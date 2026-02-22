@@ -47,6 +47,11 @@ type ProgressNarrationState = {
   allProgress: AgentProgressUpdate[];
 };
 
+type BotDisplayNameSyncState = {
+  lastSyncedName?: string;
+  retryAfterUntilMs?: number;
+};
+
 export class TelegramGateway {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
@@ -62,6 +67,8 @@ export class TelegramGateway {
   private readonly typingIntervalMs: number;
   private readonly typingSessions = new Map<number, { refs: number; timer: NodeJS.Timeout }>();
   private lastSyncedBotDisplayName: string | null = null;
+  private readonly botDisplayNameSyncStatePath: string;
+  private botDisplayNameRateLimitedUntilMs = 0;
   private running = false;
   private stoppedPromise: Promise<void> | null = null;
   private stopResolver: (() => void) | null = null;
@@ -129,6 +136,9 @@ export class TelegramGateway {
         this.writeLogLine(line);
       },
     });
+
+    this.botDisplayNameSyncStatePath = path.join(this.config.stateDir, "telegram-bot-name-sync.json");
+    this.restoreBotDisplayNameSyncState();
   }
 
   private log(message: string): void {
@@ -172,6 +182,84 @@ export class TelegramGateway {
     return normalized.slice(0, 64);
   }
 
+  private restoreBotDisplayNameSyncState(): void {
+    if (!fs.existsSync(this.botDisplayNameSyncStatePath)) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.botDisplayNameSyncStatePath, "utf-8")) as BotDisplayNameSyncState;
+      const cachedName =
+        parsed && typeof parsed.lastSyncedName === "string" ? this.normalizeBotDisplayName(parsed.lastSyncedName) : "";
+      if (cachedName) {
+        this.lastSyncedBotDisplayName = cachedName;
+      }
+      const retryAfterUntilMs = parsed && typeof parsed.retryAfterUntilMs === "number" ? parsed.retryAfterUntilMs : 0;
+      if (Number.isFinite(retryAfterUntilMs) && retryAfterUntilMs > Date.now()) {
+        this.botDisplayNameRateLimitedUntilMs = Math.trunc(retryAfterUntilMs);
+      }
+    } catch {
+      // Ignore invalid local cache payload and continue with runtime defaults.
+    }
+  }
+
+  private persistBotDisplayNameSyncState(): void {
+    const payload: BotDisplayNameSyncState = {};
+    if (this.lastSyncedBotDisplayName) {
+      payload.lastSyncedName = this.lastSyncedBotDisplayName;
+    }
+    if (this.botDisplayNameRateLimitedUntilMs > Date.now()) {
+      payload.retryAfterUntilMs = this.botDisplayNameRateLimitedUntilMs;
+    }
+
+    try {
+      if (!payload.lastSyncedName && !payload.retryAfterUntilMs) {
+        if (fs.existsSync(this.botDisplayNameSyncStatePath)) {
+          fs.unlinkSync(this.botDisplayNameSyncStatePath);
+        }
+        return;
+      }
+      fs.writeFileSync(this.botDisplayNameSyncStatePath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+    } catch {
+      // Ignore local cache persistence errors.
+    }
+  }
+
+  private getBotDisplayNameRetryAfterSec(nowMs = Date.now()): number {
+    if (this.botDisplayNameRateLimitedUntilMs <= nowMs) {
+      return 0;
+    }
+    return Math.max(1, Math.ceil((this.botDisplayNameRateLimitedUntilMs - nowMs) / 1000));
+  }
+
+  private parseTelegramRetryAfterSec(error: unknown): number {
+    const typed = error as { response?: { body?: { parameters?: { retry_after?: unknown } } } };
+    const structured = typed.response?.body?.parameters?.retry_after;
+    if (typeof structured === "number" && Number.isFinite(structured) && structured > 0) {
+      return Math.ceil(structured);
+    }
+    const message = String((error as Error)?.message ?? "");
+    const match = message.match(/retry after\s+(\d+)/i);
+    if (!match) {
+      return 0;
+    }
+    const parsed = Number(match[1]);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return 0;
+    }
+    return Math.ceil(parsed);
+  }
+
+  private markBotDisplayNameRateLimited(retryAfterSec: number): void {
+    if (retryAfterSec <= 0) {
+      return;
+    }
+    const nextUntil = Date.now() + retryAfterSec * 1000;
+    if (nextUntil > this.botDisplayNameRateLimitedUntilMs) {
+      this.botDisplayNameRateLimitedUntilMs = nextUntil;
+      this.persistBotDisplayNameSyncState();
+    }
+  }
+
   private readAssistantNameFromIdentity(): string {
     const identityPath = path.join(this.config.workspaceDir, "IDENTITY.md");
     if (!fs.existsSync(identityPath)) {
@@ -199,11 +287,24 @@ export class TelegramGateway {
     if (!assistantName || assistantName === this.lastSyncedBotDisplayName) {
       return;
     }
+    const retryAfterSec = this.getBotDisplayNameRetryAfterSec();
+    if (retryAfterSec > 0) {
+      this.log(`telegram bot display name startup-sync skipped: rate-limited retry_after=${retryAfterSec}s`);
+      return;
+    }
     try {
       await this.bot.setMyName({ name: assistantName });
       this.lastSyncedBotDisplayName = assistantName;
+      this.botDisplayNameRateLimitedUntilMs = 0;
+      this.persistBotDisplayNameSyncState();
       this.log(`telegram bot display name startup-sync name=${JSON.stringify(assistantName)}`);
     } catch (error) {
+      const retry = this.parseTelegramRetryAfterSec(error);
+      if (retry > 0) {
+        this.markBotDisplayNameRateLimited(retry);
+        this.log(`telegram bot display name startup-sync rate-limited retry_after=${retry}s`);
+        return;
+      }
       this.log(`telegram bot display name startup-sync failed: ${(error as Error).message}`);
     }
   }
@@ -412,10 +513,25 @@ export class TelegramGateway {
     if (this.lastSyncedBotDisplayName === nextName) {
       return;
     }
+    const retryAfterSec = this.getBotDisplayNameRetryAfterSec();
+    if (retryAfterSec > 0) {
+      this.log(
+        `telegram bot display name update skipped chat=${chatId} name=${JSON.stringify(nextName)} retry_after=${retryAfterSec}s`,
+      );
+      await this.bot.sendMessage(
+        chatId,
+        locale === "zh"
+          ? `Telegram 限流中，显示名暂时无法修改。请约 ${Math.ceil(retryAfterSec / 60)} 分钟后再试。`
+          : `Telegram is rate-limiting display name updates. Please retry in about ${Math.ceil(retryAfterSec / 60)} minute(s).`,
+      );
+      return;
+    }
 
     try {
       await this.bot.setMyName({ name: nextName });
       this.lastSyncedBotDisplayName = nextName;
+      this.botDisplayNameRateLimitedUntilMs = 0;
+      this.persistBotDisplayNameSyncState();
       this.log(`telegram bot display name updated chat=${chatId} name=${JSON.stringify(nextName)}`);
       await this.bot.sendMessage(
         chatId,
@@ -424,6 +540,20 @@ export class TelegramGateway {
           : `Telegram bot display name updated: ${nextName}`,
       );
     } catch (error) {
+      const retry = this.parseTelegramRetryAfterSec(error);
+      if (retry > 0) {
+        this.markBotDisplayNameRateLimited(retry);
+        this.log(
+          `telegram bot display name update rate-limited chat=${chatId} name=${JSON.stringify(nextName)} retry_after=${retry}s`,
+        );
+        await this.bot.sendMessage(
+          chatId,
+          locale === "zh"
+            ? `Telegram 限流中，显示名暂时无法修改。请约 ${Math.ceil(retry / 60)} 分钟后再试。`
+            : `Telegram is rate-limiting display name updates. Please retry in about ${Math.ceil(retry / 60)} minute(s).`,
+        );
+        return;
+      }
       this.log(
         `telegram bot display name update failed chat=${chatId} name=${JSON.stringify(nextName)} error=${(error as Error).message}`,
       );

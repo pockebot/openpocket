@@ -152,6 +152,84 @@ test("TelegramGateway startup sync reads assistant name from IDENTITY.md", async
   });
 });
 
+test("TelegramGateway startup sync backs off after Telegram rate limit", async () => {
+  await withTempHome("openpocket-telegram-startup-name-rate-limit-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+    fs.writeFileSync(
+      path.join(cfg.workspaceDir, "IDENTITY.md"),
+      [
+        "# IDENTITY",
+        "",
+        "## Agent Identity",
+        "",
+        "- Name: RateLimit-Bot",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    let setNameCalls = 0;
+    gateway.bot.setMyName = async () => {
+      setNameCalls += 1;
+      throw new Error("ETELEGRAM: 429 Too Many Requests: retry after 120");
+    };
+
+    await gateway.syncBotDisplayNameFromIdentity();
+    await gateway.syncBotDisplayNameFromIdentity();
+
+    assert.equal(setNameCalls, 1);
+    const statePath = path.join(cfg.stateDir, "telegram-bot-name-sync.json");
+    assert.equal(fs.existsSync(statePath), true);
+    const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    assert.equal(typeof state.retryAfterUntilMs, "number");
+    assert.equal(state.retryAfterUntilMs > Date.now(), true);
+  });
+});
+
+test("TelegramGateway startup sync skips API call when name already cached locally", async () => {
+  await withTempHome("openpocket-telegram-startup-name-cache-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+    fs.writeFileSync(
+      path.join(cfg.workspaceDir, "IDENTITY.md"),
+      [
+        "# IDENTITY",
+        "",
+        "## Agent Identity",
+        "",
+        "- Name: Cached-Bot",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const first = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    first.bot.on("polling_error", () => {});
+    await first.bot.stopPolling().catch(() => {});
+    let firstCalls = 0;
+    first.bot.setMyName = async () => {
+      firstCalls += 1;
+      return true;
+    };
+    await first.syncBotDisplayNameFromIdentity();
+    assert.equal(firstCalls, 1);
+
+    const second = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    second.bot.on("polling_error", () => {});
+    await second.bot.stopPolling().catch(() => {});
+    let secondCalls = 0;
+    second.bot.setMyName = async () => {
+      secondCalls += 1;
+      return true;
+    };
+    await second.syncBotDisplayNameFromIdentity();
+    assert.equal(secondCalls, 0);
+  });
+});
+
 test("TelegramGateway consumes profile-update payload after chat reply", async () => {
   await withTempHome("openpocket-telegram-profile-update-", async () => {
     const cfg = loadConfig();
