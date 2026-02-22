@@ -815,6 +815,17 @@ export class HumanAuthRelayServer {
     let artifact = null;
     let takeoverPollingTimer = null;
     let takeoverRunning = false;
+    const takeoverControlIds = [
+      "takeoverStart",
+      "takeoverStop",
+      "takeoverRefresh",
+      "takeoverSendText",
+      "keyBack",
+      "keyHome",
+      "keyRecents",
+      "keyEnter",
+      "takeoverText",
+    ];
 
     function show(id, visible) {
       const el = document.getElementById(id);
@@ -858,6 +869,18 @@ export class HumanAuthRelayServer {
       takeoverStatusEl.textContent = text;
     }
 
+    function setTakeoverControlsEnabled(enabled) {
+      for (const id of takeoverControlIds) {
+        const el = document.getElementById(id);
+        if (!el) {
+          continue;
+        }
+        if ("disabled" in el) {
+          el.disabled = !enabled;
+        }
+      }
+    }
+
     function setTakeoverMeta(frame) {
       if (!frame) {
         takeoverMetaEl.textContent = "No frame metadata.";
@@ -883,8 +906,13 @@ export class HumanAuthRelayServer {
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
+        const message = body.error || response.statusText || "unknown error";
+        if (response.status === 403 || response.status === 409) {
+          stopTakeoverForTerminalState(message);
+          return;
+        }
         if (!silent) {
-          setTakeoverStatus("Snapshot failed: " + (body.error || response.statusText));
+          setTakeoverStatus("Snapshot failed: " + message);
         }
         return;
       }
@@ -915,10 +943,15 @@ export class HumanAuthRelayServer {
       );
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (!silent) {
-          setTakeoverStatus("Action failed: " + (body.error || response.statusText));
+        const message = body.error || response.statusText || "unknown error";
+        if (response.status === 403 || response.status === 409) {
+          stopTakeoverForTerminalState(message);
+          throw new Error(message);
         }
-        throw new Error(body.error || response.statusText);
+        if (!silent) {
+          setTakeoverStatus("Action failed: " + message);
+        }
+        throw new Error(message);
       }
       if (!silent) {
         setTakeoverStatus(body.message || "Action sent.");
@@ -946,9 +979,21 @@ export class HumanAuthRelayServer {
       takeoverPollingTimer = null;
     }
 
+    function stopTakeoverForTerminalState(message) {
+      takeoverRunning = false;
+      stopTakeoverPolling();
+      takeoverStreamEl.removeAttribute("src");
+      takeoverStreamEl.hidden = true;
+      takeoverEmptyEl.style.display = "flex";
+      takeoverEmptyEl.textContent = "Takeover ended: " + message;
+      setTakeoverStatus(message);
+      setTakeoverControlsEnabled(false);
+    }
+
     function startTakeoverStream() {
       takeoverRunning = true;
       stopTakeoverPolling();
+      setTakeoverControlsEnabled(true);
       takeoverStreamEl.hidden = false;
       takeoverEmptyEl.style.display = "none";
       const url = takeoverUrl("/takeover/stream") + "&ts=" + Date.now();
@@ -1152,6 +1197,7 @@ export class HumanAuthRelayServer {
         stopTakeoverPolling();
         takeoverRunning = false;
         takeoverStreamEl.removeAttribute("src");
+        setTakeoverControlsEnabled(false);
       } catch (err) {
         statusEl.textContent = "Request failed: " + (err && err.message ? err.message : String(err));
       }
