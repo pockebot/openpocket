@@ -321,6 +321,74 @@ export class ChatAssistant {
     this.config = config;
   }
 
+  /**
+   * Shared helper: call the model with automatic endpoint-mode fallback.
+   * Returns the raw text output or empty string on failure.
+   */
+  private async callModelRaw(
+    client: OpenAI,
+    model: string,
+    maxTokens: number,
+    prompt: string,
+    label: string,
+  ): Promise<string> {
+    const tryModes: Array<"responses" | "chat" | "completions"> =
+      this.modeHint === "responses"
+        ? ["responses", "chat", "completions"]
+        : this.modeHint === "chat"
+          ? ["chat", "responses", "completions"]
+          : ["completions", "responses", "chat"];
+
+    let output = "";
+    const errors: string[] = [];
+    for (const mode of tryModes) {
+      try {
+        if (mode === "responses") {
+          const response = await client.responses.create({
+            model,
+            max_output_tokens: maxTokens,
+            input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+          } as never);
+          output = readResponseOutputText(response);
+        } else if (mode === "chat") {
+          const response = await client.chat.completions.create({
+            model,
+            max_tokens: maxTokens,
+            messages: [{ role: "user", content: prompt }],
+          } as never);
+          output = typeof response.choices?.[0]?.message?.content === "string"
+            ? response.choices?.[0]?.message?.content.trim()
+            : "";
+        } else {
+          const response = await client.completions.create({
+            model,
+            max_tokens: maxTokens,
+            prompt,
+          } as never);
+          output = (response.choices?.[0]?.text ?? "").trim();
+        }
+
+        if (!output) {
+          continue;
+        }
+        if (this.modeHint !== mode) {
+          this.modeHint = mode;
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][chat] switched endpoint mode -> ${mode}`);
+        }
+        break;
+      } catch (error) {
+        errors.push(`${mode}: ${stringifyError(error)}`);
+      }
+    }
+
+    if (!output) {
+      // eslint-disable-next-line no-console
+      console.warn(`[OpenPocket][chat] ${label} failed: ${errors.join(" | ")}`);
+    }
+    return output;
+  }
+
   clear(chatId: number): void {
     this.history.delete(chatId);
     this.profileOnboarding.delete(chatId);
@@ -1044,59 +1112,8 @@ export class ChatAssistant {
     maxTokens: number,
     prompt: string,
   ): Promise<BootstrapModelDecision | null> {
-    const tryModes: Array<"responses" | "chat" | "completions"> =
-      this.modeHint === "responses"
-        ? ["responses", "chat", "completions"]
-        : this.modeHint === "chat"
-          ? ["chat", "responses", "completions"]
-          : ["completions", "responses", "chat"];
-
-    let output = "";
-    const errors: string[] = [];
-    for (const mode of tryModes) {
-      try {
-        if (mode === "responses") {
-          const response = await client.responses.create({
-            model,
-            max_output_tokens: Math.min(maxTokens, 500),
-            input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-          } as never);
-          output = readResponseOutputText(response);
-        } else if (mode === "chat") {
-          const response = await client.chat.completions.create({
-            model,
-            max_tokens: Math.min(maxTokens, 500),
-            messages: [{ role: "user", content: prompt }],
-          } as never);
-          output = typeof response.choices?.[0]?.message?.content === "string"
-            ? response.choices?.[0]?.message?.content.trim()
-            : "";
-        } else {
-          const response = await client.completions.create({
-            model,
-            max_tokens: Math.min(maxTokens, 500),
-            prompt,
-          } as never);
-          output = (response.choices?.[0]?.text ?? "").trim();
-        }
-
-        if (!output) {
-          continue;
-        }
-        if (this.modeHint !== mode) {
-          this.modeHint = mode;
-          // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][chat] switched endpoint mode -> ${mode}`);
-        }
-        break;
-      } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
-      }
-    }
-
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 500), prompt, "bootstrap onboarding");
     if (!output) {
-      // eslint-disable-next-line no-console
-      console.warn(`[OpenPocket][chat] bootstrap onboarding failed: ${errors.join(" | ")}`);
       return null;
     }
 
@@ -1149,59 +1166,8 @@ export class ChatAssistant {
     maxTokens: number,
     prompt: string,
   ): Promise<TaskProgressNarrationDecision | null> {
-    const tryModes: Array<"responses" | "chat" | "completions"> =
-      this.modeHint === "responses"
-        ? ["responses", "chat", "completions"]
-        : this.modeHint === "chat"
-          ? ["chat", "responses", "completions"]
-          : ["completions", "responses", "chat"];
-
-    let output = "";
-    const errors: string[] = [];
-    for (const mode of tryModes) {
-      try {
-        if (mode === "responses") {
-          const response = await client.responses.create({
-            model,
-            max_output_tokens: Math.min(maxTokens, 260),
-            input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-          } as never);
-          output = readResponseOutputText(response);
-        } else if (mode === "chat") {
-          const response = await client.chat.completions.create({
-            model,
-            max_tokens: Math.min(maxTokens, 260),
-            messages: [{ role: "user", content: prompt }],
-          } as never);
-          output = typeof response.choices?.[0]?.message?.content === "string"
-            ? response.choices?.[0]?.message?.content.trim()
-            : "";
-        } else {
-          const response = await client.completions.create({
-            model,
-            max_tokens: Math.min(maxTokens, 260),
-            prompt,
-          } as never);
-          output = (response.choices?.[0]?.text ?? "").trim();
-        }
-
-        if (!output) {
-          continue;
-        }
-        if (this.modeHint !== mode) {
-          this.modeHint = mode;
-          // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][chat] switched endpoint mode -> ${mode}`);
-        }
-        break;
-      } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
-      }
-    }
-
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 260), prompt, "progress narration");
     if (!output) {
-      // eslint-disable-next-line no-console
-      console.warn(`[OpenPocket][chat] progress narration failed: ${errors.join(" | ")}`);
       return null;
     }
 
@@ -1230,59 +1196,8 @@ export class ChatAssistant {
     maxTokens: number,
     prompt: string,
   ): Promise<string | null> {
-    const tryModes: Array<"responses" | "chat" | "completions"> =
-      this.modeHint === "responses"
-        ? ["responses", "chat", "completions"]
-        : this.modeHint === "chat"
-          ? ["chat", "responses", "completions"]
-          : ["completions", "responses", "chat"];
-
-    let output = "";
-    const errors: string[] = [];
-    for (const mode of tryModes) {
-      try {
-        if (mode === "responses") {
-          const response = await client.responses.create({
-            model,
-            max_output_tokens: Math.min(maxTokens, 300),
-            input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-          } as never);
-          output = readResponseOutputText(response);
-        } else if (mode === "chat") {
-          const response = await client.chat.completions.create({
-            model,
-            max_tokens: Math.min(maxTokens, 300),
-            messages: [{ role: "user", content: prompt }],
-          } as never);
-          output = typeof response.choices?.[0]?.message?.content === "string"
-            ? response.choices?.[0]?.message?.content.trim()
-            : "";
-        } else {
-          const response = await client.completions.create({
-            model,
-            max_tokens: Math.min(maxTokens, 300),
-            prompt,
-          } as never);
-          output = (response.choices?.[0]?.text ?? "").trim();
-        }
-
-        if (!output) {
-          continue;
-        }
-        if (this.modeHint !== mode) {
-          this.modeHint = mode;
-          // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][chat] switched endpoint mode -> ${mode}`);
-        }
-        break;
-      } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
-      }
-    }
-
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 300), prompt, "task outcome narration");
     if (!output) {
-      // eslint-disable-next-line no-console
-      console.warn(`[OpenPocket][chat] task outcome narration failed: ${errors.join(" | ")}`);
       return null;
     }
 
@@ -1475,6 +1390,37 @@ export class ChatAssistant {
     markWorkspaceOnboardingCompleted(this.config.workspaceDir);
   }
 
+  /**
+   * Shared helper for the two fallback paths inside applyBootstrapOnboarding:
+   * either complete onboarding (if profile is done) or ask the next question.
+   */
+  private tryCompleteOrFallback(
+    chatId: number,
+    state: BootstrapOnboardingState,
+    locale: OnboardingLocale,
+  ): string {
+    if (this.isProfileSnapshotComplete(state.profile, locale)) {
+      this.completeWorkspaceBootstrap(state.profile);
+      this.bootstrapOnboarding.delete(chatId);
+      this.profileOnboarding.delete(chatId);
+      this.pendingProfileUpdates.set(chatId, {
+        assistantName: state.profile.assistantName,
+        locale,
+      });
+      return this.renderTemplate(this.localeTemplate(locale).onboardingSaved, {
+        userPreferredAddress: state.profile.userPreferredAddress,
+        assistantName: state.profile.assistantName,
+        assistantPersona: state.profile.assistantPersona,
+      });
+    }
+    this.bootstrapOnboarding.set(chatId, {
+      locale,
+      profile: state.profile,
+      turns: state.turns.slice(-20),
+    });
+    return this.bootstrapFallbackQuestion(locale, state.profile);
+  }
+
   private async applyBootstrapOnboarding(chatId: number, inputText: string): Promise<string | null> {
     const needs = this.needsBootstrapOnboarding();
     const active = this.bootstrapOnboarding.get(chatId);
@@ -1525,26 +1471,7 @@ export class ChatAssistant {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
-      if (this.isProfileSnapshotComplete(state.profile, locale)) {
-        this.completeWorkspaceBootstrap(state.profile);
-        this.bootstrapOnboarding.delete(chatId);
-        this.profileOnboarding.delete(chatId);
-        this.pendingProfileUpdates.set(chatId, {
-          assistantName: state.profile.assistantName,
-          locale,
-        });
-        return this.renderTemplate(this.localeTemplate(locale).onboardingSaved, {
-          userPreferredAddress: state.profile.userPreferredAddress,
-          assistantName: state.profile.assistantName,
-          assistantPersona: state.profile.assistantPersona,
-        });
-      }
-      this.bootstrapOnboarding.set(chatId, {
-        locale,
-        profile: state.profile,
-        turns: state.turns.slice(-20),
-      });
-      return this.bootstrapFallbackQuestion(locale, state.profile);
+      return this.tryCompleteOrFallback(chatId, state, locale);
     }
 
     const client = new OpenAI({
@@ -1566,26 +1493,7 @@ export class ChatAssistant {
     }
 
     if (!decision?.reply) {
-      if (this.isProfileSnapshotComplete(state.profile, locale)) {
-        this.completeWorkspaceBootstrap(state.profile);
-        this.bootstrapOnboarding.delete(chatId);
-        this.profileOnboarding.delete(chatId);
-        this.pendingProfileUpdates.set(chatId, {
-          assistantName: state.profile.assistantName,
-          locale,
-        });
-        return this.renderTemplate(this.localeTemplate(locale).onboardingSaved, {
-          userPreferredAddress: state.profile.userPreferredAddress,
-          assistantName: state.profile.assistantName,
-          assistantPersona: state.profile.assistantPersona,
-        });
-      }
-      this.bootstrapOnboarding.set(chatId, {
-        locale,
-        profile: state.profile,
-        turns: state.turns.slice(-20),
-      });
-      return this.bootstrapFallbackQuestion(locale, state.profile);
+      return this.tryCompleteOrFallback(chatId, state, locale);
     }
 
     state.profile = this.applyModelProfilePatch(state.profile, decision.profile, locale);
@@ -1809,57 +1717,9 @@ export class ChatAssistant {
       `User message: ${inputText}`,
     ].join("\n");
 
-    const tryModes: Array<"responses" | "chat" | "completions"> =
-      this.modeHint === "responses"
-        ? ["responses", "chat", "completions"]
-        : this.modeHint === "chat"
-          ? ["chat", "responses", "completions"]
-          : ["completions", "responses", "chat"];
-
-    let output = "";
-    const errors: string[] = [];
-    for (const mode of tryModes) {
-      try {
-        if (mode === "responses") {
-          const response = await client.responses.create({
-            model,
-            max_output_tokens: Math.min(maxTokens, 300),
-            input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-          } as never);
-          output = readResponseOutputText(response);
-        } else if (mode === "chat") {
-          const response = await client.chat.completions.create({
-            model,
-            max_tokens: Math.min(maxTokens, 300),
-            messages: [{ role: "user", content: prompt }],
-          } as never);
-          output = typeof response.choices?.[0]?.message?.content === "string"
-            ? response.choices?.[0]?.message?.content.trim()
-            : "";
-        } else {
-          const response = await client.completions.create({
-            model,
-            max_tokens: Math.min(maxTokens, 300),
-            prompt,
-          } as never);
-          output = (response.choices?.[0]?.text ?? "").trim();
-        }
-
-        if (output) {
-          if (this.modeHint !== mode) {
-            this.modeHint = mode;
-            // eslint-disable-next-line no-console
-            console.log(`[OpenPocket][chat] switched endpoint mode -> ${mode}`);
-          }
-          break;
-        }
-      } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
-      }
-    }
-
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 300), prompt, "classify");
     if (!output) {
-      throw new Error(`classify failed: ${errors.join(" | ")}`);
+      throw new Error("classify failed: all endpoint modes returned empty output");
     }
 
     const jsonText = (() => {
@@ -1983,7 +1843,7 @@ export class ChatAssistant {
     return text;
   }
 
-  private fallbackTaskProgressNarration(input: TaskProgressNarrationInput): TaskProgressNarrationDecision {
+  fallbackTaskProgressNarration(input: TaskProgressNarrationInput): TaskProgressNarrationDecision {
     const action = String(input.progress.actionType || "").toLowerCase();
     const message = String(input.progress.message || "");
     const isErrorLike = /(error|failed|timeout|interrupted|not completed|rejected)/i.test(message);

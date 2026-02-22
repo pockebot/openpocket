@@ -38,20 +38,21 @@ const DENY_PATTERNS: RegExp[] = [
   /\bhalt\b/i,
   /\bmkfs\b/i,
   /\bdd\s+if=/i,
-  /rm\s+-rf\s+\/(\s|$)/i,
+  /\brm\s+.*-[a-z]*r[a-z]*f[a-z]*\s+\//i,
+  /\brm\s+.*-[a-z]*f[a-z]*r[a-z]*\s+\//i,
+  /\brm\s+-rf\s/i,
+  /\bcurl\b/i,
+  /\bwget\b/i,
+  /\beval\b/i,
+  /\bsource\b/i,
+  /`[^`]+`/,
+  /\$\([^)]+\)/,
 ];
 
-function stripComments(line: string): string {
-  const idx = line.indexOf("#");
-  if (idx < 0) {
-    return line;
-  }
-  return line.slice(0, idx);
-}
-
-function splitToCommandSegments(line: string): string[] {
+/** Split a pipe chain into individual command segments. */
+function splitPipelineSegments(line: string): string[] {
   return line
-    .split(/&&|\|\||;/)
+    .split(/&&|\|\||;|\|/)
     .map((v) => v.trim())
     .filter(Boolean);
 }
@@ -62,7 +63,9 @@ function extractCommandName(segment: string): string {
   while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(tokens[i])) {
     i += 1;
   }
-  return tokens[i] ?? "";
+  const raw = tokens[i] ?? "";
+  // Strip any leading path (e.g. /usr/bin/node -> node) to prevent allowlist bypass.
+  return raw.includes("/") ? raw.split("/").pop() ?? "" : raw;
 }
 
 function truncate(text: string, maxChars: number): string {
@@ -88,6 +91,33 @@ export class CodingExecutor {
 
   constructor(config: OpenPocketConfig) {
     this.config = config;
+  }
+
+  /** Build an env object that strips sensitive API keys and tokens. */
+  private buildSafeEnv(): Record<string, string | undefined> {
+    const sensitivePatterns = [
+      /api[_-]?key/i,
+      /secret/i,
+      /token/i,
+      /password/i,
+      /credential/i,
+      /auth/i,
+    ];
+    const env: Record<string, string | undefined> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      const isSensitive = sensitivePatterns.some((pattern) => pattern.test(key));
+      if (!isSensitive) {
+        env[key] = value;
+      }
+    }
+    // Preserve PATH and common non-sensitive vars even if they match loosely.
+    env.PATH = process.env.PATH;
+    env.HOME = process.env.HOME;
+    env.USER = process.env.USER;
+    env.SHELL = process.env.SHELL;
+    env.LANG = process.env.LANG;
+    env.TERM = process.env.TERM;
+    return env;
   }
 
   private resolveWorkspacePath(inputPath: string, purpose: string): string {
@@ -129,6 +159,8 @@ export class CodingExecutor {
     if (!command.trim()) {
       return "command is empty.";
     }
+    // Run deny patterns against the raw (un-stripped) command to prevent bypass via
+    // comments, backticks, or $() substitutions.
     for (const deny of DENY_PATTERNS) {
       if (deny.test(command)) {
         return `command blocked by safety rule: ${deny}`;
@@ -137,11 +169,13 @@ export class CodingExecutor {
     const allow = new Set(this.config.codingTools.allowedCommands);
     const lines = command.split(/\r?\n/);
     for (const rawLine of lines) {
-      const line = stripComments(rawLine).trim();
-      if (!line) {
+      // Do NOT strip comments before allowlist check — the full raw line
+      // is what bash actually executes.
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) {
         continue;
       }
-      for (const segment of splitToCommandSegments(line)) {
+      for (const segment of splitPipelineSegments(line)) {
         const cmd = extractCommandName(segment);
         if (!cmd) {
           continue;
@@ -303,7 +337,7 @@ export class CodingExecutor {
 
     const child = spawn("bash", ["-lc", command], {
       cwd,
-      env: process.env,
+      env: this.buildSafeEnv(),
       stdio: ["pipe", "pipe", "pipe"],
     });
 

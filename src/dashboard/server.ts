@@ -1700,11 +1700,20 @@ export class DashboardServer {
         const envName = profile?.apiKeyEnv || "N/A";
         const modelId = profile?.model || "unknown";
         const status = state.credentialStatus[selected] || "";
-        $("#onboard-model-meta").innerHTML =
-          "<div>Model ID: <code>" + modelId + "</code></div>" +
-          "<div>Provider: <code>" + provider + "</code></div>" +
-          "<div>Provider API env: <code>" + envName + "</code></div>" +
-          "<div>" + status + "</div>";
+        // Use textContent to avoid XSS from config values.
+        const meta = $("#onboard-model-meta");
+        meta.textContent = "";
+        const lines = [
+          "Model ID: " + modelId,
+          "Provider: " + provider,
+          "Provider API env: " + envName,
+          status,
+        ].filter(Boolean);
+        for (const line of lines) {
+          const div = document.createElement("div");
+          div.textContent = line;
+          meta.appendChild(div);
+        }
       });
 
       $("#onboard-save-btn").addEventListener("click", () => {

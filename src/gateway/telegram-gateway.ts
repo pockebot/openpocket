@@ -1173,6 +1173,10 @@ export class TelegramGateway {
       `task accepted source=${source} chat=${chatId ?? "(none)"} task=${JSON.stringify(task)} model=${modelName ?? this.config.defaultModel}`,
     );
 
+    // Sparse narration: only call the LLM every N steps to save cost/latency.
+    // High-signal actions (first step, errors, human auth, finish) always go through.
+    const NARRATION_LLM_INTERVAL = 8;
+
     return this.withTypingStatus(source === "chat" ? chatId : null, async () => {
       const enqueueProgressNarration = (progress: AgentProgressUpdate): void => {
         progressWork = progressWork
@@ -1185,14 +1189,38 @@ export class TelegramGateway {
             );
             const recentProgress = [...progressNarrationState.recentProgress, progress].slice(-8);
             progressNarrationState.allProgress = [...progressNarrationState.allProgress, progress].slice(-16);
-            const decision = await this.chat.narrateTaskProgress({
-              task,
-              locale: progressLocale,
-              progress,
-              recentProgress,
-              lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-              skippedSteps: progressNarrationState.skippedSteps,
-            });
+
+            // Determine if this step qualifies for LLM narration or should use
+            // the cheaper rule-based fallback instead.
+            const action = String(progress.actionType || "").toLowerCase();
+            const isHighSignal =
+              progress.step === 1
+              || action === "finish"
+              || action === "request_human_auth"
+              || /(error|failed|timeout|interrupted|rejected)/i.test(
+                `${progress.message} ${progress.thought}`,
+              );
+            const isIntervalStep = progressNarrationState.skippedSteps >= NARRATION_LLM_INTERVAL;
+            const useLlm = isHighSignal || isIntervalStep;
+
+            const decision = useLlm
+              ? await this.chat.narrateTaskProgress({
+                  task,
+                  locale: progressLocale,
+                  progress,
+                  recentProgress,
+                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                  skippedSteps: progressNarrationState.skippedSteps,
+                })
+              : this.chat.fallbackTaskProgressNarration({
+                  task,
+                  locale: progressLocale,
+                  progress,
+                  recentProgress,
+                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                  skippedSteps: progressNarrationState.skippedSteps,
+                });
+
             if (!decision.notify) {
               progressNarrationState.skippedSteps += 1;
               progressNarrationState.recentProgress = recentProgress;
