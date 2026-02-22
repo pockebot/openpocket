@@ -181,6 +181,19 @@ export class TelegramGateway {
     return this.compact(redacted, maxChars);
   }
 
+  private buildHumanAuthSecurityLines(): string[] {
+    const usesNgrokTunnel = this.config.humanAuth.tunnel.provider === "ngrok";
+    const channelText = usesNgrokTunnel
+      ? "one-time token link + TLS ngrok tunnel to your local relay"
+      : "private local relay channel";
+    return [
+      "Security note (Local Relay):",
+      "- Relay server runs on your own computer.",
+      `- Credentials travel only through ${channelText}; they are not routed to a centralized OpenPocket relay.`,
+      "- Emulator runtime and state remain on your local machine.",
+    ];
+  }
+
   private normalizeBotDisplayName(input: string): string {
     const normalized = input.replace(/\s+/g, " ").trim();
     if (!normalized) {
@@ -1397,6 +1410,8 @@ export class TelegramGateway {
                       `Instruction: ${request.instruction}`,
                       `Reason: ${request.reason || "no reason provided"}`,
                       `Expires at: ${opened.expiresAt}`,
+                      "",
+                      ...this.buildHumanAuthSecurityLines(),
                       "",
                       "Fallback manual commands:",
                       opened.manualApproveCommand,

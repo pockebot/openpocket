@@ -540,6 +540,11 @@ export class HumanAuthRelayServer {
       line-height: 1.5;
       margin-top: 8px;
     }
+    .securityHint {
+      margin-top: 6px;
+      margin-bottom: 8px;
+      color: #5a4a38;
+    }
     .passwordRow {
       display: flex;
       gap: 8px;
@@ -736,6 +741,7 @@ export class HumanAuthRelayServer {
 
       <div class="section hidden" id="credentialDelegation">
         <h2>Login Credentials (Recommended)</h2>
+        <div class="muted securityHint">Security: credentials are submitted to your local OpenPocket relay on your own computer through this one-time auth link.</div>
         <label for="credUsername">Username / Email</label>
         <div class="inputWrap">
           <input
