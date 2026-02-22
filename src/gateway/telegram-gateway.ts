@@ -1004,7 +1004,18 @@ export class TelegramGateway {
     if (text.startsWith("/screen")) {
       const screenshotPath = await this.agent.captureManualScreenshot();
       this.log(`manual screenshot chat=${chatId} path=${screenshotPath}`);
-      await this.bot.sendMessage(chatId, "Screenshot saved in local storage.");
+      try {
+        await this.bot.sendPhoto(chatId, screenshotPath, {
+          caption: "Current emulator screenshot.",
+        });
+      } catch (error) {
+        const detail = (error as Error).message || "unknown upload error";
+        this.log(`manual screenshot upload failed chat=${chatId} path=${screenshotPath} error=${detail}`);
+        await this.bot.sendMessage(
+          chatId,
+          `Screenshot saved locally but upload failed: ${detail}\nPath: ${screenshotPath}`,
+        );
+      }
       return;
     }
 
