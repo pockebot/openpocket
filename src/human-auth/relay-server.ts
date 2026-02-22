@@ -274,6 +274,12 @@ export class HumanAuthRelayServer {
     const requestId = escapeHtml(record.requestId);
     const capability = escapeHtml(record.capability);
     const instruction = escapeHtml(record.instruction || "(no instruction)");
+    const instructionBrief = escapeHtml(
+      (record.instruction || "No instruction provided.")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 180),
+    );
     const reason = escapeHtml(record.reason || "(no reason)");
     const task = escapeHtml(record.task || "(no task)");
     const currentApp = escapeHtml(record.currentApp || "unknown");
@@ -286,87 +292,293 @@ export class HumanAuthRelayServer {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenPocket Human Auth</title>
   <style>
-    :root { color-scheme: light; }
-    body { margin: 0; font-family: "SF Pro Text", "Segoe UI", Arial, sans-serif; background: linear-gradient(120deg, #f4f1ea, #f7fbff); color: #0c1d2a; }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 20px; }
-    .card { background: #ffffffd9; border: 1px solid #d6dfeb; border-radius: 14px; padding: 18px; box-shadow: 0 8px 24px rgba(20, 40, 64, 0.08); }
-    h1 { font-size: 24px; margin: 0 0 12px; }
-    .meta { display: grid; gap: 8px; margin: 14px 0; }
-    .meta div { background: #eef4fb; border-radius: 8px; padding: 10px; font-size: 14px; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
-    button { border: 0; border-radius: 10px; padding: 10px 14px; font-size: 15px; cursor: pointer; }
-    #approve { background: #177245; color: #fff; }
-    #reject { background: #93332a; color: #fff; }
-    #startCam, #snapCam, #pickPhoto { background: #123d67; color: #fff; }
-    textarea { width: 100%; min-height: 80px; border-radius: 8px; border: 1px solid #c5d2e4; padding: 10px; margin-top: 10px; box-sizing: border-box; }
-    video, canvas { width: 100%; border-radius: 10px; margin-top: 10px; background: #0b1118; }
-    #photoPreview { width: 100%; border-radius: 10px; margin-top: 10px; background: #0b1118; }
-    .status { margin-top: 14px; font-weight: 600; }
-    .muted { color: #4a6279; font-size: 13px; }
+    @import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap");
+    :root {
+      color-scheme: light;
+      --op-brand: #ff8a00;
+      --op-brand-dark: #d85700;
+      --op-bg: #fff9f2;
+      --op-card: #ffffff;
+      --op-ink: #131313;
+      --op-ink-soft: #5f6368;
+      --op-line: #ece7de;
+      --op-chip: rgba(255, 138, 0, 0.12);
+      --op-shadow: 0 20px 44px rgba(20, 20, 20, 0.08);
+    }
+    body {
+      margin: 0;
+      font-family: "Poppins", "Avenir Next", "Segoe UI", Arial, sans-serif;
+      color: var(--op-ink);
+      background:
+        radial-gradient(circle at 85% -10%, rgba(255, 138, 0, 0.22), transparent 36%),
+        linear-gradient(155deg, #fffefb 0%, var(--op-bg) 56%, #f4f8ff 100%);
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 20px 16px 32px;
+      box-sizing: border-box;
+    }
+    .card {
+      background: var(--op-card);
+      border: 1px solid var(--op-line);
+      border-radius: 22px;
+      padding: 16px;
+      box-shadow: var(--op-shadow);
+    }
+    .brandRow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .brandPill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--op-chip);
+      color: var(--op-brand-dark);
+      border: 1px solid rgba(255, 138, 0, 0.3);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 10px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .requestId {
+      color: var(--op-ink-soft);
+      font-size: 12px;
+      font-weight: 500;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.25;
+      font-weight: 600;
+    }
+    .brief {
+      margin: 8px 0 0;
+      color: var(--op-ink-soft);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .capabilityLine {
+      margin: 10px 0 0;
+      font-size: 13px;
+      color: #8b4a07;
+      background: rgba(255, 138, 0, 0.1);
+      border: 1px solid rgba(255, 138, 0, 0.24);
+      border-radius: 10px;
+      padding: 8px 10px;
+    }
+    .section {
+      margin-top: 14px;
+      border: 1px solid var(--op-line);
+      border-radius: 16px;
+      padding: 12px;
+      background: #fff;
+    }
+    .section h2 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: #2a3138;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    input, textarea {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid #d7dce3;
+      padding: 10px;
+      box-sizing: border-box;
+      font: inherit;
+      font-size: 14px;
+      background: #fff;
+      color: #202124;
+    }
+    textarea {
+      min-height: 68px;
+      resize: vertical;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    button {
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 10px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all .12s ease;
+    }
+    button:active { transform: translateY(1px); }
+    #approve {
+      background: var(--op-brand);
+      color: #121212;
+      border-color: rgba(255, 138, 0, 0.6);
+    }
+    #reject {
+      background: #fff;
+      color: #a63a1a;
+      border-color: #e7b7aa;
+    }
+    #attachText, #useGeo, #attachGeo, #startCam, #snapCam, #pickPhoto {
+      background: #f7f8fb;
+      color: #2d3136;
+      border-color: #d9dfe8;
+    }
+    .status {
+      margin-top: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #202124;
+    }
+    .muted {
+      color: var(--op-ink-soft);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: 8px;
+    }
     .hidden { display: none !important; }
     .grid2 { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    video, canvas, #photoPreview {
+      width: 100%;
+      border-radius: 12px;
+      margin-top: 10px;
+      background: #0d1117;
+    }
+    details.context {
+      margin-top: 14px;
+      border: 1px solid var(--op-line);
+      border-radius: 14px;
+      background: #fbfbfd;
+      overflow: hidden;
+    }
+    details.context summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 12px 12px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #272e35;
+      border-bottom: 1px solid transparent;
+    }
+    details.context[open] summary {
+      border-bottom-color: var(--op-line);
+      background: #f8f9fc;
+    }
+    .meta {
+      display: grid;
+      gap: 8px;
+      padding: 10px 12px 12px;
+    }
+    .metaItem {
+      background: #fff;
+      border: 1px solid var(--op-line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .metaItem b {
+      display: block;
+      font-size: 11px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: #6e7781;
+      margin-bottom: 2px;
+      font-weight: 600;
+    }
+    @media (max-width: 480px) {
+      .card { padding: 12px; border-radius: 16px; }
+      h1 { font-size: 21px; }
+      .grid2 { grid-template-columns: 1fr; }
+      .brandRow { flex-direction: column; align-items: flex-start; }
+      .requestId { text-align: left; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>OpenPocket Authorization Request</h1>
-      <div class="muted">Request ID: ${requestId}</div>
-      <div class="meta">
-        <div><strong>Task</strong><br/>${task}</div>
-        <div><strong>Capability</strong><br/>${capability}</div>
-        <div><strong>Instruction</strong><br/>${instruction}</div>
-        <div><strong>Reason</strong><br/>${reason}</div>
-        <div><strong>Current App</strong><br/>${currentApp}</div>
+      <div class="brandRow">
+        <div class="brandPill">OpenPocket Human Auth</div>
+        <div class="requestId">Request: ${requestId}</div>
       </div>
-      <div class="muted" id="capabilityHint"></div>
+      <h1>Approve Or Reject To Continue</h1>
+      <p class="brief"><b>${capability}</b> requested. ${instructionBrief}</p>
+      <div class="capabilityLine" id="capabilityHint"></div>
 
-      <label for="note"><strong>Optional note</strong></label>
-      <textarea id="note" placeholder="e.g., Face ID approved, code confirmed"></textarea>
-
-      <div class="meta" id="delegationBlock">
-        <div>
-          <strong>Delegated Data (optional)</strong><br/>
-          Attach real-device data for VM continuation (code/text/geo/photo).
-        </div>
-      </div>
-
-      <div id="textDelegation">
-        <label for="resultText"><strong>Text / Code</strong></label>
-        <input id="resultText" type="text" style="width:100%;border-radius:8px;border:1px solid #c5d2e4;padding:10px;box-sizing:border-box" placeholder="e.g., SMS code, OTP, QR result text" />
+      <div class="section">
+        <label for="note">Optional note</label>
+        <textarea id="note" placeholder="e.g., approved with Face ID, verification done"></textarea>
         <div class="actions">
-          <button id="attachText" type="button">Attach Text</button>
+          <button id="approve" type="button">Approve</button>
+          <button id="reject" type="button">Reject</button>
         </div>
+        <div class="status" id="status"></div>
       </div>
 
-      <div id="geoDelegation" class="hidden">
-        <label><strong>Location (lat/lon)</strong></label>
-        <div class="grid2">
-          <input id="geoLat" type="number" step="0.000001" placeholder="Latitude" style="width:100%;border-radius:8px;border:1px solid #c5d2e4;padding:10px;box-sizing:border-box" />
-          <input id="geoLon" type="number" step="0.000001" placeholder="Longitude" style="width:100%;border-radius:8px;border:1px solid #c5d2e4;padding:10px;box-sizing:border-box" />
+      <div class="section">
+        <h2>Optional Delegated Data</h2>
+        <div id="textDelegation">
+          <label for="resultText">Text / Code</label>
+          <input id="resultText" type="text" placeholder="e.g., OTP, SMS code, QR result text" />
+          <div class="actions">
+            <button id="attachText" type="button">Attach Text</button>
+          </div>
         </div>
+
+        <div id="geoDelegation" class="hidden">
+          <label>Location (lat/lon)</label>
+          <div class="grid2">
+            <input id="geoLat" type="number" step="0.000001" placeholder="Latitude" />
+            <input id="geoLon" type="number" step="0.000001" placeholder="Longitude" />
+          </div>
+          <div class="actions">
+            <button id="useGeo" type="button">Use Current Location</button>
+            <button id="attachGeo" type="button">Attach Location</button>
+          </div>
+        </div>
+
         <div class="actions">
-          <button id="useGeo" type="button">Use Current Location</button>
-          <button id="attachGeo" type="button">Attach Location</button>
+          <button id="startCam" type="button">Enable Camera</button>
+          <button id="snapCam" type="button">Capture Snapshot</button>
+          <button id="pickPhoto" type="button">Capture / Upload Photo</button>
         </div>
+        <div class="muted">Camera attachment is optional. You can approve/reject without photo.</div>
+        <video id="video" autoplay playsinline hidden></video>
+        <canvas id="canvas" hidden></canvas>
+        <img id="photoPreview" alt="Captured preview" hidden />
+        <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
       </div>
 
-      <div class="actions">
-        <button id="startCam" type="button">Enable Camera</button>
-        <button id="snapCam" type="button">Capture Snapshot</button>
-        <button id="pickPhoto" type="button">Capture/Upload Photo</button>
-      </div>
-      <div class="muted">Camera attachment is optional. You can approve/reject without snapshot.</div>
-      <video id="video" autoplay playsinline hidden></video>
-      <canvas id="canvas" hidden></canvas>
-      <img id="photoPreview" alt="Captured preview" hidden />
-      <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
-
-      <div class="actions">
-        <button id="approve" type="button">Approve</button>
-        <button id="reject" type="button">Reject</button>
-      </div>
-      <div class="status" id="status"></div>
+      <details class="context">
+        <summary>Show Full Context</summary>
+        <div class="meta">
+          <div class="metaItem"><b>Task</b>${task}</div>
+          <div class="metaItem"><b>Capability</b>${capability}</div>
+          <div class="metaItem"><b>Instruction</b>${instruction}</div>
+          <div class="metaItem"><b>Reason</b>${reason}</div>
+          <div class="metaItem"><b>Current App</b>${currentApp}</div>
+        </div>
+      </details>
     </div>
   </div>
 
