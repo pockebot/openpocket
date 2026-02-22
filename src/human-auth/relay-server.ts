@@ -378,7 +378,7 @@ export class HumanAuthRelayServer {
       (record.instruction || "No instruction provided.")
         .replace(/\s+/g, " ")
         .trim()
-        .slice(0, 180),
+        .slice(0, 120),
     );
     const reason = escapeHtml(record.reason || "(no reason)");
     const task = escapeHtml(record.task || "(no task)");
@@ -430,23 +430,9 @@ export class HumanAuthRelayServer {
     .brandRow {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-end;
       gap: 10px;
-      margin-bottom: 10px;
-    }
-    .brandPill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      background: var(--op-chip);
-      color: var(--op-brand-dark);
-      border: 1px solid rgba(255, 138, 0, 0.3);
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 600;
-      padding: 6px 10px;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
+      margin-bottom: 4px;
     }
     .requestId {
       color: var(--op-ink-soft);
@@ -457,24 +443,24 @@ export class HumanAuthRelayServer {
     }
     h1 {
       margin: 0;
-      font-size: 24px;
+      font-size: 22px;
       line-height: 1.25;
       font-weight: 600;
     }
     .brief {
-      margin: 8px 0 0;
+      margin: 6px 0 0;
       color: var(--op-ink-soft);
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.42;
     }
     .capabilityLine {
-      margin: 10px 0 0;
+      margin: 12px 0 0;
       font-size: 13px;
       color: #8b4a07;
       background: rgba(255, 138, 0, 0.1);
       border: 1px solid rgba(255, 138, 0, 0.24);
       border-radius: 10px;
-      padding: 8px 10px;
+      padding: 7px 10px;
     }
     .section {
       margin-top: 14px;
@@ -537,7 +523,7 @@ export class HumanAuthRelayServer {
       color: #a63a1a;
       border-color: #e7b7aa;
     }
-    #attachText, #attachCredentials, #clearCredentials, #useGeo, #attachGeo, #startCam, #snapCam, #pickPhoto {
+    #attachText, #useGeo, #attachGeo, #startCam, #snapCam, #pickPhoto {
       background: #f7f8fb;
       color: #2d3136;
       border-color: #d9dfe8;
@@ -559,8 +545,30 @@ export class HumanAuthRelayServer {
       gap: 8px;
       align-items: center;
     }
-    .passwordRow input {
+    .passwordRow .inputWrap {
       flex: 1;
+    }
+    .inputWrap {
+      position: relative;
+    }
+    .inputWrap input {
+      padding-right: 36px;
+    }
+    .clearInputBtn {
+      position: absolute;
+      top: 50%;
+      right: 8px;
+      transform: translateY(-50%);
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      border: 1px solid #d9dfe8;
+      background: #fff;
+      color: #5f6368;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 0;
+      line-height: 1;
     }
     #togglePassword {
       border-radius: 10px;
@@ -569,6 +577,10 @@ export class HumanAuthRelayServer {
       color: #2d3136;
       border-color: #d9dfe8;
       white-space: nowrap;
+    }
+    .decisionActions {
+      margin-top: 0;
+      margin-bottom: 10px;
     }
     .hidden { display: none !important; }
     .grid2 { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -717,52 +729,53 @@ export class HumanAuthRelayServer {
   <div class="wrap">
     <div class="card">
       <div class="brandRow">
-        <div class="brandPill">OpenPocket Human Auth</div>
         <div class="requestId">Request: ${requestId}</div>
       </div>
-      <h1>Approve Or Reject To Continue</h1>
+      <h1>Authorization Required</h1>
       <p class="brief"><b>${capability}</b> requested. ${instructionBrief}</p>
-      <div class="capabilityLine" id="capabilityHint"></div>
 
       <div class="section hidden" id="credentialDelegation">
         <h2>Login Credentials (Recommended)</h2>
-        <div class="muted">Use this form first for account login walls. Agent will auto-fill credentials in the emulator login form.</div>
         <label for="credUsername">Username / Email</label>
-        <input
-          id="credUsername"
-          type="text"
-          placeholder="Enter username, email, or phone"
-          autocomplete="username"
-          autocapitalize="off"
-          spellcheck="false"
-        />
-        <label for="credPassword">Password</label>
-        <div class="passwordRow">
+        <div class="inputWrap">
           <input
-            id="credPassword"
-            type="password"
-            placeholder="Enter password"
-            autocomplete="current-password"
+            id="credUsername"
+            type="text"
+            placeholder="Enter username, email, or phone"
+            autocomplete="username"
             autocapitalize="off"
             spellcheck="false"
           />
-          <button id="togglePassword" type="button">Show</button>
+          <button id="clearUsername" class="clearInputBtn" type="button" aria-label="Clear username">×</button>
         </div>
-        <div class="actions">
-          <button id="attachCredentials" type="button">Attach Credentials</button>
-          <button id="clearCredentials" type="button">Clear</button>
+        <label for="credPassword">Password</label>
+        <div class="passwordRow">
+          <div class="inputWrap">
+            <input
+              id="credPassword"
+              type="password"
+              placeholder="Enter password"
+              autocomplete="current-password"
+              autocapitalize="off"
+              spellcheck="false"
+            />
+            <button id="clearPassword" class="clearInputBtn" type="button" aria-label="Clear password">×</button>
+          </div>
+          <button id="togglePassword" type="button">Show</button>
         </div>
       </div>
 
       <div class="section">
-        <label for="note">Decision Note (Optional)</label>
-        <textarea id="note" placeholder="e.g., approved with Face ID, verification done"></textarea>
-        <div class="actions">
+        <div class="actions decisionActions">
           <button id="approve" type="button">Approve</button>
           <button id="reject" type="button">Reject</button>
         </div>
+        <label for="note">Decision Note (Optional)</label>
+        <textarea id="note" placeholder="Optional message to agent"></textarea>
         <div class="status" id="status"></div>
       </div>
+
+      <div class="capabilityLine" id="capabilityHint"></div>
 
       <div class="section">
         <div class="takeover-head">
@@ -884,12 +897,12 @@ export class HumanAuthRelayServer {
     }
 
     function capabilityHintText(cap) {
-      if (cap === "location") return "Recommended: attach location. VM will receive geo coordinates.";
-      if (cap === "camera") return "Recommended: attach a photo if app flow needs image input.";
-      if (cap === "oauth") return "Recommended: fill username/password above, then Approve. Remote takeover below is optional.";
-      if (cap === "2fa" || cap === "sms") return "Recommended: attach OTP/code text.";
-      if (cap === "qr") return "Recommended: attach decoded QR text or photo.";
-      return "Attach optional evidence/data to help the agent continue in VM.";
+      if (cap === "location") return "Recommended: attach location and approve.";
+      if (cap === "camera") return "Recommended: capture/upload photo and approve.";
+      if (cap === "oauth") return "Recommended: fill credentials above, then approve. Remote takeover is optional.";
+      if (cap === "2fa" || cap === "sms") return "Recommended: attach OTP/code and approve.";
+      if (cap === "qr") return "Recommended: attach QR text or photo and approve.";
+      return "Recommended: attach needed data, then approve.";
     }
 
     function configureByCapability() {
@@ -1100,35 +1113,27 @@ export class HumanAuthRelayServer {
       };
     }
 
-    function attachCredentialsArtifact() {
+    function buildCredentialsArtifactPayload() {
       const username = String(credUsernameEl.value || "").trim();
       const password = String(credPasswordEl.value || "");
       if (!username && !password) {
-        statusEl.textContent = "Username and password are both empty.";
-        return;
+        return null;
       }
-      setJsonArtifact({
+      return {
         kind: "credentials",
         username,
         password,
         capability,
         capturedAt: new Date().toISOString(),
-      });
-      const parts = [];
-      if (username) {
-        parts.push("username");
-      }
-      if (password) {
-        parts.push("password");
-      }
-      statusEl.textContent = "Credentials attached (" + parts.join(" + ") + ").";
+      };
     }
 
-    function clearCredentialsArtifact() {
-      credUsernameEl.value = "";
-      credPasswordEl.value = "";
-      artifact = null;
-      statusEl.textContent = "Credentials cleared.";
+    function clearCredentialInput(inputEl) {
+      if (!inputEl) {
+        return;
+      }
+      inputEl.value = "";
+      inputEl.focus();
     }
 
     function togglePasswordVisibility() {
@@ -1270,6 +1275,18 @@ export class HumanAuthRelayServer {
     async function submitDecision(approved) {
       statusEl.textContent = "Submitting...";
       try {
+        if (capability === "oauth") {
+          if (approved) {
+            const payload = buildCredentialsArtifactPayload();
+            if (payload) {
+              setJsonArtifact(payload);
+            } else {
+              artifact = null;
+            }
+          } else {
+            artifact = null;
+          }
+        }
         const response = await fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1304,8 +1321,8 @@ export class HumanAuthRelayServer {
     document.getElementById("snapCam").addEventListener("click", captureSnapshot);
     document.getElementById("pickPhoto").addEventListener("click", pickPhoto);
     document.getElementById("attachText").addEventListener("click", attachTextArtifact);
-    document.getElementById("attachCredentials").addEventListener("click", attachCredentialsArtifact);
-    document.getElementById("clearCredentials").addEventListener("click", clearCredentialsArtifact);
+    document.getElementById("clearUsername").addEventListener("click", () => clearCredentialInput(credUsernameEl));
+    document.getElementById("clearPassword").addEventListener("click", () => clearCredentialInput(credPasswordEl));
     document.getElementById("togglePassword").addEventListener("click", togglePasswordVisibility);
     document.getElementById("useGeo").addEventListener("click", useCurrentLocation);
     document.getElementById("attachGeo").addEventListener("click", attachGeoArtifact);
