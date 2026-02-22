@@ -1175,7 +1175,7 @@ export class DashboardServer {
       <div class="card">
         <div class="row spread">
           <h3 style="margin:0;">Save Onboarding</h3>
-          <button class="btn primary" id="onboard-save-btn">Save Onboarding to Config + State</button>
+          <button class="btn primary" id="onboard-save-btn" disabled>Save Onboarding to Config + State</button>
         </div>
       </div>
     </section>
@@ -1380,6 +1380,24 @@ export class DashboardServer {
       renderOnboarding();
     }
 
+    function snapshotOnboardingForm() {
+      return JSON.stringify({
+        model: $("#onboard-model-select").value,
+        consent: $("#onboard-consent").checked,
+        gmail: $("#onboard-gmail-done").checked,
+        useEnv: $("#onboard-use-env").checked,
+        apiKey: $("#onboard-api-key").value,
+        name: $("#onboard-assistant-name").value,
+        persona: $("#onboard-assistant-persona").value,
+        address: $("#onboard-user-address").value,
+      });
+    }
+
+    function updateSaveButtonState() {
+      var dirty = !state.onboardSnapshot || snapshotOnboardingForm() !== state.onboardSnapshot;
+      $("#onboard-save-btn").disabled = !dirty;
+    }
+
     function renderOnboarding() {
       const config = state.config;
       const onboarding = state.onboarding || {};
@@ -1453,6 +1471,9 @@ export class DashboardServer {
       if (!$("#onboard-assistant-name").value) $("#onboard-assistant-name").value = pv.assistantName || "";
       if (!$("#onboard-assistant-persona").value) $("#onboard-assistant-persona").value = pv.assistantPersona || "";
       if (!$("#onboard-user-address").value) $("#onboard-user-address").value = pv.userAddress || "";
+
+      state.onboardSnapshot = snapshotOnboardingForm();
+      updateSaveButtonState();
     }
 
     async function loadControlSettings() {
@@ -1828,6 +1849,13 @@ export class DashboardServer {
           "<div>Provider: <code>" + provider + "</code></div>" +
           "<div>Provider API env: <code>" + envName + "</code></div>" +
           "<div>" + status + "</div>";
+      });
+
+      ["onboard-model-select", "onboard-consent", "onboard-gmail-done",
+       "onboard-use-env", "onboard-api-key", "onboard-assistant-name",
+       "onboard-assistant-persona", "onboard-user-address"].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener(el.tagName === "SELECT" ? "change" : "input", updateSaveButtonState);
       });
 
       $("#onboard-save-btn").addEventListener("click", () => {
