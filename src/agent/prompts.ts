@@ -95,11 +95,11 @@ export function buildSystemPrompt(
       trimmedSkills,
       trimmedWorkspaceContext
         ? [
-            "",
-            "## Workspace Prompt Context",
-            "Instruction priority inside workspace context: AGENTS.md > BOOTSTRAP.md > SOUL.md > other files.",
-            trimmedWorkspaceContext,
-          ].join("\n")
+          "",
+          "## Workspace Prompt Context",
+          "Instruction priority inside workspace context: AGENTS.md > BOOTSTRAP.md > SOUL.md > other files.",
+          trimmedWorkspaceContext,
+        ].join("\n")
         : "",
     ].filter(Boolean).join("\n");
   }
@@ -200,11 +200,11 @@ export function buildSystemPrompt(
     trimmedSkills,
     trimmedWorkspaceContext
       ? [
-          "",
-          "## Workspace Prompt Context",
-          "These files are user-owned guidance and memory. Follow them unless they conflict with higher-priority safety rules.",
-          trimmedWorkspaceContext,
-        ].join("\n")
+        "",
+        "## Workspace Prompt Context",
+        "These files are user-owned guidance and memory. Follow them unless they conflict with higher-priority safety rules.",
+        trimmedWorkspaceContext,
+      ].join("\n")
       : "",
   ].filter(Boolean).join("\n");
 }
@@ -274,7 +274,7 @@ export function buildUserPrompt(
   const appStreak = trailingStreak(recentApps);
   const focusLoopRisk = actionStreak.value === "tap" && actionStreak.count >= 3;
   const unknownAppStreak = appStreak.value === "unknown" ? appStreak.count : 0;
-  const uiCandidatesText = snapshot.uiElements.length > 0
+  const uiCandidatesText = (snapshot.uiElements?.length ?? 0) > 0
     ? snapshot.uiElements
       .slice(0, 20)
       .map((item) => {
@@ -283,7 +283,7 @@ export function buildUserPrompt(
       })
       .join("\n")
     : "(none)";
-  const recentFramesText = recentSnapshots.length > 0
+  const recentFramesText = (recentSnapshots?.length ?? 0) > 0
     ? recentSnapshots
       .slice(-3)
       .map((item, idx) => {

@@ -14,12 +14,12 @@ const {
   resolveModelAuth,
 } = require("../dist/config/index.js");
 
-function withTempHome(prefix, fn) {
+async function withTempHome(prefix, fn) {
   const prevHome = process.env.OPENPOCKET_HOME;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   process.env.OPENPOCKET_HOME = home;
   try {
-    return fn(home);
+    return await fn(home);
   } finally {
     if (prevHome === undefined) {
       delete process.env.OPENPOCKET_HOME;
@@ -29,12 +29,12 @@ function withTempHome(prefix, fn) {
   }
 }
 
-function withTempCodexHome(prefix, fn) {
+async function withTempCodexHome(prefix, fn) {
   const prevCodexHome = process.env.CODEX_HOME;
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   process.env.CODEX_HOME = codexHome;
   try {
-    return fn(codexHome);
+    return await fn(codexHome);
   } finally {
     if (prevCodexHome === undefined) {
       delete process.env.CODEX_HOME;
