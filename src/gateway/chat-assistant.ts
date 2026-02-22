@@ -52,6 +52,16 @@ interface TaskProgressNarrationDecision {
   reason?: string;
 }
 
+interface TaskOutcomeNarrationInput {
+  task: string;
+  locale: OnboardingLocale;
+  ok: boolean;
+  rawResult: string;
+  recentProgress: AgentProgressUpdate[];
+  skillPath: string | null;
+  scriptPath: string | null;
+}
+
 type OnboardingStep = 1 | 2 | 3;
 type OnboardingLocale = "zh" | "en";
 type OnboardingProfileField = "userPreferredAddress" | "assistantName" | "assistantPersona";
@@ -106,6 +116,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 const PROFILE_ONBOARDING_TEMPLATE_FILE = "PROFILE_ONBOARDING.json";
 const BARE_SESSION_RESET_TEMPLATE_FILE = "BARE_SESSION_RESET_PROMPT.md";
 const TASK_PROGRESS_REPORTER_TEMPLATE_FILE = "TASK_PROGRESS_REPORTER.md";
+const TASK_OUTCOME_REPORTER_TEMPLATE_FILE = "TASK_OUTCOME_REPORTER.md";
 
 const DEFAULT_SESSION_RESET_PROMPT: Record<OnboardingLocale, string> = {
   zh: [
@@ -882,7 +893,23 @@ export class ChatAssistant {
       "Decide whether user should be notified now.",
       "- notify=false when still repeating on same screen without clear user-visible progress.",
       "- notify=true when app/screen changed, checkpoint reached, auth required, or blocked by error.",
-      "- If notify=true, write concise conversational status with natural progress indicator (x/y).",
+      "- If notify=true, write concise conversational status.",
+      "- Avoid step counters unless user explicitly requests telemetry.",
+    ].join("\n");
+  }
+
+  private readTaskOutcomeReporterGuide(): string {
+    const guide = this.readTextSafe(this.workspaceFilePath(TASK_OUTCOME_REPORTER_TEMPLATE_FILE)).trim();
+    if (guide) {
+      return guide;
+    }
+    return [
+      "# TASK_OUTCOME_REPORTER",
+      "",
+      "Turn raw outcome into user-facing final answer.",
+      "- Lead with concrete result details.",
+      "- Avoid boilerplate status text when data is available.",
+      "- If reusable artifacts exist, mention saved reuse asset briefly.",
     ].join("\n");
   }
 
@@ -907,7 +934,7 @@ export class ChatAssistant {
       "1) notify=false when there is no clear, user-visible progress yet.",
       "2) notify=true when meaningful progress happened (page transition, key checkpoint, auth blocker, error, or completion signal).",
       "3) If notify=true, message must be concise, natural language, and in locale hint.",
-      "4) If notify=true, include progress indicator naturally (e.g., (8/50)), not rigid log format.",
+      "4) Do not include step counters (8/50, step 8, progress 8) unless user explicitly asked for it.",
       "5) Use conversational tone. Avoid repeating the same opening pattern across updates.",
       "6) Do not expose internal mechanics (model, filters, callbacks, tools).",
       "7) If notify=false, message must be empty string.",
@@ -925,6 +952,53 @@ export class ChatAssistant {
       this.trimForPrompt(user, 1200),
       "",
       "Progress context JSON:",
+      JSON.stringify(payload, null, 2),
+    ].join("\n");
+  }
+
+  private buildTaskOutcomeNarrationPrompt(input: TaskOutcomeNarrationInput): string {
+    const payload = {
+      task: this.trimForPrompt(input.task, 300),
+      localeHint: input.locale,
+      ok: input.ok,
+      rawResult: this.trimForPrompt(input.rawResult, 1200),
+      recentProgress: input.recentProgress.slice(-6).map((item) => this.compactProgressForPrompt(item)),
+      artifacts: {
+        skillGenerated: Boolean(input.skillPath),
+        scriptGenerated: Boolean(input.scriptPath),
+      },
+    };
+    const soul = this.readTextSafe(this.workspaceFilePath("SOUL.md")).trim() || "(empty)";
+    const identity = this.readTextSafe(this.profileFilePath("IDENTITY.md")).trim() || "(empty)";
+    const user = this.readTextSafe(this.profileFilePath("USER.md")).trim() || "(empty)";
+
+    return [
+      "You are OpenPocket final outcome narrator.",
+      "Convert raw task outcome to user-facing answer.",
+      "Return strict JSON only:",
+      '{"message":"..."}',
+      "Rules:",
+      "1) Lead with concrete findings/result details, not status boilerplate.",
+      "2) If success and rawResult has data (numbers/facts), surface those first.",
+      "3) Do not start with 'Task completed' unless no better data exists.",
+      "4) If failure, explain key reason and one practical next move.",
+      "5) If reusable artifacts were generated, mention reuse in one short natural sentence.",
+      "6) Use locale hint language.",
+      "7) Keep concise and natural; do not expose internal logs.",
+      "",
+      "TASK_OUTCOME_REPORTER.md:",
+      this.readTaskOutcomeReporterGuide(),
+      "",
+      "SOUL.md:",
+      this.trimForPrompt(soul, 1200),
+      "",
+      "IDENTITY.md:",
+      this.trimForPrompt(identity, 1000),
+      "",
+      "USER.md:",
+      this.trimForPrompt(user, 1000),
+      "",
+      "Outcome context JSON:",
       JSON.stringify(payload, null, 2),
     ].join("\n");
   }
@@ -1110,6 +1184,81 @@ export class ChatAssistant {
         message,
         reason: typeof parsed.reason === "string" ? parsed.reason.trim() : undefined,
       };
+    } catch {
+      return null;
+    }
+  }
+
+  private async requestTaskOutcomeNarration(
+    client: OpenAI,
+    model: string,
+    maxTokens: number,
+    prompt: string,
+  ): Promise<string | null> {
+    const tryModes: Array<"responses" | "chat" | "completions"> =
+      this.modeHint === "responses"
+        ? ["responses", "chat", "completions"]
+        : this.modeHint === "chat"
+          ? ["chat", "responses", "completions"]
+          : ["completions", "responses", "chat"];
+
+    let output = "";
+    const errors: string[] = [];
+    for (const mode of tryModes) {
+      try {
+        if (mode === "responses") {
+          const response = await client.responses.create({
+            model,
+            max_output_tokens: Math.min(maxTokens, 300),
+            input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+          } as never);
+          output = readResponseOutputText(response);
+        } else if (mode === "chat") {
+          const response = await client.chat.completions.create({
+            model,
+            max_tokens: Math.min(maxTokens, 300),
+            messages: [{ role: "user", content: prompt }],
+          } as never);
+          output = typeof response.choices?.[0]?.message?.content === "string"
+            ? response.choices?.[0]?.message?.content.trim()
+            : "";
+        } else {
+          const response = await client.completions.create({
+            model,
+            max_tokens: Math.min(maxTokens, 300),
+            prompt,
+          } as never);
+          output = (response.choices?.[0]?.text ?? "").trim();
+        }
+
+        if (!output) {
+          continue;
+        }
+        if (this.modeHint !== mode) {
+          this.modeHint = mode;
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][chat] switched endpoint mode -> ${mode}`);
+        }
+        break;
+      } catch (error) {
+        errors.push(`${mode}: ${stringifyError(error)}`);
+      }
+    }
+
+    if (!output) {
+      // eslint-disable-next-line no-console
+      console.warn(`[OpenPocket][chat] task outcome narration failed: ${errors.join(" | ")}`);
+      return null;
+    }
+
+    const jsonText = extractJsonObjectText(output);
+    try {
+      const parsed = JSON.parse(jsonText) as { message?: unknown };
+      if (typeof parsed.message !== "string") {
+        return null;
+      }
+      const message = parsed.message.trim();
+      return message || null;
     } catch {
       return null;
     }
@@ -1765,18 +1914,39 @@ export class ChatAssistant {
       };
     }
 
-    const stepToken = `${input.progress.step}/${input.progress.maxSteps}`;
     const app = this.trimForPrompt(input.progress.currentApp || "unknown", 120);
     const summary = this.trimForPrompt(input.progress.thought || input.progress.message || "", 180);
     const messageText = input.locale === "zh"
-      ? `小更新（${stepToken}）：我还在 ${app}，刚做了 ${input.progress.actionType}${summary ? `，${summary}` : ""}。`
-      : `Quick update (${stepToken}): still on ${app}, I just ran ${input.progress.actionType}${summary ? `, ${summary}` : ""}.`;
+      ? `小更新：我还在 ${app}，刚做了 ${input.progress.actionType}${summary ? `，${summary}` : ""}。`
+      : `Quick update: still on ${app}, I just ran ${input.progress.actionType}${summary ? `, ${summary}` : ""}.`;
 
     return {
       notify: true,
       message: messageText,
       reason: "fallback_notify",
     };
+  }
+
+  private sanitizeOutcomeBoilerplate(raw: string): string {
+    return String(raw || "")
+      .replace(/^task completed[.!:\s-]*/i, "")
+      .replace(/^completed[.!:\s-]*/i, "")
+      .replace(/^完成(了|。|!|！)?\s*/i, "")
+      .trim();
+  }
+
+  private fallbackTaskOutcomeNarration(input: TaskOutcomeNarrationInput): string {
+    const cleaned = this.sanitizeOutcomeBoilerplate(input.rawResult);
+    const base = cleaned || (input.ok
+      ? (input.locale === "zh" ? "结果已获取，但可用细节较少。" : "I got the result, but details are limited.")
+      : this.trimForPrompt(input.rawResult, 400));
+    const reuseNote =
+      input.ok && (input.skillPath || input.scriptPath)
+        ? (input.locale === "zh"
+          ? "另外，我已把这次流程沉淀成可复用的自动化资产，下次可以更快复用。"
+          : "Also, I saved this workflow as reusable automation assets for faster reuse next time.")
+        : "";
+    return reuseNote ? `${base}\n${reuseNote}` : base;
   }
 
   async narrateTaskProgress(input: TaskProgressNarrationInput): Promise<TaskProgressNarrationDecision> {
@@ -1820,6 +1990,36 @@ export class ChatAssistant {
       };
     } catch {
       return this.fallbackTaskProgressNarration(input);
+    }
+  }
+
+  async narrateTaskOutcome(input: TaskOutcomeNarrationInput): Promise<string> {
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return this.fallbackTaskOutcomeNarration(input);
+    }
+
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+    const prompt = this.buildTaskOutcomeNarrationPrompt(input);
+
+    try {
+      const message = await this.requestTaskOutcomeNarration(
+        client,
+        profile.model,
+        profile.maxTokens,
+        prompt,
+      );
+      if (!message) {
+        return this.fallbackTaskOutcomeNarration(input);
+      }
+      const normalized = this.normalizeOneLine(message);
+      return normalized || this.fallbackTaskOutcomeNarration(input);
+    } catch {
+      return this.fallbackTaskOutcomeNarration(input);
     }
   }
 

@@ -215,6 +215,8 @@ export interface AgentRunResult {
   ok: boolean;
   message: string;
   sessionPath: string;
+  skillPath?: string | null;
+  scriptPath?: string | null;
 }
 
 export interface AgentProgressUpdate {

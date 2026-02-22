@@ -44,6 +44,7 @@ type ProgressNarrationState = {
   lastNotifiedMessage: string;
   skippedSteps: number;
   recentProgress: AgentProgressUpdate[];
+  allProgress: AgentProgressUpdate[];
 };
 
 export class TelegramGateway {
@@ -388,27 +389,15 @@ export class TelegramGateway {
     return `On it: ${task}\nI'll update you when there's meaningful progress.`;
   }
 
-  private isTaskStoppedByUser(message: string): boolean {
-    return /(task stopped by user|stopped by user|stop requested)/i.test(String(message || ""));
-  }
-
-  private renderTaskCompletionMessage(
-    ok: boolean,
-    message: string,
-    locale: "zh" | "en",
-  ): string {
-    const summary = this.sanitizeForChat(message, 800) || (locale === "zh" ? "暂无更多细节。" : "No extra details.");
-    if (ok) {
-      return locale === "zh" ? `完成了。\n${summary}` : `Done.\n${summary}`;
-    }
-    if (this.isTaskStoppedByUser(message)) {
-      return locale === "zh"
-        ? "已按你的指令停止这次任务。"
-        : "Stopped as requested.";
-    }
-    return locale === "zh"
-      ? `这次还没完成。\n原因：${summary}`
-      : `This task is not completed yet.\nReason: ${summary}`;
+  private stripStepCounterTelemetry(text: string): string {
+    const stripped = String(text || "")
+      .replace(/(?:^|\n)\s*(?:step|progress|进度)\s*\d+\s*\/\s*\d+\s*[:：-]?\s*/gim, "\n")
+      .replace(/\b(?:step|progress)\s*\d+\s*[:：-]?\s*/gim, "")
+      .replace(/\(\s*\d+\s*\/\s*\d+\s*\)/g, "")
+      .replace(/(^|\s)\d+\s*\/\s*\d+\s*[:：-]?\s*/g, "$1")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return stripped || text;
   }
 
   private async syncBotDisplayName(
@@ -967,6 +956,7 @@ export class TelegramGateway {
       lastNotifiedMessage: "",
       skippedSteps: 0,
       recentProgress: [],
+      allProgress: [],
     };
     let progressWork: Promise<void> = Promise.resolve();
     this.log(
@@ -984,6 +974,7 @@ export class TelegramGateway {
               `progress source=${source} chat=${chatId} step=${progress.step}/${progress.maxSteps} action=${progress.actionType} app=${progress.currentApp}`,
             );
             const recentProgress = [...progressNarrationState.recentProgress, progress].slice(-8);
+            progressNarrationState.allProgress = [...progressNarrationState.allProgress, progress].slice(-16);
             const decision = await this.chat.narrateTaskProgress({
               task,
               locale: progressLocale,
@@ -997,7 +988,10 @@ export class TelegramGateway {
               progressNarrationState.recentProgress = recentProgress;
               return;
             }
-            const message = this.sanitizeForChat(decision.message, 1800);
+            const message = this.sanitizeForChat(
+              this.stripStepCounterTelemetry(decision.message),
+              1800,
+            );
             if (!message.trim()) {
               progressNarrationState.skippedSteps += 1;
               progressNarrationState.recentProgress = recentProgress;
@@ -1099,9 +1093,21 @@ export class TelegramGateway {
         this.log(`task done source=${source} chat=${chatId ?? "(none)"} ok=${result.ok} session=${result.sessionPath}`);
 
         if (chatId !== null) {
+          const finalMessage = await this.chat.narrateTaskOutcome({
+            task,
+            locale: progressLocale,
+            ok: result.ok,
+            rawResult: result.message,
+            recentProgress: progressNarrationState.allProgress,
+            skillPath: result.skillPath ?? null,
+            scriptPath: result.scriptPath ?? null,
+          });
           await this.bot.sendMessage(
             chatId,
-            this.renderTaskCompletionMessage(result.ok, result.message, progressLocale),
+            this.sanitizeForChat(
+              this.stripStepCounterTelemetry(finalMessage),
+              1800,
+            ),
           );
         }
 

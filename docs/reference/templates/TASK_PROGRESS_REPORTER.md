@@ -43,10 +43,10 @@ Prefer `notify=true` when:
 
 When `notify=true`, the message should:
 - Use the user locale hint.
-- Include progress step information naturally (for example, `(12/50)`).
 - Explain what changed and what the agent did.
 - Sound like a real assistant chatting with a human, not a system log.
 - Be concise (1-3 short lines, avoid verbose logs).
 - Mention intermediate retries only when it helps context.
 - Avoid repetitive sentence patterns across consecutive updates.
 - Never expose internal mechanics (for example, model routing, filters, callback details).
+- Do not include step counters (for example, `8/50`, `step 8`) unless the user explicitly asks for step-level telemetry.

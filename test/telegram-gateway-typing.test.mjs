@@ -536,6 +536,7 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
       decisionIndex += 1;
       return decision;
     };
+    gateway.chat.narrateTaskOutcome = async () => "收件箱已打开，当前可见最新邮件列表。";
 
     gateway.agent.runTask = async (_task, _modelName, onProgress) => {
       await onProgress({
@@ -602,9 +603,10 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     );
     assert.equal(sent.length, 3);
     assert.equal(sent[0].chatId, 9201);
-    assert.equal(sent[0].text, "进度 1/5：已打开 Gmail 首页。");
-    assert.equal(sent[1].text, "进度 4/5：已进入收件箱。");
-    assert.match(sent[2].text, /完成了/);
+    assert.equal(sent[0].text, "已打开 Gmail 首页。");
+    assert.equal(sent[1].text, "已进入收件箱。");
+    assert.equal(sent[2].text, "收件箱已打开，当前可见最新邮件列表。");
+    assert.equal(sent.slice(0, 2).some((item) => /\d+\/\d+/.test(item.text)), false);
     assert.equal(
       sent.slice(0, 2).some((item) => /Current screen app:|Reasoning:|Action:/.test(item.text)),
       false,
@@ -641,6 +643,7 @@ test("TelegramGateway suppresses low-signal repetitive narration even if model r
       decisionIndex += 1;
       return decision;
     };
+    gateway.chat.narrateTaskOutcome = async () => "Inbox is visible with latest messages.";
 
     gateway.agent.runTask = async (_task, _modelName, onProgress) => {
       await onProgress({
@@ -696,8 +699,8 @@ test("TelegramGateway suppresses low-signal repetitive narration even if model r
     assert.equal(result.ok, true);
     assert.equal(decisionIndex, 4);
     assert.equal(sent.length, 3);
-    assert.match(sent[0].text, /6\/50/);
-    assert.match(sent[1].text, /15\/50/);
-    assert.match(sent[2].text, /Done\./);
+    assert.doesNotMatch(sent[0].text, /\d+\/\d+/);
+    assert.doesNotMatch(sent[1].text, /\d+\/\d+/);
+    assert.equal(sent[2].text, "Inbox is visible with latest messages.");
   });
 });

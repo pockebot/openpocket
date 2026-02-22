@@ -76,6 +76,8 @@ const SYSTEM_PROMPT_CONTEXT_FILES = [
   "TOOLS.md",
   "HEARTBEAT.md",
   "MEMORY.md",
+  "TASK_PROGRESS_REPORTER.md",
+  "TASK_OUTCOME_REPORTER.md",
 ] as const;
 const SYSTEM_PROMPT_CONTEXT_HOOK_FILE = path.join(".openpocket", "bootstrap-context-hook.md");
 const SYSTEM_PROMPT_MAX_CHARS_PER_FILE = 20_000;
@@ -877,6 +879,8 @@ export class AgentRuntime {
         ok: false,
         message: "Agent is busy. Please retry later.",
         sessionPath: "",
+        skillPath: null,
+        scriptPath: null,
       };
     }
 
@@ -904,6 +908,8 @@ export class AgentRuntime {
           ok: false,
           message,
           sessionPath: session.path,
+          skillPath: null,
+          scriptPath: null,
         };
       }
 
@@ -929,6 +935,8 @@ export class AgentRuntime {
             ok: false,
             message,
             sessionPath: session.path,
+            skillPath: null,
+            scriptPath: null,
           };
         }
 
@@ -1061,6 +1069,8 @@ export class AgentRuntime {
               ok: false,
               message,
               sessionPath: session.path,
+              skillPath: null,
+              scriptPath: null,
             };
           }
 
@@ -1113,6 +1123,8 @@ export class AgentRuntime {
             ok: true,
             message: finishMessage,
             sessionPath: session.path,
+            skillPath: artifacts.skillPath,
+            scriptPath: artifacts.scriptPath,
           };
         }
 
@@ -1147,6 +1159,8 @@ export class AgentRuntime {
               ok: false,
               message,
               sessionPath: session.path,
+              skillPath: null,
+              scriptPath: null,
             };
           }
 
@@ -1240,6 +1254,8 @@ export class AgentRuntime {
               ok: false,
               message,
               sessionPath: session.path,
+              skillPath: null,
+              scriptPath: null,
             };
           }
 
@@ -1368,6 +1384,8 @@ export class AgentRuntime {
         ok: false,
         message,
         sessionPath: session.path,
+        skillPath: null,
+        scriptPath: null,
       };
     } catch (error) {
       const message = `Agent execution failed: ${(error as Error).message}`;
@@ -1377,6 +1395,8 @@ export class AgentRuntime {
         ok: false,
         message,
         sessionPath: session.path,
+        skillPath: null,
+        scriptPath: null,
       };
     } finally {
       if (shouldReturnHome) {
