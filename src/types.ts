@@ -196,6 +196,8 @@ export interface ScreenSnapshot {
   scaledWidth: number;
   /** Height of the scaled image the model actually sees. */
   scaledHeight: number;
+  /** Installed launchable package names (for launch_app). */
+  installedPackages?: string[];
   /** Actionable UI nodes extracted from uiautomator dump for deterministic element targeting. */
   uiElements: UiElementSnapshot[];
 }
