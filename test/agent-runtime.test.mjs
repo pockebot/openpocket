@@ -3,14 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { loadConfig } = require("../dist/config/index.js");
-const { AgentRuntime } = require("../dist/agent/agent-runtime.js");
-const { ModelClient } = require("../dist/agent/model-client.js");
+const { loadConfig } = await import("../dist/config/index.js");
+const { AgentRuntime } = await import("../dist/agent/agent-runtime.js");
 
-function makeSnapshot() {
+function makeSnapshot(overrides = {}) {
   return {
     deviceId: "emulator-5554",
     currentApp: "com.android.launcher3",
@@ -22,32 +19,161 @@ function makeSnapshot() {
     scaleY: 1,
     scaledWidth: 1080,
     scaledHeight: 2400,
+    ...overrides,
   };
 }
 
-function setupRuntime({ returnHomeOnTaskEnd }) {
+function toToolName(actionType) {
+  return actionType === "type" ? "type_text" : actionType;
+}
+
+function createAssistantMessage(stepIndex, toolName, args, model) {
+  return {
+    role: "assistant",
+    content: [{
+      type: "toolCall",
+      id: `tc-${stepIndex}`,
+      name: toolName,
+      arguments: args,
+    }],
+    api: model?.api ?? "openai-completions",
+    provider: model?.provider ?? "openai",
+    model: model?.id ?? "mock-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: Date.now(),
+  };
+}
+
+function createScriptedAgentFactory(steps, hooks = {}) {
+  return (options) => {
+    const listeners = new Set();
+    const plan = Array.isArray(steps) ? steps : [];
+    const followUps = [];
+    let idlePromise = Promise.resolve();
+
+    const emit = (event) => {
+      for (const listener of listeners) {
+        listener(event);
+      }
+    };
+
+    const run = async () => {
+      let messages = [];
+      if (hooks.onInit) {
+        hooks.onInit(options);
+      }
+
+      for (let i = 0; i < plan.length; i += 1) {
+        const scripted = typeof plan[i] === "function" ? await plan[i]() : plan[i];
+        if (options.transformContext) {
+          messages = await options.transformContext(messages);
+        }
+        if (hooks.captureUserPrompt && options.convertToLlm) {
+          const llmMessages = await options.convertToLlm(messages);
+          const latestUser = [...llmMessages].reverse().find((item) => item.role === "user");
+          const content = Array.isArray(latestUser?.content) ? latestUser.content : [];
+          const textBlock = content.find((item) => item.type === "text");
+          hooks.captureUserPrompt.push(textBlock?.text ?? "");
+        }
+
+        const action = scripted.action;
+        const toolName = toToolName(action.type);
+        const tool = options.initialState?.tools?.find((item) => item.name === toolName);
+        if (!tool) {
+          throw new Error(`Tool '${toolName}' not found in scripted agent.`);
+        }
+
+        const { type: _type, ...actionArgs } = action;
+        const args = {
+          thought: scripted.thought ?? "test-thought",
+          ...actionArgs,
+        };
+
+        await tool.execute(`tc-${i + 1}`, args);
+        emit({
+          type: "turn_end",
+          message: createAssistantMessage(i + 1, toolName, args, options.initialState?.model),
+          toolResults: [],
+        });
+
+        if (action.type === "finish") {
+          break;
+        }
+      }
+    };
+
+    return {
+      followUp(message) {
+        followUps.push(message);
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async prompt() {
+        idlePromise = run();
+        await idlePromise;
+      },
+      async waitForIdle() {
+        await idlePromise;
+      },
+      get queuedFollowUps() {
+        return followUps;
+      },
+    };
+  };
+}
+
+function setupRuntime({ returnHomeOnTaskEnd, scriptedSteps, hooks }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-runtime-"));
   const prevHome = process.env.OPENPOCKET_HOME;
   process.env.OPENPOCKET_HOME = home;
+
   const cfg = loadConfig();
   cfg.agent.verbose = false;
-  cfg.agent.maxSteps = 3;
+  cfg.agent.maxSteps = 6;
   cfg.agent.loopDelayMs = 1;
   cfg.agent.returnHomeOnTaskEnd = returnHomeOnTaskEnd;
   cfg.models[cfg.defaultModel].apiKey = "dummy";
   cfg.models[cfg.defaultModel].apiKeyEnv = "MISSING_OPENAI_KEY";
 
-  const runtime = new AgentRuntime(cfg);
+  const runtime = new AgentRuntime(cfg, {
+    agentFactory: createScriptedAgentFactory(scriptedSteps ?? [], hooks),
+  });
+
   if (prevHome === undefined) {
     delete process.env.OPENPOCKET_HOME;
   } else {
     process.env.OPENPOCKET_HOME = prevHome;
   }
+
+  runtime.autoArtifactBuilder = {
+    build: () => ({ skillPath: null, scriptPath: null }),
+  };
+
   return runtime;
 }
 
 test("AgentRuntime injects BOOTSTRAP guidance into system prompt context", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
+  let capturedSystemPrompt = "";
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedSystemPrompt = options.initialState?.systemPrompt ?? "";
+      },
+    },
+  });
+
   fs.writeFileSync(
     path.join(runtime.config.workspaceDir, "BOOTSTRAP.md"),
     "# BOOTSTRAP\n\nruntime-bootstrap-check\n",
@@ -55,80 +181,50 @@ test("AgentRuntime injects BOOTSTRAP guidance into system prompt context", async
   );
 
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async () => "ok",
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
 
-  let capturedSystemPrompt = "";
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async (params) => {
-    capturedSystemPrompt = params.systemPrompt;
-    return {
-      thought: "done",
-      action: { type: "finish", message: "task completed" },
-      raw: '{"thought":"done","action":{"type":"finish","message":"task completed"}}',
-    };
-  };
-
-  try {
-    const result = await runtime.runTask("bootstrap context test");
-    assert.equal(result.ok, true);
-    assert.match(
-      capturedSystemPrompt,
-      /Instruction priority inside workspace context: AGENTS\.md > BOOTSTRAP\.md > SOUL\.md > other files\./,
-    );
-    assert.match(capturedSystemPrompt, /### BOOTSTRAP\.md/);
-    assert.match(capturedSystemPrompt, /runtime-bootstrap-check/);
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  const result = await runtime.runTask("bootstrap context test");
+  assert.equal(result.ok, true);
+  assert.match(
+    capturedSystemPrompt,
+    /Instruction priority inside workspace context: AGENTS\.md > BOOTSTRAP\.md > SOUL\.md > other files\./,
+  );
+  assert.match(capturedSystemPrompt, /### BOOTSTRAP\.md/);
+  assert.match(capturedSystemPrompt, /runtime-bootstrap-check/);
 });
 
 test("AgentRuntime supports none system prompt mode for constrained runs", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
+  let capturedSystemPrompt = "";
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedSystemPrompt = options.initialState?.systemPrompt ?? "";
+      },
+    },
+  });
+
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async () => "ok",
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
 
-  let capturedSystemPrompt = "";
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async (params) => {
-    capturedSystemPrompt = params.systemPrompt;
-    return {
-      thought: "done",
-      action: { type: "finish", message: "task completed" },
-      raw: '{"thought":"done","action":{"type":"finish","message":"task completed"}}',
-    };
-  };
-
-  try {
-    const result = await runtime.runTask("prompt none mode test", undefined, undefined, undefined, "none");
-    assert.equal(result.ok, true);
-    assert.match(capturedSystemPrompt, /Call exactly one tool step at a time/);
-    assert.doesNotMatch(capturedSystemPrompt, /Planning Loop/);
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  const result = await runtime.runTask("prompt none mode test", undefined, undefined, undefined, "none");
+  assert.equal(result.ok, true);
+  assert.match(capturedSystemPrompt, /Call exactly one tool step at a time/);
+  assert.doesNotMatch(capturedSystemPrompt, /Planning Loop/);
 });
 
 test("AgentRuntime context report marks hook usage and head-tail truncation", () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
+  const runtime = setupRuntime({ returnHomeOnTaskEnd: false, scriptedSteps: [] });
   const hookDir = path.join(runtime.config.workspaceDir, ".openpocket");
   fs.mkdirSync(hookDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(hookDir, "bootstrap-context-hook.md"),
-    "hook-line\n",
-    "utf-8",
-  );
+  fs.writeFileSync(path.join(hookDir, "bootstrap-context-hook.md"), "hook-line\n", "utf-8");
 
   const oversized = `${"A".repeat(25_000)}\n${"B".repeat(25_000)}`;
   fs.writeFileSync(path.join(runtime.config.workspaceDir, "AGENTS.md"), oversized, "utf-8");
@@ -145,98 +241,60 @@ test("AgentRuntime context report marks hook usage and head-tail truncation", ()
 });
 
 test("AgentRuntime returns home after successful task by default", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: true });
   const actionCalls = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: true,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+  });
 
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async (action) => {
       actionCalls.push(action);
       return "ok";
     },
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
 
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => ({
-    thought: "done",
-    action: { type: "finish", message: "task completed" },
-    raw: '{"thought":"done","action":{"type":"finish","message":"task completed"}}',
-  });
-
-  try {
-    const result = await runtime.runTask("go home test");
-    assert.equal(result.ok, true);
-    assert.equal(
-      actionCalls.some((action) => action.type === "keyevent" && action.keycode === "KEYCODE_HOME"),
-      true,
-    );
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  const result = await runtime.runTask("go home test");
+  assert.equal(result.ok, true);
+  assert.equal(
+    actionCalls.some((action) => action.type === "keyevent" && action.keycode === "KEYCODE_HOME"),
+    true,
+  );
 });
 
 test("AgentRuntime does not return home when config is disabled", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const actionCalls = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+  });
 
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async (action) => {
       actionCalls.push(action);
       return "ok";
     },
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
 
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => ({
-    thought: "done",
-    action: { type: "finish", message: "task completed" },
-    raw: '{"thought":"done","action":{"type":"finish","message":"task completed"}}',
-  });
-
-  try {
-    const result = await runtime.runTask("no-home test");
-    assert.equal(result.ok, true);
-    assert.equal(
-      actionCalls.some((action) => action.type === "keyevent" && action.keycode === "KEYCODE_HOME"),
-      false,
-    );
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  const result = await runtime.runTask("no-home test");
+  assert.equal(result.ok, true);
+  assert.equal(
+    actionCalls.some((action) => action.type === "keyevent" && action.keycode === "KEYCODE_HOME"),
+    false,
+  );
 });
 
 test("AgentRuntime pauses for request_human_auth and resumes after approval", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const actions = [];
   const authRequests = [];
-
-  runtime.adb = {
-    queryLaunchablePackages: async () => [],
-    captureScreenSnapshot: () => makeSnapshot(),
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
-
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
-      return {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
         thought: "Need real camera authorization",
         action: {
           type: "request_human_auth",
@@ -244,88 +302,82 @@ test("AgentRuntime pauses for request_human_auth and resumes after approval", as
           instruction: "Please approve camera access.",
           timeoutSec: 120,
         },
-        raw: '{"thought":"Need real camera authorization","action":{"type":"request_human_auth","capability":"camera","instruction":"Please approve camera access.","timeoutSec":120}}',
-      };
-    }
-    return {
-      thought: "Done",
-      action: { type: "finish", message: "Completed after approval" },
-      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after approval"}}',
-    };
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after approval" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
   };
 
-  try {
-    const result = await runtime.runTask(
-      "human auth resume test",
-      undefined,
-      undefined,
-      async (request) => {
-        authRequests.push(request);
-        return {
-          requestId: "req-1",
-          approved: true,
-          status: "approved",
-          message: "Approved by test.",
-          decidedAt: new Date().toISOString(),
-          artifactPath: null,
-        };
-      },
-    );
-    assert.equal(result.ok, true);
-    assert.equal(authRequests.length, 1);
-    assert.equal(authRequests[0].capability, "camera");
-    assert.equal(actions.some((item) => item.type === "request_human_auth"), false);
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  const result = await runtime.runTask(
+    "human auth resume test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-1",
+        approved: true,
+        status: "approved",
+        message: "Approved by test.",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "camera");
+  assert.equal(actions.some((item) => item.type === "request_human_auth"), false);
 });
 
 test("AgentRuntime fails when request_human_auth is rejected", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{
+      thought: "Need OTP",
+      action: {
+        type: "request_human_auth",
+        capability: "2fa",
+        instruction: "Confirm OTP code.",
+        timeoutSec: 60,
+      },
+    }],
+  });
+
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async () => "ok",
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
 
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => ({
-    thought: "Need OTP",
-    action: {
-      type: "request_human_auth",
-      capability: "2fa",
-      instruction: "Confirm OTP code.",
-      timeoutSec: 60,
-    },
-    raw: '{"thought":"Need OTP","action":{"type":"request_human_auth","capability":"2fa","instruction":"Confirm OTP code.","timeoutSec":60}}',
-  });
+  const result = await runtime.runTask(
+    "human auth reject test",
+    undefined,
+    undefined,
+    async () => ({
+      requestId: "req-2",
+      approved: false,
+      status: "rejected",
+      message: "User rejected",
+      decidedAt: new Date().toISOString(),
+      artifactPath: null,
+    }),
+  );
 
-  try {
-    const result = await runtime.runTask(
-      "human auth reject test",
-      undefined,
-      undefined,
-      async () => ({
-        requestId: "req-2",
-        approved: false,
-        status: "rejected",
-        message: "User rejected",
-        decidedAt: new Date().toISOString(),
-        artifactPath: null,
-      }),
-    );
-    assert.equal(result.ok, false);
-    assert.match(result.message, /Human authorization rejected/);
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  assert.equal(result.ok, false);
+  assert.match(result.message, /Human authorization rejected/);
 });
 
 test("AgentRuntime auto-approves Android permission dialog app without human auth", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const actions = [];
   const authRequests = [];
   const uiDumpXml = [
@@ -334,17 +386,19 @@ test("AgentRuntime auto-approves Android permission dialog app without human aut
     "<node index=\"1\" text=\"Allow\" resource-id=\"com.android.permissioncontroller:id/permission_allow_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[560,2100][1024,2200]\" />",
     "</hierarchy>",
   ].join("");
+
   let snapshotCount = 0;
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "Completed after auto human auth" } }],
+  });
 
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => {
       snapshotCount += 1;
       if (snapshotCount === 1) {
-        return {
-          ...makeSnapshot(),
-          currentApp: "com.android.permissioncontroller",
-        };
+        return makeSnapshot({ currentApp: "com.android.permissioncontroller" });
       }
       return makeSnapshot();
     },
@@ -361,125 +415,89 @@ test("AgentRuntime auto-approves Android permission dialog app without human aut
       return "ok";
     },
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
 
-  let modelCalls = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    modelCalls += 1;
-    return {
-      thought: "done",
-      action: { type: "finish", message: "Completed after auto human auth" },
-      raw: '{"thought":"done","action":{"type":"finish","message":"Completed after auto human auth"}}',
-    };
-  };
+  const result = await runtime.runTask(
+    "auto permission dialog test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-auto-perm",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
 
-  try {
-    const result = await runtime.runTask(
-      "auto permission dialog test",
-      undefined,
-      undefined,
-      async (request) => {
-        authRequests.push(request);
-        return {
-          requestId: "req-auto-perm",
-          approved: true,
-          status: "approved",
-          message: "Approved from phone",
-          decidedAt: new Date().toISOString(),
-          artifactPath: null,
-        };
-      },
-    );
-
-    assert.equal(result.ok, true);
-    assert.equal(authRequests.length, 0);
-    assert.equal(
-      actions.some(
-        (action) =>
-          action.type === "tap"
-          && action.reason === "auto_vm_permission_approve"
-          && action.x >= 760
-          && action.y >= 2100,
-      ),
-      true,
-    );
-    assert.equal(modelCalls >= 1, true);
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 0);
+  assert.equal(
+    actions.some(
+      (action) =>
+        action.type === "tap"
+        && action.reason === "auto_vm_permission_approve"
+        && action.x >= 760
+        && action.y >= 2100,
+    ),
+    true,
+  );
 });
 
 test("AgentRuntime does not call human auth when model asks permission capability", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const actions = [];
   const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need permission decision",
+        action: {
+          type: "request_human_auth",
+          capability: "permission",
+          instruction: "Please decide this permission.",
+          timeoutSec: 90,
+        },
+      },
+      { thought: "done", action: { type: "finish", message: "Completed without human auth for VM permission" } },
+    ],
+  });
 
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async (action) => {
       actions.push(action);
       return "ok";
     },
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
 
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
+  const result = await runtime.runTask(
+    "permission capability no human auth test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
       return {
-        thought: "Need permission decision",
-        action: {
-          type: "request_human_auth",
-          capability: "permission",
-          instruction: "Please decide this permission.",
-          timeoutSec: 90,
-        },
-        raw: '{"thought":"Need permission decision","action":{"type":"request_human_auth","capability":"permission","instruction":"Please decide this permission.","timeoutSec":90}}',
+        requestId: "req-should-not-happen",
+        approved: true,
+        status: "approved",
+        message: "Approved",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
       };
-    }
-    return {
-      thought: "done",
-      action: { type: "finish", message: "Completed without human auth for VM permission" },
-      raw: '{"thought":"done","action":{"type":"finish","message":"Completed without human auth for VM permission"}}',
-    };
-  };
+    },
+  );
 
-  try {
-    const result = await runtime.runTask(
-      "permission capability no human auth test",
-      undefined,
-      undefined,
-      async (request) => {
-        authRequests.push(request);
-        return {
-          requestId: "req-should-not-happen",
-          approved: true,
-          status: "approved",
-          message: "Approved",
-          decidedAt: new Date().toISOString(),
-          artifactPath: null,
-        };
-      },
-    );
-    assert.equal(result.ok, true);
-    assert.equal(authRequests.length, 0);
-    assert.equal(callCount >= 2, true);
-    assert.equal(actions.length, 0);
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 0);
+  assert.equal(actions.length, 0);
 });
 
 test("AgentRuntime auto-approves permission dialog even when model asks permission capability", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const actions = [];
   const authRequests = [];
   const uiDumpXml = [
@@ -489,36 +507,10 @@ test("AgentRuntime auto-approves permission dialog even when model asks permissi
     "</hierarchy>",
   ].join("");
 
-  runtime.adb = {
-    queryLaunchablePackages: async () => [],
-    captureScreenSnapshot: () => ({
-      ...makeSnapshot(),
-      currentApp: "com.android.permissioncontroller",
-    }),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat")) {
-        return uiDumpXml;
-      }
-      return "ok";
-    },
-  };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
-
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
-      return {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
         thought: "Need permission decision",
         action: {
           type: "request_human_auth",
@@ -526,67 +518,14 @@ test("AgentRuntime auto-approves permission dialog even when model asks permissi
           instruction: "Please decide this permission.",
           timeoutSec: 90,
         },
-        raw: '{"thought":"Need permission decision","action":{"type":"request_human_auth","capability":"permission","instruction":"Please decide this permission.","timeoutSec":90}}',
-      };
-    }
-    return {
-      thought: "Done",
-      action: { type: "finish", message: "Completed after permission decision" },
-      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after permission decision"}}',
-    };
-  };
-
-  try {
-    const result = await runtime.runTask(
-      "permission decision tap test",
-      undefined,
-      undefined,
-      async (request) => {
-        authRequests.push(request);
-        return {
-          requestId: "req-perm-tap",
-          approved: true,
-          status: "approved",
-          message: "Approved from phone",
-          decidedAt: new Date().toISOString(),
-          artifactPath: null,
-        };
       },
-    );
-    assert.equal(result.ok, true);
-    assert.equal(authRequests.length, 0);
-    assert.equal(
-      actions.some(
-        (action) =>
-          action.type === "tap"
-          && action.reason === "auto_vm_permission_approve"
-          && action.x >= 760
-          && action.y >= 2100,
-      ),
-      true,
-    );
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
-});
-
-test("AgentRuntime still requests human auth for camera capability after auto-allowing VM permission dialog", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
-  const actions = [];
-  const authRequests = [];
-  const uiDumpXml = [
-    "<hierarchy rotation=\"0\">",
-    "<node index=\"0\" text=\"Don't allow\" resource-id=\"com.android.permissioncontroller:id/permission_deny_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[56,2100][520,2200]\" />",
-    "<node index=\"1\" text=\"Allow\" resource-id=\"com.android.permissioncontroller:id/permission_allow_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[560,2100][1024,2200]\" />",
-    "</hierarchy>",
-  ].join("");
+      { thought: "Done", action: { type: "finish", message: "Completed after permission decision" } },
+    ],
+  });
 
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
-    captureScreenSnapshot: () => ({
-      ...makeSnapshot(),
-      currentApp: "com.android.permissioncontroller",
-    }),
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({ currentApp: "com.android.permissioncontroller" }),
     resolveDeviceId: () => "emulator-5554",
     executeAction: async (action) => {
       actions.push(action);
@@ -601,16 +540,52 @@ test("AgentRuntime still requests human auth for camera capability after auto-al
       return "ok";
     },
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
 
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
+  const result = await runtime.runTask(
+    "permission decision tap test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
       return {
+        requestId: "req-perm-tap",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 0);
+  assert.equal(
+    actions.some(
+      (action) =>
+        action.type === "tap"
+        && action.reason === "auto_vm_permission_approve"
+        && action.x >= 760
+        && action.y >= 2100,
+    ),
+    true,
+  );
+});
+
+test("AgentRuntime still requests human auth for camera capability after auto-allowing VM permission dialog", async () => {
+  const actions = [];
+  const authRequests = [];
+  const uiDumpXml = [
+    "<hierarchy rotation=\"0\">",
+    "<node index=\"0\" text=\"Don't allow\" resource-id=\"com.android.permissioncontroller:id/permission_deny_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[56,2100][520,2200]\" />",
+    "<node index=\"1\" text=\"Allow\" resource-id=\"com.android.permissioncontroller:id/permission_allow_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[560,2100][1024,2200]\" />",
+    "</hierarchy>",
+  ].join("");
+
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
         thought: "Need real camera capture from phone.",
         action: {
           type: "request_human_auth",
@@ -618,75 +593,67 @@ test("AgentRuntime still requests human auth for camera capability after auto-al
           instruction: "Capture image on phone and approve.",
           timeoutSec: 90,
         },
-        raw: "{\"thought\":\"Need real camera capture from phone.\",\"action\":{\"type\":\"request_human_auth\",\"capability\":\"camera\",\"instruction\":\"Capture image on phone and approve.\",\"timeoutSec\":90}}",
-      };
-    }
-    return {
-      thought: "Done",
-      action: { type: "finish", message: "Completed after real-device approval" },
-      raw: "{\"thought\":\"Done\",\"action\":{\"type\":\"finish\",\"message\":\"Completed after real-device approval\"}}",
-    };
-  };
-
-  try {
-    const result = await runtime.runTask(
-      "camera capability with VM dialog test",
-      undefined,
-      undefined,
-      async (request) => {
-        authRequests.push(request);
-        return {
-          requestId: "req-camera-real-device",
-          approved: true,
-          status: "approved",
-          message: "Image captured on phone",
-          decidedAt: new Date().toISOString(),
-          artifactPath: null,
-        };
       },
-    );
-    assert.equal(result.ok, true);
-    assert.equal(callCount >= 2, true);
-    assert.equal(authRequests.length, 1);
-    assert.equal(authRequests[0].capability, "camera");
-    assert.equal(
-      actions.some(
-        (action) =>
-          action.type === "tap"
-          && action.reason === "auto_vm_permission_approve"
-          && action.x >= 760
-          && action.y >= 2100,
-      ),
-      true,
-    );
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
-});
-
-test("AgentRuntime applies OTP code from manual approval note when no artifact is provided", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
-  const actions = [];
+      { thought: "Done", action: { type: "finish", message: "Completed after real-device approval" } },
+    ],
+  });
 
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
-    captureScreenSnapshot: () => makeSnapshot(),
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({ currentApp: "com.android.permissioncontroller" }),
     resolveDeviceId: () => "emulator-5554",
     executeAction: async (action) => {
       actions.push(action);
       return "ok";
     },
   };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
+  runtime.emulator = {
+    runAdb: (args) => {
+      if (Array.isArray(args) && args.includes("cat")) {
+        return uiDumpXml;
+      }
+      return "ok";
+    },
   };
 
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
+  const result = await runtime.runTask(
+    "camera capability with VM dialog test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
       return {
+        requestId: "req-camera-real-device",
+        approved: true,
+        status: "approved",
+        message: "Image captured on phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "camera");
+  assert.equal(
+    actions.some(
+      (action) =>
+        action.type === "tap"
+        && action.reason === "auto_vm_permission_approve"
+        && action.x >= 760
+        && action.y >= 2100,
+    ),
+    true,
+  );
+});
+
+test("AgentRuntime applies OTP code from manual approval note when no artifact is provided", async () => {
+  const actions = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
         thought: "Need OTP code",
         action: {
           type: "request_human_auth",
@@ -694,42 +661,40 @@ test("AgentRuntime applies OTP code from manual approval note when no artifact i
           instruction: "Please provide current OTP.",
           timeoutSec: 90,
         },
-        raw: '{"thought":"Need OTP code","action":{"type":"request_human_auth","capability":"2fa","instruction":"Please provide current OTP.","timeoutSec":90}}',
-      };
-    }
-    return {
-      thought: "Done",
-      action: { type: "finish", message: "Completed after OTP note" },
-      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after OTP note"}}',
-    };
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after OTP note" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
   };
 
-  try {
-    const result = await runtime.runTask(
-      "otp note fallback test",
-      undefined,
-      undefined,
-      async () => ({
-        requestId: "req-otp-note",
-        approved: true,
-        status: "approved",
-        message: "123456",
-        decidedAt: new Date().toISOString(),
-        artifactPath: null,
-      }),
-    );
-    assert.equal(result.ok, true);
-    assert.equal(
-      actions.some((action) => action.type === "type" && action.text === "123456"),
-      true,
-    );
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  const result = await runtime.runTask(
+    "otp note fallback test",
+    undefined,
+    undefined,
+    async () => ({
+      requestId: "req-otp-note",
+      approved: true,
+      status: "approved",
+      message: "123456",
+      decidedAt: new Date().toISOString(),
+      artifactPath: null,
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(actions.some((action) => action.type === "type" && action.text === "123456"), true);
 });
 
 test("AgentRuntime applies delegated text artifact after human auth approval", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const actions = [];
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-text-${Date.now()}.json`);
   fs.writeFileSync(
@@ -742,25 +707,10 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
     "utf-8",
   );
 
-  runtime.adb = {
-    queryLaunchablePackages: async () => [],
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
-
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
-      return {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
         thought: "Need OTP from phone",
         action: {
           type: "request_human_auth",
@@ -768,14 +718,19 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
           instruction: "Input OTP code.",
           timeoutSec: 90,
         },
-        raw: '{"thought":"Need OTP from phone","action":{"type":"request_human_auth","capability":"2fa","instruction":"Input OTP code.","timeoutSec":90}}',
-      };
-    }
-    return {
-      thought: "Done",
-      action: { type: "finish", message: "Completed after OTP delegation" },
-      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after OTP delegation"}}',
-    };
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after OTP delegation" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
   };
 
   try {
@@ -792,19 +747,15 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
         artifactPath: artifactFile,
       }),
     );
+
     assert.equal(result.ok, true);
-    assert.equal(
-      actions.some((action) => action.type === "type" && action.text === "123456"),
-      true,
-    );
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "123456"), true);
   } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
 test("AgentRuntime applies delegated oauth credentials artifact after human auth approval", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const actions = [];
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-${Date.now()}.json`);
   fs.writeFileSync(
@@ -818,6 +769,22 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
     "utf-8",
   );
 
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need account login",
+        action: {
+          type: "request_human_auth",
+          capability: "oauth",
+          instruction: "Provide account credentials.",
+          timeoutSec: 120,
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after credential delegation" } },
+    ],
+  });
+
   runtime.adb = {
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
@@ -828,8 +795,7 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
   };
   runtime.emulator = {
     runAdb: (args) => {
-      // Match the dynamic temp file path used by captureUiDumpXml (openpocket-uidump-*.xml).
-      if (Array.isArray(args) && args.includes("cat") && args.some((a) => String(a).includes("openpocket-uidump"))) {
+      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
         return [
           "<hierarchy>",
           '<node index="0" text="" resource-id="com.demo:id/username" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[60,320][1020,430]" />',
@@ -839,32 +805,6 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
       }
       return "ok";
     },
-  };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
-
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
-      return {
-        thought: "Need account login",
-        action: {
-          type: "request_human_auth",
-          capability: "oauth",
-          instruction: "Provide account credentials.",
-          timeoutSec: 120,
-        },
-        raw: '{"thought":"Need account login","action":{"type":"request_human_auth","capability":"oauth","instruction":"Provide account credentials.","timeoutSec":120}}',
-      };
-    }
-    return {
-      thought: "Done",
-      action: { type: "finish", message: "Completed after credential delegation" },
-      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after credential delegation"}}',
-    };
   };
 
   try {
@@ -881,51 +821,22 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
         artifactPath: artifactFile,
       }),
     );
+
     assert.equal(result.ok, true);
-    assert.equal(
-      actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_username"),
-      true,
-    );
-    assert.equal(
-      actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_password"),
-      true,
-    );
-    assert.equal(
-      actions.some((action) => action.type === "type" && action.text === "alice@example.com"),
-      true,
-    );
-    assert.equal(
-      actions.some((action) => action.type === "type" && action.text === "S3cret-987"),
-      true,
-    );
+    assert.equal(actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_username"), true);
+    assert.equal(actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_password"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "alice@example.com"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "S3cret-987"), true);
   } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
 test("AgentRuntime redacts custom user decision input from logs/history", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
-  const actions = [];
-
-  runtime.adb = {
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
-
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
-      return {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
         thought: "Need user choice",
         action: {
           type: "request_user_decision",
@@ -933,43 +844,40 @@ test("AgentRuntime redacts custom user decision input from logs/history", async 
           options: ["Use Google", "Use Email"],
           timeoutSec: 90,
         },
-        raw: '{"thought":"Need user choice","action":{"type":"request_user_decision","question":"Which login route do you prefer?","options":["Use Google","Use Email"],"timeoutSec":90}}',
-      };
-    }
-    return {
-      thought: "Done",
-      action: { type: "finish", message: "Completed after user decision" },
-      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after user decision"}}',
-    };
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after user decision" } },
+    ],
+  });
+
+  runtime.adb = {
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
   };
 
-  try {
-    const secretInput = "my-sensitive-free-text";
-    const result = await runtime.runTask(
-      "user decision redaction test",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      async () => ({
-        selectedOption: secretInput,
-        rawInput: secretInput,
-        resolvedAt: new Date().toISOString(),
-      }),
-    );
-    assert.equal(result.ok, true);
-    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
-    assert.match(sessionText, /selected="\[custom-input\]"/);
-    assert.match(sessionText, /source=custom_input/);
-    assert.doesNotMatch(sessionText, /my-sensitive-free-text/);
-    assert.doesNotMatch(sessionText, /user decision raw input:/i);
-  } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
-  }
+  const secretInput = "my-sensitive-free-text";
+  const result = await runtime.runTask(
+    "user decision redaction test",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    async () => ({
+      selectedOption: secretInput,
+      rawInput: secretInput,
+      resolvedAt: new Date().toISOString(),
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /selected="\[custom-input\]"/);
+  assert.match(sessionText, /source=custom_input/);
+  assert.doesNotMatch(sessionText, /my-sensitive-free-text/);
+  assert.doesNotMatch(sessionText, /user decision raw input:/i);
 });
 
 test("AgentRuntime applies delegated location artifact after human auth approval", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const adbActions = [];
   const emulatorCommands = [];
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-geo-${Date.now()}.json`);
@@ -984,8 +892,24 @@ test("AgentRuntime applies delegated location artifact after human auth approval
     "utf-8",
   );
 
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need real location",
+        action: {
+          type: "request_human_auth",
+          capability: "location",
+          instruction: "Share current location.",
+          timeoutSec: 90,
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after delegated location" } },
+    ],
+  });
+
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
     executeAction: async (action) => {
@@ -998,32 +922,6 @@ test("AgentRuntime applies delegated location artifact after human auth approval
       emulatorCommands.push(args);
       return "ok";
     },
-  };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
-
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async () => {
-    callCount += 1;
-    if (callCount === 1) {
-      return {
-        thought: "Need real location",
-        action: {
-          type: "request_human_auth",
-          capability: "location",
-          instruction: "Share current location.",
-          timeoutSec: 90,
-        },
-        raw: '{"thought":"Need real location","action":{"type":"request_human_auth","capability":"location","instruction":"Share current location.","timeoutSec":90}}',
-      };
-    }
-    return {
-      thought: "Done",
-      action: { type: "finish", message: "Completed after delegated location" },
-      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after delegated location"}}',
-    };
   };
 
   try {
@@ -1040,37 +938,53 @@ test("AgentRuntime applies delegated location artifact after human auth approval
         artifactPath: artifactFile,
       }),
     );
+
     assert.equal(result.ok, true);
     assert.equal(
       emulatorCommands.some(
         (args) =>
-          Array.isArray(args) &&
-          args.includes("emu") &&
-          args.includes("geo") &&
-          args.includes("fix") &&
-          args.includes(String(-122.406417)) &&
-          args.includes(String(37.785834)),
+          Array.isArray(args)
+          && args.includes("emu")
+          && args.includes("geo")
+          && args.includes("fix")
+          && args.includes(String(-122.406417))
+          && args.includes(String(37.785834)),
       ),
       true,
     );
-    assert.equal(
-      adbActions.some((action) => action.type === "type"),
-      false,
-    );
+    assert.equal(adbActions.some((action) => action.type === "type"), false);
   } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
 test("AgentRuntime appends gallery template hint after delegated image artifact", async () => {
-  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const emulatorCommands = [];
+  const observedUserPrompts = [];
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-image-${Date.now()}.jpg`);
   fs.writeFileSync(artifactFile, Buffer.from("fake-image-bytes"));
 
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need delegated camera capture",
+        action: {
+          type: "request_human_auth",
+          capability: "camera",
+          instruction: "Capture an image from real device camera.",
+          timeoutSec: 120,
+        },
+      },
+      { thought: "Continue with picker", action: { type: "finish", message: "Completed with delegated image" } },
+    ],
+    hooks: {
+      captureUserPrompt: observedUserPrompts,
+    },
+  });
+
   runtime.adb = {
-    queryLaunchablePackages: async () => [],
+    queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
     executeAction: async () => "ok",
@@ -1080,34 +994,6 @@ test("AgentRuntime appends gallery template hint after delegated image artifact"
       emulatorCommands.push(args);
       return "ok";
     },
-  };
-  runtime.autoArtifactBuilder = {
-    build: () => ({ skillPath: null, scriptPath: null }),
-  };
-
-  const observedHistories = [];
-  let callCount = 0;
-  const originalNextStep = ModelClient.prototype.nextStep;
-  ModelClient.prototype.nextStep = async (params) => {
-    observedHistories.push([...(params.history || [])]);
-    callCount += 1;
-    if (callCount === 1) {
-      return {
-        thought: "Need delegated camera capture",
-        action: {
-          type: "request_human_auth",
-          capability: "camera",
-          instruction: "Capture an image from real device camera.",
-          timeoutSec: 120,
-        },
-        raw: '{"thought":"Need delegated camera capture","action":{"type":"request_human_auth","capability":"camera","instruction":"Capture an image from real device camera.","timeoutSec":120}}',
-      };
-    }
-    return {
-      thought: "Continue with picker",
-      action: { type: "finish", message: "Completed with delegated image" },
-      raw: '{"thought":"Continue with picker","action":{"type":"finish","message":"Completed with delegated image"}}',
-    };
   };
 
   try {
@@ -1124,18 +1010,17 @@ test("AgentRuntime appends gallery template hint after delegated image artifact"
         artifactPath: artifactFile,
       }),
     );
+
     assert.equal(result.ok, true);
     assert.equal(
       emulatorCommands.some((args) => Array.isArray(args) && args.includes("push") && args.includes(artifactFile)),
       true,
     );
-    const secondCallHistory = observedHistories[1] || [];
     assert.equal(
-      secondCallHistory.some((line) => typeof line === "string" && line.includes("delegation_template gallery_import_template")),
+      observedUserPrompts.some((text, index) => index > 0 && text.includes("delegation_template gallery_import_template")),
       true,
     );
   } finally {
-    ModelClient.prototype.nextStep = originalNextStep;
     fs.rmSync(artifactFile, { force: true });
   }
 });

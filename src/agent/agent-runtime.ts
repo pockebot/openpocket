@@ -12,25 +12,38 @@ import type {
   UserDecisionRequest,
   UserDecisionResponse,
   OpenPocketConfig,
+  ModelProfile,
   SkillInfo,
   ScreenSnapshot,
-} from "../types";
-import { getModelProfile, resolveModelAuth } from "../config";
-import { WorkspaceStore } from "../memory/workspace";
-import { ScreenshotStore } from "../memory/screenshot-store";
-import { sleep } from "../utils/time";
-import { nowIso } from "../utils/paths";
-import { AdbRuntime } from "../device/adb-runtime";
-import { EmulatorManager } from "../device/emulator-manager";
-import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder";
-import { SkillLoader } from "../skills/skill-loader";
-import { ScriptExecutor } from "../tools/script-executor";
-import { CodingExecutor } from "../tools/coding-executor";
-import { MemoryExecutor } from "../tools/memory-executor";
-import { ModelClient } from "./model-client";
-import { buildSystemPrompt, buildUserPrompt, type SystemPromptMode } from "./prompts";
-import { CHAT_TOOLS } from "./tools";
-import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale";
+} from "../types.js";
+import { getModelProfile, resolveModelAuth } from "../config/index.js";
+import { WorkspaceStore } from "../memory/workspace.js";
+import { ScreenshotStore } from "../memory/screenshot-store.js";
+import { sleep } from "../utils/time.js";
+import { nowIso } from "../utils/paths.js";
+import { AdbRuntime } from "../device/adb-runtime.js";
+import { EmulatorManager } from "../device/emulator-manager.js";
+import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder.js";
+import { SkillLoader } from "../skills/skill-loader.js";
+import { ScriptExecutor } from "../tools/script-executor.js";
+import { CodingExecutor } from "../tools/coding-executor.js";
+import { MemoryExecutor } from "../tools/memory-executor.js";
+import { Agent, type AgentMessage, type AgentTool, type AgentEvent, type AgentOptions } from "@mariozechner/pi-agent-core";
+import {
+  type AssistantMessage as PiAssistantMessage,
+  type Message as PiMessage,
+  type TextContent as PiTextContent,
+  type ImageContent as PiImageContent,
+  type Model as PiModel,
+  type Api as PiApi,
+  type SimpleStreamOptions as PiSimpleStreamOptions,
+  streamSimple,
+} from "@mariozechner/pi-ai";
+import { buildPiAiModel } from "./model-client.js";
+import { buildSystemPrompt, buildUserPrompt, type SystemPromptMode } from "./prompts.js";
+import { CHAT_TOOLS, TOOL_METAS, toolNameToActionType } from "./tools.js";
+import { normalizeAction } from "./actions.js";
+import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
   "permissioncontroller",
@@ -186,6 +199,60 @@ type SnapshotObservation = {
   labels: string[];
 };
 
+// ---------------------------------------------------------------------------
+// Screen observation custom message type for pi-agent-core
+// ---------------------------------------------------------------------------
+
+interface ScreenObservationMessage {
+  role: "screenObservation";
+  snapshot: ScreenSnapshot;
+  /** Recent previous snapshots for multi-frame visual context (max 2). */
+  recentSnapshots: ScreenSnapshot[];
+  stepIndex: number;
+  screenshotPath: string | null;
+  timestamp: number;
+}
+
+// Extend pi-agent-core's CustomAgentMessages via declaration merging
+declare module "@mariozechner/pi-agent-core" {
+  interface CustomAgentMessages {
+    screenObservation: ScreenObservationMessage;
+  }
+}
+
+/** Mutable state shared across tool execute closures during a single runTask invocation. */
+interface PhoneAgentRunContext {
+  task: string;
+  profileKey: string;
+  profile: ModelProfile;
+  session: { id: string; path: string };
+  stepCount: number;
+  maxSteps: number;
+  latestSnapshot: ScreenSnapshot | null;
+  /** Rolling window of recent snapshots for multi-frame visual context. */
+  recentSnapshotWindow: ScreenSnapshot[];
+  lastScreenshotPath: string | null;
+  history: string[];
+  traces: StepTrace[];
+  finishMessage: string | null;
+  failMessage: string | null;
+  stopRequested: () => boolean;
+  lastAutoPermissionAllowAtMs: number;
+  launchablePackages: string[];
+  effectivePromptMode: SystemPromptMode;
+  systemPrompt: string;
+  onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
+  onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
+  onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
+}
+
+type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle">;
+type AgentFactory = (options: AgentOptions) => AgentLike;
+
+export interface AgentRuntimeOptions {
+  agentFactory?: AgentFactory;
+}
+
 export class AgentRuntime {
   private readonly config: OpenPocketConfig;
   private readonly workspace: WorkspaceStore;
@@ -203,8 +270,9 @@ export class AgentRuntime {
   private currentTaskStartedAtMs: number | null = null;
   private lastSystemPromptReport: WorkspacePromptContextReport | null = null;
   private lastResolvedTapElementContext: ResolvedTapElementContext | null = null;
+  private readonly agentFactory: AgentFactory;
 
-  constructor(config: OpenPocketConfig) {
+  constructor(config: OpenPocketConfig, options?: AgentRuntimeOptions) {
     this.config = config;
     this.workspace = new WorkspaceStore(config);
     this.emulator = new EmulatorManager(config);
@@ -218,6 +286,7 @@ export class AgentRuntime {
       config.screenshots.directory,
       config.screenshots.maxCount,
     );
+    this.agentFactory = options?.agentFactory ?? ((agentOptions: AgentOptions) => new Agent(agentOptions));
   }
 
   isBusy(): boolean {
@@ -1487,6 +1556,299 @@ export class AgentRuntime {
     }
   }
 
+  // =========================================================================
+  // Phone-use tool execution — called from AgentTool.execute closures
+  // =========================================================================
+
+  /** Execute a phone-use action and return a text result string.
+   *  Handles coordinate scaling, tap_element resolution, state delta, etc. */
+  private async executePhoneAction(
+    action: AgentAction,
+    ctx: PhoneAgentRunContext,
+  ): Promise<string> {
+    const snapshot = ctx.latestSnapshot!;
+
+    // Resolve tap_element to coordinates
+    action = this.resolveTapElementAction(action, snapshot);
+
+    // Debug screenshot overlay before scaling
+    if (
+      this.config.screenshots.saveStepScreenshots &&
+      (action.type === "tap" || action.type === "swipe")
+    ) {
+      try {
+        const buf = Buffer.from(snapshot.screenshotBase64, "base64");
+        const annotated = await drawDebugMarker(buf, action);
+        this.screenshotStore.save(annotated, {
+          sessionId: ctx.session.id,
+          step: ctx.stepCount,
+          currentApp: `${snapshot.currentApp}-debug`,
+        });
+      } catch { /* best-effort */ }
+    }
+
+    // Scale coordinates back to device resolution
+    if (action.type === "tap") {
+      const s = scaleCoordinates(action.x, action.y, snapshot.scaleX, snapshot.scaleY, snapshot.width, snapshot.height);
+      action = { ...action, x: s.x, y: s.y };
+    } else if (action.type === "swipe") {
+      const p1 = scaleCoordinates(action.x1, action.y1, snapshot.scaleX, snapshot.scaleY, snapshot.width, snapshot.height);
+      const p2 = scaleCoordinates(action.x2, action.y2, snapshot.scaleX, snapshot.scaleY, snapshot.width, snapshot.height);
+      action = { ...action, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
+    }
+
+    let executionResult = "";
+    let stateDeltaLine = "";
+    try {
+      if (action.type === "run_script") {
+        const sr = await this.scriptExecutor.execute(action.script, action.timeoutSec);
+        executionResult = [
+          `run_script exitCode=${sr.exitCode} timedOut=${sr.timedOut}`,
+          `runDir=${sr.runDir}`,
+          sr.stdout ? `stdout=${sr.stdout}` : "",
+          sr.stderr ? `stderr=${sr.stderr}` : "",
+        ].filter(Boolean).join("\n");
+      } else if (["read", "write", "edit", "apply_patch", "exec", "process"].includes(action.type)) {
+        executionResult = await this.codingExecutor.execute(action);
+      } else if (action.type === "memory_search" || action.type === "memory_get") {
+        executionResult = this.memoryExecutor.execute(action);
+      } else {
+        executionResult = await this.adb.executeAction(action, this.config.agent.deviceId);
+      }
+      // State delta observation
+      const deltaTypes = new Set(["tap", "swipe", "type", "keyevent", "launch_app", "shell"]);
+      if (deltaTypes.has(action.type)) {
+        try {
+          const after = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, ctx.profile.model);
+          const before = this.observeSnapshotState(snapshot);
+          const afterState = this.observeSnapshotState(after);
+          stateDeltaLine = this.buildStateDeltaLine(before, afterState, action.type);
+        } catch { /* best-effort */ }
+      }
+    } catch (error) {
+      executionResult = `Action execution error: ${(error as Error).message}`;
+    }
+
+    if (this.lastResolvedTapElementContext) {
+      const m = this.lastResolvedTapElementContext;
+      executionResult += `\ntap_mark id=${m.id} label=${JSON.stringify(m.label)} class=${m.className || "unknown"} clickable=${m.clickable} center=(${m.center.x},${m.center.y}) scaled_center=(${m.scaledCenter.x},${m.scaledCenter.y})`;
+    }
+    if (stateDeltaLine) {
+      executionResult += `\n${stateDeltaLine}`;
+    }
+    return executionResult;
+  }
+
+  // =========================================================================
+  // Build AgentTool[] for pi-agent-core Agent
+  // =========================================================================
+
+  private buildPhoneAgentTools(
+    ctx: PhoneAgentRunContext,
+    runtime: AgentRuntime,
+  ): AgentTool<any>[] {
+    const tools: AgentTool<any>[] = [];
+
+    for (const meta of TOOL_METAS) {
+      const toolName = meta.name;
+      tools.push({
+        name: meta.name,
+        label: meta.name,
+        description: meta.description,
+        parameters: meta.parameters,
+        execute: async (_toolCallId: string, params: Record<string, unknown>) => {
+          if (ctx.finishMessage || ctx.failMessage || ctx.stopRequested()) {
+            const skipMsg = ctx.finishMessage
+              ? "Run already finished; skipping extra tool call."
+              : ctx.failMessage
+                ? `Run already failed; skipping extra tool call: ${ctx.failMessage}`
+                : "Stop requested; skipping extra tool call.";
+            return { content: [{ type: "text" as const, text: skipMsg }], details: { skipped: true } };
+          }
+          if (ctx.stepCount >= ctx.maxSteps) {
+            ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+            return { content: [{ type: "text" as const, text: ctx.failMessage }], details: { skipped: true } };
+          }
+
+          const thought = typeof params.thought === "string" ? params.thought : "";
+          const actionType = toolNameToActionType(toolName);
+          const { thought: _t, ...actionArgs } = params;
+          const action: AgentAction = normalizeAction({ type: actionType, ...actionArgs });
+          ctx.stepCount += 1;
+          const step = ctx.stepCount;
+          const snapshot = ctx.latestSnapshot;
+
+          if (!snapshot && action.type !== "finish") {
+            const msg = "No screen snapshot available for tool execution.";
+            ctx.failMessage = msg;
+            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+            ctx.traces.push({ step, action, result: msg, thought, currentApp: "unknown" });
+            return { content: [{ type: "text" as const, text: msg }], details: {} };
+          }
+
+            // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][step ${step}] tool=${toolName} action=${action.type}`);
+
+          // ---- finish ----
+          if (action.type === "finish") {
+            ctx.finishMessage = action.message || "Task completed.";
+            const resultText = `FINISH: ${ctx.finishMessage}`;
+            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+            ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.history.push(`step ${step}: action=finish message=${ctx.finishMessage}`);
+            return { content: [{ type: "text" as const, text: resultText }], details: {} };
+          }
+
+          // ---- request_human_auth ----
+          if (action.type === "request_human_auth") {
+            const permOnly = action.capability === "permission";
+            const onVmDialog = snapshot ? runtime.isPermissionDialogApp(snapshot.currentApp) : false;
+
+            // Auto-approve VM permission dialogs
+            if (onVmDialog || permOnly) {
+              if (onVmDialog) {
+                const auto = await runtime.autoApprovePermissionDialog(snapshot!.currentApp);
+                if (auto?.action?.type === "tap") ctx.lastAutoPermissionAllowAtMs = Date.now();
+              }
+              if (permOnly) {
+                const msg = "permission auto-approved locally (VM policy)";
+                runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+                ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+                ctx.history.push(`step ${step}: action=request_human_auth(permission) auto_approved`);
+                return { content: [{ type: "text" as const, text: msg }], details: {} };
+              }
+            }
+
+            if (!ctx.onHumanAuth) {
+              const msg = `Human authorization required (${action.capability}), but no handler configured.`;
+              ctx.failMessage = msg;
+              runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+
+            let decision: HumanAuthDecision;
+            try {
+              decision = await ctx.onHumanAuth({
+                sessionId: ctx.session.id, sessionPath: ctx.session.path, task: ctx.task, step,
+                capability: action.capability, instruction: action.instruction,
+                reason: action.reason ?? thought,
+                timeoutSec: Math.max(30, action.timeoutSec ?? runtime.config.humanAuth.requestTimeoutSec),
+                currentApp: snapshot?.currentApp ?? "unknown", screenshotPath: ctx.lastScreenshotPath,
+              });
+            } catch (error) {
+              decision = { requestId: "local-error", approved: false, status: "rejected", message: `Human auth error: ${(error as Error).message}`, decidedAt: nowIso(), artifactPath: null };
+            }
+
+            const delegation = await runtime.applyHumanDelegation(action.capability, decision, snapshot?.currentApp ?? "unknown");
+            const delegationTemplate = delegation?.templateHint ?? null;
+            const resultText = [
+              `Human auth ${decision.status}: ${decision.message}`,
+              decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
+              delegation?.message ? `delegation=${delegation.message}` : "",
+              delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
+            ].filter(Boolean).join("\n");
+            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+            ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.history.push(`step ${step}: action=request_human_auth decision=${decision.status}`);
+            if (delegationTemplate) {
+              ctx.history.push(`delegation_template ${delegationTemplate}`);
+            }
+
+            if (!decision.approved) {
+              ctx.failMessage = `Human authorization ${decision.status}: ${decision.message}`;
+            }
+            return { content: [{ type: "text" as const, text: resultText }], details: {} };
+          }
+
+          // ---- request_user_decision ----
+          if (action.type === "request_user_decision") {
+            if (!ctx.onUserDecision) {
+              const msg = "User decision required, but no handler configured.";
+              ctx.failMessage = msg;
+              runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+            let decision: UserDecisionResponse;
+            try {
+              decision = await ctx.onUserDecision({
+                sessionId: ctx.session.id, sessionPath: ctx.session.path, task: ctx.task, step,
+                question: action.question, options: action.options,
+                timeoutSec: Math.max(20, action.timeoutSec ?? 300),
+                currentApp: snapshot?.currentApp ?? "unknown", screenshotPath: ctx.lastScreenshotPath,
+              });
+            } catch (error) {
+              const msg = `User decision failed: ${(error as Error).message}`;
+              ctx.failMessage = msg;
+              runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+            const normalizedSelected = String(decision.selectedOption || "").trim();
+            const matchedOption = action.options.find(
+              (item) => item.trim().toLowerCase() === normalizedSelected.toLowerCase(),
+            );
+            const selectedForLog = matchedOption || "[custom-input]";
+            const selectedSource = matchedOption ? "listed_option" : "custom_input";
+            const resultText =
+              `user_decision selected="${selectedForLog}" source=${selectedSource} input_len=${String(decision.rawInput || "").length} at=${decision.resolvedAt}`;
+            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+            ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.history.push(`step ${step}: action=request_user_decision selected=${selectedForLog}`);
+            return { content: [{ type: "text" as const, text: resultText }], details: {} };
+          }
+
+          // ---- wait ----
+          if (action.type === "wait") {
+            const ms = action.durationMs ?? 1000;
+            await sleep(ms);
+            const resultText = `Waited ${ms}ms`;
+            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+            ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.history.push(`step ${step}: action=wait duration=${ms}`);
+            return { content: [{ type: "text" as const, text: resultText }], details: {} };
+          }
+
+          // ---- all other actions (tap, swipe, type, keyevent, launch_app, shell, run_script, read, write, edit, etc.) ----
+          const executionResult = await runtime.executePhoneAction(action, ctx);
+          const stepResult = ctx.lastScreenshotPath
+            ? `${executionResult}\nlocal_screenshot=${ctx.lastScreenshotPath}`
+            : executionResult;
+
+          runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), stepResult);
+          ctx.traces.push({ step, action, result: stepResult, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+          ctx.history.push(`step ${step}: app=${snapshot?.currentApp ?? "unknown"} action=${action.type} result=${executionResult}`);
+
+          if (runtime.config.agent.verbose) {
+            // eslint-disable-next-line no-console
+            console.log(`[OpenPocket][step ${step}] ${action.type}: ${executionResult}`);
+          }
+
+          // Progress callback
+          if (ctx.onProgress && step % runtime.config.agent.progressReportInterval === 0) {
+            try {
+              await ctx.onProgress({
+                step, maxSteps: ctx.maxSteps, currentApp: snapshot?.currentApp ?? "unknown",
+                actionType: action.type, message: executionResult, thought, screenshotPath: ctx.lastScreenshotPath,
+              });
+            } catch { /* best-effort */ }
+          }
+
+          // Post-action delay (except wait which already slept)
+          await sleep(runtime.config.agent.loopDelayMs);
+
+          return { content: [{ type: "text" as const, text: stepResult }], details: {} };
+        },
+      });
+    }
+    return tools;
+  }
+
+  // =========================================================================
+  // runTask — powered by pi-agent-core Agent class
+  // =========================================================================
+
   async runTask(
     task: string,
     modelName?: string,
@@ -1496,13 +1858,7 @@ export class AgentRuntime {
     onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
   ): Promise<AgentRunResult> {
     if (this.busy) {
-      return {
-        ok: false,
-        message: "Agent is busy. Please retry later.",
-        sessionPath: "",
-        skillPath: null,
-        scriptPath: null,
-      };
+      return { ok: false, message: "Agent is busy. Please retry later.", sessionPath: "", skillPath: null, scriptPath: null };
     }
 
     this.busy = true;
@@ -1514,766 +1870,282 @@ export class AgentRuntime {
     const profileKey = modelName ?? this.config.defaultModel;
     const profile = getModelProfile(this.config, profileKey);
     const session = this.workspace.createSession(task, profileKey, profile.model);
-    let lastAutoPermissionAllowAtMs = 0;
 
     try {
       const auth = resolveModelAuth(profile);
       if (!auth) {
         const codexHint = profile.model.toLowerCase().includes("codex")
-          ? " or login via Codex CLI (`~/.codex/auth.json`)"
-          : "";
+          ? " or login via Codex CLI (`~/.codex/auth.json`)" : "";
         const message = `Missing API key for model '${profile.model}'. Set env ${profile.apiKeyEnv} or config.models.${profileKey}.apiKey${codexHint}`;
-        this.workspace.finalizeSession(session, false, message);
-        this.workspace.appendDailyMemory(profileKey, task, false, message);
-        return {
-          ok: false,
-          message,
-          sessionPath: session.path,
-          skillPath: null,
-          scriptPath: null,
-        };
+            this.workspace.finalizeSession(session, false, message);
+            this.workspace.appendDailyMemory(profileKey, task, false, message);
+        return { ok: false, message, sessionPath: session.path, skillPath: null, scriptPath: null };
       }
 
-      const model = new ModelClient(profile, auth.apiKey, {
-        baseUrl: auth.baseUrl,
-        preferredMode: auth.preferredMode,
-      });
-      const snapshotContextWindow: ScreenSnapshot[] = [];
-      const history: string[] = [];
-      const traces: StepTrace[] = [];
+      // Build pi-ai model
+      const effectiveProfile = auth.baseUrl ? { ...profile, baseUrl: auth.baseUrl } : profile;
+      const piModel = buildPiAiModel(effectiveProfile);
+      // Override API if preferredMode is set
+      let finalModel: PiModel<PiApi> = auth.preferredMode === "responses"
+        ? { ...piModel, api: "openai-responses" as PiApi }
+        : auth.preferredMode === "completions"
+          ? { ...piModel, api: "openai-completions" as PiApi }
+          : piModel;
+      if (finalModel.api === "openai-responses" && auth.preferredMode !== "responses") {
+        // Keep the default tool-driven loop on the completions API because
+        // pi-ai's responses adapter does not expose tool_choice yet.
+        finalModel = { ...finalModel, api: "openai-completions" as PiApi };
+      }
+
       const skillsSummary = this.skillLoader.summaryText();
       const workspacePromptContext = this.buildWorkspacePromptContext();
       const effectivePromptMode = promptMode ?? this.config.agent.systemPromptMode;
-      const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
-        mode: effectivePromptMode,
-      });
+      const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, { mode: effectivePromptMode });
       this.lastSystemPromptReport = this.buildSystemPromptReport({
-        source: "run",
-        promptMode: effectivePromptMode,
-        systemPrompt,
-        skillsSummary,
+        source: "run", promptMode: effectivePromptMode, systemPrompt, skillsSummary,
         workspaceReport: workspacePromptContext.report,
       });
 
       const launchablePackages = typeof this.adb.queryLaunchablePackages === "function"
-        ? this.adb.queryLaunchablePackages(this.config.agent.deviceId)
-        : [];
+        ? this.adb.queryLaunchablePackages(this.config.agent.deviceId) : [];
 
-      for (let step = 1; step <= this.config.agent.maxSteps; step += 1) {
-        if (this.stopRequested) {
-          const message = "Task stopped by user.";
-          this.workspace.finalizeSession(session, false, message);
-          this.workspace.appendDailyMemory(profileKey, task, false, message);
-          return {
-            ok: false,
-            message,
-            sessionPath: session.path,
-            skillPath: null,
-            scriptPath: null,
-          };
-        }
+      // Mutable run context shared by tool closures
+      const ctx: PhoneAgentRunContext = {
+        task, profileKey, profile, session, stepCount: 0, maxSteps: this.config.agent.maxSteps,
+        latestSnapshot: null, recentSnapshotWindow: [], lastScreenshotPath: null,
+        history: [], traces: [],
+        finishMessage: null, failMessage: null,
+        stopRequested: () => this.stopRequested,
+        lastAutoPermissionAllowAtMs: 0,
+        launchablePackages,
+        effectivePromptMode, systemPrompt,
+        onHumanAuth, onUserDecision, onProgress,
+      };
 
-        const snapshot = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, profile.model);
-        snapshot.installedPackages = launchablePackages;
-        const recentSnapshots = snapshotContextWindow.slice(-2) as typeof snapshot[];
-        shouldReturnHome = true;
-        let screenshotPath: string | null = null;
-        if (this.config.screenshots.saveStepScreenshots) {
-          try {
-            screenshotPath = this.screenshotStore.save(
-              Buffer.from(snapshot.screenshotBase64, "base64"),
-              {
-                sessionId: session.id,
-                step,
-                currentApp: snapshot.currentApp,
-              },
-            );
-          } catch {
-            screenshotPath = null;
-          }
-        }
+      const tools = this.buildPhoneAgentTools(ctx, this);
+      const apiKey = auth.apiKey;
+      const runtime = this;
 
-        const autoPermissionDialogDetected =
-          this.isPermissionDialogApp(snapshot.currentApp) &&
-          Date.now() - lastAutoPermissionAllowAtMs >= 1_200;
+      // Map reasoning effort to pi-ai ThinkingLevel
+      const thinkingMap: Record<string, "low" | "medium" | "high" | "xhigh"> = {
+        low: "low", medium: "medium", high: "high", xhigh: "xhigh",
+      };
+      const thinkingLevel = profile.reasoningEffort && profile.reasoningEffort in thinkingMap
+        ? thinkingMap[profile.reasoningEffort] : "off";
 
-        if (autoPermissionDialogDetected) {
-          const autoThought =
-            "Detected Android runtime permission dialog in emulator. Auto-approving with Allow.";
-          const autoDecision = await this.autoApprovePermissionDialog(snapshot.currentApp);
-          if (autoDecision?.action?.type === "tap") {
-            lastAutoPermissionAllowAtMs = Date.now();
-            const autoAction = autoDecision.action;
-            const stepResult = screenshotPath
-              ? `${autoDecision.message}\nlocal_screenshot=${screenshotPath}`
-              : autoDecision.message;
-            this.workspace.appendStep(
-              session,
-              step,
-              autoThought,
-              JSON.stringify(autoAction, null, 2),
-              stepResult,
-            );
-            traces.push({
-              step,
-              action: autoAction,
-              result: stepResult,
-              thought: autoThought,
-              currentApp: snapshot.currentApp,
-            });
-            history.push(
-              `step ${step}: app=${snapshot.currentApp} action=tap(auto_vm_permission_approve) message=${autoDecision.message}`,
-            );
-
-            if (onProgress && step % this.config.agent.progressReportInterval === 0) {
-              try {
-                await onProgress({
-                  step,
-                  maxSteps: this.config.agent.maxSteps,
-                  currentApp: snapshot.currentApp,
-                  actionType: autoAction.type,
-                  message: autoDecision.message,
-                  thought: autoThought,
-                  screenshotPath,
-                });
-              } catch {
-                // Keep task execution unaffected when progress callback fails.
-              }
-            }
-
-            await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
-            continue;
-          }
-        }
-
-        const userPrompt = buildUserPrompt(task, step, snapshot, history);
-        this.saveModelInputArtifacts({
-          sessionId: session.id,
-          step,
-          task,
-          profileModel: profile.model,
-          promptMode: effectivePromptMode,
+      // Create pi-agent-core Agent
+      const agent = this.agentFactory({
+        initialState: {
           systemPrompt,
-          userPrompt,
-          snapshot,
-          history,
-        });
-        snapshotContextWindow.push(snapshot);
-        if (snapshotContextWindow.length > 2) {
-          snapshotContextWindow.shift();
-        }
+          model: finalModel,
+          tools,
+          thinkingLevel: thinkingLevel as any,
+        },
 
-        const output = await model.nextStep({
-          systemPrompt,
-          task,
-          step,
-          snapshot,
-          recentSnapshots,
-          history,
-        });
+        // Inject toolChoice when supported so each turn returns a tool call.
+        streamFn: (model, context, options) => {
+          const supportsToolChoice = model.api === "openai-completions";
+          const opts = supportsToolChoice
+            ? { ...options, toolChoice: "required" } as PiSimpleStreamOptions & { toolChoice: "required" }
+            : options;
+          return streamSimple(model, context, opts as PiSimpleStreamOptions);
+        },
 
-        if (output.action.type === "finish") {
-          const finishMessage = output.action.message || "Task completed.";
-          this.workspace.appendStep(
-            session,
-            step,
-            output.thought,
-            JSON.stringify(output.action, null, 2),
-            `FINISH: ${finishMessage}`,
-          );
-          traces.push({
-            step,
-            action: output.action,
-            result: `FINISH: ${finishMessage}`,
-            thought: output.thought,
-            currentApp: snapshot.currentApp,
-          });
-          this.workspace.finalizeSession(session, true, finishMessage);
-          this.workspace.appendDailyMemory(profileKey, task, true, finishMessage);
-          const artifacts = this.autoArtifactBuilder.build({
-            task,
-            sessionPath: session.path,
-            ok: true,
-            finalMessage: finishMessage,
-            traces,
-          });
-          if (artifacts.skillPath) {
-            // eslint-disable-next-line no-console
-            console.log(`[OpenPocket][artifact] auto skill generated: ${artifacts.skillPath}`);
-          }
-          if (artifacts.scriptPath) {
-            // eslint-disable-next-line no-console
-            console.log(`[OpenPocket][artifact] auto script generated: ${artifacts.scriptPath}`);
-          }
-          return {
-            ok: true,
-            message: finishMessage,
-            sessionPath: session.path,
-            skillPath: artifacts.skillPath,
-            scriptPath: artifacts.scriptPath,
-          };
-        }
+        // Resolve API key dynamically (supports expiring tokens)
+        getApiKey: async () => apiKey,
 
-        if (output.action.type === "request_human_auth") {
-          const permissionCapabilityOnly = output.action.capability === "permission";
-          const onVmPermissionDialog = this.isPermissionDialogApp(snapshot.currentApp);
-          let localPermissionAutoMessage: string | null = null;
-
-          if (onVmPermissionDialog) {
-            const autoDecision = await this.autoApprovePermissionDialog(snapshot.currentApp);
-            localPermissionAutoMessage = autoDecision?.message || "permission dialog auto-approve attempted but no actionable button detected";
-            const autoAction: AgentAction = autoDecision?.action?.type === "tap"
-              ? autoDecision.action
-              : {
-                type: "wait",
-                durationMs: 600,
-                reason: "auto_vm_permission_no_button_detected",
-              };
-            if (autoDecision?.action?.type === "tap") {
-              lastAutoPermissionAllowAtMs = Date.now();
-            }
-
-            history.push(
-              `step ${step}: app=${snapshot.currentApp} action=${autoAction.type}(auto_vm_permission_policy) message=${localPermissionAutoMessage}`,
-            );
-
-            if (permissionCapabilityOnly) {
-              const autoThought =
-                "Permission authorization belongs to the emulator. Auto-approving permission dialog locally.";
-              const stepResult = screenshotPath
-                ? `${localPermissionAutoMessage}\nlocal_screenshot=${screenshotPath}`
-                : localPermissionAutoMessage;
-              this.workspace.appendStep(
-                session,
-                step,
-                autoThought,
-                JSON.stringify(autoAction, null, 2),
-                stepResult,
-              );
-              traces.push({
-                step,
-                action: autoAction,
-                result: stepResult,
-                thought: autoThought,
-                currentApp: snapshot.currentApp,
-              });
-
-              if (onProgress && step % this.config.agent.progressReportInterval === 0) {
-                try {
-                  await onProgress({
-                    step,
-                    maxSteps: this.config.agent.maxSteps,
-                    currentApp: snapshot.currentApp,
-                    actionType: autoAction.type,
-                    message: localPermissionAutoMessage,
-                    thought: autoThought,
-                    screenshotPath,
-                  });
-                } catch {
-                  // Keep task execution unaffected when progress callback fails.
+        // Convert AgentMessages to LLM-compatible messages.
+        // ScreenObservation custom messages become multimodal user messages.
+        convertToLlm: (messages: AgentMessage[]): PiMessage[] => {
+          return messages.flatMap((m): PiMessage[] => {
+            if (m.role === "screenObservation") {
+              const obs = m as ScreenObservationMessage;
+              const s = obs.snapshot;
+              const observationText = buildUserPrompt(ctx.task, obs.stepIndex, s, ctx.history, obs.recentSnapshots);
+              const content: Array<PiTextContent | PiImageContent> = [
+                { type: "text", text: observationText },
+              ];
+              // Add recent frame images (oldest → newest, before current)
+              for (const recent of obs.recentSnapshots) {
+                if (recent.somScreenshotBase64) {
+                  content.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });
+                } else {
+                  content.push({ type: "image", data: recent.screenshotBase64, mimeType: "image/png" });
                 }
               }
-
-              await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
-              continue;
-            }
-
-            await sleep(Math.min(this.config.agent.loopDelayMs, 500));
-          } else if (permissionCapabilityOnly) {
-            const autoThought =
-              "Permission authorization belongs to the emulator. Waiting for local permission dialog instead of human auth.";
-            localPermissionAutoMessage =
-              "permission capability requested outside permission dialog; skipping human auth and waiting for local dialog";
-            const autoAction: AgentAction = {
-              type: "wait",
-              durationMs: 600,
-              reason: "auto_vm_permission_wait_dialog",
-            };
-            const stepResult = screenshotPath
-              ? `${localPermissionAutoMessage}\nlocal_screenshot=${screenshotPath}`
-              : localPermissionAutoMessage;
-            this.workspace.appendStep(
-              session,
-              step,
-              autoThought,
-              JSON.stringify(autoAction, null, 2),
-              stepResult,
-            );
-            traces.push({
-              step,
-              action: autoAction,
-              result: stepResult,
-              thought: autoThought,
-              currentApp: snapshot.currentApp,
-            });
-            history.push(
-              `step ${step}: app=${snapshot.currentApp} action=${autoAction.type}(auto_vm_permission_policy) message=${localPermissionAutoMessage}`,
-            );
-
-            if (onProgress && step % this.config.agent.progressReportInterval === 0) {
-              try {
-                await onProgress({
-                  step,
-                  maxSteps: this.config.agent.maxSteps,
-                  currentApp: snapshot.currentApp,
-                  actionType: autoAction.type,
-                  message: localPermissionAutoMessage,
-                  thought: autoThought,
-                  screenshotPath,
-                });
-              } catch {
-                // Keep task execution unaffected when progress callback fails.
+              // Add current snapshot SoM overlay + raw screenshot
+              if (s.somScreenshotBase64) {
+                content.push({ type: "image", data: s.somScreenshotBase64, mimeType: "image/png" });
               }
+              content.push({ type: "image", data: s.screenshotBase64, mimeType: "image/png" });
+              return [{ role: "user", content, timestamp: m.timestamp }];
             }
-
-            await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
-            continue;
-          }
-
-          const timeoutSec = Math.max(
-            30,
-            Math.round(output.action.timeoutSec ?? this.config.humanAuth.requestTimeoutSec),
-          );
-
-          if (!onHumanAuth) {
-            const message = `Human authorization required (${output.action.capability}), but no human auth handler is configured.`;
-            const stepResult = screenshotPath
-              ? `${message}\nlocal_screenshot=${screenshotPath}`
-              : message;
-            this.workspace.appendStep(
-              session,
-              step,
-              output.thought,
-              JSON.stringify(output.action, null, 2),
-              stepResult,
-            );
-            traces.push({
-              step,
-              action: output.action,
-              result: stepResult,
-              thought: output.thought,
-              currentApp: snapshot.currentApp,
-            });
-            this.workspace.finalizeSession(session, false, message);
-            this.workspace.appendDailyMemory(profileKey, task, false, message);
-            return {
-              ok: false,
-              message,
-              sessionPath: session.path,
-              skillPath: null,
-              scriptPath: null,
-            };
-          }
-
-          let decision: HumanAuthDecision;
-          try {
-            decision = await onHumanAuth({
-              sessionId: session.id,
-              sessionPath: session.path,
-              task,
-              step,
-              capability: output.action.capability,
-              instruction: output.action.instruction,
-              reason: output.action.reason ?? output.thought,
-              timeoutSec,
-              currentApp: snapshot.currentApp,
-              screenshotPath,
-            });
-          } catch (error) {
-            decision = {
-              requestId: "local-error",
-              approved: false,
-              status: "rejected",
-              message: `Human auth bridge error: ${(error as Error).message}`,
-              decidedAt: nowIso(),
-              artifactPath: null,
-            };
-          }
-
-          const delegation = await this.applyHumanDelegation(
-            output.action.capability,
-            decision,
-            snapshot.currentApp,
-          );
-          const delegationResult = delegation?.message ?? null;
-          const delegationTemplate = delegation?.templateHint ?? null;
-          const decisionLine = delegationResult
-            ? `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message} delegation=${delegationResult}`
-            : `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message}`;
-          const stepResultBaseRaw = decision.artifactPath
-            ? `${decisionLine}\nhuman_artifact=${decision.artifactPath}`
-            : decisionLine;
-          const stepResultBase = localPermissionAutoMessage
-            ? `${stepResultBaseRaw}\nlocal_vm_permission=${localPermissionAutoMessage}`
-            : stepResultBaseRaw;
-          const stepResultWithDelegation = delegationResult
-            ? `${stepResultBase}\ndelegation_result=${delegationResult}${delegationTemplate ? `\ndelegation_template=${delegationTemplate}` : ""}`
-            : stepResultBase;
-          const stepResult = screenshotPath
-            ? `${stepResultWithDelegation}\nlocal_screenshot=${screenshotPath}`
-            : stepResultWithDelegation;
-
-          this.workspace.appendStep(
-            session,
-            step,
-            output.thought,
-            JSON.stringify(output.action, null, 2),
-            stepResult,
-          );
-          traces.push({
-            step,
-            action: output.action,
-            result: stepResult,
-            thought: output.thought,
-            currentApp: snapshot.currentApp,
+            if (m.role === "user" || m.role === "assistant" || m.role === "toolResult") {
+              return [m as PiMessage];
+            }
+            return [];
           });
-          history.push(
-            `step ${step}: app=${snapshot.currentApp} action=request_human_auth decision=${decision.status} message=${decision.message}${delegationResult ? ` delegation=${delegationResult}` : ""}`,
-          );
-          if (delegationTemplate) {
-            history.push(`delegation_template ${delegationTemplate}`);
+        },
+
+        // Inject a fresh screenshot before each LLM call.
+        transformContext: async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
+          // Check stop / maxSteps
+          if (ctx.stopRequested()) {
+            ctx.failMessage = "Task stopped by user.";
+            return messages;  // Agent will stop because getFollowUpMessages returns []
+          }
+          if (ctx.stepCount >= ctx.maxSteps) {
+            ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+            return messages;
           }
 
-          if (onProgress && step % this.config.agent.progressReportInterval === 0) {
+          // Capture fresh screenshot
+          const snapshot = await runtime.adb.captureScreenSnapshot(runtime.config.agent.deviceId, profile.model);
+          snapshot.installedPackages = launchablePackages;
+          ctx.latestSnapshot = snapshot;
+          shouldReturnHome = true;
+
+          // Save screenshot
+          if (runtime.config.screenshots.saveStepScreenshots) {
             try {
-              await onProgress({
-                step,
-                maxSteps: this.config.agent.maxSteps,
-                currentApp: snapshot.currentApp,
-                actionType: output.action.type,
-                message: decisionLine,
-                thought: output.thought,
-                screenshotPath,
-              });
-            } catch {
-              // Keep task execution unaffected when progress callback fails.
+              ctx.lastScreenshotPath = runtime.screenshotStore.save(
+                Buffer.from(snapshot.screenshotBase64, "base64"),
+                { sessionId: session.id, step: ctx.stepCount + 1, currentApp: snapshot.currentApp },
+              );
+            } catch { ctx.lastScreenshotPath = null; }
+          }
+
+          // Auto-approve permission dialog before LLM sees the screen
+          if (
+            runtime.isPermissionDialogApp(snapshot.currentApp) &&
+            Date.now() - ctx.lastAutoPermissionAllowAtMs >= 1_200
+          ) {
+            const auto = await runtime.autoApprovePermissionDialog(snapshot.currentApp);
+            if (auto?.action?.type === "tap") {
+              ctx.lastAutoPermissionAllowAtMs = Date.now();
+              // Re-capture after approval
+              await sleep(300);
+              const refreshed = await runtime.adb.captureScreenSnapshot(runtime.config.agent.deviceId, profile.model);
+              refreshed.installedPackages = launchablePackages;
+              ctx.latestSnapshot = refreshed;
             }
           }
 
-          if (!decision.approved) {
-            const message = `Human authorization ${decision.status}: ${decision.message}`;
-            this.workspace.finalizeSession(session, false, message);
-            this.workspace.appendDailyMemory(profileKey, task, false, message);
-            return {
-              ok: false,
-              message,
-              sessionPath: session.path,
-              skillPath: null,
-              scriptPath: null,
-            };
-          }
-
-          await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
-          continue;
-        }
-
-        if (output.action.type === "request_user_decision") {
-          const timeoutSec = Math.max(20, Math.round(output.action.timeoutSec ?? 300));
-          if (!onUserDecision) {
-            const message = "User decision required, but no decision handler is configured.";
-            const stepResult = screenshotPath
-              ? `${message}\nlocal_screenshot=${screenshotPath}`
-              : message;
-            this.workspace.appendStep(
-              session,
-              step,
-              output.thought,
-              JSON.stringify(output.action, null, 2),
-              stepResult,
-            );
-            traces.push({
-              step,
-              action: output.action,
-              result: stepResult,
-              thought: output.thought,
-              currentApp: snapshot.currentApp,
-            });
-            this.workspace.finalizeSession(session, false, message);
-            this.workspace.appendDailyMemory(profileKey, task, false, message);
-            return {
-              ok: false,
-              message,
-              sessionPath: session.path,
-              skillPath: null,
-              scriptPath: null,
-            };
-          }
-
-          let decision: UserDecisionResponse;
-          try {
-            decision = await onUserDecision({
-              sessionId: session.id,
-              sessionPath: session.path,
-              task,
-              step,
-              question: output.action.question,
-              options: output.action.options,
-              timeoutSec,
-              currentApp: snapshot.currentApp,
-              screenshotPath,
-            });
-          } catch (error) {
-            const message = `User decision wait failed: ${(error as Error).message}`;
-            const stepResult = screenshotPath
-              ? `${message}\nlocal_screenshot=${screenshotPath}`
-              : message;
-            this.workspace.appendStep(
-              session,
-              step,
-              output.thought,
-              JSON.stringify(output.action, null, 2),
-              stepResult,
-            );
-            traces.push({
-              step,
-              action: output.action,
-              result: stepResult,
-              thought: output.thought,
-              currentApp: snapshot.currentApp,
-            });
-            this.workspace.finalizeSession(session, false, message);
-            this.workspace.appendDailyMemory(profileKey, task, false, message);
-            return {
-              ok: false,
-              message,
-              sessionPath: session.path,
-              skillPath: null,
-              scriptPath: null,
-            };
-          }
-
-          const normalizedSelected = String(decision.selectedOption || "").trim();
-          const matchedOption = output.action.options.find(
-            (item) => item.trim().toLowerCase() === normalizedSelected.toLowerCase(),
-          );
-          const selectedForLog = matchedOption || "[custom-input]";
-          const selectedSource = matchedOption ? "listed_option" : "custom_input";
-          const choiceLine =
-            `user_decision selected="${selectedForLog}" source=${selectedSource} input_len=${String(decision.rawInput || "").length} at=${decision.resolvedAt}`;
-          const stepResult = screenshotPath
-            ? `${choiceLine}\nlocal_screenshot=${screenshotPath}`
-            : choiceLine;
-          this.workspace.appendStep(
-            session,
-            step,
-            output.thought,
-            JSON.stringify(output.action, null, 2),
-            stepResult,
-          );
-          traces.push({
-            step,
-            action: output.action,
-            result: stepResult,
-            thought: output.thought,
-            currentApp: snapshot.currentApp,
+          // Save model input artifacts for debugging (same as the old step loop)
+          const stepForArtifact = ctx.stepCount + 1;
+          const observationTextForArtifact = buildUserPrompt(ctx.task, stepForArtifact, ctx.latestSnapshot, ctx.history);
+          runtime.saveModelInputArtifacts({
+            sessionId: session.id,
+            step: stepForArtifact,
+            task: ctx.task,
+            profileModel: profile.model,
+            promptMode: ctx.effectivePromptMode,
+            systemPrompt: ctx.systemPrompt,
+            userPrompt: observationTextForArtifact,
+            snapshot: ctx.latestSnapshot,
+            history: ctx.history,
           });
-          history.push(
-            `step ${step}: app=${snapshot.currentApp} action=request_user_decision question=${JSON.stringify(output.action.question)} selected=${JSON.stringify(selectedForLog)} source=${selectedSource}`,
-          );
 
-          if (onProgress && step % this.config.agent.progressReportInterval === 0) {
-            try {
-              await onProgress({
-                step,
-                maxSteps: this.config.agent.maxSteps,
-                currentApp: snapshot.currentApp,
-                actionType: output.action.type,
-                message: `User decision received (${selectedSource}).`,
-                thought: output.thought,
-                screenshotPath,
-              });
-            } catch {
-              // Keep task execution unaffected when progress callback fails.
-            }
-          }
-          await sleep(Math.min(this.config.agent.loopDelayMs, 600));
-          continue;
-        }
-
-        output.action = this.resolveTapElementAction(output.action, snapshot);
-
-        // Save debug screenshot with marker overlay before scaling coordinates.
-        if (
-          this.config.screenshots.saveStepScreenshots &&
-          (output.action.type === "tap" || output.action.type === "swipe")
-        ) {
-          try {
-            const scaledBuf = Buffer.from(snapshot.screenshotBase64, "base64");
-            const annotated = await drawDebugMarker(scaledBuf, output.action);
-            this.screenshotStore.save(annotated, {
-              sessionId: session.id,
-              step,
-              currentApp: `${snapshot.currentApp}-debug`,
-            });
-          } catch {
-            // Debug overlay is best-effort; don't break the task loop.
-          }
-        }
-
-        // Scale model-returned coordinates back to original device resolution.
-        if (output.action.type === "tap") {
-          const scaled = scaleCoordinates(
-            output.action.x, output.action.y,
-            snapshot.scaleX, snapshot.scaleY,
-            snapshot.width, snapshot.height,
-          );
-          output.action.x = scaled.x;
-          output.action.y = scaled.y;
-        } else if (output.action.type === "swipe") {
-          const p1 = scaleCoordinates(
-            output.action.x1, output.action.y1,
-            snapshot.scaleX, snapshot.scaleY,
-            snapshot.width, snapshot.height,
-          );
-          const p2 = scaleCoordinates(
-            output.action.x2, output.action.y2,
-            snapshot.scaleX, snapshot.scaleY,
-            snapshot.width, snapshot.height,
-          );
-          output.action.x1 = p1.x;
-          output.action.y1 = p1.y;
-          output.action.x2 = p2.x;
-          output.action.y2 = p2.y;
-        }
-
-        let executionResult = "";
-        let stateDeltaLine = "";
-        try {
-          if (output.action.type === "run_script") {
-            const scriptResult = await this.scriptExecutor.execute(
-              output.action.script,
-              output.action.timeoutSec,
-            );
-            executionResult = [
-              `run_script exitCode=${scriptResult.exitCode} timedOut=${scriptResult.timedOut}`,
-              `runDir=${scriptResult.runDir}`,
-              scriptResult.stdout ? `stdout=${scriptResult.stdout}` : "",
-              scriptResult.stderr ? `stderr=${scriptResult.stderr}` : "",
-            ]
-              .filter(Boolean)
-              .join("\n");
-          } else if (
-            output.action.type === "read" ||
-            output.action.type === "write" ||
-            output.action.type === "edit" ||
-            output.action.type === "apply_patch" ||
-            output.action.type === "exec" ||
-            output.action.type === "process"
-          ) {
-            executionResult = await this.codingExecutor.execute(output.action);
-          } else if (
-            output.action.type === "memory_search" ||
-            output.action.type === "memory_get"
-          ) {
-            executionResult = this.memoryExecutor.execute(output.action);
-          } else {
-            executionResult = await this.adb.executeAction(output.action, this.config.agent.deviceId);
+          // Maintain a rolling window of recent snapshots (max 2) for multi-frame context
+          const recentSnapshots = ctx.recentSnapshotWindow.slice(-2);
+          ctx.recentSnapshotWindow.push(ctx.latestSnapshot);
+          if (ctx.recentSnapshotWindow.length > 3) {
+            ctx.recentSnapshotWindow = ctx.recentSnapshotWindow.slice(-3);
           }
 
-          const shouldObserveDelta =
-            output.action.type === "tap" ||
-            output.action.type === "swipe" ||
-            output.action.type === "type" ||
-            output.action.type === "keyevent" ||
-            output.action.type === "launch_app" ||
-            output.action.type === "shell";
-          if (shouldObserveDelta) {
-            try {
-              const afterSnapshot = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, profile.model);
-              const beforeState = this.observeSnapshotState(snapshot);
-              const afterState = this.observeSnapshotState(afterSnapshot);
-              stateDeltaLine = this.buildStateDeltaLine(beforeState, afterState, output.action.type);
-            } catch {
-              stateDeltaLine = "";
-            }
-          }
-        } catch (error) {
-          executionResult = `Action execution error: ${(error as Error).message}`;
-        }
+          // Strip old screenshot observations (keep only text history, last 1 screenshot)
+          const filtered = messages.filter((m) => m.role !== "screenObservation");
+          const observation: ScreenObservationMessage = {
+            role: "screenObservation",
+            snapshot: ctx.latestSnapshot,
+            recentSnapshots,
+            stepIndex: ctx.stepCount + 1,
+            screenshotPath: ctx.lastScreenshotPath,
+            timestamp: Date.now(),
+          };
+          return [...filtered, observation];
+        },
 
-        if (this.lastResolvedTapElementContext) {
-          const mark = this.lastResolvedTapElementContext;
-          const markLine =
-            `tap_mark id=${mark.id} label=${JSON.stringify(mark.label)} class=${mark.className || "unknown"} clickable=${mark.clickable} center=(${mark.center.x},${mark.center.y}) scaled_center=(${mark.scaledCenter.x},${mark.scaledCenter.y}) bounds=[${mark.bounds.left},${mark.bounds.top}][${mark.bounds.right},${mark.bounds.bottom}] scaled_bounds=[${mark.scaledBounds.left},${mark.scaledBounds.top}][${mark.scaledBounds.right},${mark.scaledBounds.bottom}]`;
-          executionResult = `${executionResult}\n${markLine}`;
-        }
-        if (stateDeltaLine) {
-          executionResult = `${executionResult}\n${stateDeltaLine}`;
-        }
+        // After each turn, inject follow-up to keep the loop going
+        // (the model returns exactly one tool call per turn, then the loop would
+        //  normally end — follow-up messages keep it alive until finish/fail/maxSteps).
+        followUpMode: "one-at-a-time",
+      });
 
-        const stepResult = screenshotPath
-          ? `${executionResult}\nlocal_screenshot=${screenshotPath}`
-          : executionResult;
-        this.workspace.appendStep(
-          session,
-          step,
-          output.thought,
-          JSON.stringify(output.action, null, 2),
-          stepResult,
-        );
-        traces.push({
-          step,
-          action: output.action,
-          result: stepResult,
-          thought: output.thought,
-          currentApp: snapshot.currentApp,
+      // Follow-up: inject continuation messages to keep the agent loop running
+      const checkContinuation = () => {
+        if (ctx.finishMessage || ctx.failMessage || ctx.stopRequested()) {
+          return; // Don't queue follow-up — agent will stop
+        }
+        if (ctx.stepCount >= ctx.maxSteps) {
+          ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+          return;
+        }
+        agent.followUp({
+          role: "user",
+          content: [{ type: "text", text: `Step ${ctx.stepCount + 1}: continue executing the task.` }],
+          timestamp: Date.now(),
         });
+      };
 
-        history.push(
-          `step ${step}: app=${snapshot.currentApp} thought="${output.thought}" action=${output.action.type} result=${executionResult}`,
-        );
-
-        if (this.config.agent.verbose) {
-          // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][step ${step}] ${output.action.type}: ${executionResult}`);
-        }
-
-        if (onProgress && step % this.config.agent.progressReportInterval === 0) {
-          try {
-            await onProgress({
-              step,
-              maxSteps: this.config.agent.maxSteps,
-              currentApp: snapshot.currentApp,
-              actionType: output.action.type,
-              message: executionResult,
-              thought: output.thought,
-              screenshotPath,
-            });
-          } catch {
-            // Keep task execution unaffected when progress callback fails.
+      // Subscribe to events for continuation logic
+      agent.subscribe((event: AgentEvent) => {
+        if (event.type === "turn_end") {
+          const assistantMessage = event.message as PiAssistantMessage;
+          if (assistantMessage.role !== "assistant") {
+            return;
           }
+          if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
+            const detail = assistantMessage.errorMessage || assistantMessage.stopReason;
+            ctx.failMessage = `Model response error: ${detail}`;
+            return;
+          }
+          const hasToolCall = assistantMessage.content.some((item) => item.type === "toolCall");
+          if (!hasToolCall && !ctx.finishMessage && !ctx.failMessage) {
+            ctx.failMessage = "Model response did not include a tool call.";
+            return;
+          }
+          checkContinuation();
         }
+      });
 
-        if (output.action.type !== "wait") {
-          await sleep(this.config.agent.loopDelayMs);
-        }
+      // ---- Run the Agent ----
+          // eslint-disable-next-line no-console
+      console.log(`[OpenPocket][agent-core] starting task: ${task}`);
+      await agent.prompt(`Task: ${task}`);
+      await agent.waitForIdle();
+      const agentStateError = (agent as { state?: { error?: string } }).state?.error;
+      if (!ctx.finishMessage && !ctx.failMessage && typeof agentStateError === "string" && agentStateError.trim()) {
+        ctx.failMessage = `Model response error: ${agentStateError}`;
       }
 
-      const message = `Max steps reached (${this.config.agent.maxSteps})`;
-      this.workspace.finalizeSession(session, false, message);
-      this.workspace.appendDailyMemory(profileKey, task, false, message);
+      // ---- Determine result ----
+      if (ctx.finishMessage) {
+        this.workspace.finalizeSession(session, true, ctx.finishMessage);
+        this.workspace.appendDailyMemory(profileKey, task, true, ctx.finishMessage);
+        const artifacts = this.autoArtifactBuilder.build({
+          task, sessionPath: session.path, ok: true, finalMessage: ctx.finishMessage, traces: ctx.traces,
+        });
+        if (artifacts.skillPath) console.log(`[OpenPocket][artifact] auto skill: ${artifacts.skillPath}`);
+        if (artifacts.scriptPath) console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
       return {
-        ok: false,
-        message,
-        sessionPath: session.path,
-        skillPath: null,
-        scriptPath: null,
-      };
+          ok: true, message: ctx.finishMessage, sessionPath: session.path,
+          skillPath: artifacts.skillPath, scriptPath: artifacts.scriptPath,
+        };
+      }
+
+      const failMsg = ctx.failMessage || "Agent stopped without finishing.";
+      this.workspace.finalizeSession(session, false, failMsg);
+      this.workspace.appendDailyMemory(profileKey, task, false, failMsg);
+      return { ok: false, message: failMsg, sessionPath: session.path, skillPath: null, scriptPath: null };
+
     } catch (error) {
       const message = `Agent execution failed: ${(error as Error).message}`;
       this.workspace.finalizeSession(session, false, message);
       this.workspace.appendDailyMemory(profileKey, task, false, message);
-      return {
-        ok: false,
-        message,
-        sessionPath: session.path,
-        skillPath: null,
-        scriptPath: null,
-      };
+      return { ok: false, message, sessionPath: session.path, skillPath: null, scriptPath: null };
     } finally {
-      if (shouldReturnHome) {
-        await this.safeReturnToHome();
-      }
+      if (shouldReturnHome) await this.safeReturnToHome();
       this.busy = false;
       this.currentTask = null;
       this.currentTaskStartedAtMs = null;

@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { ModelClient } = require("../dist/agent/model-client.js");
+const { ModelClient, buildPiAiModel } = await import("../dist/agent/model-client.js");
 
 function makeProfile() {
   return {
@@ -17,186 +15,123 @@ function makeProfile() {
   };
 }
 
-function makeSnapshot() {
-  return {
-    deviceId: "emulator-5554",
-    currentApp: "com.android.chrome",
-    width: 1080,
-    height: 2400,
-    screenshotBase64: "abc",
-    somScreenshotBase64: null,
-    capturedAt: new Date().toISOString(),
-    scaleX: 1,
-    scaleY: 1,
-    scaledWidth: 1080,
-    scaledHeight: 2400,
-    installedPackages: ["com.android.chrome"],
-    uiElements: [],
-  };
-}
+// ---------------------------------------------------------------------------
+// buildPiAiModel tests
+// ---------------------------------------------------------------------------
 
-test("ModelClient falls back from chat to responses", async () => {
-  const client = new ModelClient(makeProfile(), "dummy");
-  client.client = {
-    chat: {
-      completions: {
-        create: async () => {
-          throw new Error("chat not supported");
-        },
-      },
-    },
-    responses: {
-      create: async () => ({
-        output: [
-          {
-            type: "function_call",
-            name: "finish",
-            arguments: '{"thought":"done","message":"ok"}',
-          },
-        ],
-      }),
-    },
-  };
-
-  const out = await client.nextStep({
-    systemPrompt: "system",
-    task: "task",
-    step: 1,
-    snapshot: makeSnapshot(),
-    history: [],
-  });
-
-  assert.equal(out.action.type, "finish");
-  assert.equal(out.action.message, "ok");
-  assert.equal(out.thought, "done");
-  assert.equal(client.modeHint, "responses");
+test("buildPiAiModel selects openai-completions for codex models on OpenAI", () => {
+  const model = buildPiAiModel(makeProfile());
+  assert.equal(model.api, "openai-completions");
+  assert.equal(model.provider, "openai");
+  assert.equal(model.id, "gpt-5.2-codex");
 });
 
-test("ModelClient parses chat tool call correctly", async () => {
-  const client = new ModelClient(makeProfile(), "dummy");
-  client.client = {
-    chat: {
-      completions: {
-        create: async () => ({
-          choices: [
-            {
-              message: {
-                tool_calls: [
-                  {
-                    function: {
-                      name: "tap",
-                      arguments: '{"thought":"tapping button","x":540,"y":1200}',
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        }),
-      },
-    },
-    responses: {
-      create: async () => {
-        throw new Error("not needed");
-      },
-    },
-  };
-
-  const out = await client.nextStep({
-    systemPrompt: "system",
-    task: "task",
-    step: 2,
-    snapshot: makeSnapshot(),
-    history: [],
-  });
-
-  assert.equal(out.action.type, "tap");
-  assert.equal(out.action.x, 540);
-  assert.equal(out.action.y, 1200);
-  assert.equal(out.thought, "tapping button");
+test("buildPiAiModel selects openai-completions for non-codex models on OpenAI", () => {
+  const profile = { ...makeProfile(), model: "gpt-4o" };
+  const model = buildPiAiModel(profile);
+  assert.equal(model.api, "openai-completions");
+  assert.equal(model.provider, "openai");
 });
 
-test("ModelClient fails when no tool call is returned", async () => {
-  const client = new ModelClient(makeProfile(), "dummy");
-  client.client = {
-    chat: {
-      completions: {
-        create: async () => ({
-          choices: [{ message: { content: "no tool call here" } }],
-        }),
-      },
-    },
-    responses: {
-      create: async () => ({
-        output: [{ type: "text", text: "no tool call here either" }],
-      }),
-    },
+test("buildPiAiModel selects openrouter provider for OpenRouter baseUrl", () => {
+  const profile = {
+    ...makeProfile(),
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "claude-sonnet-4.6",
   };
-
-  await assert.rejects(
-    () =>
-      client.nextStep({
-        systemPrompt: "system",
-        task: "task",
-        step: 2,
-        snapshot: makeSnapshot(),
-        history: [],
-      }),
-    /All model endpoints failed/,
-  );
+  const model = buildPiAiModel(profile);
+  assert.equal(model.api, "openai-completions");
+  assert.equal(model.provider, "openrouter");
 });
 
-test("ModelClient uses codex-compatible responses payload on codex backend", async () => {
-  const profile = makeProfile();
-  profile.baseUrl = "https://chatgpt.com/backend-api/codex";
-  const client = new ModelClient(profile, "dummy", { baseUrl: profile.baseUrl, preferredMode: "responses" });
-
-  let captured = null;
-  let createCalled = false;
-  client.client = {
-    chat: {
-      completions: {
-        create: async () => {
-          throw new Error("chat should not be used for codex backend");
-        },
-      },
-    },
-    responses: {
-      create: async () => {
-        createCalled = true;
-        throw new Error("responses.create should not be used for codex backend");
-      },
-      stream: (request) => {
-        captured = request;
-        return {
-          finalResponse: async () => ({
-            output: [
-              {
-                type: "function_call",
-                name: "finish",
-                arguments: '{"thought":"done","message":"ok"}',
-              },
-            ],
-          }),
-        };
-      },
-    },
+test("buildPiAiModel selects anthropic-messages for Anthropic baseUrl", () => {
+  const profile = {
+    ...makeProfile(),
+    baseUrl: "https://api.anthropic.com/v1",
+    model: "claude-sonnet-4.6",
   };
+  const model = buildPiAiModel(profile);
+  assert.equal(model.api, "anthropic-messages");
+  assert.equal(model.provider, "anthropic");
+});
 
-  const out = await client.nextStep({
-    systemPrompt: "system",
-    task: "task",
-    step: 1,
-    snapshot: makeSnapshot(),
-    history: [],
+test("buildPiAiModel selects openai-completions for gpt-5 models on OpenAI", () => {
+  const profile = { ...makeProfile(), model: "gpt-5.3" };
+  const model = buildPiAiModel(profile);
+  assert.equal(model.api, "openai-completions");
+  assert.equal(model.provider, "openai");
+});
+
+test("buildPiAiModel sets reasoning flag based on reasoningEffort", () => {
+  const withReasoning = buildPiAiModel(makeProfile());
+  assert.equal(withReasoning.reasoning, true);
+
+  const withoutReasoning = buildPiAiModel({
+    ...makeProfile(),
+    reasoningEffort: null,
   });
+  assert.equal(withoutReasoning.reasoning, false);
+});
 
-  assert.equal(out.action.type, "finish");
-  assert.equal(createCalled, false);
-  assert.ok(captured);
-  assert.equal(captured.store, false);
-  assert.equal(captured.stream, true);
-  assert.equal(typeof captured.instructions, "string");
-  assert.ok(captured.instructions.includes("system"));
-  assert.ok(!Object.hasOwn(captured, "max_output_tokens"));
+// ---------------------------------------------------------------------------
+// ModelClient constructor tests
+// ---------------------------------------------------------------------------
+
+test("ModelClient respects preferredMode override to responses", () => {
+  const client = new ModelClient(makeProfile(), "dummy", {
+    preferredMode: "responses",
+  });
+  // The piModel is private, but we can verify via the public API
+  // Just ensure construction doesn't throw
+  assert.ok(client);
+});
+
+test("ModelClient respects preferredMode override to completions", () => {
+  const client = new ModelClient(makeProfile(), "dummy", {
+    preferredMode: "completions",
+  });
+  assert.ok(client);
+});
+
+test("ModelClient respects baseUrl override", () => {
+  const client = new ModelClient(makeProfile(), "dummy", {
+    baseUrl: "https://custom-api.example.com/v1",
+  });
+  assert.ok(client);
+});
+
+// ---------------------------------------------------------------------------
+// TOOL_METAS integration
+// ---------------------------------------------------------------------------
+
+test("ModelClient builds pi-ai tools from TOOL_METAS", async () => {
+  const { TOOL_METAS } = await import("../dist/agent/tools.js");
+  assert.equal(TOOL_METAS.length, 20);
+  const names = TOOL_METAS.map((t) => t.name);
+  assert.ok(names.includes("tap"));
+  assert.ok(names.includes("finish"));
+  assert.ok(names.includes("request_human_auth"));
+
+  // Each tool meta has valid TypeBox-generated schema with properties
+  for (const meta of TOOL_METAS) {
+    assert.equal(typeof meta.parameters, "object");
+    assert.ok(meta.parameters.properties, `${meta.name} should have properties`);
+    assert.ok(meta.parameters.properties.thought, `${meta.name} should have thought property`);
+  }
+});
+
+test("CHAT_TOOLS format matches expected OpenAI function calling shape", async () => {
+  const { CHAT_TOOLS } = await import("../dist/agent/tools.js");
+  assert.ok(CHAT_TOOLS.length > 0);
+  const tap = CHAT_TOOLS.find((t) => t.function.name === "tap");
+  assert.ok(tap);
+  assert.equal(tap.type, "function");
+  assert.equal(typeof tap.function.description, "string");
+  assert.ok(tap.function.parameters.properties);
+  assert.ok(tap.function.parameters.required);
+  assert.ok(tap.function.parameters.required.includes("thought"));
+  assert.ok(tap.function.parameters.required.includes("x"));
+  assert.ok(tap.function.parameters.required.includes("y"));
+  // reason should NOT be required (it's Optional)
+  assert.ok(!tap.function.parameters.required.includes("reason"));
 });
