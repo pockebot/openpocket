@@ -62,6 +62,21 @@ interface TaskOutcomeNarrationInput {
   scriptPath: string | null;
 }
 
+interface EscalationNarrationInput {
+  event: "human_auth" | "user_decision";
+  locale: OnboardingLocale;
+  task: string;
+  capability?: string | null;
+  currentApp?: string | null;
+  instruction?: string;
+  reason?: string;
+  question?: string;
+  options?: string[];
+  hasWebLink?: boolean;
+  isCodeFlow?: boolean;
+  includeLocalSecurityAssurance?: boolean;
+}
+
 type OnboardingStep = 1 | 2 | 3;
 type OnboardingLocale = "zh" | "en";
 type OnboardingProfileField = "userPreferredAddress" | "assistantName" | "assistantPersona";
@@ -1115,6 +1130,97 @@ export class ChatAssistant {
     ].join("\n");
   }
 
+  private capabilityLabel(capability: string | null | undefined, locale: OnboardingLocale): string {
+    const normalized = String(capability || "").trim().toLowerCase();
+    if (!normalized) {
+      return locale === "zh" ? "授权" : "authorization";
+    }
+    const zhMap: Record<string, string> = {
+      oauth: "登录授权",
+      permission: "权限授权",
+      camera: "相机授权",
+      microphone: "麦克风授权",
+      location: "定位授权",
+      contacts: "通讯录授权",
+      nfc: "NFC 授权",
+      sms: "短信/验证码授权",
+      "2fa": "二步验证授权",
+      otp: "一次性验证码授权",
+      email: "邮箱验证码授权",
+      files: "文件访问授权",
+      payment: "支付确认授权",
+      unknown: "授权",
+    };
+    const enMap: Record<string, string> = {
+      oauth: "login authorization",
+      permission: "permission authorization",
+      camera: "camera authorization",
+      microphone: "microphone authorization",
+      location: "location authorization",
+      contacts: "contacts authorization",
+      nfc: "NFC authorization",
+      sms: "SMS/code authorization",
+      "2fa": "2FA authorization",
+      otp: "OTP authorization",
+      email: "email-code authorization",
+      files: "file-access authorization",
+      payment: "payment authorization",
+      unknown: "authorization",
+    };
+    return locale === "zh" ? (zhMap[normalized] || "授权") : (enMap[normalized] || "authorization");
+  }
+
+  private buildEscalationNarrationPrompt(input: EscalationNarrationInput): string {
+    const payload = {
+      event: input.event,
+      localeHint: input.locale,
+      task: this.trimForPrompt(input.task, 260),
+      capability: this.trimForPrompt(String(input.capability || ""), 80),
+      capabilityLabel: this.capabilityLabel(input.capability, input.locale),
+      currentApp: this.trimForPrompt(String(input.currentApp || ""), 140),
+      instruction: this.trimForPrompt(String(input.instruction || ""), 360),
+      reason: this.trimForPrompt(String(input.reason || ""), 280),
+      question: this.trimForPrompt(String(input.question || ""), 260),
+      options: (input.options || []).slice(0, 8).map((item) => this.trimForPrompt(item, 100)),
+      hasWebLink: Boolean(input.hasWebLink),
+      isCodeFlow: Boolean(input.isCodeFlow),
+      includeLocalSecurityAssurance: Boolean(input.includeLocalSecurityAssurance),
+    };
+    const identity = this.readTextSafe(this.profileFilePath("IDENTITY.md")).trim() || "(empty)";
+    const user = this.readTextSafe(this.profileFilePath("USER.md")).trim() || "(empty)";
+    const soul = this.readTextSafe(this.workspaceFilePath("SOUL.md")).trim() || "(empty)";
+
+    return [
+      "You are OpenPocket escalation narrator.",
+      "Write the user-facing interruption message when automation asks for human input.",
+      "Return strict JSON only:",
+      '{"message":"..."}',
+      "Rules:",
+      "1) Keep it concise, natural, and conversational (2-4 short sentences).",
+      "2) Lead with what user should do now.",
+      "3) Do NOT use rigid labels like 'Instruction:', 'Reason:', 'Request ID:', 'Current app:'.",
+      "4) Mention current app only when it is available and meaningful.",
+      "5) If includeLocalSecurityAssurance=true, include one short reassurance sentence:",
+      "   relay is local on user's machine, channel is private/encrypted, no centralized OpenPocket relay stores credentials.",
+      "6) event=human_auth: ask user to open link and approve/reject, unless link unavailable.",
+      "7) event=user_decision: ask user to reply with an option clearly and briefly.",
+      "8) event with code flow should mention user can reply code directly in Telegram.",
+      "9) Use locale hint language and avoid unnecessary long context copy.",
+      "",
+      "SOUL.md:",
+      this.trimForPrompt(soul, 1200),
+      "",
+      "IDENTITY.md:",
+      this.trimForPrompt(identity, 1000),
+      "",
+      "USER.md:",
+      this.trimForPrompt(user, 1000),
+      "",
+      "Escalation context JSON:",
+      JSON.stringify(payload, null, 2),
+    ].join("\n");
+  }
+
   private async requestBootstrapOnboardingDecision(
     client: OpenAI,
     model: string,
@@ -1210,6 +1316,29 @@ export class ChatAssistant {
       return null;
     }
 
+    const jsonText = extractJsonObjectText(output);
+    try {
+      const parsed = JSON.parse(jsonText) as { message?: unknown };
+      if (typeof parsed.message !== "string") {
+        return null;
+      }
+      const message = parsed.message.trim();
+      return message || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async requestEscalationNarration(
+    client: OpenAI,
+    model: string,
+    maxTokens: number,
+    prompt: string,
+  ): Promise<string | null> {
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 260), prompt, "escalation narration");
+    if (!output) {
+      return null;
+    }
     const jsonText = extractJsonObjectText(output);
     try {
       const parsed = JSON.parse(jsonText) as { message?: unknown };
@@ -1919,6 +2048,52 @@ export class ChatAssistant {
     return reuseNote ? `${base}\n${reuseNote}` : base;
   }
 
+  private fallbackEscalationNarration(input: EscalationNarrationInput): string {
+    const locale = input.locale;
+    const capabilityLabel = this.capabilityLabel(input.capability, locale);
+    const appToken = String(input.currentApp || "").trim();
+    const appLine = appToken && appToken.toLowerCase() !== "unknown"
+      ? (locale === "zh" ? `当前停在 ${appToken}。` : `Current app: ${appToken}.`)
+      : "";
+    const securityLine = input.includeLocalSecurityAssurance
+      ? (locale === "zh"
+        ? "安全提示：授权页连接的是你本机上的 OpenPocket Relay；凭据仅走当前私有加密通道，不会进入中心化服务器。"
+        : "Security note: this auth page connects to your local OpenPocket relay; credentials stay in a private encrypted channel and are not stored in a centralized relay.")
+      : "";
+
+    if (input.event === "human_auth") {
+      const actionLine = locale === "zh"
+        ? (input.hasWebLink
+          ? "请点开下面链接完成授权，然后回到 Telegram 告诉我已完成。"
+          : "当前没有可用授权链接，请在 Telegram 里直接回复我是否同意。")
+        : (input.hasWebLink
+          ? "Open the link below, complete the authorization, then return to Telegram."
+          : "Web link is unavailable; reply in Telegram with your decision.");
+      const codeLine = input.isCodeFlow
+        ? (locale === "zh"
+          ? "这是验证码流程，你也可以直接回复 4-10 位验证码。"
+          : "This is a code flow: you can also reply with the 4-10 digit code directly.")
+        : "";
+      const intro = locale === "zh"
+        ? `我需要你完成一次${capabilityLabel}，我这边已暂停。`
+        : `I need your help for ${capabilityLabel}; automation is paused.`;
+      return [intro, actionLine, codeLine, appLine, securityLine].filter(Boolean).join(" ");
+    }
+
+    const optionsLine = Array.isArray(input.options) && input.options.length > 0
+      ? (locale === "zh"
+        ? `可选项：${input.options.slice(0, 6).join(" / ")}。`
+        : `Options: ${input.options.slice(0, 6).join(" / ")}.`)
+      : "";
+    const questionLine = input.question
+      ? (locale === "zh" ? `问题：${input.question}` : `Question: ${input.question}`)
+      : "";
+    const actionLine = locale === "zh"
+      ? "请直接回复选项编号或文本，我收到后会继续。"
+      : "Reply with the option number or text, and I will continue.";
+    return [questionLine, optionsLine, actionLine].filter(Boolean).join(" ");
+  }
+
   async narrateTaskProgress(input: TaskProgressNarrationInput): Promise<TaskProgressNarrationDecision> {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
@@ -1990,6 +2165,36 @@ export class ChatAssistant {
       return normalized || this.fallbackTaskOutcomeNarration(input);
     } catch {
       return this.fallbackTaskOutcomeNarration(input);
+    }
+  }
+
+  async narrateEscalation(input: EscalationNarrationInput): Promise<string> {
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return this.fallbackEscalationNarration(input);
+    }
+
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+    const prompt = this.buildEscalationNarrationPrompt(input);
+
+    try {
+      const message = await this.requestEscalationNarration(
+        client,
+        profile.model,
+        profile.maxTokens,
+        prompt,
+      );
+      if (!message) {
+        return this.fallbackEscalationNarration(input);
+      }
+      const normalized = this.normalizeOneLine(message);
+      return normalized || this.fallbackEscalationNarration(input);
+    } catch {
+      return this.fallbackEscalationNarration(input);
     }
   }
 

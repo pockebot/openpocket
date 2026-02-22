@@ -514,3 +514,52 @@ test("ChatAssistant narrateTaskOutcome falls back and strips boilerplate", async
   assert.doesNotMatch(out, /^Task completed/i);
   assert.match(out, /Weather is 51F/i);
 });
+
+test("ChatAssistant narrateEscalation fallback generates concise local-security reassurance", async () => {
+  const { assistant } = createAssistant();
+  const out = await assistant.narrateEscalation({
+    event: "human_auth",
+    locale: "zh",
+    task: "登录 Duolingo",
+    capability: "oauth",
+    currentApp: "unknown",
+    instruction: "Please enter username and password.",
+    reason: "Sensitive credentials are required.",
+    hasWebLink: true,
+    isCodeFlow: false,
+    includeLocalSecurityAssurance: true,
+  });
+
+  assert.match(out, /登录授权/);
+  assert.match(out, /本机上的 OpenPocket Relay/);
+  assert.doesNotMatch(out, /Instruction:/i);
+  assert.doesNotMatch(out, /Reason:/i);
+  assert.doesNotMatch(out, /Request ID/i);
+});
+
+test("ChatAssistant narrateEscalation uses model output when available", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  let capturedPrompt = "";
+  assistant.requestEscalationNarration = async (_client, _model, _maxTokens, prompt) => {
+    capturedPrompt = prompt;
+    return "我这边卡在登录确认，请打开授权链接完成后告诉我，我会继续。";
+  };
+
+  const out = await assistant.narrateEscalation({
+    event: "human_auth",
+    locale: "zh",
+    task: "登录 Duolingo",
+    capability: "oauth",
+    currentApp: "com.duolingo",
+    instruction: "Take over and sign in.",
+    reason: "credential-required",
+    hasWebLink: true,
+    isCodeFlow: false,
+    includeLocalSecurityAssurance: true,
+  });
+
+  assert.match(out, /打开授权链接/);
+  assert.match(capturedPrompt, /Escalation context JSON/);
+  assert.match(capturedPrompt, /includeLocalSecurityAssurance/);
+  assert.match(capturedPrompt, /event/);
+});

@@ -181,17 +181,60 @@ export class TelegramGateway {
     return this.compact(redacted, maxChars);
   }
 
-  private buildHumanAuthSecurityLines(): string[] {
-    const usesNgrokTunnel = this.config.humanAuth.tunnel.provider === "ngrok";
-    const channelText = usesNgrokTunnel
-      ? "one-time token link + TLS ngrok tunnel to your local relay"
-      : "private local relay channel";
-    return [
-      "Security note (Local Relay):",
-      "- Relay server runs on your own computer.",
-      `- Credentials travel only through ${channelText}; they are not routed to a centralized OpenPocket relay.`,
-      "- Emulator runtime and state remain on your local machine.",
+  private normalizeHumanAuthCurrentAppToken(app: string): string | null {
+    const value = String(app || "").trim();
+    if (!value) {
+      return null;
+    }
+    const lower = value.toLowerCase();
+    if (lower === "unknown" || lower === "n/a" || lower === "null" || lower === "(null)") {
+      return null;
+    }
+    return value;
+  }
+
+  private extractPackageNameFromWindowDump(windowDump: string): string | null {
+    const patterns = [
+      /mCurrentFocus=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
+      /mFocusedApp=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
+      /topResumedActivity=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
     ];
+    for (const pattern of patterns) {
+      const matched = windowDump.match(pattern);
+      if (!matched?.[1]) {
+        continue;
+      }
+      const normalized = this.normalizeHumanAuthCurrentAppToken(matched[1]);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return null;
+  }
+
+  private resolveHumanAuthCurrentApp(appHint: string): string | null {
+    const provided = this.normalizeHumanAuthCurrentAppToken(appHint);
+    if (provided) {
+      return provided;
+    }
+    try {
+      const status = this.emulator.status();
+      const probeDevices = status.bootedDevices.length > 0 ? status.bootedDevices : status.devices;
+      for (const deviceId of probeDevices) {
+        try {
+          const dump = this.emulator.runAdb(["-s", deviceId, "shell", "dumpsys", "window", "windows"], 15_000);
+          const parsed = this.extractPackageNameFromWindowDump(dump);
+          if (parsed) {
+            return parsed;
+          }
+        } catch {
+          // Continue probing next available device.
+        }
+      }
+    } catch {
+      // Best-effort current-app probe; ignore probe failures.
+    }
+    return null;
   }
 
   private normalizeBotDisplayName(input: string): string {
@@ -934,17 +977,33 @@ export class TelegramGateway {
         timeout,
       });
 
+      const decisionLocale = this.inferTaskLocale(
+        `${request.question}\n${Array.isArray(request.options) ? request.options.join(" ") : ""}`,
+      );
+      const escalationIntro = this.sanitizeForChat(
+        await this.chat.narrateEscalation({
+          event: "user_decision",
+          locale: decisionLocale,
+          task: request.task,
+          question: request.question,
+          options: request.options,
+          hasWebLink: false,
+          includeLocalSecurityAssurance: false,
+        }),
+        1000,
+      );
+      const optionsTitle = decisionLocale === "zh" ? "选项：" : "Options:";
+      const replyHint = decisionLocale === "zh" ? "请回复选项编号或文本。" : "Reply with option number or text.";
       const options = request.options.length > 0
         ? request.options.map((item, index) => `${index + 1}. ${item}`).join("\n")
-        : "(no options provided)";
+        : (decisionLocale === "zh" ? "（没有可用选项）" : "(no options provided)");
       const prompt = [
-        "I need your decision to continue:",
-        `Question: ${request.question}`,
+        escalationIntro,
         "",
-        "Options:",
+        optionsTitle,
         options,
         "",
-        "Reply with option number or text.",
+        replyHint,
       ].join("\n");
       const screenshotPath = await screenshotPromise;
       if (screenshotPath) {
@@ -1403,41 +1462,59 @@ export class TelegramGateway {
                   { chatId, task, request: { ...request, timeoutSec } },
                   async (opened) => {
                     const isCodeFlow = this.isCodeBasedHumanAuthCapability(request.capability);
-                    const lines = [
-                      `Human authorization required (${request.capability}).`,
-                      `Request ID: ${opened.requestId}`,
-                      `Current app: ${request.currentApp}`,
-                      `Instruction: ${request.instruction}`,
-                      `Reason: ${request.reason || "no reason provided"}`,
-                      `Expires at: ${opened.expiresAt}`,
-                      "",
-                      ...this.buildHumanAuthSecurityLines(),
-                      "",
-                      "Fallback manual commands:",
-                      opened.manualApproveCommand,
-                      opened.manualRejectCommand,
-                    ];
+                    const resolvedCurrentApp = this.resolveHumanAuthCurrentApp(request.currentApp);
+                    const escalationMessage = this.sanitizeForChat(
+                      await this.chat.narrateEscalation({
+                        event: "human_auth",
+                        locale: progressLocale,
+                        task,
+                        capability: request.capability,
+                        currentApp: resolvedCurrentApp,
+                        instruction: request.instruction,
+                        reason: request.reason,
+                        hasWebLink: Boolean(opened.openUrl),
+                        isCodeFlow,
+                        includeLocalSecurityAssurance: true,
+                      }),
+                      1500,
+                    );
 
                     if (isCodeFlow) {
+                      const codeLines = progressLocale === "zh"
+                        ? [
+                            "你也可以直接在 Telegram 回复验证码（4-10位数字，例如 123456）。",
+                            `多个验证码请求时可发送：${opened.manualApproveCommand} <code>`,
+                            `拒绝可发送：${opened.manualRejectCommand}`,
+                          ]
+                        : [
+                            "You can also reply directly in Telegram with the 4-10 digit code (for example: 123456).",
+                            `If multiple code requests are pending, use: ${opened.manualApproveCommand} <code>`,
+                            `Reject with: ${opened.manualRejectCommand}`,
+                          ];
+                      const codeBody = [escalationMessage, "", ...codeLines].join("\n");
                       await this.bot.sendMessage(
                         chatId,
-                        [
-                          ...lines,
-                          "",
-                          "Code flow (recommended):",
-                          `- reply plain code (4-10 digits), for example: 123456`,
-                          `- or run: ${opened.manualApproveCommand} <code>`,
-                          `- reject with: ${opened.manualRejectCommand}`,
-                          opened.openUrl
-                            ? "- web page is optional for SMS/2FA; Telegram code reply is faster."
-                            : "- web page is unavailable; use Telegram code reply.",
-                        ].join("\n"),
+                        codeBody,
+                        opened.openUrl
+                          ? {
+                              reply_markup: {
+                                inline_keyboard: [
+                                  [
+                                    {
+                                      text: "Open Human Auth",
+                                      url: opened.openUrl,
+                                    },
+                                  ],
+                                ],
+                              },
+                            }
+                          : undefined,
                       );
                       return;
                     }
 
                     if (opened.openUrl) {
-                      await this.bot.sendMessage(chatId, lines.join("\n"), {
+                      await this.bot.sendMessage(chatId, escalationMessage, {
                         reply_markup: {
                           inline_keyboard: [
                             [
@@ -1452,9 +1529,18 @@ export class TelegramGateway {
                       return;
                     }
 
+                    const noLinkHint = progressLocale === "zh"
+                      ? "当前授权链接不可用，请直接用命令处理："
+                      : "Web link is unavailable. Use manual commands:";
                     await this.bot.sendMessage(
                       chatId,
-                      `${lines.join("\n")}\n\nWeb link is unavailable. Use manual approve/reject commands.`,
+                      [
+                        escalationMessage,
+                        "",
+                        noLinkHint,
+                        opened.manualApproveCommand,
+                        opened.manualRejectCommand,
+                      ].join("\n"),
                     );
                   },
                 );
