@@ -53,7 +53,17 @@ function printStep(step: number, total: number, title: string, status: CliStepSt
   printRaw(cliTheme.step(step, total, title, status, detail));
 }
 
+function shouldSuppressRuntimeLine(line: string): boolean {
+  const normalized = line.toLowerCase();
+  const isHeartbeat = normalized.includes("[heartbeat]");
+  const isWarning = normalized.includes("[warn]");
+  return isHeartbeat && !isWarning;
+}
+
 function printRuntimeLine(line: string): void {
+  if (shouldSuppressRuntimeLine(line)) {
+    return;
+  }
   printRaw(cliTheme.classifyRuntimeLine(line));
 }
 
