@@ -21,6 +21,7 @@ interface ToolCallResult {
 export class ModelClient {
   private readonly client: OpenAI;
   private readonly profile: ModelProfile;
+  private readonly baseUrl: string;
   private modeHint: "chat" | "responses" = "chat";
 
   constructor(
@@ -32,7 +33,8 @@ export class ModelClient {
     },
   ) {
     this.profile = profile;
-    this.client = new OpenAI({ apiKey, baseURL: options?.baseUrl ?? profile.baseUrl });
+    this.baseUrl = options?.baseUrl ?? profile.baseUrl;
+    this.client = new OpenAI({ apiKey, baseURL: this.baseUrl });
     if (options?.preferredMode) {
       this.modeHint = options.preferredMode === "completions" ? "chat" : options.preferredMode;
     }
@@ -122,35 +124,53 @@ export class ModelClient {
           image_url: `data:image/png;base64,${item.screenshotBase64}`,
         }]
     ));
-    const request: Record<string, unknown> = {
-      model: this.profile.model,
-      max_output_tokens: this.profile.maxTokens,
-      input: [
-        {
-          role: "system",
-          content: [{ type: "input_text", text: params.systemPrompt }],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: params.userText },
-            ...recentImages,
-            ...(params.snapshot.somScreenshotBase64
-              ? [{
-                type: "input_image" as const,
-                image_url: `data:image/png;base64,${params.snapshot.somScreenshotBase64}`,
-              }]
-              : []),
+    const userContent = [
+      { type: "input_text", text: params.userText },
+      ...recentImages,
+      ...(params.snapshot.somScreenshotBase64
+        ? [{
+          type: "input_image" as const,
+          image_url: `data:image/png;base64,${params.snapshot.somScreenshotBase64}`,
+        }]
+        : []),
+      {
+        type: "input_image",
+        image_url: `data:image/png;base64,${params.snapshot.screenshotBase64}`,
+      },
+    ];
+    const isCodex = this.isCodexBackend();
+    const request: Record<string, unknown> = isCodex
+      ? {
+          model: this.profile.model,
+          instructions: params.systemPrompt,
+          input: [
             {
-              type: "input_image",
-              image_url: `data:image/png;base64,${params.snapshot.screenshotBase64}`,
+              role: "user",
+              content: userContent,
             },
           ],
-        },
-      ],
-      tools: RESPONSES_TOOLS,
-      tool_choice: "required",
-    };
+          tools: RESPONSES_TOOLS,
+          tool_choice: "required",
+          // chatgpt.com/backend-api/codex/responses requires these flags.
+          stream: true,
+          store: false,
+        }
+      : {
+          model: this.profile.model,
+          max_output_tokens: this.profile.maxTokens,
+          input: [
+            {
+              role: "system",
+              content: [{ type: "input_text", text: params.systemPrompt }],
+            },
+            {
+              role: "user",
+              content: userContent,
+            },
+          ],
+          tools: RESPONSES_TOOLS,
+          tool_choice: "required",
+        };
 
     if (this.profile.reasoningEffort) {
       request.reasoning = { effort: this.profile.reasoningEffort };
@@ -214,6 +234,10 @@ export class ModelClient {
   // Mode dispatch
   // -----------------------------------------------------------------------
 
+  private isCodexBackend(): boolean {
+    return this.baseUrl.toLowerCase().includes("chatgpt.com/backend-api/codex");
+  }
+
   private async requestByMode(
     mode: "chat" | "responses",
     params: {
@@ -231,9 +255,10 @@ export class ModelClient {
     }
 
     // responses mode
-    const response = await this.client.responses.create(
-      this.buildResponsesRequest(params) as never,
-    );
+    const request = this.buildResponsesRequest(params);
+    const response = this.isCodexBackend()
+      ? await this.client.responses.stream(request as never).finalResponse()
+      : await this.client.responses.create(request as never);
     return this.parseResponsesToolCall(response);
   }
 
@@ -256,8 +281,9 @@ export class ModelClient {
       params.history,
       params.recentSnapshots ?? [],
     );
-    const modes: Array<"chat" | "responses"> =
-      this.modeHint === "chat"
+    const modes: Array<"chat" | "responses"> = this.isCodexBackend()
+      ? ["responses"]
+      : this.modeHint === "chat"
         ? ["chat", "responses"]
         : ["responses", "chat"];
 
