@@ -55,7 +55,7 @@ const TOOL_DEFS: ToolDef[] = [
       type: "object",
       properties: {
         thought: thoughtParam,
-        elementId: { type: "string", description: "Element id (e.g. e3) from the prompt's UI candidates list." },
+        elementId: { type: "string", description: "Element id (e.g. 3) from the prompt's UI candidates list." },
         reason: reasonParam,
       },
       required: ["thought", "elementId"],
@@ -292,6 +292,25 @@ const TOOL_DEFS: ToolDef[] = [
         reason: reasonParam,
       },
       required: ["thought", "capability", "instruction"],
+    },
+  },
+  {
+    name: "request_user_decision",
+    description: "Ask user to choose one option during task execution (mixed-initiative flow).",
+    parameters: {
+      type: "object",
+      properties: {
+        thought: thoughtParam,
+        question: { type: "string", description: "Question shown to the user." },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description: "2-8 concise options the user can choose from.",
+        },
+        timeoutSec: { type: "number", description: "How long to wait for user input (default 300)." },
+        reason: reasonParam,
+      },
+      required: ["thought", "question", "options"],
     },
   },
   {

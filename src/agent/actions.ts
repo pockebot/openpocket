@@ -229,6 +229,22 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "request_user_decision") {
+    const options = Array.isArray(input.options)
+      ? input.options
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 8)
+      : [];
+    return {
+      type,
+      question: String(input.question ?? input.instruction ?? "Please choose one option."),
+      options,
+      timeoutSec: toNumber(input.timeoutSec, 300),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "finish") {
     return {
       type,
