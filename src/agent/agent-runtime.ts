@@ -1088,6 +1088,8 @@ export class AgentRuntime {
         workspaceReport: workspacePromptContext.report,
       });
 
+      const launchablePackages = this.adb.queryLaunchablePackages(this.config.agent.deviceId);
+
       for (let step = 1; step <= this.config.agent.maxSteps; step += 1) {
         if (this.stopRequested) {
           const message = "Task stopped by user.";
@@ -1103,6 +1105,7 @@ export class AgentRuntime {
         }
 
         const snapshot = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, profile.model);
+        snapshot.installedPackages = launchablePackages;
         shouldReturnHome = true;
         let screenshotPath: string | null = null;
         if (this.config.screenshots.saveStepScreenshots) {
