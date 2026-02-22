@@ -177,6 +177,8 @@ export interface ScreenSnapshot {
   scaledWidth: number;
   /** Height of the scaled image the model actually sees. */
   scaledHeight: number;
+  /** Installed third-party package names (for launch_app). */
+  installedPackages?: string[];
 }
 
 export type AgentAction =

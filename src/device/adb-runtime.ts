@@ -91,6 +91,17 @@ export class AdbRuntime {
       currentApp = "unknown";
     }
 
+    let installedPackages: string[] = [];
+    try {
+      const raw = this.emulator.runAdb(["-s", deviceId, "shell", "pm", "list", "packages", "-3"]);
+      installedPackages = raw
+        .split("\n")
+        .map((l) => l.replace("package:", "").trim())
+        .filter(Boolean);
+    } catch {
+      // non-critical
+    }
+
     const scaled = await scaleScreenshot(data, modelName);
 
     return {
@@ -104,6 +115,7 @@ export class AdbRuntime {
       scaleY: scaled.scaleY,
       scaledWidth: scaled.width,
       scaledHeight: scaled.height,
+      installedPackages,
     };
   }
 
