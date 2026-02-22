@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { loadConfig, saveConfig } from "../config";
 import { AdbRuntime } from "../device/adb-runtime";
 import { EmulatorManager } from "../device/emulator-manager";
+import { isWorkspaceOnboardingCompleted, markWorkspaceOnboardingCompleted } from "../memory/workspace";
 import type { OpenPocketConfig } from "../types";
 import { nowIso, resolvePath } from "../utils/paths";
 import {
@@ -148,6 +149,47 @@ export class DashboardServer {
     }
     const host = addr.address === "::" ? "127.0.0.1" : addr.address;
     return `http://${host}:${addr.port}`;
+  }
+
+  private checkProfileReadiness(): {
+    ready: boolean;
+    missing: string[];
+    values: { assistantName: string; assistantPersona: string; userAddress: string };
+  } {
+    const missing: string[] = [];
+    const placeholders = new Set(["unknown", "tbd", "todo", "null", "n/a", "none", "placeholder", "openpocket"]);
+    const extractBullet = (content: string, label: string): string => {
+      const re = new RegExp(`^\\s*[-*]\\s*${label}\\s*[:：]\\s*(.+)`, "im");
+      const m = content.match(re);
+      return (m?.[1] ?? "").trim();
+    };
+    const isPlaceholder = (v: string) => !v || placeholders.has(v.toLowerCase());
+
+    const idPath = path.join(this.config.workspaceDir, "IDENTITY.md");
+    const idContent = fs.existsSync(idPath) ? fs.readFileSync(idPath, "utf-8") : "";
+    const assistantName = extractBullet(idContent, "Name");
+    const assistantPersona = extractBullet(idContent, "Persona");
+    if (isPlaceholder(assistantName)) missing.push("Assistant name (IDENTITY.md → Name)");
+    if (isPlaceholder(assistantPersona)) missing.push("Assistant persona (IDENTITY.md → Persona)");
+
+    const userPath = path.join(this.config.workspaceDir, "USER.md");
+    const userContent = fs.existsSync(userPath) ? fs.readFileSync(userPath, "utf-8") : "";
+    const userAddress = extractBullet(userContent, "Preferred form of address");
+    if (isPlaceholder(userAddress))
+      missing.push("Your preferred name (USER.md → Preferred form of address)");
+
+    if (!isWorkspaceOnboardingCompleted(this.config.workspaceDir))
+      missing.push("Workspace onboarding not yet completed");
+
+    return {
+      ready: missing.length === 0,
+      missing,
+      values: {
+        assistantName: isPlaceholder(assistantName) ? "" : assistantName,
+        assistantPersona: isPlaceholder(assistantPersona) ? "" : assistantPersona,
+        userAddress: isPlaceholder(userAddress) ? "" : userAddress,
+      },
+    };
   }
 
   private log(line: string): void {
@@ -571,6 +613,42 @@ export class DashboardServer {
       gmailLoginConfirmedAt: gmailLoginDone ? now : null,
     };
     saveOnboardingState(this.config, onboarding);
+
+    // Write profile fields if provided.
+    const assistantName = String(input.assistantName ?? "").trim();
+    const assistantPersona = String(input.assistantPersona ?? "").trim();
+    const userAddress = String(input.userAddress ?? "").trim();
+
+    if (assistantName || assistantPersona) {
+      const idPath = path.join(this.config.workspaceDir, "IDENTITY.md");
+      fs.mkdirSync(path.dirname(idPath), { recursive: true });
+      fs.writeFileSync(idPath, [
+        "# IDENTITY",
+        "",
+        `- Name: ${assistantName || "OpenPocket"}`,
+        `- Persona: ${assistantPersona || "Helpful assistant"}`,
+        "",
+      ].join("\n"), "utf-8");
+    }
+
+    if (userAddress) {
+      const userPath = path.join(this.config.workspaceDir, "USER.md");
+      fs.mkdirSync(path.dirname(userPath), { recursive: true });
+      fs.writeFileSync(userPath, [
+        "# USER",
+        "",
+        `- Preferred form of address: ${userAddress}`,
+        "",
+      ].join("\n"), "utf-8");
+    }
+
+    // Mark workspace onboarding complete if profile is now filled.
+    const readiness = this.checkProfileReadiness();
+    if (readiness.ready || (assistantName && assistantPersona && userAddress)) {
+      if (!isWorkspaceOnboardingCompleted(this.config.workspaceDir)) {
+        markWorkspaceOnboardingCompleted(this.config.workspaceDir);
+      }
+    }
 
     this.log(`onboarding applied model=${selectedModelProfile} source=${onboarding.apiKeySource}`);
 
@@ -1075,10 +1153,29 @@ export class DashboardServer {
         </div>
       </div>
 
+      <div class="card" id="onboard-profile-status"></div>
+
+      <div class="card" id="onboard-profile-fields">
+        <h3>Profile Setup</h3>
+        <p class="hint">These fields are required before the gateway will accept tasks.</p>
+        <div style="margin-bottom:8px;">
+          <label for="onboard-assistant-name">Assistant name</label>
+          <input type="text" id="onboard-assistant-name" placeholder="e.g. Pocket, Jarvis, Friday" value="Pocket" />
+        </div>
+        <div style="margin-bottom:8px;">
+          <label for="onboard-assistant-persona">Assistant persona</label>
+          <input type="text" id="onboard-assistant-persona" placeholder="e.g. Helpful and concise assistant" value="Helpful and concise phone assistant" />
+        </div>
+        <div style="margin-bottom:8px;">
+          <label for="onboard-user-address">What should the assistant call you?</label>
+          <input type="text" id="onboard-user-address" placeholder="e.g. Boss, your first name" value="Boss" />
+        </div>
+      </div>
+
       <div class="card">
         <div class="row spread">
           <h3 style="margin:0;">Save Onboarding</h3>
-          <button class="btn primary" id="onboard-save-btn">Save Onboarding to Config + State</button>
+          <button class="btn primary" id="onboard-save-btn" disabled>Save Onboarding to Config + State</button>
         </div>
       </div>
     </section>
@@ -1278,7 +1375,27 @@ export class DashboardServer {
       state.config = configPayload.config;
       state.credentialStatus = configPayload.credentialStatus || {};
       state.onboarding = onboardingPayload.onboarding || {};
+      state.profileReadiness = onboardingPayload.profileReadiness || null;
+      state.profileValues = onboardingPayload.profileValues || {};
       renderOnboarding();
+    }
+
+    function snapshotOnboardingForm() {
+      return JSON.stringify({
+        model: $("#onboard-model-select").value,
+        consent: $("#onboard-consent").checked,
+        gmail: $("#onboard-gmail-done").checked,
+        useEnv: $("#onboard-use-env").checked,
+        apiKey: $("#onboard-api-key").value,
+        name: $("#onboard-assistant-name").value,
+        persona: $("#onboard-assistant-persona").value,
+        address: $("#onboard-user-address").value,
+      });
+    }
+
+    function updateSaveButtonState() {
+      var dirty = !state.onboardSnapshot || snapshotOnboardingForm() !== state.onboardSnapshot;
+      $("#onboard-save-btn").disabled = !dirty;
     }
 
     function renderOnboarding() {
@@ -1336,6 +1453,27 @@ export class DashboardServer {
         "<div>Provider: <code>" + provider + "</code></div>" +
         "<div>Provider API env: <code>" + envName + "</code></div>" +
         "<div>" + status + "</div>";
+
+      const pr = state.profileReadiness;
+      const statusEl = $("#onboard-profile-status");
+      if (pr && !pr.ready) {
+        statusEl.style.display = "";
+        statusEl.innerHTML =
+          "<h3 style='color:#e65100;margin-top:0;'>Profile Incomplete</h3>" +
+          "<p>The gateway will not run tasks until these are resolved. Fill in the fields below and save.</p>" +
+          "<ul>" + pr.missing.map(function(m) { return "<li>" + m + "</li>"; }).join("") + "</ul>";
+      } else {
+        statusEl.style.display = "none";
+        statusEl.innerHTML = "";
+      }
+
+      var pv = state.profileValues || {};
+      if (!$("#onboard-assistant-name").value) $("#onboard-assistant-name").value = pv.assistantName || "";
+      if (!$("#onboard-assistant-persona").value) $("#onboard-assistant-persona").value = pv.assistantPersona || "";
+      if (!$("#onboard-user-address").value) $("#onboard-user-address").value = pv.userAddress || "";
+
+      state.onboardSnapshot = snapshotOnboardingForm();
+      updateSaveButtonState();
     }
 
     async function loadControlSettings() {
@@ -1594,6 +1732,9 @@ export class DashboardServer {
       const gmailLoginDone = $("#onboard-gmail-done").checked;
       const useEnvKey = $("#onboard-use-env").checked;
       const apiKey = $("#onboard-api-key").value;
+      const assistantName = $("#onboard-assistant-name").value.trim();
+      const assistantPersona = $("#onboard-assistant-persona").value.trim();
+      const userAddress = $("#onboard-user-address").value.trim();
 
       await api("/api/onboarding/apply", {
         method: "POST",
@@ -1603,6 +1744,9 @@ export class DashboardServer {
           gmailLoginDone,
           useEnvKey,
           apiKey,
+          assistantName,
+          assistantPersona,
+          userAddress,
         }),
       });
       setStatus("Onboarding saved to config + state.", "ok");
@@ -1714,6 +1858,13 @@ export class DashboardServer {
           div.textContent = line;
           meta.appendChild(div);
         }
+      });
+
+      ["onboard-model-select", "onboard-consent", "onboard-gmail-done",
+       "onboard-use-env", "onboard-api-key", "onboard-assistant-name",
+       "onboard-assistant-persona", "onboard-user-address"].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener(el.tagName === "SELECT" ? "change" : "input", updateSaveButtonState);
       });
 
       $("#onboard-save-btn").addEventListener("click", () => {
@@ -1879,8 +2030,11 @@ export class DashboardServer {
       }
 
       if (method === "GET" && url.pathname === "/api/onboarding") {
+        const readiness = this.checkProfileReadiness();
         sendJson(res, 200, {
           onboarding: loadOnboardingState(this.config),
+          profileReadiness: readiness,
+          profileValues: readiness.values,
         });
         return;
       }
