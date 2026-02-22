@@ -561,6 +561,99 @@ test("AgentRuntime auto-approves permission dialog even when model asks permissi
   }
 });
 
+test("AgentRuntime still requests human auth for camera capability after auto-allowing VM permission dialog", async () => {
+  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
+  const actions = [];
+  const authRequests = [];
+  const uiDumpXml = [
+    "<hierarchy rotation=\"0\">",
+    "<node index=\"0\" text=\"Don't allow\" resource-id=\"com.android.permissioncontroller:id/permission_deny_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[56,2100][520,2200]\" />",
+    "<node index=\"1\" text=\"Allow\" resource-id=\"com.android.permissioncontroller:id/permission_allow_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[560,2100][1024,2200]\" />",
+    "</hierarchy>",
+  ].join("");
+
+  runtime.adb = {
+    captureScreenSnapshot: () => ({
+      ...makeSnapshot(),
+      currentApp: "com.android.permissioncontroller",
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
+  };
+  runtime.emulator = {
+    runAdb: (args) => {
+      if (Array.isArray(args) && args.includes("cat")) {
+        return uiDumpXml;
+      }
+      return "ok";
+    },
+  };
+  runtime.autoArtifactBuilder = {
+    build: () => ({ skillPath: null, scriptPath: null }),
+  };
+
+  let callCount = 0;
+  const originalNextStep = ModelClient.prototype.nextStep;
+  ModelClient.prototype.nextStep = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return {
+        thought: "Need real camera capture from phone.",
+        action: {
+          type: "request_human_auth",
+          capability: "camera",
+          instruction: "Capture image on phone and approve.",
+          timeoutSec: 90,
+        },
+        raw: "{\"thought\":\"Need real camera capture from phone.\",\"action\":{\"type\":\"request_human_auth\",\"capability\":\"camera\",\"instruction\":\"Capture image on phone and approve.\",\"timeoutSec\":90}}",
+      };
+    }
+    return {
+      thought: "Done",
+      action: { type: "finish", message: "Completed after real-device approval" },
+      raw: "{\"thought\":\"Done\",\"action\":{\"type\":\"finish\",\"message\":\"Completed after real-device approval\"}}",
+    };
+  };
+
+  try {
+    const result = await runtime.runTask(
+      "camera capability with VM dialog test",
+      undefined,
+      undefined,
+      async (request) => {
+        authRequests.push(request);
+        return {
+          requestId: "req-camera-real-device",
+          approved: true,
+          status: "approved",
+          message: "Image captured on phone",
+          decidedAt: new Date().toISOString(),
+          artifactPath: null,
+        };
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(callCount >= 2, true);
+    assert.equal(authRequests.length, 1);
+    assert.equal(authRequests[0].capability, "camera");
+    assert.equal(
+      actions.some(
+        (action) =>
+          action.type === "tap"
+          && action.reason === "auto_vm_permission_approve"
+          && action.x >= 760
+          && action.y >= 2100,
+      ),
+      true,
+    );
+  } finally {
+    ModelClient.prototype.nextStep = originalNextStep;
+  }
+});
+
 test("AgentRuntime applies OTP code from manual approval note when no artifact is provided", async () => {
   const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const actions = [];

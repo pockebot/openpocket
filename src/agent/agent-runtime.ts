@@ -21,6 +21,7 @@ import { EmulatorManager } from "../device/emulator-manager";
 import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder";
 import { SkillLoader } from "../skills/skill-loader";
 import { ScriptExecutor } from "../tools/script-executor";
+import { CodingExecutor } from "../tools/coding-executor";
 import { ModelClient } from "./model-client";
 import { buildSystemPrompt } from "./prompts";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale";
@@ -132,6 +133,7 @@ export class AgentRuntime {
   private readonly skillLoader: SkillLoader;
   private readonly autoArtifactBuilder: AutoArtifactBuilder;
   private readonly scriptExecutor: ScriptExecutor;
+  private readonly codingExecutor: CodingExecutor;
   private readonly screenshotStore: ScreenshotStore;
   private busy = false;
   private stopRequested = false;
@@ -146,6 +148,7 @@ export class AgentRuntime {
     this.skillLoader = new SkillLoader(config);
     this.autoArtifactBuilder = new AutoArtifactBuilder(config);
     this.scriptExecutor = new ScriptExecutor(config);
+    this.codingExecutor = new CodingExecutor(config);
     this.screenshotStore = new ScreenshotStore(
       config.screenshots.directory,
       config.screenshots.maxCount,
@@ -1087,13 +1090,13 @@ export class AgentRuntime {
         }
 
         if (output.action.type === "request_human_auth") {
-          const autoPermissionRequested =
-            output.action.capability === "permission" || this.isPermissionDialogApp(snapshot.currentApp);
-          if (autoPermissionRequested) {
-            const autoThought =
-              "Permission authorization belongs to the emulator. Auto-approving permission dialog locally.";
+          const permissionCapabilityOnly = output.action.capability === "permission";
+          const onVmPermissionDialog = this.isPermissionDialogApp(snapshot.currentApp);
+          let localPermissionAutoMessage: string | null = null;
+
+          if (onVmPermissionDialog) {
             const autoDecision = await this.autoApprovePermissionDialog(snapshot.currentApp);
-            const autoMessage = autoDecision?.message || "permission dialog auto-approve attempted but no actionable button detected";
+            localPermissionAutoMessage = autoDecision?.message || "permission dialog auto-approve attempted but no actionable button detected";
             const autoAction: AgentAction = autoDecision?.action?.type === "tap"
               ? autoDecision.action
               : {
@@ -1101,10 +1104,69 @@ export class AgentRuntime {
                   durationMs: 600,
                   reason: "auto_vm_permission_no_button_detected",
                 };
-            const stepResult = screenshotPath
-              ? `${autoMessage}\nlocal_screenshot=${screenshotPath}`
-              : autoMessage;
+            if (autoDecision?.action?.type === "tap") {
+              lastAutoPermissionAllowAtMs = Date.now();
+            }
 
+            history.push(
+              `step ${step}: app=${snapshot.currentApp} action=${autoAction.type}(auto_vm_permission_policy) message=${localPermissionAutoMessage}`,
+            );
+
+            if (permissionCapabilityOnly) {
+              const autoThought =
+                "Permission authorization belongs to the emulator. Auto-approving permission dialog locally.";
+              const stepResult = screenshotPath
+                ? `${localPermissionAutoMessage}\nlocal_screenshot=${screenshotPath}`
+                : localPermissionAutoMessage;
+              this.workspace.appendStep(
+                session,
+                step,
+                autoThought,
+                JSON.stringify(autoAction, null, 2),
+                stepResult,
+              );
+              traces.push({
+                step,
+                action: autoAction,
+                result: stepResult,
+                thought: autoThought,
+                currentApp: snapshot.currentApp,
+              });
+
+              if (onProgress && step % this.config.agent.progressReportInterval === 0) {
+                try {
+                  await onProgress({
+                    step,
+                    maxSteps: this.config.agent.maxSteps,
+                    currentApp: snapshot.currentApp,
+                    actionType: autoAction.type,
+                    message: localPermissionAutoMessage,
+                    thought: autoThought,
+                    screenshotPath,
+                  });
+                } catch {
+                  // Keep task execution unaffected when progress callback fails.
+                }
+              }
+
+              await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
+              continue;
+            }
+
+            await sleep(Math.min(this.config.agent.loopDelayMs, 500));
+          } else if (permissionCapabilityOnly) {
+            const autoThought =
+              "Permission authorization belongs to the emulator. Waiting for local permission dialog instead of human auth.";
+            localPermissionAutoMessage =
+              "permission capability requested outside permission dialog; skipping human auth and waiting for local dialog";
+            const autoAction: AgentAction = {
+              type: "wait",
+              durationMs: 600,
+              reason: "auto_vm_permission_wait_dialog",
+            };
+            const stepResult = screenshotPath
+              ? `${localPermissionAutoMessage}\nlocal_screenshot=${screenshotPath}`
+              : localPermissionAutoMessage;
             this.workspace.appendStep(
               session,
               step,
@@ -1120,7 +1182,7 @@ export class AgentRuntime {
               currentApp: snapshot.currentApp,
             });
             history.push(
-              `step ${step}: app=${snapshot.currentApp} action=${autoAction.type}(auto_vm_permission_policy) message=${autoMessage}`,
+              `step ${step}: app=${snapshot.currentApp} action=${autoAction.type}(auto_vm_permission_policy) message=${localPermissionAutoMessage}`,
             );
 
             if (onProgress && step % this.config.agent.progressReportInterval === 0) {
@@ -1130,7 +1192,7 @@ export class AgentRuntime {
                   maxSteps: this.config.agent.maxSteps,
                   currentApp: snapshot.currentApp,
                   actionType: autoAction.type,
-                  message: autoMessage,
+                  message: localPermissionAutoMessage,
                   thought: autoThought,
                   screenshotPath,
                 });
@@ -1213,9 +1275,12 @@ export class AgentRuntime {
           const decisionLine = delegationResult
             ? `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message} delegation=${delegationResult}`
             : `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message}`;
-          const stepResultBase = decision.artifactPath
+          const stepResultBaseRaw = decision.artifactPath
             ? `${decisionLine}\nhuman_artifact=${decision.artifactPath}`
             : decisionLine;
+          const stepResultBase = localPermissionAutoMessage
+            ? `${stepResultBaseRaw}\nlocal_vm_permission=${localPermissionAutoMessage}`
+            : stepResultBaseRaw;
           const stepResultWithDelegation = delegationResult
             ? `${stepResultBase}\ndelegation_result=${delegationResult}${delegationTemplate ? `\ndelegation_template=${delegationTemplate}` : ""}`
             : stepResultBase;
@@ -1336,6 +1401,15 @@ export class AgentRuntime {
             ]
               .filter(Boolean)
               .join("\n");
+          } else if (
+            output.action.type === "read" ||
+            output.action.type === "write" ||
+            output.action.type === "edit" ||
+            output.action.type === "apply_patch" ||
+            output.action.type === "exec" ||
+            output.action.type === "process"
+          ) {
+            executionResult = await this.codingExecutor.execute(output.action);
           } else {
             executionResult = await this.adb.executeAction(output.action, this.config.agent.deviceId);
           }

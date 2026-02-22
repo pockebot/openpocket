@@ -223,6 +223,14 @@ export class AdbRuntime {
       case "run_script": {
         return "run_script is handled by ScriptExecutor in AgentRuntime.";
       }
+      case "read":
+      case "write":
+      case "edit":
+      case "apply_patch":
+      case "exec":
+      case "process": {
+        return `${action.type} is handled by CodingExecutor in AgentRuntime.`;
+      }
       case "request_human_auth": {
         return `Human authorization requested: capability=${action.capability}`;
       }

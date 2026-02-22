@@ -55,6 +55,40 @@
       "npm"
     ]
   },
+  "codingTools": {
+    "enabled": true,
+    "workspaceOnly": true,
+    "timeoutSec": 1800,
+    "maxOutputChars": 12000,
+    "allowBackground": true,
+    "applyPatchEnabled": true,
+    "allowedCommands": [
+      "git",
+      "ls",
+      "cat",
+      "grep",
+      "rg",
+      "sed",
+      "awk",
+      "head",
+      "tail",
+      "pwd",
+      "bash",
+      "sh",
+      "node",
+      "npm",
+      "pnpm",
+      "yarn",
+      "python",
+      "python3",
+      "pytest",
+      "jest",
+      "vitest",
+      "tsc",
+      "eslint",
+      "prettier"
+    ]
+  },
   "heartbeat": {
     "enabled": true,
     "everySec": 30,

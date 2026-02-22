@@ -40,6 +40,16 @@ export interface ScriptExecutorConfig {
   allowedCommands: string[];
 }
 
+export interface CodingToolsConfig {
+  enabled: boolean;
+  workspaceOnly: boolean;
+  timeoutSec: number;
+  maxOutputChars: number;
+  allowBackground: boolean;
+  applyPatchEnabled: boolean;
+  allowedCommands: string[];
+}
+
 export interface HeartbeatConfig {
   enabled: boolean;
   everySec: number;
@@ -148,6 +158,7 @@ export interface OpenPocketConfig {
   agent: AgentConfig;
   screenshots: ScreenshotConfig;
   scriptExecutor: ScriptExecutorConfig;
+  codingTools: CodingToolsConfig;
   heartbeat: HeartbeatConfig;
   cron: CronConfig;
   dashboard: DashboardConfig;
@@ -195,6 +206,29 @@ export type AgentAction =
   | { type: "launch_app"; packageName: string; reason?: string }
   | { type: "shell"; command: string; reason?: string }
   | { type: "run_script"; script: string; timeoutSec?: number; reason?: string }
+  | { type: "read"; path: string; from?: number; lines?: number; reason?: string }
+  | { type: "write"; path: string; content: string; append?: boolean; reason?: string }
+  | { type: "edit"; path: string; find: string; replace: string; replaceAll?: boolean; reason?: string }
+  | { type: "apply_patch"; input: string; reason?: string }
+  | {
+      type: "exec";
+      command: string;
+      workdir?: string;
+      yieldMs?: number;
+      background?: boolean;
+      timeoutSec?: number;
+      reason?: string;
+    }
+  | {
+      type: "process";
+      action: "list" | "poll" | "log" | "write" | "kill";
+      sessionId?: string;
+      input?: string;
+      offset?: number;
+      limit?: number;
+      timeoutMs?: number;
+      reason?: string;
+    }
   | {
       type: "request_human_auth";
       capability: HumanAuthCapability;
