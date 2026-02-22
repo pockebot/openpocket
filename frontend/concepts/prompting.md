@@ -1,79 +1,126 @@
 # Prompting and Decision Model
 
-This page explains how OpenPocket constructs prompts and routes user messages.
+This page explains how OpenPocket builds prompts across onboarding, task execution, and user-facing narration.
 
-## System Prompt
+## Task Prompt Stack
 
-`buildSystemPrompt(skillsSummary, workspaceContext)` generates a structured instruction block with:
+### System prompt
 
-- tool catalog and argument expectations
-- mandatory planning loop for every step
-- skill-selection protocol (mandatory when relevant skills exist)
-- memory-recall protocol for identity/preferences/history questions
-- execution policy (deterministic, bounded, anti-loop)
-- explicit `request_human_auth` policy and capability set
-- completion policy (`finish` with full summary)
-- output discipline (one tool call per step, English text fields)
-- loaded skill summary text
-- optional injected workspace context (`AGENTS.md`, `BOOTSTRAP.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`, `TOOLS.md`, `HEARTBEAT.md`, `MEMORY.md`)
+`buildSystemPrompt(skillsSummary, workspaceContext, { mode })` builds policy instructions for the task loop.
 
-System prompt supports three modes:
+Core layers in `full` mode:
 
-- `full`: default rich policy
-- `minimal`: lean policy (used by cron)
-- `none`: minimal safety skeleton only
+- complete tool catalog (Android actions + script + coding + memory + human auth)
+- mandatory planning loop and anti-loop strategy switch
+- execution policy for deterministic one-step actions
+- permission/auth policy
+- completion policy (result-first `finish.message`)
+- skill-selection protocol
+- memory-recall protocol (`memory_search` -> `memory_get`)
+- self-learning/reuse guidance
 
-Prompt templates are documented in [Prompt Templates](../reference/prompt-templates.md).
+Modes:
 
-## User Prompt
+- `full` (default)
+- `minimal` (used by cron runs)
+- `none` (minimal safety shell)
 
-Per step, `buildUserPrompt(task, step, snapshot, history)` includes:
+### User prompt (per step)
 
-- task text
-- step number
-- structured screen metadata (`currentApp`, `width`, `height`, `deviceId`, `capturedAt`)
-- recent execution history (last 8 lines)
-- decision checklist (sub-goal, evidence, anti-loop alternative, auth escalation, finish criteria)
-- explicit instruction to call exactly one tool
+`buildUserPrompt(task, step, snapshot, history)` includes:
 
-The screenshot image itself is attached in model request payload as base64 PNG.
+- task + step
+- screen metadata and scaled coordinate bounds
+- recent history
+- stuck indicators (`action streak`, `app streak`, `unknown-app streak`, `focus-loop risk`)
+- explicit decision checklist
 
-## Output Contract
+The screenshot is attached as image input in the same model request.
 
-Runtime uses function/tool calling, then converts tool call args into an internal `AgentAction`.
+## Workspace Context Injection
 
-If args are malformed or action type is unknown, runtime normalizes to safe fallback `wait` action.
+Runtime injects workspace prompt files into system prompt context:
 
-## Telegram Routing
+- `AGENTS.md`, `BOOTSTRAP.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`
+- `TOOLS.md`, `HEARTBEAT.md`, `MEMORY.md`
+- `TASK_PROGRESS_REPORTER.md`, `TASK_OUTCOME_REPORTER.md`
 
-`ChatAssistant.decide(chatId, inputText)` uses:
+Optional pre-hook:
 
-1. heuristic classifier (high-confidence greetings and obvious task keywords)
-2. model-based classifier fallback
-3. final fallback strategy if model classification fails
+- `.openpocket/bootstrap-context-hook.md`
 
-When routed to task mode, message is passed to `AgentRuntime.runTask`.
-When routed to chat mode, response is generated conversationally.
+Budget strategy:
 
-For task mode with auth checkpoints:
-
-- agent can emit `request_human_auth`
-- gateway opens one-time web approval link (when relay is configured)
-- Telegram `/auth approve|reject` remains available as manual fallback
-- approved requests may inject `delegation_result` and `delegation_template` lines into history, so the next step can continue with deterministic UI paths (for example gallery import after delegated image upload)
-
-## Memory Window
-
-Chat assistant stores in-memory turn history per chat ID:
-
-- keep max 20 turns
-- include up to last 12 turns in next prompt
-
-`/clear` removes memory for the current chat.
+- per file: up to `20,000` chars
+- total: `agent.contextBudgetChars` (default `150,000`)
+- truncation uses head+tail keep with explicit marker
 
 ## Prompt Observability
 
-Telegram command `/context` exposes workspace prompt injection diagnostics:
+`AgentRuntime` generates a prompt report (system size, per-file status, skill/tool budget usage).
 
-- list mode: injected files, truncation status, char budgets
-- detail mode: snippet preview for one injected file
+Gateway command `/context` exposes this report in:
+
+- summary list
+- detailed breakdown
+- raw JSON
+
+## Onboarding Prompting
+
+Chat onboarding is model-driven when profile is incomplete.
+
+Inputs to onboarding conductor prompt:
+
+- `BOOTSTRAP.md`
+- locale hint
+- profile snapshot from `IDENTITY.md` + `USER.md`
+- recent onboarding turns
+- `SOUL.md`
+
+Model returns strict JSON (`reply`, profile patch, `writeProfile`, `onboardingComplete`).
+
+Template support:
+
+- `PROFILE_ONBOARDING.json` provides locale questions, persona presets, and confirmations
+- `BARE_SESSION_RESET_PROMPT.md` controls post-`/reset` startup guidance when onboarding is already complete
+
+## Progress and Outcome Prompting
+
+During task execution, gateway does not hardcode per-step text.
+It asks model narrators with structured context.
+
+### Progress narrator
+
+- prompt guide: `TASK_PROGRESS_REPORTER.md`
+- output JSON: `{ notify, message, reason }`
+- notify only on meaningful user-visible progress
+- avoid step counters unless user asked for telemetry
+
+### Outcome narrator
+
+- prompt guide: `TASK_OUTCOME_REPORTER.md`
+- output JSON: `{ message }`
+- lead with concrete results
+- avoid generic "task completed" boilerplate when result data exists
+
+Gateway adds extra suppression to avoid repetitive low-signal updates on the same screen.
+
+## Output Contract and Safety
+
+- model must call exactly one tool per step
+- tool args are normalized to `AgentAction`
+- unknown/malformed actions degrade to safe `wait`
+- in-emulator Android permission dialogs are auto-approved locally
+- `request_human_auth` is reserved for real-device checkpoints and sensitive authorization flows
+
+## Chat Routing
+
+`ChatAssistant.decide(chatId, inputText)` routing order:
+
+1. bootstrap/profile onboarding gates
+2. profile update intent check (name/persona/address)
+3. model classification (`task` vs `chat`)
+4. fallback to `task` if classifier fails
+
+Task mode delegates to `AgentRuntime.runTask`.
+Chat mode replies conversationally.

@@ -1,25 +1,37 @@
 # Remote Human Authorization
 
-This page documents the implemented remote authorization and delegation system used by OpenPocket today.
+This page documents the implemented authorization and delegation system used by OpenPocket today.
 
-The design goal is:
+Design goal:
 
-- keep long-running automation in the local VM/emulator
-- delegate real-device checkpoints to the user phone only when required
-- resume VM flow with auditable, scoped data handoff
+- keep long-running automation inside local emulator task loop
+- ask user on phone only when true real-world authorization/data is required
+- resume VM flow with auditable, scoped delegation
+
+## Boundary Policy
+
+### Handled locally in emulator (no human auth)
+
+- Android runtime permission dialogs inside emulator (`permissioncontroller`, `packageinstaller`)
+- runtime auto-detects and taps allow/reject target based on policy
+
+### Escalated to human auth
+
+- real-device/sensitive checkpoints (OTP, camera capture, biometric-like approval, payment, OAuth, etc.)
+- any step where model explicitly emits `request_human_auth`
 
 ## Why This Exists
 
-Many app flows cannot be completed only inside an emulator:
+Some flows cannot be completed from emulator-only UI automation:
 
-- runtime permissions that need human confirmation context
-- identity checks (2FA, OTP, biometric-style confirmation)
-- real-world inputs (camera image, QR text, live location)
+- identity checks (2FA, OTP)
+- real-world inputs (camera image, QR payload, live location)
+- policy-gated confirmation steps
 
-OpenPocket handles this with a split architecture:
+OpenPocket handles this with split architecture:
 
 - VM side: continuous autonomous execution
-- real phone side: explicit authorization and data delegation
+- phone side: explicit authorization + optional delegation artifact
 
 ## Architecture
 
@@ -52,7 +64,8 @@ sequenceDiagram
 
   U->>G: /run <task>
   G->>A: runTask(...)
-  A->>A: detect permission/auth wall or emit request_human_auth
+  A->>A: continue local execution
+  A->>A: if blocked by real auth checkpoint -> request_human_auth
   A->>B: requestAndWait(request)
   B->>R: POST /v1/human-auth/requests
   R-->>B: openUrl + pollToken + expiresAt
@@ -71,43 +84,36 @@ sequenceDiagram
 
 ## Request and Token Model
 
-Each remote auth request has:
+Each request has:
 
 - `requestId`
-- `openToken` (used only by phone web page)
-- `pollToken` (used only by runtime polling)
+- `openToken` (phone web page token)
+- `pollToken` (runtime polling token)
 - `expiresAt`
 - immutable context (`task`, `sessionId`, `step`, `capability`, `instruction`, `currentApp`)
 
 Security characteristics:
 
-- one-time scoped page token (`openTokenHash` stored server-side)
-- separate poll channel token (`pollTokenHash`)
+- one-time scoped open token hash
+- separate poll token hash
 - timeout auto-resolution (`pending -> timeout`)
 - optional relay API bearer auth (`humanAuth.apiKey` / `humanAuth.apiKeyEnv`)
 
 ## Delegation Artifact Types
 
-Remote approval may include an optional artifact payload.
-
-OpenPocket currently supports:
+Remote approval may include optional artifact payload.
 
 | Capability | Typical payload from phone | Runtime apply behavior |
 | --- | --- | --- |
 | `sms`, `2fa`, `qr`, `oauth`, `payment`, `biometric`, `notification`, `contacts`, `calendar`, `files`, `permission`, `unknown` | JSON `{ kind: "text" \| "qr_text", value }` | Auto `type` into focused input field |
-| `location` | JSON `{ kind: "geo", lat, lon }` | `adb emu geo fix <lon> <lat>` injected to emulator |
-| `camera`, `microphone`, `voice`, `nfc` (or any image path) | Image file (`.jpg/.png/.webp`) | Push to `/sdcard/Download/openpocket-human-auth-<ts>.<ext>` |
+| `location` | JSON `{ kind: "geo", lat, lon }` | `adb emu geo fix <lon> <lat>` |
+| `camera`, `microphone`, `voice`, `nfc` (or image path) | Image file (`.jpg/.png/.webp`) | Push to `/sdcard/Download/openpocket-human-auth-<ts>.<ext>` |
 
-After image injection, runtime appends a deterministic hint into step history:
+After image injection, runtime may append deterministic hint in history:
 
 - `delegation_template=gallery_import_template: ...`
 
-This allows the next model step to follow a stable upload path:
-
-- open app upload/gallery picker
-- navigate to `Downloads`
-- choose injected OpenPocket file
-- confirm
+So the next model step can follow stable upload flow (open picker -> Downloads -> select file -> confirm).
 
 ## Relay Modes
 
@@ -117,31 +123,29 @@ This allows the next model step to follow a stable upload path:
 - `humanAuth.tunnel.provider=none`
 - phone must reach local network address
 
-### Local relay + ngrok (remote phone access)
+### Local relay + ngrok (remote phone)
 
 - `humanAuth.useLocalRelay=true`
 - `humanAuth.tunnel.provider=ngrok`
 - `humanAuth.tunnel.ngrok.enabled=true`
-- `NGROK_AUTHTOKEN` (or config authtoken) available
+- `NGROK_AUTHTOKEN` (or config token) configured
 
-Gateway startup auto-brings up local relay and tunnel when enabled.
+Gateway startup auto-brings relay/tunnel up when enabled.
 
 ## Telegram Integration
 
-During blocked steps:
+When blocked by auth checkpoint:
 
-- gateway sends human-auth request summary
-- includes one-tap web link when relay is reachable
-- manual fallback commands always remain:
+- gateway sends request summary
+- includes one-tap link when available
+- manual fallback commands always available:
   - `/auth pending`
   - `/auth approve <request-id> [note]`
   - `/auth reject <request-id> [note]`
 
-Gateway also emits `typing` heartbeat during long reasoning/execution so users see active progress in chat.
+For `sms`/`2fa`, plain code reply (4-10 digits) can resolve pending request directly.
 
 ## Test Methodology
-
-This section is an executable validation playbook for contributors and operators.
 
 ### 1) Preflight
 
@@ -154,9 +158,9 @@ openpocket gateway start
 
 Checkpoints:
 
-- Telegram token is valid and target chat is allowed.
-- Emulator has at least one booted device.
-- Gateway logs show local relay/tunnel readiness.
+- Telegram token valid and target chat allowed
+- emulator booted device exists
+- gateway logs show relay/tunnel readiness (if enabled)
 
 ### 2) List PermissionLab scenarios
 
@@ -164,97 +168,59 @@ Checkpoints:
 openpocket test permission-app cases
 ```
 
-Expected scenario IDs:
+Expected IDs:
 
-- `camera`
-- `microphone`
-- `location`
-- `contacts`
-- `sms`
-- `calendar`
-- `photos`
-- `notification`
-- `2fa`
+- `camera`, `microphone`, `location`, `contacts`, `sms`, `calendar`, `photos`, `notification`, `2fa`
 
 ### 3) Run full E2E scenario
-
-Use direct end-to-end command (recommended):
 
 ```bash
 openpocket test permission-app run --case camera --chat <telegram_chat_id>
 ```
 
-Alternative:
+Expected:
 
-```bash
-openpocket test permission-app task --case camera --send --chat <telegram_chat_id>
-```
-
-What should happen:
-
-1. PermissionLab is built, installed, reset, and launched in emulator.
-2. Agent taps the scenario button automatically.
-3. Agent calls `request_human_auth` when blocked.
-4. Telegram receives human-auth message with clickable link.
-5. User approves/rejects (optionally attaches text/geo/photo).
-6. Agent resumes and reports outcome.
+1. PermissionLab deploy/install/reset/launch
+2. agent taps scenario button
+3. if scenario requires remote authorization, agent calls `request_human_auth`
+4. Telegram receives auth request/link
+5. user approves/rejects
+6. agent resumes and reports outcome
 
 ### 4) Validate delegation application
 
-Inspect session output:
-
-```bash
-ls -t ~/.openpocket/workspace/sessions | head -n 1
-```
-
-Open latest session and verify `execution_result` includes expected lines:
+Inspect latest session file and verify lines:
 
 - `Human auth approved|rejected|timeout request_id=...`
 - optional `human_artifact=...`
 - optional `delegation_result=...`
-- optional `delegation_template=gallery_import_template: ...`
-
-Location delegation validation:
-
-- session contains `delegated location injected lat=... lon=...`
-
-Image delegation validation:
-
-- session contains `delegated image pushed to /sdcard/Download/...`
-- later model step uses gallery/import flow path
+- optional `delegation_template=...`
 
 ### 5) Failure drills
 
-Run the same scenario while intentionally creating faults:
+Simulate faults:
 
-- stop ngrok session to verify fallback behavior
-- reject request from phone
+- stop ngrok tunnel
+- reject request
 - let request timeout
 
-Expected system behavior:
+Expected:
 
 - task does not hang forever
-- decision is surfaced in session + Telegram
-- manual `/auth` commands can still resolve pending requests
+- decision appears in session + Telegram
+- manual `/auth` commands still work
 
 ## Operational Observability
 
-Primary runtime artifacts:
+Primary artifacts:
 
 - relay request state: `state/human-auth-relay/requests.json`
 - uploaded artifacts: `state/human-auth-artifacts/`
-- task execution trace: `workspace/sessions/session-*.md`
-- human-auth logs: gateway stdout lines containing `[OpenPocket][human-auth]`
+- task trace: `workspace/sessions/session-*.md`
+- gateway logs containing `[OpenPocket][human-auth]`
 
 ## Current Limits
 
-- Browser permission handling differs across Telegram in-app browsers and mobile OS versions.
-- Some app-specific permission walls may require custom action heuristics after delegation.
-- ngrok free plan allows only one active agent session; duplicate sessions can break link generation.
-
-## Recommended Production Baseline
-
-- Keep relay local-first and avoid centralized backend requirement.
-- Use ngrok only as a connectivity layer, not data persistence.
-- Keep relay API key enabled when exposing public URL.
-- Regularly prune old artifacts from `state/human-auth-artifacts/`.
+- browser permission behavior differs by Telegram in-app browser and mobile OS
+- some app-specific post-delegation flows still require stronger skill guidance
+- ngrok free tier allows only one active session; duplicates can break link generation
