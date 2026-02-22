@@ -1,4 +1,4 @@
-import type { AgentAction, OpenPocketConfig, ScreenSnapshot } from "../types";
+import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types";
 import { nowIso } from "../utils/paths";
 import { scaleScreenshot } from "../utils/image-scale";
 import { sleep } from "../utils/time";
@@ -26,6 +26,99 @@ function parseScreenSize(output: string): { width: number; height: number } {
     return { width: 1080, height: 1920 };
   }
   return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+function parseBounds(boundsRaw: string): { left: number; top: number; right: number; bottom: number } | null {
+  const match = boundsRaw.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
+  if (!match) {
+    return null;
+  }
+  const left = Number(match[1]);
+  const top = Number(match[2]);
+  const right = Number(match[3]);
+  const bottom = Number(match[4]);
+  if (![left, top, right, bottom].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  if (right <= left || bottom <= top) {
+    return null;
+  }
+  return { left, top, right, bottom };
+}
+
+function parseUiXmlNodes(xml: string): Array<{
+  text: string;
+  contentDesc: string;
+  resourceId: string;
+  className: string;
+  clickable: boolean;
+  enabled: boolean;
+  focusable: boolean;
+  bounds: { left: number; top: number; right: number; bottom: number };
+}> {
+  const nodes: Array<{
+    text: string;
+    contentDesc: string;
+    resourceId: string;
+    className: string;
+    clickable: boolean;
+    enabled: boolean;
+    focusable: boolean;
+    bounds: { left: number; top: number; right: number; bottom: number };
+  }> = [];
+  const nodeRe = /<node\s+([^>]*?)\/>/g;
+  const attrRe = /([a-zA-Z0-9_:-]+)="([^"]*)"/g;
+  let nodeMatch = nodeRe.exec(xml);
+  while (nodeMatch) {
+    const attrsRaw = nodeMatch[1] ?? "";
+    const attrs: Record<string, string> = {};
+    attrRe.lastIndex = 0;
+    let attrMatch = attrRe.exec(attrsRaw);
+    while (attrMatch) {
+      attrs[attrMatch[1]] = attrMatch[2] ?? "";
+      attrMatch = attrRe.exec(attrsRaw);
+    }
+    const parsedBounds = parseBounds(String(attrs.bounds ?? "").trim());
+    if (parsedBounds) {
+      nodes.push({
+        text: String(attrs.text ?? ""),
+        contentDesc: String(attrs["content-desc"] ?? ""),
+        resourceId: String(attrs["resource-id"] ?? ""),
+        className: String(attrs.class ?? ""),
+        clickable: String(attrs.clickable ?? "").toLowerCase() === "true",
+        enabled: String(attrs.enabled ?? "").toLowerCase() !== "false",
+        focusable: String(attrs.focusable ?? "").toLowerCase() === "true",
+        bounds: parsedBounds,
+      });
+    }
+    nodeMatch = nodeRe.exec(xml);
+  }
+  return nodes;
+}
+
+function uiNodeScore(node: {
+  text: string;
+  contentDesc: string;
+  resourceId: string;
+  className: string;
+  clickable: boolean;
+  enabled: boolean;
+  focusable: boolean;
+}): number {
+  if (!node.enabled) {
+    return 0;
+  }
+  const classLower = node.className.toLowerCase();
+  let score = 0;
+  if (node.clickable) score += 5;
+  if (node.focusable) score += 2;
+  if (node.text.trim()) score += 4;
+  if (node.contentDesc.trim()) score += 4;
+  if (node.resourceId.trim()) score += 2;
+  if (classLower.includes("button")) score += 6;
+  if (classLower.includes("imagebutton")) score += 4;
+  if (classLower.includes("edittext")) score += 3;
+  return score;
 }
 
 function encodeInputText(text: string): string {
@@ -134,6 +227,13 @@ export class AdbRuntime {
     }
 
     const scaled = await scaleScreenshot(data, modelName);
+    const uiElements = this.captureUiElements(
+      deviceId,
+      width,
+      height,
+      scaled.width,
+      scaled.height,
+    );
 
     return {
       deviceId,
@@ -146,7 +246,68 @@ export class AdbRuntime {
       scaleY: scaled.scaleY,
       scaledWidth: scaled.width,
       scaledHeight: scaled.height,
+      uiElements,
     };
+  }
+
+  private captureUiElements(
+    deviceId: string,
+    width: number,
+    height: number,
+    scaledWidth: number,
+    scaledHeight: number,
+  ): UiElementSnapshot[] {
+    let raw = "";
+    try {
+      raw = this.emulator.runAdb(
+        ["-s", deviceId, "shell", "uiautomator", "dump", "/dev/tty"],
+        12_000,
+      );
+    } catch {
+      return [];
+    }
+    const xmlStart = raw.indexOf("<hierarchy");
+    if (xmlStart < 0) {
+      return [];
+    }
+    const xml = raw.slice(xmlStart);
+    const parsed = parseUiXmlNodes(xml)
+      .map((node) => ({ node, score: uiNodeScore(node) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 28);
+
+    const scaleDownX = scaledWidth / Math.max(1, width);
+    const scaleDownY = scaledHeight / Math.max(1, height);
+
+    return parsed.map(({ node }, index) => {
+      const centerX = Math.round((node.bounds.left + node.bounds.right) / 2);
+      const centerY = Math.round((node.bounds.top + node.bounds.bottom) / 2);
+      const scaledLeft = Math.max(0, Math.min(scaledWidth - 1, Math.round(node.bounds.left * scaleDownX)));
+      const scaledTop = Math.max(0, Math.min(scaledHeight - 1, Math.round(node.bounds.top * scaleDownY)));
+      const scaledRight = Math.max(0, Math.min(scaledWidth - 1, Math.round(node.bounds.right * scaleDownX)));
+      const scaledBottom = Math.max(0, Math.min(scaledHeight - 1, Math.round(node.bounds.bottom * scaleDownY)));
+      const scaledCenterX = Math.max(0, Math.min(scaledWidth - 1, Math.round(centerX * scaleDownX)));
+      const scaledCenterY = Math.max(0, Math.min(scaledHeight - 1, Math.round(centerY * scaleDownY)));
+      return {
+        id: `e${index + 1}`,
+        text: node.text.trim(),
+        contentDesc: node.contentDesc.trim(),
+        resourceId: node.resourceId.trim(),
+        className: node.className.trim(),
+        clickable: node.clickable,
+        enabled: node.enabled,
+        bounds: node.bounds,
+        center: { x: centerX, y: centerY },
+        scaledBounds: {
+          left: Math.min(scaledLeft, scaledRight),
+          top: Math.min(scaledTop, scaledBottom),
+          right: Math.max(scaledLeft, scaledRight),
+          bottom: Math.max(scaledTop, scaledBottom),
+        },
+        scaledCenter: { x: scaledCenterX, y: scaledCenterY },
+      };
+    });
   }
 
   async executeAction(action: AgentAction, preferred?: string | null): Promise<string> {
@@ -158,6 +319,9 @@ export class AdbRuntime {
         const y = Math.max(0, Math.round(action.y));
         this.emulator.runAdb(["-s", deviceId, "shell", "input", "tap", String(x), String(y)]);
         return `Tapped at (${x}, ${y})`;
+      }
+      case "tap_element": {
+        return `tap_element(${action.elementId}) is resolved by AgentRuntime to tap coordinates.`;
       }
       case "swipe": {
         const durationMs = Math.max(100, Math.round(action.durationMs ?? 300));

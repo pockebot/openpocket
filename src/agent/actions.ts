@@ -60,6 +60,14 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "tap_element") {
+    return {
+      type,
+      elementId: String(input.elementId ?? input.id ?? "").trim(),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "swipe") {
     return {
       type,

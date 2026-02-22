@@ -49,6 +49,19 @@ const TOOL_DEFS: ToolDef[] = [
     },
   },
   {
+    name: "tap_element",
+    description: "Tap a UI element by id from the current UI candidate list.",
+    parameters: {
+      type: "object",
+      properties: {
+        thought: thoughtParam,
+        elementId: { type: "string", description: "Element id (e.g. e3) from the prompt's UI candidates list." },
+        reason: reasonParam,
+      },
+      required: ["thought", "elementId"],
+    },
+  },
+  {
     name: "swipe",
     description: "Swipe from (x1,y1) to (x2,y2) on the screen.",
     parameters: {

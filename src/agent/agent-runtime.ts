@@ -720,6 +720,31 @@ export class AgentRuntime {
     return nodes;
   }
 
+  private resolveTapElementAction(
+    action: AgentAction,
+    snapshot: { uiElements: Array<{ id: string; center: { x: number; y: number } }> },
+  ): AgentAction {
+    if (action.type !== "tap_element") {
+      return action;
+    }
+    const target = snapshot.uiElements.find((item) => item.id === action.elementId);
+    if (!target) {
+      return {
+        type: "wait",
+        durationMs: 500,
+        reason: `tap_element target not found: ${action.elementId}`,
+      };
+    }
+    return {
+      type: "tap",
+      x: target.center.x,
+      y: target.center.y,
+      reason: action.reason
+        ? `${action.reason} [resolved:${action.elementId}]`
+        : `resolved tap_element ${action.elementId}`,
+    };
+  }
+
   private scorePermissionNodeCandidate(node: PermissionDialogNode, approved: boolean): number {
     if (!node.enabled) {
       return 0;
@@ -1475,6 +1500,8 @@ export class AgentRuntime {
           await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
           continue;
         }
+
+        output.action = this.resolveTapElementAction(output.action, snapshot);
 
         // Save debug screenshot with marker overlay before scaling coordinates.
         if (
