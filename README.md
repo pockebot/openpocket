@@ -93,6 +93,13 @@ openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
 
 Or send plain text directly to your Telegram bot after `gateway start`.
 
+### 5. Persistence and storage locations
+
+For a full persistence map (OpenPocket runtime files + Android AVD/image storage and deletion/reset flow), see:
+
+- [Filesystem Layout](./frontend/reference/filesystem-layout.md)
+- [Session and Memory Formats](./frontend/reference/session-memory-formats.md)
+
 ## Deployment Playbook by OS
 
 This section focuses on production-style runtime deployment for:
