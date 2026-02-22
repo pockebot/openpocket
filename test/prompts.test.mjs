@@ -17,6 +17,7 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /Write thought and all text fields in English/);
   assert.match(prompt, /Input-focus anti-loop/);
   assert.match(prompt, /Never type internal logs\/history\/JSON/);
+  assert.match(prompt, /in-emulator permission dialogs/i);
   assert.match(prompt, /skill-a/);
 });
 
@@ -30,6 +31,7 @@ test("buildSystemPrompt supports minimal mode", () => {
   const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A", { mode: "minimal" });
   assert.match(prompt, /Core Rules/);
   assert.match(prompt, /Call exactly one tool per step/);
+  assert.match(prompt, /tap Allow locally/i);
   assert.match(prompt, /Workspace Prompt Context/);
   assert.match(prompt, /Tooling/);
   assert.match(prompt, /tap.*swipe/s);
@@ -39,6 +41,7 @@ test("buildSystemPrompt supports minimal mode", () => {
 test("buildSystemPrompt supports none mode", () => {
   const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A", { mode: "none" });
   assert.match(prompt, /Call exactly one tool step at a time/);
+  assert.match(prompt, /permission dialogs/i);
   assert.doesNotMatch(prompt, /Workspace Prompt Context/);
   assert.doesNotMatch(prompt, /Available Skills/);
 });

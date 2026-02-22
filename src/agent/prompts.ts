@@ -59,6 +59,7 @@ export function buildSystemPrompt(
     return [
       "You are OpenPocket, an Android phone-use agent.",
       "Call exactly one tool step at a time.",
+      "For Android in-emulator permission dialogs, approve locally with Allow and do not request human auth.",
       "If blocked by real-device authorization, use request_human_auth.",
       "When the task is complete, call finish with concise results.",
     ].join("\n");
@@ -74,6 +75,7 @@ export function buildSystemPrompt(
       "## Core Rules",
       "- Call exactly one tool per step.",
       "- Pick the smallest deterministic action that progresses the task.",
+      "- For Android in-emulator permission dialogs, tap Allow locally; do not call request_human_auth for these dialogs.",
       "- If blocked by sensitive checkpoints, call request_human_auth.",
       "- If done, call finish with key outputs.",
       "",
@@ -120,6 +122,8 @@ export function buildSystemPrompt(
     "- Keep actions practical and reproducible.",
     "",
     "## Human Authorization Policy",
+    "- Android in-emulator permission dialogs (notifications/photos/files/network/etc.) must be handled locally by tapping Allow.",
+    "- Do not call request_human_auth for in-emulator permission dialogs.",
     "- If blocked by real-device authorization or sensitive checkpoints, call request_human_auth.",
     `- Allowed capability values: ${HUMAN_AUTH_CAPABILITIES}.`,
     "- request_human_auth must include a clear instruction that a human can execute directly.",
@@ -218,7 +222,7 @@ export function buildUserPrompt(
     "3) If recently stuck, what alternative path should be tried now?",
     "4) If this is text-entry intent: max 2 focus taps, then type_text once and submit with keyevent if needed.",
     "5) Never type logs/history/JSON strings; text must come from user intent or on-screen content.",
-    "6) If blocked by authorization, use request_human_auth.",
+    "6) For in-emulator permission dialogs, tap Allow locally. Use request_human_auth only for real-device data/authorization.",
     "7) If done, use finish with a complete summary.",
     "",
     "Call exactly one tool now.",

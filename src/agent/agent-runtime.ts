@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   AgentProgressUpdate,
   AgentRunResult,
+  AgentAction,
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
@@ -107,6 +108,7 @@ export type WorkspacePromptContextReport = {
 type DelegationApplyResult = {
   message: string;
   templateHint: string | null;
+  action?: AgentAction | null;
 };
 
 type PermissionDialogNode = {
@@ -701,6 +703,7 @@ export class AgentRuntime {
     capability: HumanAuthCapability,
     decision: HumanAuthDecision,
     currentApp: string,
+    source: "human_auth" | "auto_vm" = "human_auth",
   ): Promise<DelegationApplyResult | null> {
     if (decision.status === "timeout") {
       return null;
@@ -738,6 +741,7 @@ export class AgentRuntime {
       return {
         message: `permission dialog decision recorded (${decision.status}), but no actionable button was detected`,
         templateHint: null,
+        action: null,
       };
     }
 
@@ -749,15 +753,15 @@ export class AgentRuntime {
       targetNode.resourceId.trim() ||
       "(unlabeled)";
 
+    const reasonPrefix = source === "auto_vm" ? "auto_vm_permission" : "human_auth_permission";
+    const tapAction: AgentAction = {
+      type: "tap",
+      x: tapX,
+      y: tapY,
+      reason: decision.approved ? `${reasonPrefix}_approve` : `${reasonPrefix}_reject`,
+    };
     await this.adb.executeAction(
-      {
-        type: "tap",
-        x: tapX,
-        y: tapY,
-        reason: decision.approved
-          ? "human_auth_permission_approve"
-          : "human_auth_permission_reject",
-      },
+      tapAction,
       this.config.agent.deviceId,
     );
     await sleep(300);
@@ -765,7 +769,28 @@ export class AgentRuntime {
     return {
       message: `permission dialog ${decision.approved ? "approve" : "reject"} tapped (${tapX}, ${tapY}) label="${label}"`,
       templateHint: null,
+      action: tapAction,
     };
+  }
+
+  private async autoApprovePermissionDialog(currentApp: string): Promise<DelegationApplyResult | null> {
+    if (!this.isPermissionDialogApp(currentApp)) {
+      return null;
+    }
+    const decision: HumanAuthDecision = {
+      requestId: "auto-vm-permission",
+      approved: true,
+      status: "approved",
+      message: "Auto-approved by virtual-device permission policy.",
+      decidedAt: nowIso(),
+      artifactPath: null,
+    };
+    return this.applyPermissionDialogDecision(
+      "permission",
+      decision,
+      currentApp,
+      "auto_vm",
+    );
   }
 
   private async applyHumanDelegation(
@@ -893,7 +918,7 @@ export class AgentRuntime {
     const profileKey = modelName ?? this.config.defaultModel;
     const profile = getModelProfile(this.config, profileKey);
     const session = this.workspace.createSession(task, profileKey, profile.model);
-    let lastAutoPermissionAuthAtMs = 0;
+    let lastAutoPermissionAllowAtMs = 0;
 
     try {
       const auth = resolveModelAuth(profile);
@@ -959,123 +984,56 @@ export class AgentRuntime {
         }
 
         const autoPermissionDialogDetected =
-          this.config.humanAuth.enabled &&
-          typeof onHumanAuth === "function" &&
-          AUTO_PERMISSION_DIALOG_PACKAGES.some((token) =>
-            snapshot.currentApp.toLowerCase().includes(token),
-          ) &&
-          Date.now() - lastAutoPermissionAuthAtMs >= 15_000;
+          this.isPermissionDialogApp(snapshot.currentApp) &&
+          Date.now() - lastAutoPermissionAllowAtMs >= 1_200;
 
-        if (autoPermissionDialogDetected && onHumanAuth) {
-          lastAutoPermissionAuthAtMs = Date.now();
+        if (autoPermissionDialogDetected) {
           const autoThought =
-            "Detected Android runtime permission dialog. Escalating to human authorization.";
-          const autoAction = {
-            type: "request_human_auth",
-            capability: "permission",
-            instruction:
-              "A system permission dialog is blocking automation. Review and approve or reject this permission from your real device.",
-            timeoutSec: Math.max(30, Math.round(this.config.humanAuth.requestTimeoutSec)),
-            reason: "auto_detected_android_permission_dialog",
-          } as const;
-
-          let decision: HumanAuthDecision;
-          try {
-            decision = await onHumanAuth({
-              sessionId: session.id,
-              sessionPath: session.path,
-              task,
+            "Detected Android runtime permission dialog in emulator. Auto-approving with Allow.";
+          const autoDecision = await this.autoApprovePermissionDialog(snapshot.currentApp);
+          if (autoDecision?.action?.type === "tap") {
+            lastAutoPermissionAllowAtMs = Date.now();
+            const autoAction = autoDecision.action;
+            const stepResult = screenshotPath
+              ? `${autoDecision.message}\nlocal_screenshot=${screenshotPath}`
+              : autoDecision.message;
+            this.workspace.appendStep(
+              session,
               step,
-              capability: autoAction.capability,
-              instruction: autoAction.instruction,
-              reason: autoAction.reason ?? autoThought,
-              timeoutSec: autoAction.timeoutSec,
+              autoThought,
+              JSON.stringify(autoAction, null, 2),
+              stepResult,
+            );
+            traces.push({
+              step,
+              action: autoAction,
+              result: stepResult,
+              thought: autoThought,
               currentApp: snapshot.currentApp,
-              screenshotPath,
             });
-          } catch (error) {
-            decision = {
-              requestId: "local-error",
-              approved: false,
-              status: "rejected",
-              message: `Human auth bridge error: ${(error as Error).message}`,
-              decidedAt: nowIso(),
-              artifactPath: null,
-            };
-          }
+            history.push(
+              `step ${step}: app=${snapshot.currentApp} action=tap(auto_vm_permission_approve) message=${autoDecision.message}`,
+            );
 
-          const delegation = await this.applyHumanDelegation(
-            autoAction.capability,
-            decision,
-            snapshot.currentApp,
-          );
-          const delegationResult = delegation?.message ?? null;
-          const delegationTemplate = delegation?.templateHint ?? null;
-          const decisionLine = delegationResult
-            ? `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message} delegation=${delegationResult}`
-            : `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message}`;
-          const stepResultBase = decision.artifactPath
-            ? `${decisionLine}\nhuman_artifact=${decision.artifactPath}`
-            : decisionLine;
-          const stepResultWithDelegation = delegationResult
-            ? `${stepResultBase}\ndelegation_result=${delegationResult}${delegationTemplate ? `\ndelegation_template=${delegationTemplate}` : ""}`
-            : stepResultBase;
-          const stepResult = screenshotPath
-            ? `${stepResultWithDelegation}\nlocal_screenshot=${screenshotPath}`
-            : stepResultWithDelegation;
-
-          this.workspace.appendStep(
-            session,
-            step,
-            autoThought,
-            JSON.stringify(autoAction, null, 2),
-            stepResult,
-          );
-          traces.push({
-            step,
-            action: autoAction,
-            result: stepResult,
-            thought: autoThought,
-            currentApp: snapshot.currentApp,
-          });
-          history.push(
-            `step ${step}: app=${snapshot.currentApp} action=request_human_auth(auto_permission_dialog) decision=${decision.status} message=${decision.message}${delegationResult ? ` delegation=${delegationResult}` : ""}`,
-          );
-          if (delegationTemplate) {
-            history.push(`delegation_template ${delegationTemplate}`);
-          }
-
-          if (onProgress && step % this.config.agent.progressReportInterval === 0) {
-            try {
-              await onProgress({
-                step,
-                maxSteps: this.config.agent.maxSteps,
-                currentApp: snapshot.currentApp,
-                actionType: autoAction.type,
-                message: decisionLine,
-                thought: autoThought,
-                screenshotPath,
-              });
-            } catch {
-              // Keep task execution unaffected when progress callback fails.
+            if (onProgress && step % this.config.agent.progressReportInterval === 0) {
+              try {
+                await onProgress({
+                  step,
+                  maxSteps: this.config.agent.maxSteps,
+                  currentApp: snapshot.currentApp,
+                  actionType: autoAction.type,
+                  message: autoDecision.message,
+                  thought: autoThought,
+                  screenshotPath,
+                });
+              } catch {
+                // Keep task execution unaffected when progress callback fails.
+              }
             }
-          }
 
-          if (!decision.approved) {
-            const message = `Human authorization ${decision.status}: ${decision.message}`;
-            this.workspace.finalizeSession(session, false, message);
-            this.workspace.appendDailyMemory(profileKey, task, false, message);
-            return {
-              ok: false,
-              message,
-              sessionPath: session.path,
-              skillPath: null,
-              scriptPath: null,
-            };
+            await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
+            continue;
           }
-
-          await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
-          continue;
         }
 
         const output = await model.nextStep({
@@ -1129,6 +1087,62 @@ export class AgentRuntime {
         }
 
         if (output.action.type === "request_human_auth") {
+          const autoPermissionRequested =
+            output.action.capability === "permission" || this.isPermissionDialogApp(snapshot.currentApp);
+          if (autoPermissionRequested) {
+            const autoThought =
+              "Permission authorization belongs to the emulator. Auto-approving permission dialog locally.";
+            const autoDecision = await this.autoApprovePermissionDialog(snapshot.currentApp);
+            const autoMessage = autoDecision?.message || "permission dialog auto-approve attempted but no actionable button detected";
+            const autoAction: AgentAction = autoDecision?.action?.type === "tap"
+              ? autoDecision.action
+              : {
+                  type: "wait",
+                  durationMs: 600,
+                  reason: "auto_vm_permission_no_button_detected",
+                };
+            const stepResult = screenshotPath
+              ? `${autoMessage}\nlocal_screenshot=${screenshotPath}`
+              : autoMessage;
+
+            this.workspace.appendStep(
+              session,
+              step,
+              autoThought,
+              JSON.stringify(autoAction, null, 2),
+              stepResult,
+            );
+            traces.push({
+              step,
+              action: autoAction,
+              result: stepResult,
+              thought: autoThought,
+              currentApp: snapshot.currentApp,
+            });
+            history.push(
+              `step ${step}: app=${snapshot.currentApp} action=${autoAction.type}(auto_vm_permission_policy) message=${autoMessage}`,
+            );
+
+            if (onProgress && step % this.config.agent.progressReportInterval === 0) {
+              try {
+                await onProgress({
+                  step,
+                  maxSteps: this.config.agent.maxSteps,
+                  currentApp: snapshot.currentApp,
+                  actionType: autoAction.type,
+                  message: autoMessage,
+                  thought: autoThought,
+                  screenshotPath,
+                });
+              } catch {
+                // Keep task execution unaffected when progress callback fails.
+              }
+            }
+
+            await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
+            continue;
+          }
+
           const timeoutSec = Math.max(
             30,
             Math.round(output.action.timeoutSec ?? this.config.humanAuth.requestTimeoutSec),
