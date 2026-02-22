@@ -196,12 +196,33 @@ export interface ScreenSnapshot {
   scaledWidth: number;
   /** Height of the scaled image the model actually sees. */
   scaledHeight: number;
-  /** Installed third-party package names (for launch_app). */
+  /** Installed launchable package names (for launch_app). */
   installedPackages?: string[];
+  /** Actionable UI nodes extracted from uiautomator dump for deterministic element targeting. */
+  uiElements: UiElementSnapshot[];
+}
+
+export interface UiElementSnapshot {
+  id: string;
+  text: string;
+  contentDesc: string;
+  resourceId: string;
+  className: string;
+  clickable: boolean;
+  enabled: boolean;
+  /** Original-device bounds. */
+  bounds: { left: number; top: number; right: number; bottom: number };
+  /** Center point in original device coordinate space. */
+  center: { x: number; y: number };
+  /** Bounds in model/scaled screenshot coordinate space. */
+  scaledBounds: { left: number; top: number; right: number; bottom: number };
+  /** Center in model/scaled screenshot coordinate space. */
+  scaledCenter: { x: number; y: number };
 }
 
 export type AgentAction =
   | { type: "tap"; x: number; y: number; reason?: string }
+  | { type: "tap_element"; elementId: string; reason?: string }
   | {
       type: "swipe";
       x1: number;

@@ -5,6 +5,7 @@ const HUMAN_AUTH_CAPABILITIES =
 
 const TOOL_CATALOG = [
   "- tap: tap(x, y[, reason])",
+  "- tap_element: tap_element(elementId[, reason])",
   "- swipe: swipe(x1, y1, x2, y2[, durationMs, reason])",
   "- type_text: type_text(text[, reason])",
   "- keyevent: keyevent(keycode[, reason])",
@@ -117,6 +118,7 @@ export function buildSystemPrompt(
     "",
     "## Execution Policy",
     "- Prefer the smallest safe action that increases certainty.",
+    "- If UI candidates are provided, prefer tap_element over raw coordinate tap.",
     "- Keep coordinates inside the provided screen bounds.",
     "- Before type_text, ensure the intended input field is focused.",
     "- Use launch_app to open or switch apps directly instead of tapping through the home screen or app drawer.",
@@ -202,6 +204,16 @@ export function buildUserPrompt(
   const appStreak = trailingStreak(recentApps);
   const focusLoopRisk = actionStreak.value === "tap" && actionStreak.count >= 3;
   const unknownAppStreak = appStreak.value === "unknown" ? appStreak.count : 0;
+  const uiCandidatesText = snapshot.uiElements.length > 0
+    ? snapshot.uiElements
+      .slice(0, 20)
+      .map((item) => {
+        const label = item.text || item.contentDesc || item.resourceId || item.className || "(unlabeled)";
+        return `- ${item.id}: label="${label}" clickable=${item.clickable} class=${item.className || "unknown"} center=(${item.scaledCenter.x},${item.scaledCenter.y}) bounds=[${item.scaledBounds.left},${item.scaledBounds.top}][${item.scaledBounds.right},${item.scaledBounds.bottom}]`;
+      })
+      .join("\n")
+    : "(none)";
+
   return [
     "One-step decision for Android task execution.",
     `Task: ${task}`,
@@ -221,6 +233,9 @@ export function buildUserPrompt(
       2,
     ),
     "",
+    "UI candidates (scaled coordinate space):",
+    uiCandidatesText,
+    "",
     "Recent execution history (oldest -> newest):",
     recentHistory.length > 0 ? recentHistory.join("\n") : "(none)",
     "",
@@ -234,6 +249,7 @@ export function buildUserPrompt(
     "1) What sub-goal is active right now?",
     "2) What evidence on screen/history supports the next action?",
     "3) If recently stuck, what alternative path should be tried now?",
+    "3.1) If UI candidates exist, pick one element id and use tap_element.",
     "4) If this is text-entry intent: max 2 focus taps, then type_text once and submit with keyevent if needed.",
     "5) Never type logs/history/JSON strings; text must come from user intent or on-screen content.",
     "6) For in-emulator permission dialogs, tap Allow locally. Use request_human_auth only for real-device data/authorization.",
