@@ -113,6 +113,99 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "read") {
+    return {
+      type,
+      path: String(input.path ?? ""),
+      from: toNumber(input.from, 1),
+      lines: toNumber(input.lines, 200),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "write") {
+    return {
+      type,
+      path: String(input.path ?? ""),
+      content: String(input.content ?? ""),
+      append: Boolean(input.append),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "edit") {
+    return {
+      type,
+      path: String(input.path ?? ""),
+      find: String(input.find ?? ""),
+      replace: String(input.replace ?? ""),
+      replaceAll: Boolean(input.replaceAll),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "apply_patch") {
+    return {
+      type,
+      input: String(input.input ?? ""),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "exec") {
+    return {
+      type,
+      command: String(input.command ?? ""),
+      workdir: input.workdir ? String(input.workdir) : undefined,
+      yieldMs: toNumber(input.yieldMs, 0),
+      background: Boolean(input.background),
+      timeoutSec: toNumber(input.timeoutSec, 1800),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "process") {
+    const action = String(input.action ?? "").trim().toLowerCase();
+    return {
+      type,
+      action: (
+        action === "list" ||
+        action === "poll" ||
+        action === "log" ||
+        action === "write" ||
+        action === "kill"
+      )
+        ? action
+        : "list",
+      sessionId: input.sessionId ? String(input.sessionId) : undefined,
+      input: input.input ? String(input.input) : undefined,
+      offset: toNumber(input.offset, 0),
+      limit: toNumber(input.limit, 200),
+      timeoutMs: toNumber(input.timeoutMs, 0),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "memory_search") {
+    return {
+      type,
+      query: String(input.query ?? ""),
+      maxResults: toNumber(input.maxResults, 6),
+      minScore: toNumber(input.minScore, 0.2),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "memory_get") {
+    return {
+      type,
+      path: String(input.path ?? ""),
+      from: toNumber(input.from, 1),
+      lines: toNumber(input.lines, 120),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "request_human_auth") {
     const capabilityRaw = String(input.capability ?? "unknown").trim().toLowerCase();
     return {

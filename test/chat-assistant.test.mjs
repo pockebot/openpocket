@@ -471,5 +471,46 @@ test("ChatAssistant narrateTaskProgress falls back when model output is unavaila
   });
 
   assert.equal(out.notify, true);
-  assert.match(out.message, /Quick update \(1\/10\)/i);
+  assert.match(out.message, /Quick update:/i);
+});
+
+test("ChatAssistant narrateTaskOutcome rewrites final output with model decision", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  let capturedPrompt = "";
+  assistant.requestTaskOutcomeNarration = async (_client, _model, _maxTokens, prompt) => {
+    capturedPrompt = prompt;
+    return "旧金山当前 51°F，晴到多云，体感 46°F。每小时和未来几天预报都已显示。";
+  };
+
+  const out = await assistant.narrateTaskOutcome({
+    task: "搜索旧金山天气",
+    locale: "zh",
+    ok: true,
+    rawResult: "Task completed. Search results for San Francisco weather are displayed.",
+    recentProgress: [],
+    skillPath: "/tmp/skill.md",
+    scriptPath: "/tmp/script.sh",
+  });
+
+  assert.match(out, /51°F/);
+  assert.match(capturedPrompt, /TASK_OUTCOME_REPORTER\.md/);
+  assert.match(capturedPrompt, /artifacts/);
+});
+
+test("ChatAssistant narrateTaskOutcome falls back and strips boilerplate", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.requestTaskOutcomeNarration = async () => null;
+
+  const out = await assistant.narrateTaskOutcome({
+    task: "check weather",
+    locale: "en",
+    ok: true,
+    rawResult: "Task completed. Weather is 51F with clear sky.",
+    recentProgress: [],
+    skillPath: null,
+    scriptPath: null,
+  });
+
+  assert.doesNotMatch(out, /^Task completed/i);
+  assert.match(out, /Weather is 51F/i);
 });

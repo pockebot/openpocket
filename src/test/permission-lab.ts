@@ -8,6 +8,7 @@ import { ensureDir } from "../utils/paths";
 
 const PACKAGE_NAME = "ai.openpocket.permissionlab";
 const MAIN_ACTIVITY = `${PACKAGE_NAME}.MainActivity`;
+const SCENARIO_FILTER_EXTRA = "openpocket.permissionlab.case";
 
 const REQUESTED_PERMISSIONS = [
   "android.permission.CAMERA",
@@ -417,12 +418,19 @@ public class MainActivity extends Activity {
   private final SparseArray<String> requestLabels = new SparseArray<>();
   private int requestCodeSeed = 100;
   private TextView logView;
+  private String scenarioCase;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+    scenarioCase = normalizeScenarioCase(
+      getIntent() != null ? getIntent().getStringExtra("${SCENARIO_FILTER_EXTRA}") : null
+    );
     setContentView(createLayout());
     appendLog("PermissionLab ready.");
+    if (scenarioCase != null) {
+      appendLog("Scenario filter active: " + scenarioCase);
+    }
     appendLog("Tip for agent: if blocked by permission/2FA, call request_human_auth.");
   }
 
@@ -438,63 +446,75 @@ public class MainActivity extends Activity {
     body.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
     TextView subtitle = new TextView(this);
-    subtitle.setText("Use buttons below to trigger runtime permission prompts and auth-blocking scenarios.");
+    if (scenarioCase == null) {
+      subtitle.setText("Use buttons below to trigger runtime permission prompts and auth-blocking scenarios.");
+    } else {
+      subtitle.setText("Scenario mode: " + scenarioCase + ". Tap the visible test button exactly once.");
+    }
     subtitle.setTextSize(14);
     subtitle.setPadding(0, 16, 0, 16);
     body.addView(subtitle);
 
-    addPermissionButton(body, "Request Camera Permission", Manifest.permission.CAMERA, "camera");
-    addPermissionButton(body, "Request Microphone Permission", Manifest.permission.RECORD_AUDIO, "microphone");
-    addPermissionButton(body, "Request Location Permission", Manifest.permission.ACCESS_FINE_LOCATION, "location");
-    addPermissionButton(body, "Request Contacts Permission", Manifest.permission.READ_CONTACTS, "contacts");
-    addPermissionButton(body, "Request SMS Permission", Manifest.permission.READ_SMS, "sms");
-    addPermissionButton(body, "Request Calendar Permission", Manifest.permission.READ_CALENDAR, "calendar");
+    addPermissionButton(body, "Request Camera Permission", Manifest.permission.CAMERA, "camera", "camera");
+    addPermissionButton(body, "Request Microphone Permission", Manifest.permission.RECORD_AUDIO, "microphone", "microphone");
+    addPermissionButton(body, "Request Location Permission", Manifest.permission.ACCESS_FINE_LOCATION, "location", "location");
+    addPermissionButton(body, "Request Contacts Permission", Manifest.permission.READ_CONTACTS, "contacts", "contacts");
+    addPermissionButton(body, "Request SMS Permission", Manifest.permission.READ_SMS, "sms", "sms");
+    addPermissionButton(body, "Request Calendar Permission", Manifest.permission.READ_CALENDAR, "calendar", "calendar");
 
-    Button photosButton = createButton("Request Photos Permission");
-    photosButton.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View v) {
-        if (Build.VERSION.SDK_INT >= 33) {
-          requestPermission(Manifest.permission.READ_MEDIA_IMAGES, "photos");
-        } else {
-          requestPermission(Manifest.permission.READ_EXTERNAL_STORAGE, "photos");
+    if (showScenario("photos")) {
+      Button photosButton = createButton("Request Photos Permission");
+      photosButton.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          if (Build.VERSION.SDK_INT >= 33) {
+            requestPermission(Manifest.permission.READ_MEDIA_IMAGES, "photos");
+          } else {
+            requestPermission(Manifest.permission.READ_EXTERNAL_STORAGE, "photos");
+          }
         }
-      }
-    });
-    body.addView(photosButton);
+      });
+      body.addView(photosButton);
+    }
 
-    Button notificationButton = createButton("Request Notification Permission");
-    notificationButton.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View v) {
-        if (Build.VERSION.SDK_INT >= 33) {
-          requestPermission(Manifest.permission.POST_NOTIFICATIONS, "notification");
-        } else {
-          appendLog("Notification runtime permission is only required on Android 13+.");
+    if (showScenario("notification")) {
+      Button notificationButton = createButton("Request Notification Permission");
+      notificationButton.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          if (Build.VERSION.SDK_INT >= 33) {
+            requestPermission(Manifest.permission.POST_NOTIFICATIONS, "notification");
+          } else {
+            appendLog("Notification runtime permission is only required on Android 13+.");
+          }
         }
-      }
-    });
-    body.addView(notificationButton);
+      });
+      body.addView(notificationButton);
+    }
 
-    Button authDrill = createButton("Trigger Human Auth Drill (2FA style)");
-    authDrill.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View v) {
-        appendLog("2FA drill: ask OpenPocket agent to call request_human_auth with capability=2fa.");
-      }
-    });
-    body.addView(authDrill);
+    if (showScenario("2fa")) {
+      Button authDrill = createButton("Trigger Human Auth Drill (2FA style)");
+      authDrill.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          appendLog("2FA drill: ask OpenPocket agent to call request_human_auth with capability=2fa.");
+        }
+      });
+      body.addView(authDrill);
+    }
 
-    Button settings = createButton("Open App Settings");
-    settings.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View v) {
-        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-        intent.setData(Uri.parse("package:" + getPackageName()));
-        startActivity(intent);
-      }
-    });
-    body.addView(settings);
+    if (scenarioCase == null) {
+      Button settings = createButton("Open App Settings");
+      settings.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+          intent.setData(Uri.parse("package:" + getPackageName()));
+          startActivity(intent);
+        }
+      });
+      body.addView(settings);
+    }
 
     TextView logTitle = new TextView(this);
     logTitle.setText("Event Log");
@@ -514,7 +534,44 @@ public class MainActivity extends Activity {
     return root;
   }
 
-  private void addPermissionButton(LinearLayout body, String label, String permission, String capabilityHint) {
+  private String normalizeScenarioCase(String raw) {
+    if (raw == null) {
+      return null;
+    }
+    String normalized = raw.trim().toLowerCase();
+    if (normalized.length() == 0) {
+      return null;
+    }
+    if (
+      normalized.equals("camera")
+      || normalized.equals("microphone")
+      || normalized.equals("location")
+      || normalized.equals("contacts")
+      || normalized.equals("sms")
+      || normalized.equals("calendar")
+      || normalized.equals("photos")
+      || normalized.equals("notification")
+      || normalized.equals("2fa")
+    ) {
+      return normalized;
+    }
+    return null;
+  }
+
+  private boolean showScenario(String scenarioId) {
+    return scenarioCase == null || scenarioCase.equals(scenarioId);
+  }
+
+  private void addPermissionButton(
+    LinearLayout body,
+    String label,
+    String permission,
+    String capabilityHint,
+    String scenarioId
+  ) {
+    if (!showScenario(scenarioId)) {
+      return;
+    }
     Button button = createButton(label);
     button.setOnClickListener(new View.OnClickListener() {
       @Override
@@ -629,6 +686,7 @@ export class PermissionLabManager {
     if (scenario.id === "2fa") {
       return [
         "Open app OpenPocket PermissionLab.",
+        "The app is launched in scenario mode where only the target case button is visible.",
         `Tap button "${scenario.buttonLabel}" exactly once.`,
         "Then call request_human_auth with capability=2fa and instruction='Please provide your current 2FA code in Telegram.'",
         "Wait for my decision from Telegram before doing anything else.",
@@ -643,7 +701,8 @@ export class PermissionLabManager {
 
     return [
       "Open app OpenPocket PermissionLab.",
-      `Tap button "${scenario.buttonLabel}" exactly once.`,
+      "The app is launched in scenario mode where only the target case button is visible.",
+      `Tap the visible "${scenario.buttonLabel}" button exactly once.`,
       "If emulator-local permission dialog appears, do not keep looping on it.",
       `Immediately call request_human_auth with capability=${scenario.capability} and wait for my decision.`,
       "For camera/location/qr style blocks, prefer real-device delegation data over emulator-local permission state.",
@@ -958,12 +1017,17 @@ export class PermissionLabManager {
     };
   }
 
-  launch(preferredDeviceId?: string): string {
+  launch(preferredDeviceId?: string, scenarioId?: string | null): string {
     const deviceId = this.ensureEmulatorReady(preferredDeviceId);
     const adb = this.emulator.adbBinary();
+    const normalizedScenario = (scenarioId || "").trim().toLowerCase();
+    const args = ["-s", deviceId, "shell", "am", "start", "-n", `${PACKAGE_NAME}/.MainActivity`];
+    if (normalizedScenario) {
+      args.push("--es", SCENARIO_FILTER_EXTRA, normalizedScenario);
+    }
     return requireCommandOk(
       adb,
-      ["-s", deviceId, "shell", "am", "start", "-n", `${PACKAGE_NAME}/.MainActivity`],
+      args,
       "adb launch PermissionLab",
     ).trim();
   }

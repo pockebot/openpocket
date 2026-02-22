@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   AgentProgressUpdate,
   AgentRunResult,
+  AgentAction,
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
@@ -20,8 +21,11 @@ import { EmulatorManager } from "../device/emulator-manager";
 import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder";
 import { SkillLoader } from "../skills/skill-loader";
 import { ScriptExecutor } from "../tools/script-executor";
+import { CodingExecutor } from "../tools/coding-executor";
+import { MemoryExecutor } from "../tools/memory-executor";
 import { ModelClient } from "./model-client";
-import { buildSystemPrompt } from "./prompts";
+import { buildSystemPrompt, type SystemPromptMode } from "./prompts";
+import { CHAT_TOOLS } from "./tools";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
@@ -76,6 +80,8 @@ const SYSTEM_PROMPT_CONTEXT_FILES = [
   "TOOLS.md",
   "HEARTBEAT.md",
   "MEMORY.md",
+  "TASK_PROGRESS_REPORTER.md",
+  "TASK_OUTCOME_REPORTER.md",
 ] as const;
 const SYSTEM_PROMPT_CONTEXT_HOOK_FILE = path.join(".openpocket", "bootstrap-context-hook.md");
 const SYSTEM_PROMPT_MAX_CHARS_PER_FILE = 20_000;
@@ -100,11 +106,39 @@ export type WorkspacePromptContextReport = {
   totalIncludedChars: number;
   files: WorkspacePromptFileReport[];
   hookApplied: boolean;
+  source: "estimate" | "run";
+  generatedAt: string;
+  promptMode: SystemPromptMode;
+  systemPrompt: {
+    chars: number;
+    workspaceContextChars: number;
+    nonWorkspaceChars: number;
+  };
+  skills: {
+    promptChars: number;
+    entries: Array<{
+      name: string;
+      source: "workspace" | "local" | "bundled";
+      path: string;
+      blockChars: number;
+    }>;
+  };
+  tools: {
+    listChars: number;
+    schemaChars: number;
+    entries: Array<{
+      name: string;
+      summaryChars: number;
+      schemaChars: number;
+      propertiesCount: number | null;
+    }>;
+  };
 };
 
 type DelegationApplyResult = {
   message: string;
   templateHint: string | null;
+  action?: AgentAction | null;
 };
 
 type PermissionDialogNode = {
@@ -128,11 +162,14 @@ export class AgentRuntime {
   private readonly skillLoader: SkillLoader;
   private readonly autoArtifactBuilder: AutoArtifactBuilder;
   private readonly scriptExecutor: ScriptExecutor;
+  private readonly codingExecutor: CodingExecutor;
+  private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
   private busy = false;
   private stopRequested = false;
   private currentTask: string | null = null;
   private currentTaskStartedAtMs: number | null = null;
+  private lastSystemPromptReport: WorkspacePromptContextReport | null = null;
 
   constructor(config: OpenPocketConfig) {
     this.config = config;
@@ -142,6 +179,8 @@ export class AgentRuntime {
     this.skillLoader = new SkillLoader(config);
     this.autoArtifactBuilder = new AutoArtifactBuilder(config);
     this.scriptExecutor = new ScriptExecutor(config);
+    this.codingExecutor = new CodingExecutor(config);
+    this.memoryExecutor = new MemoryExecutor(config);
     this.screenshotStore = new ScreenshotStore(
       config.screenshots.directory,
       config.screenshots.maxCount,
@@ -366,20 +405,115 @@ export class AgentRuntime {
           ...blocks,
         ].join("\n\n");
 
+    const baseReport = {
+      maxCharsPerFile: SYSTEM_PROMPT_MAX_CHARS_PER_FILE,
+      maxCharsTotal: totalBudget,
+      totalIncludedChars: reports.reduce((sum, item) => sum + item.includedChars, 0),
+      files: reports,
+      hookApplied,
+    };
+
     return {
       text,
       report: {
-        maxCharsPerFile: SYSTEM_PROMPT_MAX_CHARS_PER_FILE,
-        maxCharsTotal: totalBudget,
-        totalIncludedChars: reports.reduce((sum, item) => sum + item.includedChars, 0),
-        files: reports,
-        hookApplied,
+        ...baseReport,
+        source: "estimate",
+        generatedAt: nowIso(),
+        promptMode: "full",
+        systemPrompt: {
+          chars: 0,
+          workspaceContextChars: text.length,
+          nonWorkspaceChars: 0,
+        },
+        skills: {
+          promptChars: 0,
+          entries: [],
+        },
+        tools: {
+          listChars: 0,
+          schemaChars: 0,
+          entries: [],
+        },
       },
     };
   }
 
+  private buildToolPromptReport(): WorkspacePromptContextReport["tools"] {
+    const entries = CHAT_TOOLS.map((tool) => {
+      const schemaChars = JSON.stringify(tool.function.parameters).length;
+      const properties = tool.function.parameters.properties;
+      const propertiesCount = properties && typeof properties === "object"
+        ? Object.keys(properties).length
+        : null;
+      return {
+        name: tool.function.name,
+        summaryChars: (tool.function.description || "").trim().length,
+        schemaChars,
+        propertiesCount,
+      };
+    });
+
+    const listText = CHAT_TOOLS
+      .map((tool) => `- ${tool.function.name}: ${tool.function.description}`)
+      .join("\n");
+    return {
+      listChars: listText.length,
+      schemaChars: entries.reduce((sum, item) => sum + item.schemaChars, 0),
+      entries,
+    };
+  }
+
+  private buildSystemPromptReport(params: {
+    source: "estimate" | "run";
+    promptMode: SystemPromptMode;
+    systemPrompt: string;
+    skillsSummary: string;
+    workspaceReport: WorkspacePromptContextReport;
+  }): WorkspacePromptContextReport {
+    const skillsEntries = this.skillLoader.summaryEntries().map((entry) => ({
+      name: entry.skill.name,
+      source: entry.skill.source,
+      path: entry.skill.path,
+      blockChars: entry.line.length,
+    }));
+    const workspaceContextChars = params.workspaceReport.files
+      .reduce((sum, file) => sum + file.includedChars, 0);
+    const tools = this.buildToolPromptReport();
+    return {
+      ...params.workspaceReport,
+      source: params.source,
+      generatedAt: nowIso(),
+      promptMode: params.promptMode,
+      systemPrompt: {
+        chars: params.systemPrompt.length,
+        workspaceContextChars,
+        nonWorkspaceChars: Math.max(0, params.systemPrompt.length - workspaceContextChars),
+      },
+      skills: {
+        promptChars: params.skillsSummary.length,
+        entries: skillsEntries,
+      },
+      tools,
+    };
+  }
+
   getWorkspacePromptContextReport(): WorkspacePromptContextReport {
-    return this.buildWorkspacePromptContext().report;
+    if (this.lastSystemPromptReport) {
+      return this.lastSystemPromptReport;
+    }
+    const skillsSummary = this.skillLoader.summaryText();
+    const workspacePromptContext = this.buildWorkspacePromptContext();
+    const promptMode = this.config.agent.systemPromptMode;
+    const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
+      mode: promptMode,
+    });
+    return this.buildSystemPromptReport({
+      source: "estimate",
+      promptMode,
+      systemPrompt,
+      skillsSummary,
+      workspaceReport: workspacePromptContext.report,
+    });
   }
 
   private isImageArtifactPath(artifactPath: string): boolean {
@@ -699,6 +833,7 @@ export class AgentRuntime {
     capability: HumanAuthCapability,
     decision: HumanAuthDecision,
     currentApp: string,
+    source: "human_auth" | "auto_vm" = "human_auth",
   ): Promise<DelegationApplyResult | null> {
     if (decision.status === "timeout") {
       return null;
@@ -736,6 +871,7 @@ export class AgentRuntime {
       return {
         message: `permission dialog decision recorded (${decision.status}), but no actionable button was detected`,
         templateHint: null,
+        action: null,
       };
     }
 
@@ -747,15 +883,15 @@ export class AgentRuntime {
       targetNode.resourceId.trim() ||
       "(unlabeled)";
 
+    const reasonPrefix = source === "auto_vm" ? "auto_vm_permission" : "human_auth_permission";
+    const tapAction: AgentAction = {
+      type: "tap",
+      x: tapX,
+      y: tapY,
+      reason: decision.approved ? `${reasonPrefix}_approve` : `${reasonPrefix}_reject`,
+    };
     await this.adb.executeAction(
-      {
-        type: "tap",
-        x: tapX,
-        y: tapY,
-        reason: decision.approved
-          ? "human_auth_permission_approve"
-          : "human_auth_permission_reject",
-      },
+      tapAction,
       this.config.agent.deviceId,
     );
     await sleep(300);
@@ -763,7 +899,28 @@ export class AgentRuntime {
     return {
       message: `permission dialog ${decision.approved ? "approve" : "reject"} tapped (${tapX}, ${tapY}) label="${label}"`,
       templateHint: null,
+      action: tapAction,
     };
+  }
+
+  private async autoApprovePermissionDialog(currentApp: string): Promise<DelegationApplyResult | null> {
+    if (!this.isPermissionDialogApp(currentApp)) {
+      return null;
+    }
+    const decision: HumanAuthDecision = {
+      requestId: "auto-vm-permission",
+      approved: true,
+      status: "approved",
+      message: "Auto-approved by virtual-device permission policy.",
+      decidedAt: nowIso(),
+      artifactPath: null,
+    };
+    return this.applyPermissionDialogDecision(
+      "permission",
+      decision,
+      currentApp,
+      "auto_vm",
+    );
   }
 
   private async applyHumanDelegation(
@@ -877,6 +1034,8 @@ export class AgentRuntime {
         ok: false,
         message: "Agent is busy. Please retry later.",
         sessionPath: "",
+        skillPath: null,
+        scriptPath: null,
       };
     }
 
@@ -889,7 +1048,7 @@ export class AgentRuntime {
     const profileKey = modelName ?? this.config.defaultModel;
     const profile = getModelProfile(this.config, profileKey);
     const session = this.workspace.createSession(task, profileKey, profile.model);
-    let lastAutoPermissionAuthAtMs = 0;
+    let lastAutoPermissionAllowAtMs = 0;
 
     try {
       const auth = resolveModelAuth(profile);
@@ -904,6 +1063,8 @@ export class AgentRuntime {
           ok: false,
           message,
           sessionPath: session.path,
+          skillPath: null,
+          scriptPath: null,
         };
       }
 
@@ -919,6 +1080,13 @@ export class AgentRuntime {
       const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
         mode: effectivePromptMode,
       });
+      this.lastSystemPromptReport = this.buildSystemPromptReport({
+        source: "run",
+        promptMode: effectivePromptMode,
+        systemPrompt,
+        skillsSummary,
+        workspaceReport: workspacePromptContext.report,
+      });
 
       for (let step = 1; step <= this.config.agent.maxSteps; step += 1) {
         if (this.stopRequested) {
@@ -929,6 +1097,8 @@ export class AgentRuntime {
             ok: false,
             message,
             sessionPath: session.path,
+            skillPath: null,
+            scriptPath: null,
           };
         }
 
@@ -951,121 +1121,56 @@ export class AgentRuntime {
         }
 
         const autoPermissionDialogDetected =
-          this.config.humanAuth.enabled &&
-          typeof onHumanAuth === "function" &&
-          AUTO_PERMISSION_DIALOG_PACKAGES.some((token) =>
-            snapshot.currentApp.toLowerCase().includes(token),
-          ) &&
-          Date.now() - lastAutoPermissionAuthAtMs >= 15_000;
+          this.isPermissionDialogApp(snapshot.currentApp) &&
+          Date.now() - lastAutoPermissionAllowAtMs >= 1_200;
 
-        if (autoPermissionDialogDetected && onHumanAuth) {
-          lastAutoPermissionAuthAtMs = Date.now();
+        if (autoPermissionDialogDetected) {
           const autoThought =
-            "Detected Android runtime permission dialog. Escalating to human authorization.";
-          const autoAction = {
-            type: "request_human_auth",
-            capability: "permission",
-            instruction:
-              "A system permission dialog is blocking automation. Review and approve or reject this permission from your real device.",
-            timeoutSec: Math.max(30, Math.round(this.config.humanAuth.requestTimeoutSec)),
-            reason: "auto_detected_android_permission_dialog",
-          } as const;
-
-          let decision: HumanAuthDecision;
-          try {
-            decision = await onHumanAuth({
-              sessionId: session.id,
-              sessionPath: session.path,
-              task,
+            "Detected Android runtime permission dialog in emulator. Auto-approving with Allow.";
+          const autoDecision = await this.autoApprovePermissionDialog(snapshot.currentApp);
+          if (autoDecision?.action?.type === "tap") {
+            lastAutoPermissionAllowAtMs = Date.now();
+            const autoAction = autoDecision.action;
+            const stepResult = screenshotPath
+              ? `${autoDecision.message}\nlocal_screenshot=${screenshotPath}`
+              : autoDecision.message;
+            this.workspace.appendStep(
+              session,
               step,
-              capability: autoAction.capability,
-              instruction: autoAction.instruction,
-              reason: autoAction.reason ?? autoThought,
-              timeoutSec: autoAction.timeoutSec,
+              autoThought,
+              JSON.stringify(autoAction, null, 2),
+              stepResult,
+            );
+            traces.push({
+              step,
+              action: autoAction,
+              result: stepResult,
+              thought: autoThought,
               currentApp: snapshot.currentApp,
-              screenshotPath,
             });
-          } catch (error) {
-            decision = {
-              requestId: "local-error",
-              approved: false,
-              status: "rejected",
-              message: `Human auth bridge error: ${(error as Error).message}`,
-              decidedAt: nowIso(),
-              artifactPath: null,
-            };
-          }
+            history.push(
+              `step ${step}: app=${snapshot.currentApp} action=tap(auto_vm_permission_approve) message=${autoDecision.message}`,
+            );
 
-          const delegation = await this.applyHumanDelegation(
-            autoAction.capability,
-            decision,
-            snapshot.currentApp,
-          );
-          const delegationResult = delegation?.message ?? null;
-          const delegationTemplate = delegation?.templateHint ?? null;
-          const decisionLine = delegationResult
-            ? `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message} delegation=${delegationResult}`
-            : `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message}`;
-          const stepResultBase = decision.artifactPath
-            ? `${decisionLine}\nhuman_artifact=${decision.artifactPath}`
-            : decisionLine;
-          const stepResultWithDelegation = delegationResult
-            ? `${stepResultBase}\ndelegation_result=${delegationResult}${delegationTemplate ? `\ndelegation_template=${delegationTemplate}` : ""}`
-            : stepResultBase;
-          const stepResult = screenshotPath
-            ? `${stepResultWithDelegation}\nlocal_screenshot=${screenshotPath}`
-            : stepResultWithDelegation;
-
-          this.workspace.appendStep(
-            session,
-            step,
-            autoThought,
-            JSON.stringify(autoAction, null, 2),
-            stepResult,
-          );
-          traces.push({
-            step,
-            action: autoAction,
-            result: stepResult,
-            thought: autoThought,
-            currentApp: snapshot.currentApp,
-          });
-          history.push(
-            `step ${step}: app=${snapshot.currentApp} action=request_human_auth(auto_permission_dialog) decision=${decision.status} message=${decision.message}${delegationResult ? ` delegation=${delegationResult}` : ""}`,
-          );
-          if (delegationTemplate) {
-            history.push(`delegation_template ${delegationTemplate}`);
-          }
-
-          if (onProgress && step % this.config.agent.progressReportInterval === 0) {
-            try {
-              await onProgress({
-                step,
-                maxSteps: this.config.agent.maxSteps,
-                currentApp: snapshot.currentApp,
-                actionType: autoAction.type,
-                message: decisionLine,
-                thought: autoThought,
-                screenshotPath,
-              });
-            } catch {
-              // Keep task execution unaffected when progress callback fails.
+            if (onProgress && step % this.config.agent.progressReportInterval === 0) {
+              try {
+                await onProgress({
+                  step,
+                  maxSteps: this.config.agent.maxSteps,
+                  currentApp: snapshot.currentApp,
+                  actionType: autoAction.type,
+                  message: autoDecision.message,
+                  thought: autoThought,
+                  screenshotPath,
+                });
+              } catch {
+                // Keep task execution unaffected when progress callback fails.
+              }
             }
-          }
 
-          if (!decision.approved) {
-            const message = `Human authorization ${decision.status}: ${decision.message}`;
-            this.workspace.finalizeSession(session, false, message);
-            this.workspace.appendDailyMemory(profileKey, task, false, message);
-            return {
-              ok: false,
-              message,
-              sessionPath: session.path,
-            };
+            await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
+            continue;
           }
-
-          await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
-          continue;
         }
 
         const output = await model.nextStep({
@@ -1113,10 +1218,127 @@ export class AgentRuntime {
             ok: true,
             message: finishMessage,
             sessionPath: session.path,
+            skillPath: artifacts.skillPath,
+            scriptPath: artifacts.scriptPath,
           };
         }
 
         if (output.action.type === "request_human_auth") {
+          const permissionCapabilityOnly = output.action.capability === "permission";
+          const onVmPermissionDialog = this.isPermissionDialogApp(snapshot.currentApp);
+          let localPermissionAutoMessage: string | null = null;
+
+          if (onVmPermissionDialog) {
+            const autoDecision = await this.autoApprovePermissionDialog(snapshot.currentApp);
+            localPermissionAutoMessage = autoDecision?.message || "permission dialog auto-approve attempted but no actionable button detected";
+            const autoAction: AgentAction = autoDecision?.action?.type === "tap"
+              ? autoDecision.action
+              : {
+                  type: "wait",
+                  durationMs: 600,
+                  reason: "auto_vm_permission_no_button_detected",
+                };
+            if (autoDecision?.action?.type === "tap") {
+              lastAutoPermissionAllowAtMs = Date.now();
+            }
+
+            history.push(
+              `step ${step}: app=${snapshot.currentApp} action=${autoAction.type}(auto_vm_permission_policy) message=${localPermissionAutoMessage}`,
+            );
+
+            if (permissionCapabilityOnly) {
+              const autoThought =
+                "Permission authorization belongs to the emulator. Auto-approving permission dialog locally.";
+              const stepResult = screenshotPath
+                ? `${localPermissionAutoMessage}\nlocal_screenshot=${screenshotPath}`
+                : localPermissionAutoMessage;
+              this.workspace.appendStep(
+                session,
+                step,
+                autoThought,
+                JSON.stringify(autoAction, null, 2),
+                stepResult,
+              );
+              traces.push({
+                step,
+                action: autoAction,
+                result: stepResult,
+                thought: autoThought,
+                currentApp: snapshot.currentApp,
+              });
+
+              if (onProgress && step % this.config.agent.progressReportInterval === 0) {
+                try {
+                  await onProgress({
+                    step,
+                    maxSteps: this.config.agent.maxSteps,
+                    currentApp: snapshot.currentApp,
+                    actionType: autoAction.type,
+                    message: localPermissionAutoMessage,
+                    thought: autoThought,
+                    screenshotPath,
+                  });
+                } catch {
+                  // Keep task execution unaffected when progress callback fails.
+                }
+              }
+
+              await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
+              continue;
+            }
+
+            await sleep(Math.min(this.config.agent.loopDelayMs, 500));
+          } else if (permissionCapabilityOnly) {
+            const autoThought =
+              "Permission authorization belongs to the emulator. Waiting for local permission dialog instead of human auth.";
+            localPermissionAutoMessage =
+              "permission capability requested outside permission dialog; skipping human auth and waiting for local dialog";
+            const autoAction: AgentAction = {
+              type: "wait",
+              durationMs: 600,
+              reason: "auto_vm_permission_wait_dialog",
+            };
+            const stepResult = screenshotPath
+              ? `${localPermissionAutoMessage}\nlocal_screenshot=${screenshotPath}`
+              : localPermissionAutoMessage;
+            this.workspace.appendStep(
+              session,
+              step,
+              autoThought,
+              JSON.stringify(autoAction, null, 2),
+              stepResult,
+            );
+            traces.push({
+              step,
+              action: autoAction,
+              result: stepResult,
+              thought: autoThought,
+              currentApp: snapshot.currentApp,
+            });
+            history.push(
+              `step ${step}: app=${snapshot.currentApp} action=${autoAction.type}(auto_vm_permission_policy) message=${localPermissionAutoMessage}`,
+            );
+
+            if (onProgress && step % this.config.agent.progressReportInterval === 0) {
+              try {
+                await onProgress({
+                  step,
+                  maxSteps: this.config.agent.maxSteps,
+                  currentApp: snapshot.currentApp,
+                  actionType: autoAction.type,
+                  message: localPermissionAutoMessage,
+                  thought: autoThought,
+                  screenshotPath,
+                });
+              } catch {
+                // Keep task execution unaffected when progress callback fails.
+              }
+            }
+
+            await sleep(Math.min(this.config.agent.loopDelayMs, 1200));
+            continue;
+          }
+
           const timeoutSec = Math.max(
             30,
             Math.round(output.action.timeoutSec ?? this.config.humanAuth.requestTimeoutSec),
@@ -1147,6 +1369,8 @@ export class AgentRuntime {
               ok: false,
               message,
               sessionPath: session.path,
+              skillPath: null,
+              scriptPath: null,
             };
           }
 
@@ -1185,9 +1409,12 @@ export class AgentRuntime {
           const decisionLine = delegationResult
             ? `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message} delegation=${delegationResult}`
             : `Human auth ${decision.status} request_id=${decision.requestId} message=${decision.message}`;
-          const stepResultBase = decision.artifactPath
+          const stepResultBaseRaw = decision.artifactPath
             ? `${decisionLine}\nhuman_artifact=${decision.artifactPath}`
             : decisionLine;
+          const stepResultBase = localPermissionAutoMessage
+            ? `${stepResultBaseRaw}\nlocal_vm_permission=${localPermissionAutoMessage}`
+            : stepResultBaseRaw;
           const stepResultWithDelegation = delegationResult
             ? `${stepResultBase}\ndelegation_result=${delegationResult}${delegationTemplate ? `\ndelegation_template=${delegationTemplate}` : ""}`
             : stepResultBase;
@@ -1240,6 +1467,8 @@ export class AgentRuntime {
               ok: false,
               message,
               sessionPath: session.path,
+              skillPath: null,
+              scriptPath: null,
             };
           }
 
@@ -1306,6 +1535,20 @@ export class AgentRuntime {
             ]
               .filter(Boolean)
               .join("\n");
+          } else if (
+            output.action.type === "read" ||
+            output.action.type === "write" ||
+            output.action.type === "edit" ||
+            output.action.type === "apply_patch" ||
+            output.action.type === "exec" ||
+            output.action.type === "process"
+          ) {
+            executionResult = await this.codingExecutor.execute(output.action);
+          } else if (
+            output.action.type === "memory_search" ||
+            output.action.type === "memory_get"
+          ) {
+            executionResult = this.memoryExecutor.execute(output.action);
           } else {
             executionResult = await this.adb.executeAction(output.action, this.config.agent.deviceId);
           }
@@ -1368,6 +1611,8 @@ export class AgentRuntime {
         ok: false,
         message,
         sessionPath: session.path,
+        skillPath: null,
+        scriptPath: null,
       };
     } catch (error) {
       const message = `Agent execution failed: ${(error as Error).message}`;
@@ -1377,6 +1622,8 @@ export class AgentRuntime {
         ok: false,
         message,
         sessionPath: session.path,
+        skillPath: null,
+        scriptPath: null,
       };
     } finally {
       if (shouldReturnHome) {

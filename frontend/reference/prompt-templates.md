@@ -1,92 +1,77 @@
 # Prompt Templates
 
-This page documents the runtime prompt templates used by `src/agent/prompts.ts`.
+This page documents runtime prompt templates used by both task loop and chat gateway flows.
 
-## System Prompt (EN)
+## Task System Prompt (`buildSystemPrompt`)
 
-`buildSystemPrompt(skillsSummary, workspaceContext)` builds a sectioned prompt:
+`buildSystemPrompt(skillsSummary, workspaceContext, { mode })` supports three modes.
 
-```text
-You are OpenPocket, an Android phone-use agent running one tool step at a time.
+### `full` (default)
 
-## Tooling
-- Tool catalog with argument expectations (tap, swipe, type_text, keyevent, launch_app, shell, run_script, request_human_auth, wait, finish)
+Includes complete policy stack:
 
-## Planning Loop (mandatory every step)
-1) active sub-goal
-2) current screen inference
-3) one deterministic next action
-4) anti-loop strategy switch
-5) complete finish criteria
+- Tooling catalog (all task tools):
+  - Android actions: `tap`, `swipe`, `type_text`, `keyevent`, `launch_app`, `shell`, `wait`, `finish`
+  - script fallback: `run_script`
+  - coding tools: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`
+  - memory tools: `memory_search`, `memory_get`
+  - auth tool: `request_human_auth`
+- Mandatory planning loop (sub-goal, screen inference, deterministic next action, anti-loop switch)
+- Execution policy (focus anti-loop, avoid repetitive taps, no internal-log typing, practical reproducibility)
+- Human-authorization policy (in-emulator permission dialogs handled locally; real-device checkpoints use `request_human_auth`)
+- Completion policy (lead `finish.message` with concrete result values)
+- Output discipline (exactly one tool per step, thought in English)
+- Skill selection protocol
+- Memory recall protocol (search first, then targeted read)
+- Messaging and runtime discipline
+- Self-learning/reuse guidance for reusable flows
+- Available skills summary and workspace context block
 
-## Execution Policy
-- coordinate bounds
-- focused typing
-- wait usage
-- run_script fallback policy
-- deterministic action bias
+### `minimal`
 
-## Human Authorization Policy
-- request_human_auth capability set:
-  camera, qr, microphone, voice, nfc, sms, 2fa, location, biometric, notification, contacts, calendar, files, oauth, payment, permission, unknown
-- when history contains `delegation_template ...`, model should use that template to resume blocked UI flow deterministically
+Condensed prompt for lower-noise runs (used by cron tasks):
 
-## Completion Policy
-- finish as soon as goal is fully complete
-- include full summary in finish.message
+- one-tool-per-step
+- deterministic progress
+- permission and human-auth basics
+- finish with key outputs
+- includes skills + workspace context when available
 
-## Output Discipline
-- exactly one tool call per step
-- concise thought in tool args
-- thought and all text fields in English
+### `none`
 
-## Available Skills
-<skillsSummary>
+Minimal safety skeleton:
 
-## Workspace Prompt Context (optional)
-<workspaceContext>
-```
+- one-step tool call
+- permission dialog local handling
+- real auth via `request_human_auth`
+- finish with concise result
 
-Prompt mode support:
+## Task User Prompt (`buildUserPrompt`)
 
-- `full`: complete policy sections (default)
-- `minimal`: condensed rules for lower-noise automation
-- `none`: only minimal safety instructions
+Per step, runtime builds a decision prompt with:
 
-## User Prompt (EN)
+- task text + step number
+- structured screen metadata (`currentApp`, scaled width/height, device id, timestamp)
+- recent execution history (last 8 lines)
+- stuck signals:
+  - trailing action streak
+  - trailing app streak
+  - unknown-app streak
+  - focus-loop risk
+- decision checklist:
+  - active sub-goal
+  - evidence-based next action
+  - anti-loop alternative path
+  - text-entry policy (max focus taps, then type and submit)
+  - forbid typing logs/history/JSON
+  - permission/auth policy reminder
+  - finish criteria
 
-`buildUserPrompt(task, step, snapshot, history)` builds:
+The screenshot is attached as base64 image in model payload.
 
-```text
-One-step decision for Android task execution.
-Task: <task>
-Step: <step>
+## Workspace Context Injection
 
-Screen metadata (coordinates use this scaled space):
-{
-  "currentApp": "...",
-  "width": 1080,
-  "height": 1920,
-  "deviceId": "emulator-5554",
-  "capturedAt": "<ISO8601>"
-}
-
-Recent execution history (oldest -> newest):
-<last up to 8 lines or (none)>
-
-Decision checklist:
-1) active sub-goal
-2) supporting evidence
-3) anti-loop alternative
-4) auth escalation if blocked
-5) finish if done
-
-Call exactly one tool now.
-```
-
-## Workspace Prompt Files
-
-At runtime, OpenPocket loads these workspace files (trimmed with size limits) and injects them into system prompt context:
+Runtime injects workspace files into system prompt context (subject to char budgets):
 
 - `AGENTS.md`
 - `BOOTSTRAP.md`
@@ -96,16 +81,128 @@ At runtime, OpenPocket loads these workspace files (trimmed with size limits) an
 - `TOOLS.md`
 - `HEARTBEAT.md`
 - `MEMORY.md`
+- `TASK_PROGRESS_REPORTER.md`
+- `TASK_OUTCOME_REPORTER.md`
 
-Optional hook:
+Optional hook (injected first):
 
-- `.openpocket/bootstrap-context-hook.md` (injected before workspace files when present)
+- `.openpocket/bootstrap-context-hook.md`
 
-## Multimodal
+Budget policy:
 
-Each step request includes the screenshot as base64 PNG in the model payload.
+- per file max: `20,000` chars
+- total max: `agent.contextBudgetChars` (default `150,000`)
+- truncation strategy: head+tail with explicit middle-truncation marker
 
-## Parsing and Fallback
+## Prompt Observability
 
-- OpenPocket uses function/tool calling and maps tool name -> action.
-- If tool args are invalid or action type is unknown, runtime normalizes to safe `wait`.
+`AgentRuntime` generates a prompt-context report containing:
+
+- prompt mode
+- system prompt total chars
+- workspace/non-workspace char split
+- per-file inclusion/truncation/missing/budget-exhausted status
+- skill summary char usage
+- tool list/schema char usage
+
+Gateway exposes this via `/context [list|detail|json]`.
+
+## Onboarding Prompt Templates (Chat Assistant)
+
+### Bootstrap onboarding conductor
+
+`ChatAssistant` builds a strict-JSON prompt that includes:
+
+- `BOOTSTRAP.md`
+- `SOUL.md`
+- current `IDENTITY.md` and `USER.md`
+- recent onboarding conversation turns
+- locale hint and current profile snapshot
+
+Model output contract:
+
+```json
+{
+  "reply": "...",
+  "profile": {
+    "userPreferredAddress": "...",
+    "assistantName": "...",
+    "assistantPersona": "...",
+    "userName": "...",
+    "timezone": "...",
+    "languagePreference": "..."
+  },
+  "writeProfile": true,
+  "onboardingComplete": false
+}
+```
+
+Completion requires all required fields:
+
+- `userPreferredAddress`
+- `assistantName`
+- `assistantPersona`
+
+### Locale onboarding template
+
+`PROFILE_ONBOARDING.json` provides locale text for:
+
+- step questions
+- empty-answer prompt
+- saved/update/no-change confirmations
+- persona presets and aliases
+- default fallback values
+
+## Session Reset Prompt Template
+
+`BARE_SESSION_RESET_PROMPT.md` provides reset/startup guidance text used after `/reset` when onboarding is not pending.
+
+## Task Narration Prompt Templates
+
+### Progress narrator
+
+Prompt source:
+
+- `TASK_PROGRESS_REPORTER.md`
+- compact recent progress context
+- locale hint + profile context (`SOUL.md`, `IDENTITY.md`, `USER.md`)
+
+Model output contract:
+
+```json
+{
+  "notify": true,
+  "message": "...",
+  "reason": "..."
+}
+```
+
+Rules include:
+
+- silence on low-signal/no-visible-progress loops
+- notify on meaningful checkpoints/errors/auth blockers
+- avoid step counters unless user requested telemetry
+- natural conversational tone
+
+### Outcome narrator
+
+Prompt source:
+
+- `TASK_OUTCOME_REPORTER.md`
+- task result, recent progress summary, and artifact flags
+- profile context (`SOUL.md`, `IDENTITY.md`, `USER.md`)
+
+Model output contract:
+
+```json
+{
+  "message": "..."
+}
+```
+
+Rules include:
+
+- lead with concrete findings
+- avoid boilerplate status-first phrasing
+- for failures, include practical next move
+- mention reusable artifacts briefly when generated

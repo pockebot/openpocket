@@ -1,6 +1,6 @@
 # Config Defaults
 
-This page is the source-of-truth documentation for current default config values and normalization behavior.
+This page is the source-of-truth for current default config values and normalization behavior.
 
 ## Default Config JSON
 
@@ -28,6 +28,8 @@ This page is the source-of-truth documentation for current default config values
     "loopDelayMs": 1200,
     "progressReportInterval": 1,
     "returnHomeOnTaskEnd": true,
+    "systemPromptMode": "full",
+    "contextBudgetChars": 150000,
     "lang": "en",
     "verbose": true,
     "deviceId": null
@@ -59,6 +61,46 @@ This page is the source-of-truth documentation for current default config values
       "node",
       "npm"
     ]
+  },
+  "codingTools": {
+    "enabled": true,
+    "workspaceOnly": true,
+    "timeoutSec": 1800,
+    "maxOutputChars": 12000,
+    "allowBackground": true,
+    "applyPatchEnabled": true,
+    "allowedCommands": [
+      "git",
+      "ls",
+      "cat",
+      "grep",
+      "rg",
+      "sed",
+      "awk",
+      "head",
+      "tail",
+      "pwd",
+      "bash",
+      "sh",
+      "node",
+      "npm",
+      "pnpm",
+      "yarn",
+      "python",
+      "python3",
+      "pytest",
+      "jest",
+      "vitest",
+      "tsc",
+      "eslint",
+      "prettier"
+    ]
+  },
+  "memoryTools": {
+    "enabled": true,
+    "maxResults": 6,
+    "minScore": 0.2,
+    "maxSnippetChars": 1200
   },
   "heartbeat": {
     "enabled": true,
@@ -195,14 +237,22 @@ Notes:
 ## Normalization
 
 - `defaultModel` must exist in `models`.
-- `agent.lang` is normalized to `en` (English-only runtime prompts).
+- `agent.lang` is normalized to `en` (runtime internal prompt language).
+- `agent.systemPromptMode` accepts only `full|minimal|none`; invalid values fall back to `full`.
+- `agent.contextBudgetChars` is clamped to at least `10000`.
 - `agent.progressReportInterval` is clamped to at least `1`.
 - `screenshots.maxCount` is clamped to at least `20`.
 - `scriptExecutor.timeoutSec` is clamped to at least `1`.
 - `scriptExecutor.maxOutputChars` is clamped to at least `1000`.
+- `codingTools.timeoutSec` is clamped to at least `1`.
+- `codingTools.maxOutputChars` is clamped to at least `1000`.
+- `memoryTools.maxResults` is clamped to `1..30`.
+- `memoryTools.minScore` is clamped to `0..1`.
+- `memoryTools.maxSnippetChars` is clamped to `200..8000`.
 - `heartbeat.everySec` is clamped to at least `5`.
 - `heartbeat.stuckTaskWarnSec` is clamped to at least `30`.
 - `cron.tickSec` is clamped to at least `2`.
+- `dashboard.port` is clamped to `1..65535`.
 - `humanAuth.localRelayPort` is clamped to `1..65535`.
 - `humanAuth.requestTimeoutSec` is clamped to at least `30`.
 - `humanAuth.pollIntervalMs` is clamped to at least `500`.
@@ -214,8 +264,8 @@ Notes:
 
 ## Paths
 
-- values starting with `~` are expanded to user home
-- other paths are resolved to absolute paths
+- Values starting with `~` are expanded to user home.
+- Other paths are resolved to absolute paths.
 
 ## API Keys
 
@@ -228,7 +278,7 @@ Per model profile:
 
 Missing key causes task start failure with a persisted failed session/memory entry.
 
-Human-auth relay API key uses the same precedence:
+Human-auth relay API key precedence:
 
 1. `humanAuth.apiKey`
 2. env from `humanAuth.apiKeyEnv`
@@ -241,12 +291,17 @@ ngrok authtoken precedence:
 
 ## Backward Compatibility Keys
 
-The loader maps compatibility snake_case keys (top-level and nested) to camelCase keys before merge.
+The loader maps snake_case compatibility keys to camelCase keys before merge.
 
 Examples:
 
 - `default_model` -> `defaultModel`
 - `max_steps` -> `maxSteps`
+- `system_prompt_mode` -> `systemPromptMode`
+- `context_budget_chars` -> `contextBudgetChars`
+- `script_executor` -> `scriptExecutor`
+- `coding_tools` -> `codingTools`
+- `memory_tools` -> `memoryTools`
 - `heartbeat_config` -> `heartbeat`
 - `cron_config` -> `cron`
 - `human_auth` -> `humanAuth`

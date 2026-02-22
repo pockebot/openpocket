@@ -44,6 +44,12 @@ type ProgressNarrationState = {
   lastNotifiedMessage: string;
   skippedSteps: number;
   recentProgress: AgentProgressUpdate[];
+  allProgress: AgentProgressUpdate[];
+};
+
+type BotDisplayNameSyncState = {
+  lastSyncedName?: string;
+  retryAfterUntilMs?: number;
 };
 
 export class TelegramGateway {
@@ -61,6 +67,8 @@ export class TelegramGateway {
   private readonly typingIntervalMs: number;
   private readonly typingSessions = new Map<number, { refs: number; timer: NodeJS.Timeout }>();
   private lastSyncedBotDisplayName: string | null = null;
+  private readonly botDisplayNameSyncStatePath: string;
+  private botDisplayNameRateLimitedUntilMs = 0;
   private running = false;
   private stoppedPromise: Promise<void> | null = null;
   private stopResolver: (() => void) | null = null;
@@ -128,6 +136,9 @@ export class TelegramGateway {
         this.writeLogLine(line);
       },
     });
+
+    this.botDisplayNameSyncStatePath = path.join(this.config.stateDir, "telegram-bot-name-sync.json");
+    this.restoreBotDisplayNameSyncState();
   }
 
   private log(message: string): void {
@@ -171,6 +182,84 @@ export class TelegramGateway {
     return normalized.slice(0, 64);
   }
 
+  private restoreBotDisplayNameSyncState(): void {
+    if (!fs.existsSync(this.botDisplayNameSyncStatePath)) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.botDisplayNameSyncStatePath, "utf-8")) as BotDisplayNameSyncState;
+      const cachedName =
+        parsed && typeof parsed.lastSyncedName === "string" ? this.normalizeBotDisplayName(parsed.lastSyncedName) : "";
+      if (cachedName) {
+        this.lastSyncedBotDisplayName = cachedName;
+      }
+      const retryAfterUntilMs = parsed && typeof parsed.retryAfterUntilMs === "number" ? parsed.retryAfterUntilMs : 0;
+      if (Number.isFinite(retryAfterUntilMs) && retryAfterUntilMs > Date.now()) {
+        this.botDisplayNameRateLimitedUntilMs = Math.trunc(retryAfterUntilMs);
+      }
+    } catch {
+      // Ignore invalid local cache payload and continue with runtime defaults.
+    }
+  }
+
+  private persistBotDisplayNameSyncState(): void {
+    const payload: BotDisplayNameSyncState = {};
+    if (this.lastSyncedBotDisplayName) {
+      payload.lastSyncedName = this.lastSyncedBotDisplayName;
+    }
+    if (this.botDisplayNameRateLimitedUntilMs > Date.now()) {
+      payload.retryAfterUntilMs = this.botDisplayNameRateLimitedUntilMs;
+    }
+
+    try {
+      if (!payload.lastSyncedName && !payload.retryAfterUntilMs) {
+        if (fs.existsSync(this.botDisplayNameSyncStatePath)) {
+          fs.unlinkSync(this.botDisplayNameSyncStatePath);
+        }
+        return;
+      }
+      fs.writeFileSync(this.botDisplayNameSyncStatePath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+    } catch {
+      // Ignore local cache persistence errors.
+    }
+  }
+
+  private getBotDisplayNameRetryAfterSec(nowMs = Date.now()): number {
+    if (this.botDisplayNameRateLimitedUntilMs <= nowMs) {
+      return 0;
+    }
+    return Math.max(1, Math.ceil((this.botDisplayNameRateLimitedUntilMs - nowMs) / 1000));
+  }
+
+  private parseTelegramRetryAfterSec(error: unknown): number {
+    const typed = error as { response?: { body?: { parameters?: { retry_after?: unknown } } } };
+    const structured = typed.response?.body?.parameters?.retry_after;
+    if (typeof structured === "number" && Number.isFinite(structured) && structured > 0) {
+      return Math.ceil(structured);
+    }
+    const message = String((error as Error)?.message ?? "");
+    const match = message.match(/retry after\s+(\d+)/i);
+    if (!match) {
+      return 0;
+    }
+    const parsed = Number(match[1]);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return 0;
+    }
+    return Math.ceil(parsed);
+  }
+
+  private markBotDisplayNameRateLimited(retryAfterSec: number): void {
+    if (retryAfterSec <= 0) {
+      return;
+    }
+    const nextUntil = Date.now() + retryAfterSec * 1000;
+    if (nextUntil > this.botDisplayNameRateLimitedUntilMs) {
+      this.botDisplayNameRateLimitedUntilMs = nextUntil;
+      this.persistBotDisplayNameSyncState();
+    }
+  }
+
   private readAssistantNameFromIdentity(): string {
     const identityPath = path.join(this.config.workspaceDir, "IDENTITY.md");
     if (!fs.existsSync(identityPath)) {
@@ -198,11 +287,24 @@ export class TelegramGateway {
     if (!assistantName || assistantName === this.lastSyncedBotDisplayName) {
       return;
     }
+    const retryAfterSec = this.getBotDisplayNameRetryAfterSec();
+    if (retryAfterSec > 0) {
+      this.log(`telegram bot display name startup-sync skipped: rate-limited retry_after=${retryAfterSec}s`);
+      return;
+    }
     try {
       await this.bot.setMyName({ name: assistantName });
       this.lastSyncedBotDisplayName = assistantName;
+      this.botDisplayNameRateLimitedUntilMs = 0;
+      this.persistBotDisplayNameSyncState();
       this.log(`telegram bot display name startup-sync name=${JSON.stringify(assistantName)}`);
     } catch (error) {
+      const retry = this.parseTelegramRetryAfterSec(error);
+      if (retry > 0) {
+        this.markBotDisplayNameRateLimited(retry);
+        this.log(`telegram bot display name startup-sync rate-limited retry_after=${retry}s`);
+        return;
+      }
       this.log(`telegram bot display name startup-sync failed: ${(error as Error).message}`);
     }
   }
@@ -230,27 +332,95 @@ export class TelegramGateway {
     return true;
   }
 
+  private estimateTokens(chars: number): number {
+    return Math.ceil(Math.max(0, chars) / 4);
+  }
+
+  private formatChars(chars: number): string {
+    return `${chars} chars (~${this.estimateTokens(chars)} tok)`;
+  }
+
   private buildContextSummaryMessage(): string {
     const report = this.agent.getWorkspacePromptContextReport();
     const lines = [
-      "Workspace prompt context report:",
+      "Context breakdown:",
+      `- source: ${report.source}`,
+      `- prompt mode: ${report.promptMode}`,
+      `- system prompt: ${this.formatChars(report.systemPrompt?.chars ?? 0)}`,
+      `- workspace context: ${this.formatChars(report.totalIncludedChars)}`,
       `- limits: per-file=${report.maxCharsPerFile}, total=${report.maxCharsTotal}`,
-      `- included chars: ${report.totalIncludedChars}`,
-      `- bootstrap hook applied: ${report.hookApplied}`,
-      "- files:",
+      `- hook applied: ${Boolean(report.hookApplied)}`,
+      `- skills: ${this.formatChars(report.skills?.promptChars ?? 0)} (${report.skills?.entries?.length ?? 0})`,
+      `- tools list: ${this.formatChars(report.tools?.listChars ?? 0)}`,
+      `- tools schema: ${this.formatChars(report.tools?.schemaChars ?? 0)}`,
+      "",
+      "Injected files:",
     ];
     for (const file of report.files) {
       const status = file.included ? "included" : file.budgetExhausted ? "budget-exhausted" : "skipped";
       lines.push(
-        `  - ${file.fileName}: ${status}`
-        + `, missing=${file.missing}, truncated=${file.truncated}, chars=${file.includedChars}/${file.originalChars}`,
+        `- ${file.fileName}: ${status}, missing=${file.missing}, truncated=${file.truncated}, chars=${file.includedChars}/${file.originalChars}`,
       );
     }
-    lines.push("Use `/context detail <fileName>` to inspect one snippet.");
+    lines.push("");
+    lines.push("Try `/context detail` for full breakdown, `/context detail <fileName>` for snippet, `/context json` for raw JSON.");
     return lines.join("\n");
   }
 
-  private buildContextDetailMessage(target: string): string {
+  private buildContextDeepDetailMessage(): string {
+    const report = this.agent.getWorkspacePromptContextReport();
+    const topSkills = [...(report.skills?.entries ?? [])]
+      .sort((a, b) => b.blockChars - a.blockChars)
+      .slice(0, 20);
+    const topToolsBySchema = [...(report.tools?.entries ?? [])]
+      .sort((a, b) => b.schemaChars - a.schemaChars)
+      .slice(0, 20);
+
+    const lines = [
+      "Context breakdown (detailed):",
+      `- source: ${report.source}`,
+      `- generatedAt: ${report.generatedAt}`,
+      `- prompt mode: ${report.promptMode}`,
+      `- system prompt: ${this.formatChars(report.systemPrompt?.chars ?? 0)}`,
+      `  - workspace context chars: ${this.formatChars(report.systemPrompt?.workspaceContextChars ?? 0)}`,
+      `  - non-workspace chars: ${this.formatChars(report.systemPrompt?.nonWorkspaceChars ?? 0)}`,
+      `- workspace limits: per-file=${report.maxCharsPerFile}, total=${report.maxCharsTotal}`,
+      `- workspace included: ${this.formatChars(report.totalIncludedChars)}`,
+      "",
+      "Injected workspace files:",
+    ];
+
+    for (const file of report.files) {
+      const status = file.missing ? "MISSING" : file.truncated ? "TRUNCATED" : file.included ? "OK" : "SKIPPED";
+      lines.push(
+        `- ${file.fileName}: ${status} | raw ${this.formatChars(file.originalChars)} | injected ${this.formatChars(file.includedChars)}`,
+      );
+    }
+
+    lines.push("");
+    lines.push(`Skills prompt: ${this.formatChars(report.skills?.promptChars ?? 0)} (${report.skills?.entries?.length ?? 0} skills)`);
+    if (topSkills.length > 0) {
+      lines.push("Top skills by entry size:");
+      for (const skill of topSkills) {
+        lines.push(`- ${skill.name}: ${this.formatChars(skill.blockChars)} (${skill.source})`);
+      }
+    }
+
+    lines.push("");
+    lines.push(`Tools list: ${this.formatChars(report.tools?.listChars ?? 0)}`);
+    lines.push(`Tools schema: ${this.formatChars(report.tools?.schemaChars ?? 0)} (${report.tools?.entries?.length ?? 0} tools)`);
+    if (topToolsBySchema.length > 0) {
+      lines.push("Top tools by schema size:");
+      for (const tool of topToolsBySchema) {
+        const paramsCount = tool.propertiesCount ?? 0;
+        lines.push(`- ${tool.name}: ${this.formatChars(tool.schemaChars)} (${paramsCount} params)`);
+      }
+    }
+
+    return lines.join("\n");
+  }
+
+  private buildContextFileDetailMessage(target: string): string {
     const report = this.agent.getWorkspacePromptContextReport();
     const normalizedTarget = target.trim().toLowerCase();
     if (!normalizedTarget) {
@@ -263,8 +433,8 @@ export class TelegramGateway {
     if (!file.included || !file.snippet) {
       return `No injected snippet for ${file.fileName} (missing=${file.missing}).`;
     }
-    const snippet = file.snippet.length > 2200
-      ? `${file.snippet.slice(0, 2200)}\n...[detail truncated]`
+    const snippet = file.snippet.length > 2400
+      ? `${file.snippet.slice(0, 2400)}\n...[detail truncated]`
       : file.snippet;
     return [
       `${file.fileName}`,
@@ -388,27 +558,15 @@ export class TelegramGateway {
     return `On it: ${task}\nI'll update you when there's meaningful progress.`;
   }
 
-  private isTaskStoppedByUser(message: string): boolean {
-    return /(task stopped by user|stopped by user|stop requested)/i.test(String(message || ""));
-  }
-
-  private renderTaskCompletionMessage(
-    ok: boolean,
-    message: string,
-    locale: "zh" | "en",
-  ): string {
-    const summary = this.sanitizeForChat(message, 800) || (locale === "zh" ? "暂无更多细节。" : "No extra details.");
-    if (ok) {
-      return locale === "zh" ? `完成了。\n${summary}` : `Done.\n${summary}`;
-    }
-    if (this.isTaskStoppedByUser(message)) {
-      return locale === "zh"
-        ? "已按你的指令停止这次任务。"
-        : "Stopped as requested.";
-    }
-    return locale === "zh"
-      ? `这次还没完成。\n原因：${summary}`
-      : `This task is not completed yet.\nReason: ${summary}`;
+  private stripStepCounterTelemetry(text: string): string {
+    const stripped = String(text || "")
+      .replace(/(?:^|\n)\s*(?:step|progress|进度)\s*\d+\s*\/\s*\d+\s*[:：-]?\s*/gim, "\n")
+      .replace(/\b(?:step|progress)\s*\d+\s*[:：-]?\s*/gim, "")
+      .replace(/\(\s*\d+\s*\/\s*\d+\s*\)/g, "")
+      .replace(/(^|\s)\d+\s*\/\s*\d+\s*[:：-]?\s*/g, "$1")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return stripped || text;
   }
 
   private async syncBotDisplayName(
@@ -423,10 +581,25 @@ export class TelegramGateway {
     if (this.lastSyncedBotDisplayName === nextName) {
       return;
     }
+    const retryAfterSec = this.getBotDisplayNameRetryAfterSec();
+    if (retryAfterSec > 0) {
+      this.log(
+        `telegram bot display name update skipped chat=${chatId} name=${JSON.stringify(nextName)} retry_after=${retryAfterSec}s`,
+      );
+      await this.bot.sendMessage(
+        chatId,
+        locale === "zh"
+          ? `Telegram 限流中，显示名暂时无法修改。请约 ${Math.ceil(retryAfterSec / 60)} 分钟后再试。`
+          : `Telegram is rate-limiting display name updates. Please retry in about ${Math.ceil(retryAfterSec / 60)} minute(s).`,
+      );
+      return;
+    }
 
     try {
       await this.bot.setMyName({ name: nextName });
       this.lastSyncedBotDisplayName = nextName;
+      this.botDisplayNameRateLimitedUntilMs = 0;
+      this.persistBotDisplayNameSyncState();
       this.log(`telegram bot display name updated chat=${chatId} name=${JSON.stringify(nextName)}`);
       await this.bot.sendMessage(
         chatId,
@@ -435,6 +608,20 @@ export class TelegramGateway {
           : `Telegram bot display name updated: ${nextName}`,
       );
     } catch (error) {
+      const retry = this.parseTelegramRetryAfterSec(error);
+      if (retry > 0) {
+        this.markBotDisplayNameRateLimited(retry);
+        this.log(
+          `telegram bot display name update rate-limited chat=${chatId} name=${JSON.stringify(nextName)} retry_after=${retry}s`,
+        );
+        await this.bot.sendMessage(
+          chatId,
+          locale === "zh"
+            ? `Telegram 限流中，显示名暂时无法修改。请约 ${Math.ceil(retry / 60)} 分钟后再试。`
+            : `Telegram is rate-limiting display name updates. Please retry in about ${Math.ceil(retry / 60)} minute(s).`,
+        );
+        return;
+      }
       this.log(
         `telegram bot display name update failed chat=${chatId} name=${JSON.stringify(nextName)} error=${(error as Error).message}`,
       );
@@ -698,7 +885,7 @@ export class TelegramGateway {
         [
           "OpenPocket commands:",
           "/start",
-          "/context",
+          "/context [list|detail|json]",
           "/context detail <fileName>",
           "/status",
           "/model [name]",
@@ -725,17 +912,29 @@ export class TelegramGateway {
     }
 
     if (text.startsWith("/context")) {
-      const detailArg = text.replace("/context", "").trim();
-      if (!detailArg || /^list$/i.test(detailArg)) {
+      const contextArg = text.replace("/context", "").trim();
+      if (!contextArg || /^list$/i.test(contextArg) || /^show$/i.test(contextArg)) {
         await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextSummaryMessage(), 3500));
         return;
       }
-      if (/^detail(\s+.+)?$/i.test(detailArg)) {
-        const target = detailArg.replace(/^detail\s*/i, "");
-        await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextDetailMessage(target), 3500));
+      if (/^json$/i.test(contextArg)) {
+        const report = this.agent.getWorkspacePromptContextReport();
+        await this.bot.sendMessage(chatId, this.sanitizeForChat(JSON.stringify(report, null, 2), 3800));
         return;
       }
-      await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextDetailMessage(detailArg), 3500));
+      if (/^detail$/i.test(contextArg) || /^deep$/i.test(contextArg)) {
+        await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextDeepDetailMessage(), 3800));
+        return;
+      }
+      if (/^detail\s+.+/i.test(contextArg)) {
+        const target = contextArg.replace(/^detail\s*/i, "");
+        await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextFileDetailMessage(target), 3500));
+        return;
+      }
+      await this.bot.sendMessage(
+        chatId,
+        "Usage: /context [list|detail|json] or /context detail <fileName>",
+      );
       return;
     }
 
@@ -967,6 +1166,7 @@ export class TelegramGateway {
       lastNotifiedMessage: "",
       skippedSteps: 0,
       recentProgress: [],
+      allProgress: [],
     };
     let progressWork: Promise<void> = Promise.resolve();
     this.log(
@@ -984,6 +1184,7 @@ export class TelegramGateway {
               `progress source=${source} chat=${chatId} step=${progress.step}/${progress.maxSteps} action=${progress.actionType} app=${progress.currentApp}`,
             );
             const recentProgress = [...progressNarrationState.recentProgress, progress].slice(-8);
+            progressNarrationState.allProgress = [...progressNarrationState.allProgress, progress].slice(-16);
             const decision = await this.chat.narrateTaskProgress({
               task,
               locale: progressLocale,
@@ -997,7 +1198,10 @@ export class TelegramGateway {
               progressNarrationState.recentProgress = recentProgress;
               return;
             }
-            const message = this.sanitizeForChat(decision.message, 1800);
+            const message = this.sanitizeForChat(
+              this.stripStepCounterTelemetry(decision.message),
+              1800,
+            );
             if (!message.trim()) {
               progressNarrationState.skippedSteps += 1;
               progressNarrationState.recentProgress = recentProgress;
@@ -1099,9 +1303,21 @@ export class TelegramGateway {
         this.log(`task done source=${source} chat=${chatId ?? "(none)"} ok=${result.ok} session=${result.sessionPath}`);
 
         if (chatId !== null) {
+          const finalMessage = await this.chat.narrateTaskOutcome({
+            task,
+            locale: progressLocale,
+            ok: result.ok,
+            rawResult: result.message,
+            recentProgress: progressNarrationState.allProgress,
+            skillPath: result.skillPath ?? null,
+            scriptPath: result.scriptPath ?? null,
+          });
           await this.bot.sendMessage(
             chatId,
-            this.renderTaskCompletionMessage(result.ok, result.message, progressLocale),
+            this.sanitizeForChat(
+              this.stripStepCounterTelemetry(finalMessage),
+              1800,
+            ),
           );
         }
 

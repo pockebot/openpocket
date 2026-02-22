@@ -8,32 +8,31 @@
 An Intelligent Phone That Never Sleeps.  
 OpenPocket runs an always-on agent phone locally, with privacy first.
 
-## Current Development Progress
+## Current Capability Snapshot
 
 Status snapshot (February 2026):
 
-### Implemented and usable today
+### Implemented and usable now
 
-- Local Android emulator runtime driven by CLI + Telegram gateway.
-- Interactive onboarding (`openpocket onboard`) for consent, model/API key setup, Telegram setup, emulator boot, and human-auth mode selection.
-- Human authorization relay bridge with:
-  - in-chat manual fallback (`/auth approve|reject`)
-  - one-time web approval links
-  - optional local ngrok tunnel auto-start
-- Script execution safety controls (allowlist, deny patterns, timeout, output limits).
-- Workspace persistence for sessions, daily memory logs, screenshots, and script run artifacts.
-- Gateway operational loop with heartbeat, cron triggers, and restart handling.
+- Local Android emulator runtime driven by CLI + Telegram gateway + dashboard.
+- Interactive setup (`openpocket onboard`) for consent, model/API key, Telegram, emulator boot, and human-auth mode.
+- Template-driven prompt system with runtime mode control (`full|minimal|none`) and workspace context budgets.
+- Bootstrap-driven chat onboarding (`BOOTSTRAP.md`, `PROFILE_ONBOARDING.json`) with persisted workspace onboarding state.
+- Model-driven progress and outcome narration (`TASK_PROGRESS_REPORTER.md`, `TASK_OUTCOME_REPORTER.md`) with anti-noise suppression.
+- Coding toolchain in task loop (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`) with workspace/safety constraints.
+- Memory tools in task loop (`memory_search`, `memory_get`) for recall-oriented interactions.
+- Prompt observability via Telegram `/context [list|detail|json]`.
+- Human-authorization relay (manual `/auth`, one-time web link, optional ngrok) with delegation artifact application.
+- In-emulator permission dialogs auto-handled locally (no remote auth escalation for Android runtime permission popups).
+- Telegram bot display-name sync from profile identity changes.
+- Automatic reusable artifact generation after successful tasks (`skills/auto`, `scripts/auto`).
+- Auditable persistence for sessions, daily memory, screenshots, relay state, and script run artifacts.
 
-### In progress and partially complete
+### Active improvement focus
 
-- Human-auth remote flow reliability and UX hardening.
-- Runtime architecture and docs stabilization for broader open-source adoption.
-
-### Priority gaps to close
-
-- A stronger long-horizon memory system.
-- Phone-use-specific prompt engineering and evaluation.
-- Cross-platform runtime/web-dashboard support beyond macOS-first workflows.
+- Long-horizon memory quality (ranking/compaction/freshness).
+- Prompt evaluation and regression coverage for phone-use scenarios.
+- Cross-platform runtime hardening and operational reliability.
 
 ## Quick Start
 
@@ -46,7 +45,7 @@ Status snapshot (February 2026):
 - Telegram bot token (for gateway mode) follow this [instruction](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)
 - (Optional, recommended) ngrok authtoken for remote approval (free to obtain)
 
-NOTE: As of 02/21/2026, codex-5.3 has not be supported by OpenAI API, please fallback to codex-5.2 until it is generally available.
+NOTE: If `gpt-5.3-codex` is unavailable in your account/provider route, use `gpt-5.2-codex`.
 
 ### 2. Install
 
@@ -263,15 +262,24 @@ OpenPocket currently has two E2E paths:
 ## Key Capabilities
 
 - **Local emulator-first runtime**: execution stays on your machine via adb, not a hosted cloud phone.
-- **Always-on agent loop**: model-driven planning + action execution over Android UI primitives.
+- **Always-on agent loop**: model-driven planning + one-step action execution over Android UI primitives.
+- **Prompt system aligned for agent behavior**:
+  - prompt modes (`full|minimal|none`)
+  - workspace template injection with explicit char budgets
+  - task progress/outcome narrators driven by prompt templates
 - **Remote authorization proxy (human-auth relay)**:
-  - agent can emit `request_human_auth` when blocked by real-device checks
+  - agent emits `request_human_auth` only for real-device/sensitive checkpoints
   - gateway sends one-time approval link and manual fallback commands
   - local relay can auto-start with optional ngrok tunnel
+- **In-emulator permission handling**: Android runtime permission dialogs are auto-approved locally when detected.
+- **Coding and memory tools inside task loop**:
+  - coding: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`
+  - memory: `memory_search`, `memory_get`
 - **Dual control modes**: direct user control and agent control on the same emulator runtime.
 - **Production-style gateway operations**: Telegram command menu bootstrap, heartbeat, cron jobs, restart loop, safe stop.
-- **Script safety controls**: allowlist + deny patterns + timeout + output caps + run artifacts.
-- **Auditable persistence**: task sessions, daily memory, screenshots, and script archives.
+- **Script and coding safety controls**: allowlist + deny patterns + timeout + output caps + run artifacts.
+- **Prompt observability**: `/context` command reports actual injected prompt context and budgets.
+- **Auditable persistence**: task sessions, daily memory, screenshots, script archives, and relay/auth state.
 
 ## Roadmap
 
@@ -429,11 +437,14 @@ flowchart LR
   A --> M["Model Client"]
   A --> D["ADB Runtime"]
   A --> S["Script Executor"]
+  A --> C["Coding Executor"]
+  A --> R["Memory Executor"]
   D --> E["Android Emulator (Local)"]
   A --> W["Workspace Store"]
   W --> SS["sessions/*.md"]
   W --> MM["memory/YYYY-MM-DD.md"]
   W --> RR["scripts/runs/*"]
+  W --> AS["skills/auto/* + scripts/auto/*"]
   RP["User Phone (Human Auth Link)"] -.-> G
 ```
 
@@ -571,8 +582,8 @@ openpocket telegram whoami
 ```
 
 When a running task enters Android system permission UI
-(`permissioncontroller` / `packageinstaller`), OpenPocket now auto-triggers
-`request_human_auth` and sends the Telegram approval link flow.
+(`permissioncontroller` / `packageinstaller`), OpenPocket handles it locally in
+the emulator (auto-approve policy) instead of escalating to remote human-auth.
 
 ## PermissionLab E2E Test
 
@@ -737,7 +748,9 @@ npm test
 ## Security and Safety Notes
 
 - `run_script` execution is guarded by an allowlist and deny patterns.
-- Timeout and output truncation are enforced per script run.
+- `exec`/`process` coding tools are guarded by allowlist, deny patterns, workspace boundaries, timeout, and output caps.
+- Timeout and output truncation are enforced for script/coding execution.
+- memory tools are read-scoped to `MEMORY.md` and `memory/*.md`.
 - Local paths are sanitized/redacted in Telegram-facing outputs.
 
 ## License

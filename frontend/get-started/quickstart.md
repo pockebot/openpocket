@@ -8,11 +8,11 @@ OpenPocket runs automation on a local Android emulator, so tasks do not consume 
 
 - Node.js 20+
 - Android SDK Emulator and platform-tools (`adb`)
-- At least one Android AVD
+- at least one Android AVD
 - API key for your configured model profile
 - Telegram bot token (for gateway mode)
 
-You do not need to root or modify your personal phone to use OpenPocket.
+You do not need to root or modify your personal phone.
 
 ## npm Install
 
@@ -21,7 +21,7 @@ npm install -g openpocket
 openpocket onboard
 ```
 
-OpenPocket now uses a local Web dashboard instead of a native panel app:
+OpenPocket uses a local web dashboard:
 
 ```bash
 openpocket dashboard start
@@ -39,58 +39,48 @@ npm run build
 
 `./openpocket` uses `dist/cli.js` when present and falls back to `tsx src/cli.ts` in dev installs.
 
-Default runtime home is `~/.openpocket`, unless `OPENPOCKET_HOME` is set.
+Default runtime home is `~/.openpocket` unless `OPENPOCKET_HOME` is set.
 
 For commands below:
 
 - use `openpocket ...` for npm package install
 - use `./openpocket ...` for local clone
 
+## First Onboard Output
+
 On first `onboard`, OpenPocket creates:
 
 - `config.json`
-- `workspace/` with bootstrap files and directories
-- `state/` for runtime state and emulator logs
+- `workspace/` with bootstrap prompt templates and runtime folders
+- `state/` for runtime state and logs
 
-`onboard` creates/updates onboarding state in `state/onboarding.json` and guides:
+CLI onboarding state:
 
-- user consent
-- model profile selection (GPT/Claude/AutoGLM profiles)
-- provider-specific API key setup based on selected model
-- Telegram token source and chat allowlist policy
-- option prompts use Up/Down arrows + Enter
-- emulator wake-up + manual Gmail login for Play Store
-- human-auth mode selection (`disabled`, `LAN relay`, `local relay + ngrok`)
-- Android dependency doctor + auto-install on macOS when required (includes Java 17+ runtime for sdkmanager)
-- existing AVD reuse to avoid repeated heavy system-image/bootstrap downloads on later onboard runs
+- `state/onboarding.json`
 
-If you explicitly want a user-local PATH command without npm global install:
-
-```bash
-./openpocket install-cli
-```
+Workspace bootstrap includes prompt/memory identity files (for example `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `TASK_PROGRESS_REPORTER.md`, `TASK_OUTCOME_REPORTER.md`).
 
 ## Env Vars
 
 ```bash
 export OPENAI_API_KEY="<your_key>"
-export OPENROUTER_API_KEY="<your_key>"        # required if using Claude/OpenRouter profile
-export TELEGRAM_BOT_TOKEN="<your_bot_token>"   # only for Telegram gateway
-export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"   # recommended
+export OPENROUTER_API_KEY="<your_key>"        # if using OpenRouter profiles
+export TELEGRAM_BOT_TOKEN="<your_bot_token>"   # for gateway mode
+export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
 ```
 
 Optional:
 
 ```bash
 export OPENPOCKET_HOME="$HOME/.openpocket"
-export BLOCKRUN_API_KEY="<optional>"          # required if using Blockrun profiles
+export BLOCKRUN_API_KEY="<optional>"
 export AUTOGLM_API_KEY="<optional>"
 export OPENPOCKET_HUMAN_AUTH_KEY="<optional relay api key>"
 export NGROK_AUTHTOKEN="<optional ngrok token>"
-export CODEX_HOME="$HOME/.codex"              # optional override for Codex CLI credential path
+export CODEX_HOME="$HOME/.codex"              # optional override
 ```
 
-If you use a Codex subscription, you can also run `codex` login and skip `OPENAI_API_KEY` for codex models.
+If you use Codex subscription auth, run `codex` login and codex model profiles can use CLI credentials.
 
 ## Command Check
 
@@ -103,7 +93,7 @@ openpocket skills list
 openpocket script run --text "echo hello"
 ```
 
-## Run a Task
+## Run a Task (CLI)
 
 ```bash
 openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
@@ -111,47 +101,35 @@ openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
 
 Result includes:
 
-- terminal summary message
+- summary message
 - session file path (`workspace/sessions/session-*.md`)
-- daily memory append in `workspace/memory/YYYY-MM-DD.md`
+- daily memory append (`workspace/memory/YYYY-MM-DD.md`)
 
-## Control Modes
-
-OpenPocket supports two operating styles:
-
-- direct local control of the emulator by the user
-- agent control of the same emulator runtime
-
-This allows practical handoff between manual and automated execution.
-
-Current remote human-in-the-loop support:
-
-- if agent emits `request_human_auth`, gateway can issue a one-time approval link
-- user can approve/reject from phone browser, or use `/auth approve|reject` in Telegram
-
-For architecture, security, and end-to-end test playbook, see:
-
-- [Remote Human Authorization](../concepts/remote-human-authorization.md)
-
-Planned next step:
-
-- broader phone-side remote controls (pause/resume/retry beyond auth-only checkpoints)
-
-## Telegram Gateway
+## Run via Telegram Gateway
 
 ```bash
 openpocket gateway start
 ```
 
-Then chat with your bot and send `/help`.
+Then chat with your bot:
 
-For auth workflow testing, use:
+- `/start` (will trigger chat onboarding if workspace profile is incomplete)
+- plain text requests for auto route (`task` or `chat`)
+- `/help` for command list
 
-- `/auth pending`
-- `/auth approve <request-id> [note]`
-- `/auth reject <request-id> [note]`
+Useful debug command:
 
-PermissionLab end-to-end test command:
+- `/context [list|detail|json]`
+
+## Human-in-the-Loop
+
+When task emits `request_human_auth`, gateway can send one-time approval link and `/auth` fallback commands.
+
+For architecture and end-to-end validation:
+
+- [Remote Human Authorization](../concepts/remote-human-authorization.md)
+
+PermissionLab E2E command:
 
 ```bash
 openpocket test permission-app run --case camera --chat <telegram_chat_id>

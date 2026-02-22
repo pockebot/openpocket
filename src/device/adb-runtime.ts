@@ -40,6 +40,14 @@ function hasNonAscii(text: string): boolean {
   return /[^\x00-\x7F]/.test(text);
 }
 
+function looksLikeClipboardCommandError(text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return /(^|\s)(error|unknown|usage|exception|not found|unsupported)(\s|:|$)/i.test(normalized);
+}
+
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
@@ -49,8 +57,42 @@ export class AdbRuntime {
     this.emulator = emulator;
   }
 
+  private normalizeClipboardText(text: string): string {
+    return String(text || "")
+      .replace(/\r/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private verifyClipboardContains(deviceId: string, expected: string): boolean {
+    const sample = expected.trim().slice(0, 16);
+    if (!sample) {
+      return true;
+    }
+    try {
+      const output = this.emulator.runAdb(["-s", deviceId, "shell", "cmd", "clipboard", "get", "text"]);
+      if (looksLikeClipboardCommandError(output)) {
+        return false;
+      }
+      const normalizedOutput = this.normalizeClipboardText(output).toLowerCase();
+      const normalizedSample = this.normalizeClipboardText(sample).toLowerCase();
+      if (!normalizedOutput || !normalizedSample) {
+        return false;
+      }
+      return normalizedOutput.includes(normalizedSample);
+    } catch {
+      return false;
+    }
+  }
+
   private inputByClipboardPaste(deviceId: string, text: string): string {
-    this.emulator.runAdb(["-s", deviceId, "shell", "cmd", "clipboard", "set", "text", text]);
+    const setOutput = this.emulator.runAdb(["-s", deviceId, "shell", "cmd", "clipboard", "set", "text", text]);
+    if (looksLikeClipboardCommandError(setOutput)) {
+      throw new Error(`clipboard set command failed: ${this.normalizeClipboardText(setOutput)}`);
+    }
+    if (!this.verifyClipboardContains(deviceId, text)) {
+      throw new Error("clipboard set could not be verified; skip paste to avoid stale clipboard content");
+    }
     this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_PASTE"]);
     return `Typed text via clipboard paste length=${text.length}`;
   }
@@ -148,9 +190,14 @@ export class AdbRuntime {
       case "type": {
         const encoded = encodeInputText(action.text);
         // On some emulator images, `input text` throws NPE for unicode text.
-        // Prefer clipboard paste for non-ASCII, and fallback to clipboard on failure.
+        // Try clipboard paste first for non-ASCII; verify write before paste.
         if (hasNonAscii(action.text)) {
-          return this.inputByClipboardPaste(deviceId, action.text);
+          try {
+            return this.inputByClipboardPaste(deviceId, action.text);
+          } catch {
+            this.emulator.runAdb(["-s", deviceId, "shell", "input", "text", encoded]);
+            return `Typed text length=${action.text.length}`;
+          }
         }
         try {
           this.emulator.runAdb(["-s", deviceId, "shell", "input", "text", encoded]);
@@ -187,6 +234,18 @@ export class AdbRuntime {
       }
       case "run_script": {
         return "run_script is handled by ScriptExecutor in AgentRuntime.";
+      }
+      case "read":
+      case "write":
+      case "edit":
+      case "apply_patch":
+      case "exec":
+      case "process": {
+        return `${action.type} is handled by CodingExecutor in AgentRuntime.`;
+      }
+      case "memory_search":
+      case "memory_get": {
+        return `${action.type} is handled by MemoryExecutor in AgentRuntime.`;
       }
       case "request_human_auth": {
         return `Human authorization requested: capability=${action.capability}`;

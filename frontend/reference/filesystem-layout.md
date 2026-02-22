@@ -13,6 +13,7 @@ OpenPocket runtime uses `OPENPOCKET_HOME` (default `~/.openpocket`).
     cron-state.json
     control-panel.json
     onboarding.json
+    telegram-bot-name-sync.json
     human-auth-relay/
       requests.json
     human-auth-artifacts/
@@ -21,12 +22,16 @@ OpenPocket runtime uses `OPENPOCKET_HOME` (default `~/.openpocket`).
       *.png
   workspace/
     AGENTS.md
+    BOOTSTRAP.md
     SOUL.md
     USER.md
     IDENTITY.md
     TOOLS.md
     HEARTBEAT.md
     MEMORY.md
+    PROFILE_ONBOARDING.json
+    TASK_PROGRESS_REPORTER.md
+    TASK_OUTCOME_REPORTER.md
     BARE_SESSION_RESET_PROMPT.md
     .openpocket/
       workspace-state.json
@@ -60,21 +65,24 @@ OpenPocket runtime uses `OPENPOCKET_HOME` (default `~/.openpocket`).
 
 ```text
 src/
-  agent/       # prompts, model client, runtime loop
-  config/      # default config, load/save/normalize
-  device/      # emulator and adb runtime
-  gateway/     # telegram gateway, heartbeat, cron, and run-loop
-  human-auth/  # relay bridge, web relay server, local stack, ngrok tunnel
-  memory/      # session, memory, screenshot storage
-  skills/      # skill loader and auto artifact builder
-  tools/       # script executor
-  utils/       # paths and timing helpers
-  cli.ts       # command entrypoint
+  agent/        # prompts, tools schema, model client, runtime loop
+  config/       # default config, load/save/normalize, Codex credential fallback
+  device/       # emulator and adb runtime
+  gateway/      # telegram gateway, onboarding/chat assistant, heartbeat, cron, run-loop
+  human-auth/   # relay bridge, web relay server, local stack, ngrok tunnel
+  memory/       # workspace bootstrap, templates, session, screenshot storage
+  onboarding/   # interactive CLI setup wizard
+  skills/       # skill loader and auto artifact builder
+  tools/        # script executor, coding executor, memory executor, apply_patch
+  dashboard/    # web control API server
+  test/         # permission lab runner
+  utils/        # paths, image scaling, time, CLI theme
+  cli.ts        # command entrypoint
 ```
 
 ## Skill Sources
 
-At runtime, skills are loaded from:
+At runtime, skills are loaded in this priority order:
 
 1. `workspace/skills`
 2. `OPENPOCKET_HOME/skills`

@@ -152,6 +152,84 @@ test("TelegramGateway startup sync reads assistant name from IDENTITY.md", async
   });
 });
 
+test("TelegramGateway startup sync backs off after Telegram rate limit", async () => {
+  await withTempHome("openpocket-telegram-startup-name-rate-limit-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+    fs.writeFileSync(
+      path.join(cfg.workspaceDir, "IDENTITY.md"),
+      [
+        "# IDENTITY",
+        "",
+        "## Agent Identity",
+        "",
+        "- Name: RateLimit-Bot",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    let setNameCalls = 0;
+    gateway.bot.setMyName = async () => {
+      setNameCalls += 1;
+      throw new Error("ETELEGRAM: 429 Too Many Requests: retry after 120");
+    };
+
+    await gateway.syncBotDisplayNameFromIdentity();
+    await gateway.syncBotDisplayNameFromIdentity();
+
+    assert.equal(setNameCalls, 1);
+    const statePath = path.join(cfg.stateDir, "telegram-bot-name-sync.json");
+    assert.equal(fs.existsSync(statePath), true);
+    const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    assert.equal(typeof state.retryAfterUntilMs, "number");
+    assert.equal(state.retryAfterUntilMs > Date.now(), true);
+  });
+});
+
+test("TelegramGateway startup sync skips API call when name already cached locally", async () => {
+  await withTempHome("openpocket-telegram-startup-name-cache-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+    fs.writeFileSync(
+      path.join(cfg.workspaceDir, "IDENTITY.md"),
+      [
+        "# IDENTITY",
+        "",
+        "## Agent Identity",
+        "",
+        "- Name: Cached-Bot",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const first = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    first.bot.on("polling_error", () => {});
+    await first.bot.stopPolling().catch(() => {});
+    let firstCalls = 0;
+    first.bot.setMyName = async () => {
+      firstCalls += 1;
+      return true;
+    };
+    await first.syncBotDisplayNameFromIdentity();
+    assert.equal(firstCalls, 1);
+
+    const second = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    second.bot.on("polling_error", () => {});
+    await second.bot.stopPolling().catch(() => {});
+    let secondCalls = 0;
+    second.bot.setMyName = async () => {
+      secondCalls += 1;
+      return true;
+    };
+    await second.syncBotDisplayNameFromIdentity();
+    assert.equal(secondCalls, 0);
+  });
+});
+
 test("TelegramGateway consumes profile-update payload after chat reply", async () => {
   await withTempHome("openpocket-telegram-profile-update-", async () => {
     const cfg = loadConfig();
@@ -435,6 +513,23 @@ test("TelegramGateway /context returns summary report", async () => {
       maxCharsTotal: 150000,
       totalIncludedChars: 1024,
       hookApplied: false,
+      source: "estimate",
+      generatedAt: new Date().toISOString(),
+      promptMode: "full",
+      systemPrompt: {
+        chars: 4096,
+        workspaceContextChars: 1024,
+        nonWorkspaceChars: 3072,
+      },
+      skills: {
+        promptChars: 300,
+        entries: [],
+      },
+      tools: {
+        listChars: 500,
+        schemaChars: 700,
+        entries: [],
+      },
       files: [
         {
           fileName: "AGENTS.md",
@@ -454,7 +549,7 @@ test("TelegramGateway /context returns summary report", async () => {
     });
 
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /Workspace prompt context report/);
+    assert.match(sent[0].text, /Context breakdown/);
     assert.match(sent[0].text, /AGENTS\.md/);
   });
 });
@@ -478,6 +573,23 @@ test("TelegramGateway /context detail returns file snippet", async () => {
       maxCharsTotal: 150000,
       totalIncludedChars: 2048,
       hookApplied: true,
+      source: "run",
+      generatedAt: new Date().toISOString(),
+      promptMode: "full",
+      systemPrompt: {
+        chars: 5000,
+        workspaceContextChars: 2048,
+        nonWorkspaceChars: 2952,
+      },
+      skills: {
+        promptChars: 420,
+        entries: [],
+      },
+      tools: {
+        listChars: 640,
+        schemaChars: 860,
+        entries: [],
+      },
       files: [
         {
           fileName: "SOUL.md",
@@ -499,6 +611,66 @@ test("TelegramGateway /context detail returns file snippet", async () => {
     assert.equal(sent.length, 1);
     assert.match(sent[0].text, /SOUL\.md/);
     assert.match(sent[0].text, /soul-snippet-body/);
+  });
+});
+
+test("TelegramGateway /context json returns machine-readable report", async () => {
+  await withTempHome("openpocket-telegram-context-json-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.agent.getWorkspacePromptContextReport = () => ({
+      maxCharsPerFile: 20000,
+      maxCharsTotal: 150000,
+      totalIncludedChars: 1280,
+      hookApplied: false,
+      source: "estimate",
+      generatedAt: new Date().toISOString(),
+      promptMode: "full",
+      systemPrompt: {
+        chars: 4600,
+        workspaceContextChars: 1280,
+        nonWorkspaceChars: 3320,
+      },
+      skills: {
+        promptChars: 320,
+        entries: [],
+      },
+      tools: {
+        listChars: 590,
+        schemaChars: 810,
+        entries: [],
+      },
+      files: [
+        {
+          fileName: "AGENTS.md",
+          originalChars: 400,
+          includedChars: 400,
+          truncated: false,
+          included: true,
+          missing: false,
+          snippet: "agents-snippet",
+        },
+      ],
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 9107 },
+      text: "/context json",
+    });
+
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /"promptMode": "full"/);
+    assert.match(sent[0].text, /"systemPrompt"/);
   });
 });
 
@@ -536,6 +708,7 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
       decisionIndex += 1;
       return decision;
     };
+    gateway.chat.narrateTaskOutcome = async () => "收件箱已打开，当前可见最新邮件列表。";
 
     gateway.agent.runTask = async (_task, _modelName, onProgress) => {
       await onProgress({
@@ -602,9 +775,10 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     );
     assert.equal(sent.length, 3);
     assert.equal(sent[0].chatId, 9201);
-    assert.equal(sent[0].text, "进度 1/5：已打开 Gmail 首页。");
-    assert.equal(sent[1].text, "进度 4/5：已进入收件箱。");
-    assert.match(sent[2].text, /完成了/);
+    assert.equal(sent[0].text, "已打开 Gmail 首页。");
+    assert.equal(sent[1].text, "已进入收件箱。");
+    assert.equal(sent[2].text, "收件箱已打开，当前可见最新邮件列表。");
+    assert.equal(sent.slice(0, 2).some((item) => /\d+\/\d+/.test(item.text)), false);
     assert.equal(
       sent.slice(0, 2).some((item) => /Current screen app:|Reasoning:|Action:/.test(item.text)),
       false,
@@ -641,6 +815,7 @@ test("TelegramGateway suppresses low-signal repetitive narration even if model r
       decisionIndex += 1;
       return decision;
     };
+    gateway.chat.narrateTaskOutcome = async () => "Inbox is visible with latest messages.";
 
     gateway.agent.runTask = async (_task, _modelName, onProgress) => {
       await onProgress({
@@ -696,8 +871,8 @@ test("TelegramGateway suppresses low-signal repetitive narration even if model r
     assert.equal(result.ok, true);
     assert.equal(decisionIndex, 4);
     assert.equal(sent.length, 3);
-    assert.match(sent[0].text, /6\/50/);
-    assert.match(sent[1].text, /15\/50/);
-    assert.match(sent[2].text, /Done\./);
+    assert.doesNotMatch(sent[0].text, /\d+\/\d+/);
+    assert.doesNotMatch(sent[1].text, /\d+\/\d+/);
+    assert.equal(sent[2].text, "Inbox is visible with latest messages.");
   });
 });

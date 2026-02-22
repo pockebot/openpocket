@@ -1426,7 +1426,7 @@ async function runPermissionLabScenario(params: {
     printKeyValue("Device", deployed.deviceId, "accent");
     printKeyValue("Install", deployed.installOutput || "ok", "success");
     printKeyValue("Reset", permissionLab.reset(deployed.deviceId));
-    printKeyValue("Launch", permissionLab.launch(deployed.deviceId));
+    printKeyValue("Launch", permissionLab.launch(deployed.deviceId, scenario.id));
 
     const task = permissionLab.agentTaskForScenario(scenario.id);
     await sendTelegramMessage(tokenInfo.token, {

@@ -70,6 +70,46 @@ function defaultConfigObject() {
         "npm",
       ],
     },
+    codingTools: {
+      enabled: true,
+      workspaceOnly: true,
+      timeoutSec: 1800,
+      maxOutputChars: 12000,
+      allowBackground: true,
+      applyPatchEnabled: true,
+      allowedCommands: [
+        "git",
+        "ls",
+        "cat",
+        "grep",
+        "rg",
+        "sed",
+        "awk",
+        "head",
+        "tail",
+        "pwd",
+        "bash",
+        "sh",
+        "node",
+        "npm",
+        "pnpm",
+        "yarn",
+        "python",
+        "python3",
+        "pytest",
+        "jest",
+        "vitest",
+        "tsc",
+        "eslint",
+        "prettier",
+      ],
+    },
+    memoryTools: {
+      enabled: true,
+      maxResults: 6,
+      minScore: 0.2,
+      maxSnippetChars: 1200,
+    },
     heartbeat: {
       enabled: true,
       everySec: 30,
@@ -226,6 +266,8 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     state_dir: "stateDir",
     default_model: "defaultModel",
     script_executor: "scriptExecutor",
+    coding_tools: "codingTools",
+    memory_tools: "memoryTools",
     heartbeat_config: "heartbeat",
     cron_config: "cron",
     dashboard_config: "dashboard",
@@ -316,6 +358,39 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
   }
   if (Object.keys(scriptExecutor).length > 0) {
     raw.scriptExecutor = scriptExecutor;
+  }
+
+  const codingTools = isObject(raw.codingTools) ? { ...raw.codingTools } : {};
+  const codingToolsMap: Record<string, string> = {
+    workspace_only: "workspaceOnly",
+    timeout_sec: "timeoutSec",
+    max_output_chars: "maxOutputChars",
+    allow_background: "allowBackground",
+    apply_patch_enabled: "applyPatchEnabled",
+    allowed_commands: "allowedCommands",
+  };
+  for (const [oldKey, newKey] of Object.entries(codingToolsMap)) {
+    if (oldKey in codingTools && !(newKey in codingTools)) {
+      codingTools[newKey] = codingTools[oldKey];
+    }
+  }
+  if (Object.keys(codingTools).length > 0) {
+    raw.codingTools = codingTools;
+  }
+
+  const memoryTools = isObject(raw.memoryTools) ? { ...raw.memoryTools } : {};
+  const memoryToolsMap: Record<string, string> = {
+    max_results: "maxResults",
+    min_score: "minScore",
+    max_snippet_chars: "maxSnippetChars",
+  };
+  for (const [oldKey, newKey] of Object.entries(memoryToolsMap)) {
+    if (oldKey in memoryTools && !(newKey in memoryTools)) {
+      memoryTools[newKey] = memoryTools[oldKey];
+    }
+  }
+  if (Object.keys(memoryTools).length > 0) {
+    raw.memoryTools = memoryTools;
   }
 
   const heartbeat = isObject(raw.heartbeat) ? { ...raw.heartbeat } : {};
@@ -482,6 +557,8 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
   const agent = (merged.agent ?? {}) as Record<string, unknown>;
   const screenshots = (merged.screenshots ?? {}) as Record<string, unknown>;
   const scriptExecutor = (merged.scriptExecutor ?? {}) as Record<string, unknown>;
+  const codingTools = (merged.codingTools ?? {}) as Record<string, unknown>;
+  const memoryTools = (merged.memoryTools ?? {}) as Record<string, unknown>;
   const heartbeat = (merged.heartbeat ?? {}) as Record<string, unknown>;
   const cron = (merged.cron ?? {}) as Record<string, unknown>;
   const dashboard = (merged.dashboard ?? {}) as Record<string, unknown>;
@@ -546,6 +623,23 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       allowedCommands: Array.isArray(scriptExecutor.allowedCommands)
         ? scriptExecutor.allowedCommands.map((v) => String(v))
         : defaultConfigObject().scriptExecutor.allowedCommands,
+    },
+    codingTools: {
+      enabled: Boolean(codingTools.enabled ?? true),
+      workspaceOnly: Boolean(codingTools.workspaceOnly ?? true),
+      timeoutSec: Math.max(1, Number(codingTools.timeoutSec ?? 1800)),
+      maxOutputChars: Math.max(1000, Number(codingTools.maxOutputChars ?? 12000)),
+      allowBackground: Boolean(codingTools.allowBackground ?? true),
+      applyPatchEnabled: Boolean(codingTools.applyPatchEnabled ?? true),
+      allowedCommands: Array.isArray(codingTools.allowedCommands)
+        ? codingTools.allowedCommands.map((v) => String(v))
+        : defaultConfigObject().codingTools.allowedCommands,
+    },
+    memoryTools: {
+      enabled: Boolean(memoryTools.enabled ?? true),
+      maxResults: Math.max(1, Math.min(30, Number(memoryTools.maxResults ?? 6))),
+      minScore: Math.max(0, Math.min(1, Number(memoryTools.minScore ?? 0.2))),
+      maxSnippetChars: Math.max(200, Math.min(8000, Number(memoryTools.maxSnippetChars ?? 1200))),
     },
     heartbeat: {
       enabled: Boolean(heartbeat.enabled ?? true),
@@ -662,6 +756,8 @@ export function saveConfig(config: OpenPocketConfig): void {
     agent: config.agent,
     screenshots: config.screenshots,
     scriptExecutor: config.scriptExecutor,
+    codingTools: config.codingTools,
+    memoryTools: config.memoryTools,
     heartbeat: config.heartbeat,
     cron: config.cron,
     dashboard: config.dashboard,
