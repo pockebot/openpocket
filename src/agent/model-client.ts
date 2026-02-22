@@ -46,7 +46,19 @@ export class ModelClient {
     systemPrompt: string;
     userText: string;
     snapshot: ScreenSnapshot;
+    recentSnapshots?: ScreenSnapshot[];
   }): Record<string, unknown> {
+    const recentImages = (params.recentSnapshots ?? []).flatMap((item) => (
+      item.somScreenshotBase64
+        ? [{
+          type: "image_url" as const,
+          image_url: { url: `data:image/png;base64,${item.somScreenshotBase64}` },
+        }]
+        : [{
+          type: "image_url" as const,
+          image_url: { url: `data:image/png;base64,${item.screenshotBase64}` },
+        }]
+    ));
     const request: Record<string, unknown> = {
       model: this.profile.model,
       max_tokens: this.profile.maxTokens,
@@ -62,6 +74,15 @@ export class ModelClient {
               type: "text",
               text: params.userText,
             },
+            ...recentImages,
+            ...(params.snapshot.somScreenshotBase64
+              ? [{
+                type: "image_url" as const,
+                image_url: {
+                  url: `data:image/png;base64,${params.snapshot.somScreenshotBase64}`,
+                },
+              }]
+              : []),
             {
               type: "image_url",
               image_url: {
@@ -88,7 +109,19 @@ export class ModelClient {
     systemPrompt: string;
     userText: string;
     snapshot: ScreenSnapshot;
+    recentSnapshots?: ScreenSnapshot[];
   }): Record<string, unknown> {
+    const recentImages = (params.recentSnapshots ?? []).flatMap((item) => (
+      item.somScreenshotBase64
+        ? [{
+          type: "input_image" as const,
+          image_url: `data:image/png;base64,${item.somScreenshotBase64}`,
+        }]
+        : [{
+          type: "input_image" as const,
+          image_url: `data:image/png;base64,${item.screenshotBase64}`,
+        }]
+    ));
     const request: Record<string, unknown> = {
       model: this.profile.model,
       max_output_tokens: this.profile.maxTokens,
@@ -101,6 +134,13 @@ export class ModelClient {
           role: "user",
           content: [
             { type: "input_text", text: params.userText },
+            ...recentImages,
+            ...(params.snapshot.somScreenshotBase64
+              ? [{
+                type: "input_image" as const,
+                image_url: `data:image/png;base64,${params.snapshot.somScreenshotBase64}`,
+              }]
+              : []),
             {
               type: "input_image",
               image_url: `data:image/png;base64,${params.snapshot.screenshotBase64}`,
@@ -180,6 +220,7 @@ export class ModelClient {
       systemPrompt: string;
       userText: string;
       snapshot: ScreenSnapshot;
+      recentSnapshots?: ScreenSnapshot[];
     },
   ): Promise<ToolCallResult> {
     if (mode === "chat") {
@@ -205,9 +246,16 @@ export class ModelClient {
     task: string;
     step: number;
     snapshot: ScreenSnapshot;
+    recentSnapshots?: ScreenSnapshot[];
     history: string[];
   }): Promise<ModelStepOutput> {
-    const userText = buildUserPrompt(params.task, params.step, params.snapshot, params.history);
+    const userText = buildUserPrompt(
+      params.task,
+      params.step,
+      params.snapshot,
+      params.history,
+      params.recentSnapshots ?? [],
+    );
     const modes: Array<"chat" | "responses"> =
       this.modeHint === "chat"
         ? ["chat", "responses"]
@@ -222,6 +270,7 @@ export class ModelClient {
           systemPrompt: params.systemPrompt,
           userText,
           snapshot: params.snapshot,
+          recentSnapshots: params.recentSnapshots,
         });
         if (this.modeHint !== mode) {
           this.modeHint = mode;

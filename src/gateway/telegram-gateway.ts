@@ -2,7 +2,7 @@ import TelegramBot, { type Message } from "node-telegram-bot-api";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AgentProgressUpdate, CronJob, OpenPocketConfig } from "../types";
+import type { AgentProgressUpdate, CronJob, OpenPocketConfig, UserDecisionRequest, UserDecisionResponse } from "../types";
 import { saveConfig } from "../config";
 import { AgentRuntime } from "../agent/agent-runtime";
 import { EmulatorManager } from "../device/emulator-manager";
@@ -52,6 +52,13 @@ type BotDisplayNameSyncState = {
   retryAfterUntilMs?: number;
 };
 
+type PendingUserDecision = {
+  request: UserDecisionRequest;
+  resolve: (value: UserDecisionResponse) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
+};
+
 export class TelegramGateway {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
@@ -66,6 +73,7 @@ export class TelegramGateway {
   private readonly writeLogLine: (line: string) => void;
   private readonly typingIntervalMs: number;
   private readonly typingSessions = new Map<number, { refs: number; timer: NodeJS.Timeout }>();
+  private readonly pendingUserDecisions = new Map<number, PendingUserDecision>();
   private lastSyncedBotDisplayName: string | null = null;
   private readonly botDisplayNameSyncStatePath: string;
   private botDisplayNameRateLimitedUntilMs = 0;
@@ -853,6 +861,93 @@ export class TelegramGateway {
     return true;
   }
 
+  private async tryResolvePendingUserDecision(chatId: number, text: string): Promise<boolean> {
+    const pending = this.pendingUserDecisions.get(chatId);
+    if (!pending) {
+      return false;
+    }
+    const normalized = String(text || "").trim();
+    if (!normalized) {
+      return false;
+    }
+    const options = pending.request.options || [];
+    let selected = normalized;
+    const numeric = normalized.match(/^\d+$/);
+    if (numeric) {
+      const idx = Number(numeric[0]) - 1;
+      if (idx >= 0 && idx < options.length) {
+        selected = options[idx];
+      }
+    } else {
+      const exact = options.find((opt) => opt.toLowerCase() === normalized.toLowerCase());
+      if (exact) {
+        selected = exact;
+      }
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingUserDecisions.delete(chatId);
+    pending.resolve({
+      selectedOption: selected,
+      rawInput: normalized,
+      resolvedAt: new Date().toISOString(),
+    });
+    await this.bot.sendMessage(chatId, `Got it. Continuing with: ${selected}`);
+    return true;
+  }
+
+  private requestUserDecisionFromChat(
+    chatId: number,
+    request: UserDecisionRequest,
+  ): Promise<UserDecisionResponse> {
+    const screenshotPromise = this.agent.captureManualScreenshot().catch(() => "");
+    return new Promise<UserDecisionResponse>(async (resolve, reject) => {
+      if (this.pendingUserDecisions.has(chatId)) {
+        const existing = this.pendingUserDecisions.get(chatId)!;
+        clearTimeout(existing.timeout);
+        this.pendingUserDecisions.delete(chatId);
+        existing.reject(new Error("Superseded by a newer user-decision request."));
+      }
+
+      const timeout = setTimeout(() => {
+        this.pendingUserDecisions.delete(chatId);
+        reject(new Error("User decision timed out."));
+      }, Math.max(15_000, request.timeoutSec * 1000));
+
+      this.pendingUserDecisions.set(chatId, {
+        request,
+        resolve,
+        reject,
+        timeout,
+      });
+
+      const options = request.options.length > 0
+        ? request.options.map((item, index) => `${index + 1}. ${item}`).join("\n")
+        : "(no options provided)";
+      const prompt = [
+        "I need your decision to continue:",
+        `Question: ${request.question}`,
+        "",
+        "Options:",
+        options,
+        "",
+        "Reply with option number or text.",
+      ].join("\n");
+      const screenshotPath = await screenshotPromise;
+      if (screenshotPath) {
+        try {
+          await this.bot.sendPhoto(chatId, screenshotPath, {
+            caption: this.sanitizeForChat(prompt, 950),
+          });
+          return;
+        } catch {
+          // Fall back to text-only prompt below.
+        }
+      }
+      await this.bot.sendMessage(chatId, this.sanitizeForChat(prompt, 1800));
+    });
+  }
+
   private async consumeMessage(message: Message): Promise<void> {
     const chatId = message.chat.id;
     if (!this.allowed(chatId)) {
@@ -861,6 +956,10 @@ export class TelegramGateway {
 
     const text = message.text?.trim();
     if (!text) {
+      return;
+    }
+
+    if (!text.startsWith("/") && await this.tryResolvePendingUserDecision(chatId, text)) {
       return;
     }
 
@@ -1002,19 +1101,23 @@ export class TelegramGateway {
     }
 
     if (text.startsWith("/screen")) {
+      this.chat.appendExternalTurn(chatId, "user", text);
       const screenshotPath = await this.agent.captureManualScreenshot();
       this.log(`manual screenshot chat=${chatId} path=${screenshotPath}`);
       try {
         await this.bot.sendPhoto(chatId, screenshotPath, {
           caption: "Current emulator screenshot.",
         });
+        this.chat.appendExternalTurn(chatId, "assistant", "[shared current emulator screenshot]");
       } catch (error) {
         const detail = (error as Error).message || "unknown upload error";
         this.log(`manual screenshot upload failed chat=${chatId} path=${screenshotPath} error=${detail}`);
+        const fallback = `Screenshot saved locally but upload failed: ${detail}\nPath: ${screenshotPath}`;
         await this.bot.sendMessage(
           chatId,
-          `Screenshot saved locally but upload failed: ${detail}\nPath: ${screenshotPath}`,
+          fallback,
         );
+        this.chat.appendExternalTurn(chatId, "assistant", fallback);
       }
       return;
     }
@@ -1098,6 +1201,7 @@ export class TelegramGateway {
         await this.bot.sendMessage(chatId, "Usage: /run <task>");
         return;
       }
+      this.chat.appendExternalTurn(chatId, "user", task);
       await this.runTaskAsync(chatId, task);
       return;
     }
@@ -1117,6 +1221,7 @@ export class TelegramGateway {
     );
     if (decision.mode === "task") {
       const task = decision.task || text;
+      this.chat.appendExternalTurn(chatId, "user", task);
       await this.runTaskAsync(chatId, task);
       return;
     }
@@ -1132,14 +1237,18 @@ export class TelegramGateway {
   private async runTaskAsync(chatId: number, task: string): Promise<void> {
     if (this.agent.isBusy()) {
       this.log(`task rejected busy chat=${chatId} task=${JSON.stringify(task)}`);
-      await this.bot.sendMessage(chatId, "A previous task is still running. Please wait.");
+      const busyText = "A previous task is still running. Please wait.";
+      await this.bot.sendMessage(chatId, busyText);
+      this.chat.appendExternalTurn(chatId, "assistant", busyText);
       return;
     }
     const locale = this.inferTaskLocale(task);
+    const acceptedMessage = this.renderTaskAcceptedMessage(task, locale);
     await this.bot.sendMessage(
       chatId,
-      this.renderTaskAcceptedMessage(task, locale),
+      acceptedMessage,
     );
+    this.chat.appendExternalTurn(chatId, "assistant", acceptedMessage);
     void this.runTaskAndReport({ chatId, task, source: "chat", modelName: null });
   }
 
@@ -1336,6 +1445,9 @@ export class TelegramGateway {
                 );
               },
           source === "cron" ? "minimal" : undefined,
+          chatId === null
+            ? undefined
+            : async (request) => this.requestUserDecisionFromChat(chatId, request),
         );
         await progressWork;
 
@@ -1358,6 +1470,7 @@ export class TelegramGateway {
               1800,
             ),
           );
+          this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
         }
 
         return {
@@ -1370,7 +1483,9 @@ export class TelegramGateway {
         const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
         this.log(`task crash source=${source} chat=${chatId ?? "(none)"} error=${(error as Error).message}`);
         if (chatId !== null) {
-          await this.bot.sendMessage(chatId, this.sanitizeForChat(message, 600));
+          const sanitized = this.sanitizeForChat(message, 600);
+          await this.bot.sendMessage(chatId, sanitized);
+          this.chat.appendExternalTurn(chatId, "assistant", sanitized);
         }
         return {
           accepted: true,

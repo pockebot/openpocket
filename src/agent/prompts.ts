@@ -21,6 +21,7 @@ const TOOL_CATALOG = [
   "- memory_search: memory_search(query[, maxResults, minScore, reason])",
   "- memory_get: memory_get(path[, from, lines, reason])",
   "- request_human_auth: request_human_auth(capability, instruction[, timeoutSec, reason])",
+  "- request_user_decision: request_user_decision(question, options[, timeoutSec, reason])",
   "- wait: wait([durationMs, reason])",
   "- finish: finish(message)",
 ].join("\n");
@@ -85,9 +86,11 @@ export function buildSystemPrompt(
       "## Core Rules",
       "- Call exactly one tool per step.",
       "- Pick the smallest deterministic action that progresses the task.",
+      "- For app-open tasks, first check whether the app is already installed/present; only go to Play Store if it is missing.",
       "- For Android in-emulator permission dialogs, tap Allow locally; do not call request_human_auth for these dialogs.",
       "- If blocked by sensitive checkpoints, call request_human_auth.",
       "- For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
+      "- If task requires user preference/choice, call request_user_decision with clear options.",
       "- If done, call finish with key outputs.",
       "",
       "## Available Skills",
@@ -120,6 +123,10 @@ export function buildSystemPrompt(
     "",
     "## Execution Policy",
     "- Prefer the smallest safe action that increases certainty.",
+    "- App-first policy: for requests to open/use an app, first verify app presence (launcher/app drawer/search).",
+    "- If app is present, launch it directly; do not open web/Play Store first.",
+    "- Only use Play Store install flow when app is confirmed missing.",
+    "- If multiple similar apps match, ask user to confirm before installing a new one.",
     "- If UI candidates are provided, prefer tap_element over raw coordinate tap.",
     "- Keep coordinates inside the provided screen bounds.",
     "- Before type_text, ensure the intended input field is focused.",
@@ -127,6 +134,8 @@ export function buildSystemPrompt(
     "- Input-focus anti-loop: do not tap the same field more than 2 times in a row.",
     "- After one focus tap (or if field likely focused), attempt type_text with intended query instead of more focus taps.",
     "- If two taps in similar area do not change state, switch strategy (type_text, keyevent KEYCODE_ENTER/KEYCODE_SEARCH, back, or relaunch).",
+    "- If recent history contains `state_delta changed=false`, do not repeat the same tap target; pick a different control or navigation path next.",
+    "- For repeated no-change on search result rows/chevrons, tap a different hit target (e.g., row text/icon instead of trailing arrow, or vice versa).",
     "- Never type internal logs/history/JSON (forbidden examples: [OpenPocket], action=..., step=..., parsed action).",
     "- Use KEYCODE_BACK for back navigation and KEYCODE_HOME for home.",
     "- Use wait for loading/animations/network delay; do not spam repeated taps during loading.",
@@ -142,8 +151,17 @@ export function buildSystemPrompt(
     "- Do not call request_human_auth for in-emulator permission dialogs.",
     "- If blocked by real-device authorization or sensitive checkpoints, call request_human_auth.",
     "- For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
+    "- If progress depends on user preference (choice among visible options), call request_user_decision.",
     `- Allowed capability values: ${HUMAN_AUTH_CAPABILITIES}.`,
     "- request_human_auth must include a clear instruction that a human can execute directly.",
+    "",
+    "## Mandatory User-Input Gate",
+    "- If screen requires user-owned account/personal data, do not guess or invent values; call request_user_decision first.",
+    "- Trigger request_user_decision for fields/prompts like: username, email, phone, password, OTP/code, DOB, address, payment, legal consent, profile identity.",
+    "- Trigger request_user_decision when multiple plausible choices exist or confidence is low.",
+    "- request_user_decision.question must be concise and specific to current screen.",
+    "- request_user_decision.options should provide 2-6 concrete options, plus a custom/free-text option when applicable.",
+    "- Wait for user response before continuing past the gate.",
     "",
     "## Completion Policy",
     "- Call finish immediately when the user task is complete.",
@@ -250,6 +268,7 @@ export function buildUserPrompt(
   step: number,
   snapshot: ScreenSnapshot,
   history: string[],
+  recentSnapshots: ScreenSnapshot[] = [],
 ): string {
   const safeHistory = Array.isArray(history) ? history : [];
   const uiElements = Array.isArray(snapshot.uiElements) ? snapshot.uiElements : [];
@@ -265,7 +284,19 @@ export function buildUserPrompt(
       .slice(0, 20)
       .map((item) => {
         const label = item.text || item.contentDesc || item.resourceId || item.className || "(unlabeled)";
-        return `- ${item.id}: label="${label}" clickable=${item.clickable} class=${item.className || "unknown"} center=(${item.scaledCenter.x},${item.scaledCenter.y}) bounds=[${item.scaledBounds.left},${item.scaledBounds.top}][${item.scaledBounds.right},${item.scaledBounds.bottom}]`;
+        return `- mark ${item.id}: label="${label}" clickable=${item.clickable} class=${item.className || "unknown"} center=(${item.scaledCenter.x},${item.scaledCenter.y}) bounds=[${item.scaledBounds.left},${item.scaledBounds.top}][${item.scaledBounds.right},${item.scaledBounds.bottom}]`;
+      })
+      .join("\n")
+    : "(none)";
+  const recentFramesText = recentSnapshots.length > 0
+    ? recentSnapshots
+      .slice(-3)
+      .map((item, idx) => {
+        const labels = (item.uiElements || [])
+          .map((n) => n.text || n.contentDesc || n.resourceId || n.className || "")
+          .filter(Boolean)
+          .slice(0, 4);
+        return `- frame-${idx + 1}: app=${item.currentApp} capturedAt=${item.capturedAt} size=${item.scaledWidth}x${item.scaledHeight} labels=${JSON.stringify(labels)}`;
       })
       .join("\n")
     : "(none)";
@@ -288,6 +319,13 @@ export function buildUserPrompt(
       null,
       2,
     ),
+    "",
+    snapshot.somScreenshotBase64
+      ? "Image notes: previous frames (if any) appear first; the final images are current-frame SoM overlay then current raw screenshot."
+      : "Image notes: previous frames (if any) appear first; final image is current raw screenshot.",
+    "",
+    "Recent visual frames (oldest -> newest, excluding current frame):",
+    recentFramesText,
     "",
     "UI candidates (scaled coordinate space):",
     uiCandidatesText,
@@ -314,11 +352,14 @@ export function buildUserPrompt(
     "1) What sub-goal is active right now?",
     "2) What evidence on screen/history supports the next action?",
     "3) If recently stuck, what alternative path should be tried now?",
-    "3.1) If UI candidates exist, pick one element id and use tap_element.",
+    "3.0) If task is app usage, verify whether app already exists before install/web flow.",
+    "3.1) If UI candidates exist, pick one mark id and use tap_element(mark_id).",
+    "3.2) If last step had `state_delta changed=false`, switch to a different target/interaction instead of retrying same one.",
     "4) If this is text-entry intent: max 2 focus taps, then type_text once and submit with keyevent if needed.",
     "5) Never type logs/history/JSON strings; text must come from user intent or on-screen content.",
     "6) For in-emulator permission dialogs, tap Allow locally. Use request_human_auth only for real-device data/authorization.",
     "7) If done, use finish with a complete summary.",
+    "8) If this step asks for user-owned identity/account data, call request_user_decision before entering anything.",
     "",
     "Call exactly one tool now.",
   ].join("\n");

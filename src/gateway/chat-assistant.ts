@@ -795,7 +795,7 @@ export class ChatAssistant {
     ]);
     const assistantPersona = this.extractByPatterns(normalized, [
       /(?:人设|风格|语气|设定)\s*[:：]?\s*([^。;；\n]+)/i,
-      /(?:persona|tone|style)\s*(?:is|:)?\s*([^.;\n]+)/i,
+      /(?:\bpersona\b|\btone\b|\bstyle\b)\s*(?:is|:)?\s*([^.;\n]+)/i,
     ]);
 
     if (userPreferredAddress) {
@@ -809,6 +809,15 @@ export class ChatAssistant {
     }
 
     return out;
+  }
+
+  private looksLikeTaskInstruction(input: string): boolean {
+    const t = this.normalizeOneLine(input).toLowerCase();
+    if (!t) {
+      return false;
+    }
+    return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start)\b/.test(t)
+      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用)/.test(t);
   }
 
   private personaPresetFromAnswer(answer: string, locale: OnboardingLocale): string {
@@ -1533,6 +1542,9 @@ export class ChatAssistant {
     if (activeOnboarding || this.bootstrapOnboarding.has(chatId) || this.needsBootstrapOnboarding()) {
       return null;
     }
+    if (this.looksLikeTaskInstruction(inputText)) {
+      return null;
+    }
 
     const parsed = this.parseOnboardingFields(inputText);
     if (!parsed.userPreferredAddress && !parsed.assistantName && !parsed.assistantPersona) {
@@ -1697,6 +1709,14 @@ export class ChatAssistant {
     const turns = this.history.get(chatId) ?? [];
     turns.push({ role, content });
     this.history.set(chatId, turns.slice(-20));
+  }
+
+  appendExternalTurn(chatId: number, role: "user" | "assistant", content: string): void {
+    const normalized = String(content || "").trim();
+    if (!normalized) {
+      return;
+    }
+    this.pushTurn(chatId, role, normalized);
   }
 
   private async classifyWithModel(

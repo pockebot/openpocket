@@ -8,6 +8,11 @@ export interface ScaledImage {
   height: number;
 }
 
+export interface SoMOverlayMark {
+  id: string;
+  bounds: { left: number; top: number; right: number; bottom: number };
+}
+
 /**
  * Determine the scaling strategy based on the model name.
  * - Anthropic/Claude: scale longest side to 1568px
@@ -122,6 +127,60 @@ export async function drawDebugMarker(
     return pngBuffer;
   }
 
+  return sharp(pngBuffer)
+    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .png()
+    .toBuffer();
+}
+
+function escapeXml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+export async function drawSetOfMarkOverlay(
+  pngBuffer: Buffer,
+  marks: SoMOverlayMark[],
+): Promise<Buffer> {
+  if (!marks.length) {
+    return pngBuffer;
+  }
+  const meta = await sharp(pngBuffer).metadata();
+  const width = meta.width!;
+  const height = meta.height!;
+  const lines: string[] = [];
+  const palette = ["#00E5FF", "#FFEE58", "#81C784", "#FF8A65", "#CE93D8", "#4DD0E1"];
+
+  for (let i = 0; i < marks.length; i += 1) {
+    const mark = marks[i];
+    const color = palette[i % palette.length];
+    const left = Math.max(0, Math.min(width - 1, Math.round(mark.bounds.left)));
+    const top = Math.max(0, Math.min(height - 1, Math.round(mark.bounds.top)));
+    const right = Math.max(0, Math.min(width - 1, Math.round(mark.bounds.right)));
+    const bottom = Math.max(0, Math.min(height - 1, Math.round(mark.bounds.bottom)));
+    const boxWidth = Math.max(1, right - left);
+    const boxHeight = Math.max(1, bottom - top);
+    const label = escapeXml(mark.id);
+    const badgeW = Math.max(22, 8 + label.length * 9);
+    const badgeH = 20;
+    const badgeX = left;
+    const badgeY = Math.max(0, top - badgeH);
+    lines.push(
+      `<rect x="${left}" y="${top}" width="${boxWidth}" height="${boxHeight}" fill="${color}" fill-opacity="0.15" stroke="${color}" stroke-width="2"/>`,
+    );
+    lines.push(
+      `<rect x="${badgeX}" y="${badgeY}" width="${badgeW}" height="${badgeH}" rx="4" ry="4" fill="${color}" stroke="#001018" stroke-width="1"/>`,
+    );
+    lines.push(
+      `<text x="${badgeX + 6}" y="${badgeY + 14}" font-family="Menlo, monospace" font-size="12" font-weight="700" fill="#001018">${label}</text>`,
+    );
+  }
+
+  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">${lines.join("")}</svg>`;
   return sharp(pngBuffer)
     .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
     .png()
