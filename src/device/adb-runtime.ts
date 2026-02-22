@@ -211,6 +211,28 @@ export class AdbRuntime {
     throw new Error("No running emulator device found.");
   }
 
+  queryLaunchablePackages(preferred?: string | null): string[] {
+    const deviceId = this.resolveDeviceId(preferred);
+    try {
+      const raw = this.emulator.runAdb([
+        "-s", deviceId, "shell",
+        "pm", "query-activities", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
+      ]);
+      const seen = new Set<string>();
+      const result: string[] = [];
+      for (const line of raw.split("\n")) {
+        const m = line.match(/packageName=(\S+)/);
+        if (m && m[1] && !seen.has(m[1])) {
+          seen.add(m[1]);
+          result.push(m[1]);
+        }
+      }
+      return result.sort();
+    } catch {
+      return [];
+    }
+  }
+
   async captureScreenSnapshot(preferred?: string | null, modelName?: string): Promise<ScreenSnapshot> {
     const deviceId = this.resolveDeviceId(preferred);
 
