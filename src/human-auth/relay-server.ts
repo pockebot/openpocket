@@ -937,16 +937,20 @@ export class HumanAuthRelayServer {
       }
     }
 
-    function takeoverUrl(path) {
+    /** Build takeover URL. For stream (img src), token stays in query string.
+     *  For fetch-based calls (snapshot/action), we send via header instead. */
+    function takeoverBasePath(path) {
+      return "/v1/human-auth/requests/" + encodeURIComponent(requestId) + path;
+    }
+    function takeoverStreamUrl(path) {
       return (
-        "/v1/human-auth/requests/" +
-        encodeURIComponent(requestId) +
-        path +
+        takeoverBasePath(path) +
         (path.includes("?") ? "&" : "?") +
         "token=" +
         encodeURIComponent(token)
       );
     }
+    var authHeaders = { "X-OpenPocket-Auth": token };
 
     function setTakeoverStatus(text) {
       takeoverStatusEl.textContent = text;
@@ -983,8 +987,9 @@ export class HumanAuthRelayServer {
     }
 
     async function loadTakeoverSnapshot(silent) {
-      const response = await fetch(takeoverUrl("/takeover/snapshot"), {
+      const response = await fetch(takeoverBasePath("/takeover/snapshot"), {
         method: "GET",
+        headers: authHeaders,
         cache: "no-store",
       });
       const body = await response.json().catch(() => ({}));
@@ -1017,11 +1022,11 @@ export class HumanAuthRelayServer {
 
     async function sendTakeoverAction(action, silent) {
       const response = await fetch(
-        "/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/takeover/action",
+        takeoverBasePath("/takeover/action"),
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token, action }),
+          headers: Object.assign({ "content-type": "application/json" }, authHeaders),
+          body: JSON.stringify({ action }),
         },
       );
       const body = await response.json().catch(() => ({}));
@@ -1079,7 +1084,7 @@ export class HumanAuthRelayServer {
       setTakeoverControlsEnabled(true);
       takeoverStreamEl.hidden = false;
       takeoverEmptyEl.style.display = "none";
-      const url = takeoverUrl("/takeover/stream") + "&ts=" + Date.now();
+      const url = takeoverStreamUrl("/takeover/stream") + "&ts=" + Date.now();
       takeoverStreamEl.src = url;
       setTakeoverStatus("Live stream connected. Tap image to control emulator.");
       loadTakeoverSnapshot(true).catch(() => {});
@@ -1481,7 +1486,7 @@ export class HumanAuthRelayServer {
         expiresAt,
         takeover: {
           enabled: Boolean(this.options.takeoverRuntime),
-          snapshotUrl: `${publicBaseUrl}/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/snapshot?token=${encodeURIComponent(openToken)}`,
+          snapshotPath: `/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/snapshot`,
           streamUrl: `${publicBaseUrl}/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/stream?token=${encodeURIComponent(openToken)}`,
           actionPath: `/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/action`,
         },
@@ -1588,7 +1593,10 @@ export class HumanAuthRelayServer {
         sendJson(res, 409, { error: `Request already ${record.status}.` });
         return;
       }
-      const auth = this.verifyOpenToken(record, requestUrl.searchParams.get("token"));
+      // Accept token from header (preferred) or query string (fallback).
+      const headerToken = req.headers["x-openpocket-auth"];
+      const tokenRaw = typeof headerToken === "string" ? headerToken : requestUrl.searchParams.get("token");
+      const auth = this.verifyOpenToken(record, tokenRaw);
       if (!auth.ok) {
         sendJson(res, auth.status, { error: auth.error });
         return;
@@ -1640,7 +1648,10 @@ export class HumanAuthRelayServer {
         sendJson(res, 400, { error: "Invalid body." });
         return;
       }
-      const auth = this.verifyOpenToken(record, body.token);
+      // Accept token from header (preferred) or body (legacy fallback).
+      const headerToken = req.headers["x-openpocket-auth"];
+      const tokenRaw = typeof headerToken === "string" ? headerToken : body.token;
+      const auth = this.verifyOpenToken(record, tokenRaw);
       if (!auth.ok) {
         sendJson(res, auth.status, { error: auth.error });
         return;

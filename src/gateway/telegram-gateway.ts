@@ -935,7 +935,14 @@ export class TelegramGateway {
       rawInput: normalized,
       resolvedAt: new Date().toISOString(),
     });
-    await this.bot.sendMessage(chatId, "Got it. Continuing.");
+    // Echo the selected option if it matches a listed choice; redact custom free-text input.
+    const matchedOption = options.find(
+      (opt) => opt.trim().toLowerCase() === selected.trim().toLowerCase(),
+    );
+    const confirmMessage = matchedOption
+      ? `Got it: "${matchedOption}". Continuing.`
+      : "Got it. Continuing.";
+    await this.bot.sendMessage(chatId, confirmMessage);
     return true;
   }
 
