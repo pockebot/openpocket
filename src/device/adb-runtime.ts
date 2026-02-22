@@ -289,14 +289,32 @@ export class AdbRuntime {
   ): UiElementSnapshot[] {
     let raw = "";
     try {
+      // Use exec-out so XML is streamed directly; shell /dev/tty is often empty
+      // in non-interactive ADB sessions.
       raw = this.emulator.runAdb(
-        ["-s", deviceId, "shell", "uiautomator", "dump", "/dev/tty"],
+        ["-s", deviceId, "exec-out", "uiautomator", "dump", "/dev/tty"],
         12_000,
       );
     } catch {
-      return [];
+      raw = "";
     }
-    const xmlStart = raw.indexOf("<hierarchy");
+    let xmlStart = raw.indexOf("<hierarchy");
+    if (xmlStart < 0) {
+      try {
+        // Fallback: dump to device file then read via cat.
+        this.emulator.runAdb(
+          ["-s", deviceId, "shell", "uiautomator", "dump", "/sdcard/openpocket-ui.xml"],
+          12_000,
+        );
+        raw = this.emulator.runAdb(
+          ["-s", deviceId, "shell", "cat", "/sdcard/openpocket-ui.xml"],
+          12_000,
+        );
+      } catch {
+        return [];
+      }
+      xmlStart = raw.indexOf("<hierarchy");
+    }
     if (xmlStart < 0) {
       return [];
     }
