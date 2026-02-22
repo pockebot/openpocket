@@ -8,6 +8,7 @@
     "url": "git+https://github.com/SergioChan/openpocket.git"
   },
   "homepage": "https://github.com/SergioChan/openpocket",
+  "type": "module",
   "main": "dist/cli.js",
   "bin": {
     "openpocket": "dist/cli.js",
@@ -36,9 +37,12 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.54.1",
+    "@mariozechner/pi-ai": "^0.54.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "@sinclair/typebox": "^0.34.48",
     "node-telegram-bot-api": "^0.66.0",
-    "openai": "^4.0.0",
+    "openai": "^6.10.0",
     "sharp": "^0.34.5",
     "zod": "^3.25.76"
   },

@@ -14,9 +14,9 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { loadConfig } from "../config";
-import { EmulatorManager } from "../device/emulator-manager";
-import { AdbRuntime } from "../device/adb-runtime";
+import { loadConfig } from "../config/index.js";
+import { EmulatorManager } from "../device/emulator-manager.js";
+import { AdbRuntime } from "../device/adb-runtime.js";
 
 // --- Bootstrap ---------------------------------------------------------
 

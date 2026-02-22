@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import type { OpenPocketConfig } from "../types";
-import { ensureDir } from "../utils/paths";
+import type { OpenPocketConfig } from "../types.js";
+import { ensureDir } from "../utils/paths.js";
 
 type ToolName = "adb" | "emulator" | "sdkmanager" | "avdmanager";
 

@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { normalizeAction } = require("../dist/agent/actions.js");
+const { normalizeAction } = await import("../dist/agent/actions.js");
 
 test("normalizeAction handles invalid payload", () => {
   const out = normalizeAction(null);

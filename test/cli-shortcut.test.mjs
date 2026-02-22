@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { installCliShortcut } = require("../dist/install/cli-shortcut.js");
+const { installCliShortcut } = await import("../dist/install/cli-shortcut.js");
 
 test("installCliShortcut creates launcher and updates shell rc once", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-shortcut-"));

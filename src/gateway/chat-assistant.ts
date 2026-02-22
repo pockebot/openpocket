@@ -2,13 +2,13 @@ import OpenAI from "openai";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AgentProgressUpdate, OpenPocketConfig } from "../types";
-import { getModelProfile, resolveModelAuth } from "../config";
+import type { AgentProgressUpdate, OpenPocketConfig } from "../types.js";
+import { getModelProfile, resolveModelAuth } from "../config/index.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceOnboardingCompleted,
   markWorkspaceOnboardingCompleted,
-} from "../memory/workspace";
+} from "../memory/workspace.js";
 
 type MsgRole = "user" | "assistant";
 

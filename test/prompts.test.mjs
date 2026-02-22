@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { buildSystemPrompt, buildUserPrompt } = require("../dist/agent/prompts.js");
+const { buildSystemPrompt, buildUserPrompt } = await import("../dist/agent/prompts.js");
 
 test("buildSystemPrompt includes planning rules and skills", () => {
   const prompt = buildSystemPrompt("- skill-a\n- skill-b");

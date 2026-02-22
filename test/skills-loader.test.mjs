@@ -3,11 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { loadConfig } = require("../dist/config/index.js");
-const { SkillLoader } = require("../dist/skills/skill-loader.js");
+const { loadConfig } = await import("../dist/config/index.js");
+const { SkillLoader } = await import("../dist/skills/skill-loader.js");
 
 test("SkillLoader loads workspace skills", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-"));

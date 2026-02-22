@@ -1,8 +1,8 @@
-import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types";
-import { nowIso } from "../utils/paths";
-import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale";
-import { sleep } from "../utils/time";
-import { EmulatorManager } from "./emulator-manager";
+import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types.js";
+import { nowIso } from "../utils/paths.js";
+import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
+import { sleep } from "../utils/time.js";
+import { EmulatorManager } from "./emulator-manager.js";
 
 export function extractPackageName(input: string): string {
   const patterns = [

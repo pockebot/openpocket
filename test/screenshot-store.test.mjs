@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { ScreenshotStore } = require("../dist/memory/screenshot-store.js");
+const { ScreenshotStore } = await import("../dist/memory/screenshot-store.js");
 
 test("ScreenshotStore enforces maxCount by deleting oldest files", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-shot-"));

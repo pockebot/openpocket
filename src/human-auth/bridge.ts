@@ -6,9 +6,9 @@ import type {
   HumanAuthDecision,
   HumanAuthRequest,
   OpenPocketConfig,
-} from "../types";
-import { ensureDir, nowIso } from "../utils/paths";
-import { sleep } from "../utils/time";
+} from "../types.js";
+import { ensureDir, nowIso } from "../utils/paths.js";
+import { sleep } from "../utils/time.js";
 
 type PendingEntry = {
   id: string;

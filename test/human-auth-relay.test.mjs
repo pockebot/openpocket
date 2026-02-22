@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { HumanAuthRelayServer } = require("../dist/human-auth/relay-server.js");
+const { HumanAuthRelayServer } = await import("../dist/human-auth/relay-server.js");
 
 test("HumanAuthRelayServer create, resolve, and poll lifecycle", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-auth-relay-"));

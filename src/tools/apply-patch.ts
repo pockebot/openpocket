@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { applyUpdateHunk } from "./apply-patch-update";
+import { applyUpdateHunk } from "./apply-patch-update.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";

@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import type { HumanAuthCapability, OpenPocketConfig } from "../types";
-import { EmulatorManager } from "../device/emulator-manager";
-import { ensureDir } from "../utils/paths";
+import type { HumanAuthCapability, OpenPocketConfig } from "../types.js";
+import { EmulatorManager } from "../device/emulator-manager.js";
+import { ensureDir } from "../utils/paths.js";
 
 const PACKAGE_NAME = "ai.openpocket.permissionlab";
 const MAIN_ACTIVITY = `${PACKAGE_NAME}.MainActivity`;

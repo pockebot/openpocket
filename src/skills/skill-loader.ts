@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import type { OpenPocketConfig, SkillInfo } from "../types";
-import { ensureDir, openpocketHome } from "../utils/paths";
+import type { OpenPocketConfig, SkillInfo } from "../types.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+import { ensureDir, openpocketHome } from "../utils/paths.js";
 
 function listMarkdownFilesRecursive(root: string): string[] {
   if (!fs.existsSync(root)) {

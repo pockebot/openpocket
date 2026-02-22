@@ -3,15 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
 const {
   ensureWorkspaceBootstrap,
   isWorkspaceOnboardingCompleted,
   markWorkspaceOnboardingCompleted,
   WorkspaceStore,
-} = require("../dist/memory/workspace.js");
+} = await import("../dist/memory/workspace.js");
 
 test("ensureWorkspaceBootstrap creates required layout", () => {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-workspace-bootstrap-"));

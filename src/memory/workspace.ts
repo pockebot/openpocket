@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { OpenPocketConfig } from "../types";
-import { ensureDir, nowForFilename, nowIso, timeString, todayString } from "../utils/paths";
-import { loadWorkspaceTemplate } from "./workspace-templates";
+import type { OpenPocketConfig } from "../types.js";
+import { ensureDir, nowForFilename, nowIso, timeString, todayString } from "../utils/paths.js";
+import { loadWorkspaceTemplate } from "./workspace-templates.js";
 
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";

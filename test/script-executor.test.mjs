@@ -3,11 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { loadConfig } = require("../dist/config/index.js");
-const { ScriptExecutor } = require("../dist/tools/script-executor.js");
+const { loadConfig } = await import("../dist/config/index.js");
+const { ScriptExecutor } = await import("../dist/tools/script-executor.js");
 
 test("ScriptExecutor executes allowed commands", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-script-ok-"));

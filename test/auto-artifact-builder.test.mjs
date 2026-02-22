@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { AutoArtifactBuilder } = require("../dist/skills/auto-artifact-builder.js");
+const { AutoArtifactBuilder } = await import("../dist/skills/auto-artifact-builder.js");
 
 test("AutoArtifactBuilder returns null when task not successful", () => {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-artifact-empty-"));

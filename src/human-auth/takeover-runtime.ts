@@ -1,7 +1,7 @@
-import type { OpenPocketConfig } from "../types";
-import { nowIso } from "../utils/paths";
-import { EmulatorManager } from "../device/emulator-manager";
-import { extractPackageName } from "../device/adb-runtime";
+import type { OpenPocketConfig } from "../types.js";
+import { nowIso } from "../utils/paths.js";
+import { EmulatorManager } from "../device/emulator-manager.js";
+import { extractPackageName } from "../device/adb-runtime.js";
 
 export type HumanAuthTakeoverAction =
   | { type: "tap"; x: number; y: number }

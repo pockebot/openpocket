@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
-import type { HumanAuthTunnelNgrokConfig } from "../types";
-import { sleep } from "../utils/time";
+import type { HumanAuthTunnelNgrokConfig } from "../types.js";
+import { sleep } from "../utils/time.js";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

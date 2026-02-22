@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
-import type { AgentAction, OpenPocketConfig } from "../types";
-import { applyPatch } from "./apply-patch";
+import type { AgentAction, OpenPocketConfig } from "../types.js";
+import { applyPatch } from "./apply-patch.js";
 
 type ReadAction = Extract<AgentAction, { type: "read" }>;
 type WriteAction = Extract<AgentAction, { type: "write" }>;

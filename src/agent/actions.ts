@@ -1,4 +1,4 @@
-import type { AgentAction, HumanAuthCapability } from "../types";
+import type { AgentAction, HumanAuthCapability } from "../types.js";
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
