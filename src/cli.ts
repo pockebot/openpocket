@@ -6,25 +6,26 @@ import { spawnSync } from "node:child_process";
 import * as readline from "node:readline";
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { pathToFileURL } from "node:url";
 
-import { AgentRuntime } from "./agent/agent-runtime";
-import { loadConfig, saveConfig } from "./config";
-import { EmulatorManager } from "./device/emulator-manager";
-import { TelegramGateway } from "./gateway/telegram-gateway";
-import { runGatewayLoop } from "./gateway/run-loop";
-import { DashboardServer, type DashboardGatewayStatus } from "./dashboard/server";
-import { HumanAuthBridge } from "./human-auth/bridge";
-import { LocalHumanAuthStack } from "./human-auth/local-stack";
-import { HumanAuthRelayServer } from "./human-auth/relay-server";
-import { LocalHumanAuthTakeoverRuntime } from "./human-auth/takeover-runtime";
-import { SkillLoader } from "./skills/skill-loader";
-import { ScriptExecutor } from "./tools/script-executor";
-import { runSetupWizard } from "./onboarding/setup-wizard";
-import { installCliShortcut } from "./install/cli-shortcut";
-import { ensureAndroidPrerequisites } from "./environment/android-prerequisites";
-import { PermissionLabManager } from "./test/permission-lab";
-import { createCliTheme, createOpenPocketBanner, type CliStepStatus, type CliTone } from "./utils/cli-theme";
-import type { OpenPocketConfig } from "./types";
+import { AgentRuntime } from "./agent/agent-runtime.js";
+import { loadConfig, saveConfig } from "./config/index.js";
+import { EmulatorManager } from "./device/emulator-manager.js";
+import { TelegramGateway } from "./gateway/telegram-gateway.js";
+import { runGatewayLoop } from "./gateway/run-loop.js";
+import { DashboardServer, type DashboardGatewayStatus } from "./dashboard/server.js";
+import { HumanAuthBridge } from "./human-auth/bridge.js";
+import { LocalHumanAuthStack } from "./human-auth/local-stack.js";
+import { HumanAuthRelayServer } from "./human-auth/relay-server.js";
+import { LocalHumanAuthTakeoverRuntime } from "./human-auth/takeover-runtime.js";
+import { SkillLoader } from "./skills/skill-loader.js";
+import { ScriptExecutor } from "./tools/script-executor.js";
+import { runSetupWizard } from "./onboarding/setup-wizard.js";
+import { installCliShortcut } from "./install/cli-shortcut.js";
+import { ensureAndroidPrerequisites } from "./environment/android-prerequisites.js";
+import { PermissionLabManager } from "./test/permission-lab.js";
+import { createCliTheme, createOpenPocketBanner, type CliStepStatus, type CliTone } from "./utils/cli-theme.js";
+import type { OpenPocketConfig } from "./types.js";
 
 const cliTheme = createCliTheme(output);
 
@@ -1697,7 +1698,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   throw new Error(`Unknown command: ${command}`);
 }
 
-if (require.main === module) {
+const isMainEntry = process.argv[1]
+  ? pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+  : false;
+
+if (isMainEntry) {
   main()
     .then((code) => {
       process.exitCode = code;

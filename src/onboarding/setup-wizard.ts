@@ -4,14 +4,15 @@ import * as readline from "node:readline";
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 
-import type { EmulatorStatus, ModelProfile, OpenPocketConfig } from "../types";
-import { saveConfig } from "../config";
-import { readCodexCliCredential } from "../config/codex-cli";
-import { ensureDir, nowIso } from "../utils/paths";
-import { EmulatorManager } from "../device/emulator-manager";
+import type { EmulatorStatus, ModelProfile, OpenPocketConfig } from "../types.js";
+import { saveConfig } from "../config/index.js";
+import { readCodexCliCredential } from "../config/codex-cli.js";
+import { ensureDir, nowIso } from "../utils/paths.js";
+import { EmulatorManager } from "../device/emulator-manager.js";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+const require = createRequire(import.meta.url);
 const pkgJson = require("../../package.json") as { version: string; license: string };
 
 const OPENPOCKET_ASCII = [
