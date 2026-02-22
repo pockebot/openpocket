@@ -1113,7 +1113,9 @@ export class AgentRuntime {
         workspaceReport: workspacePromptContext.report,
       });
 
-      const launchablePackages = this.adb.queryLaunchablePackages(this.config.agent.deviceId);
+      const launchablePackages = typeof this.adb.queryLaunchablePackages === "function"
+        ? this.adb.queryLaunchablePackages(this.config.agent.deviceId)
+        : [];
 
       for (let step = 1; step <= this.config.agent.maxSteps; step += 1) {
         if (this.stopRequested) {

@@ -16,6 +16,7 @@ import { DashboardServer, type DashboardGatewayStatus } from "./dashboard/server
 import { HumanAuthBridge } from "./human-auth/bridge";
 import { LocalHumanAuthStack } from "./human-auth/local-stack";
 import { HumanAuthRelayServer } from "./human-auth/relay-server";
+import { LocalHumanAuthTakeoverRuntime } from "./human-auth/takeover-runtime";
 import { SkillLoader } from "./skills/skill-loader";
 import { ScriptExecutor } from "./tools/script-executor";
 import { runSetupWizard } from "./onboarding/setup-wizard";
@@ -1304,6 +1305,7 @@ async function runHumanAuthRelayCommand(
     stateFile:
       stateFile?.trim() ||
       cfg.humanAuth.localRelayStateFile,
+    takeoverRuntime: new LocalHumanAuthTakeoverRuntime(cfg),
   });
 
   await relay.start();

@@ -70,6 +70,7 @@ export function buildSystemPrompt(
       "Call exactly one tool step at a time.",
       "For Android in-emulator permission dialogs, approve locally with Allow and do not request human auth.",
       "If blocked by real-device authorization, use request_human_auth.",
+      "For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
       "When the task is complete, call finish with concise results.",
     ].join("\n");
   }
@@ -86,6 +87,7 @@ export function buildSystemPrompt(
       "- Pick the smallest deterministic action that progresses the task.",
       "- For Android in-emulator permission dialogs, tap Allow locally; do not call request_human_auth for these dialogs.",
       "- If blocked by sensitive checkpoints, call request_human_auth.",
+      "- For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
       "- If done, call finish with key outputs.",
       "",
       "## Available Skills",
@@ -139,6 +141,7 @@ export function buildSystemPrompt(
     "- Android in-emulator permission dialogs (notifications/photos/files/network/etc.) must be handled locally by tapping Allow.",
     "- Do not call request_human_auth for in-emulator permission dialogs.",
     "- If blocked by real-device authorization or sensitive checkpoints, call request_human_auth.",
+    "- For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
     `- Allowed capability values: ${HUMAN_AUTH_CAPABILITIES}.`,
     "- request_human_auth must include a clear instruction that a human can execute directly.",
     "",
@@ -248,15 +251,17 @@ export function buildUserPrompt(
   snapshot: ScreenSnapshot,
   history: string[],
 ): string {
-  const recentHistory = history.slice(-8);
+  const safeHistory = Array.isArray(history) ? history : [];
+  const uiElements = Array.isArray(snapshot.uiElements) ? snapshot.uiElements : [];
+  const recentHistory = safeHistory.slice(-8);
   const recentActions = recentHistory.map(parseActionFromHistoryLine);
   const recentApps = recentHistory.map(parseAppFromHistoryLine);
   const actionStreak = trailingStreak(recentActions);
   const appStreak = trailingStreak(recentApps);
   const focusLoopRisk = actionStreak.value === "tap" && actionStreak.count >= 3;
   const unknownAppStreak = appStreak.value === "unknown" ? appStreak.count : 0;
-  const uiCandidatesText = snapshot.uiElements.length > 0
-    ? snapshot.uiElements
+  const uiCandidatesText = uiElements.length > 0
+    ? uiElements
       .slice(0, 20)
       .map((item) => {
         const label = item.text || item.contentDesc || item.resourceId || item.className || "(unlabeled)";
@@ -288,7 +293,7 @@ export function buildUserPrompt(
     uiCandidatesText,
     "",
     "Recent execution history (oldest -> newest):",
-    recentHistory.length > 0 ? recentHistory.join("\n") : "(none)",
+    safeHistory.length > 0 ? safeHistory.slice(-8).join("\n") : "(none)",
     "",
     "Runtime stuck signals:",
     `- trailing action streak: ${actionStreak.value || "(none)"} x ${actionStreak.count}`,

@@ -4,6 +4,11 @@ import http from "node:http";
 import path from "node:path";
 
 import { ensureDir, nowIso } from "../utils/paths";
+import type {
+  HumanAuthTakeoverAction,
+  HumanAuthTakeoverFrame,
+  HumanAuthTakeoverRuntime,
+} from "./takeover-runtime";
 
 type RelayStatus = "pending" | "approved" | "rejected" | "timeout";
 
@@ -103,6 +108,8 @@ export interface HumanAuthRelayServerOptions {
   apiKey: string;
   apiKeyEnv: string;
   stateFile: string;
+  takeoverRuntime?: HumanAuthTakeoverRuntime;
+  takeoverFps?: number;
 }
 
 export class HumanAuthRelayServer {
@@ -268,6 +275,99 @@ export class HumanAuthRelayServer {
       record.decidedAt = nowIso();
       this.persistState();
     }
+  }
+
+  private verifyOpenToken(record: RelayRecord, tokenRaw: unknown): { ok: true } | { ok: false; error: string; status: number } {
+    const token = String(tokenRaw ?? "");
+    if (!token || hashToken(token) !== record.openTokenHash) {
+      return { ok: false, error: "Invalid or expired token.", status: 403 };
+    }
+    return { ok: true };
+  }
+
+  private ensureTakeoverRuntime(): HumanAuthTakeoverRuntime | null {
+    return this.options.takeoverRuntime ?? null;
+  }
+
+  private sanitizeHeaderValue(input: string): string {
+    return String(input || "").replace(/[\r\n]+/g, " ").slice(0, 200);
+  }
+
+  private parseTakeoverAction(input: unknown): HumanAuthTakeoverAction | null {
+    if (!isObject(input)) {
+      return null;
+    }
+    const type = String(input.type ?? "").trim().toLowerCase();
+    if (type === "tap") {
+      const x = Number(input.x);
+      const y = Number(input.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+      }
+      return {
+        type: "tap",
+        x: Math.max(0, Math.round(x)),
+        y: Math.max(0, Math.round(y)),
+      };
+    }
+    if (type === "swipe") {
+      const x1 = Number(input.x1);
+      const y1 = Number(input.y1);
+      const x2 = Number(input.x2);
+      const y2 = Number(input.y2);
+      const durationMs = Number(input.durationMs ?? 260);
+      if (![x1, y1, x2, y2, durationMs].every((value) => Number.isFinite(value))) {
+        return null;
+      }
+      return {
+        type: "swipe",
+        x1: Math.max(0, Math.round(x1)),
+        y1: Math.max(0, Math.round(y1)),
+        x2: Math.max(0, Math.round(x2)),
+        y2: Math.max(0, Math.round(y2)),
+        durationMs: Math.max(80, Math.min(3000, Math.round(durationMs))),
+      };
+    }
+    if (type === "type") {
+      const text = String(input.text ?? "");
+      if (!text.trim()) {
+        return null;
+      }
+      if (text.length > 2000) {
+        return null;
+      }
+      return { type: "type", text };
+    }
+    if (type === "keyevent") {
+      const keycode = String(input.keycode ?? "").trim().toUpperCase();
+      if (!keycode) {
+        return null;
+      }
+      if (!/^KEYCODE_[A-Z0-9_]+$/.test(keycode)) {
+        return null;
+      }
+      return { type: "keyevent", keycode };
+    }
+    return null;
+  }
+
+  private async writeMjpegFrame(
+    res: http.ServerResponse,
+    frame: HumanAuthTakeoverFrame,
+  ): Promise<void> {
+    const imageBuffer = Buffer.from(frame.screenshotBase64, "base64");
+    const appHeader = this.sanitizeHeaderValue(frame.currentApp || "unknown");
+    const capturedAt = this.sanitizeHeaderValue(frame.capturedAt || nowIso());
+    const resolution = this.sanitizeHeaderValue(`${frame.width || 0}x${frame.height || 0}`);
+    res.write(`--frame\r\n`);
+    res.write("Content-Type: image/png\r\n");
+    res.write(`Content-Length: ${imageBuffer.length}\r\n`);
+    res.write(`X-OpenPocket-App: ${appHeader}\r\n`);
+    res.write(`X-OpenPocket-Captured-At: ${capturedAt}\r\n`);
+    res.write(`X-OpenPocket-Resolution: ${resolution}\r\n`);
+    res.write("\r\n");
+    res.write(imageBuffer);
+    res.write("\r\n");
   }
 
   private renderPortalPage(record: RelayRecord, token: string): string {
@@ -456,6 +556,82 @@ export class HumanAuthRelayServer {
     }
     .hidden { display: none !important; }
     .grid2 { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .takeover-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .takeover-meta {
+      font-size: 12px;
+      color: #5f6368;
+      overflow-wrap: anywhere;
+    }
+    .stream-wrap {
+      position: relative;
+      margin-top: 8px;
+      border-radius: 14px;
+      border: 1px solid #d9dfe8;
+      background: #050912;
+      min-height: 280px;
+      overflow: hidden;
+    }
+    .stream-wrap img {
+      width: 100%;
+      height: auto;
+      display: block;
+      object-fit: contain;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .stream-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #b2bfd3;
+      font-size: 13px;
+      padding: 18px;
+      text-align: center;
+    }
+    .quick-keys {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .quick-keys button {
+      border-radius: 12px;
+      padding: 8px 10px;
+      font-size: 13px;
+      background: #0f1725;
+      border-color: #202b40;
+      color: #f4f8ff;
+    }
+    .takeover-input {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .takeover-input input {
+      flex: 1;
+    }
+    .takeover-status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #5f6368;
+    }
+    .takeover-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
     video, canvas, #photoPreview {
       width: 100%;
       border-radius: 12px;
@@ -511,6 +687,13 @@ export class HumanAuthRelayServer {
       .grid2 { grid-template-columns: 1fr; }
       .brandRow { flex-direction: column; align-items: flex-start; }
       .requestId { text-align: left; }
+      .quick-keys {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .takeover-input {
+        flex-direction: column;
+        align-items: stretch;
+      }
     }
   </style>
 </head>
@@ -533,6 +716,33 @@ export class HumanAuthRelayServer {
           <button id="reject" type="button">Reject</button>
         </div>
         <div class="status" id="status"></div>
+      </div>
+
+      <div class="section">
+        <div class="takeover-head">
+          <h2>Remote Takeover (Live)</h2>
+          <div class="takeover-meta" id="takeoverMeta">Preparing stream...</div>
+        </div>
+        <div class="takeover-actions">
+          <button id="takeoverStart" type="button">Start Live Stream</button>
+          <button id="takeoverStop" type="button">Stop Stream</button>
+          <button id="takeoverRefresh" type="button">Refresh Snapshot</button>
+        </div>
+        <div class="stream-wrap">
+          <img id="takeoverStream" alt="Emulator live stream" hidden />
+          <div class="stream-empty" id="takeoverEmpty">Connecting to emulator live stream...</div>
+        </div>
+        <div class="quick-keys">
+          <button id="keyBack" type="button">Back</button>
+          <button id="keyHome" type="button">Home</button>
+          <button id="keyRecents" type="button">Recents</button>
+          <button id="keyEnter" type="button">Enter</button>
+        </div>
+        <div class="takeover-input">
+          <input id="takeoverText" type="text" placeholder="Type text to emulator input field" />
+          <button id="takeoverSendText" type="button">Send Text</button>
+        </div>
+        <div class="takeover-status" id="takeoverStatus">Tip: tap inside live view to control emulator directly.</div>
       </div>
 
       <div class="section">
@@ -596,8 +806,15 @@ export class HumanAuthRelayServer {
     const resultTextEl = document.getElementById("resultText");
     const geoLatEl = document.getElementById("geoLat");
     const geoLonEl = document.getElementById("geoLon");
+    const takeoverStreamEl = document.getElementById("takeoverStream");
+    const takeoverEmptyEl = document.getElementById("takeoverEmpty");
+    const takeoverMetaEl = document.getElementById("takeoverMeta");
+    const takeoverStatusEl = document.getElementById("takeoverStatus");
+    const takeoverTextEl = document.getElementById("takeoverText");
     let stream = null;
     let artifact = null;
+    let takeoverPollingTimer = null;
+    let takeoverRunning = false;
 
     function show(id, visible) {
       const el = document.getElementById(id);
@@ -624,6 +841,144 @@ export class HumanAuthRelayServer {
       } else if (capability === "qr") {
         resultTextEl.placeholder = "Paste QR decoded content";
       }
+    }
+
+    function takeoverUrl(path) {
+      return (
+        "/v1/human-auth/requests/" +
+        encodeURIComponent(requestId) +
+        path +
+        (path.includes("?") ? "&" : "?") +
+        "token=" +
+        encodeURIComponent(token)
+      );
+    }
+
+    function setTakeoverStatus(text) {
+      takeoverStatusEl.textContent = text;
+    }
+
+    function setTakeoverMeta(frame) {
+      if (!frame) {
+        takeoverMetaEl.textContent = "No frame metadata.";
+        return;
+      }
+      takeoverMetaEl.textContent =
+        "App: " +
+        (frame.currentApp || "unknown") +
+        " | " +
+        (frame.width || "?") +
+        "x" +
+        (frame.height || "?") +
+        " | " +
+        new Date(frame.capturedAt || Date.now()).toLocaleTimeString();
+      takeoverStreamEl.dataset.pixelWidth = String(frame.width || 0);
+      takeoverStreamEl.dataset.pixelHeight = String(frame.height || 0);
+    }
+
+    async function loadTakeoverSnapshot(silent) {
+      const response = await fetch(takeoverUrl("/takeover/snapshot"), {
+        method: "GET",
+        cache: "no-store",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (!silent) {
+          setTakeoverStatus("Snapshot failed: " + (body.error || response.statusText));
+        }
+        return;
+      }
+      const frame = body.frame || null;
+      if (!frame || !frame.screenshotBase64) {
+        if (!silent) {
+          setTakeoverStatus("Snapshot unavailable.");
+        }
+        return;
+      }
+      takeoverStreamEl.src = "data:image/png;base64," + frame.screenshotBase64;
+      takeoverStreamEl.hidden = false;
+      takeoverEmptyEl.style.display = "none";
+      setTakeoverMeta(frame);
+      if (!silent) {
+        setTakeoverStatus("Snapshot refreshed.");
+      }
+    }
+
+    async function sendTakeoverAction(action, silent) {
+      const response = await fetch(
+        "/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/takeover/action",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token, action }),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (!silent) {
+          setTakeoverStatus("Action failed: " + (body.error || response.statusText));
+        }
+        throw new Error(body.error || response.statusText);
+      }
+      if (!silent) {
+        setTakeoverStatus(body.message || "Action sent.");
+      }
+    }
+
+    function startTakeoverPolling() {
+      if (takeoverPollingTimer) {
+        clearInterval(takeoverPollingTimer);
+        takeoverPollingTimer = null;
+      }
+      takeoverPollingTimer = setInterval(() => {
+        if (!takeoverRunning) {
+          return;
+        }
+        loadTakeoverSnapshot(true).catch(() => {});
+      }, 1200);
+    }
+
+    function stopTakeoverPolling() {
+      if (!takeoverPollingTimer) {
+        return;
+      }
+      clearInterval(takeoverPollingTimer);
+      takeoverPollingTimer = null;
+    }
+
+    function startTakeoverStream() {
+      takeoverRunning = true;
+      stopTakeoverPolling();
+      takeoverStreamEl.hidden = false;
+      takeoverEmptyEl.style.display = "none";
+      const url = takeoverUrl("/takeover/stream") + "&ts=" + Date.now();
+      takeoverStreamEl.src = url;
+      setTakeoverStatus("Live stream connected. Tap image to control emulator.");
+      loadTakeoverSnapshot(true).catch(() => {});
+    }
+
+    function stopTakeoverStream() {
+      takeoverRunning = false;
+      stopTakeoverPolling();
+      takeoverStreamEl.removeAttribute("src");
+      takeoverStreamEl.hidden = true;
+      takeoverEmptyEl.style.display = "flex";
+      setTakeoverStatus("Live stream stopped.");
+    }
+
+    function streamToDeviceCoordinates(clientX, clientY) {
+      const rect = takeoverStreamEl.getBoundingClientRect();
+      const pixelWidth = Number(takeoverStreamEl.dataset.pixelWidth || takeoverStreamEl.naturalWidth || "0");
+      const pixelHeight = Number(takeoverStreamEl.dataset.pixelHeight || takeoverStreamEl.naturalHeight || "0");
+      if (!pixelWidth || !pixelHeight || !rect.width || !rect.height) {
+        return null;
+      }
+      const localX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+      const localY = Math.max(0, Math.min(rect.height, clientY - rect.top));
+      return {
+        x: Math.max(0, Math.min(pixelWidth - 1, Math.round((localX / rect.width) * pixelWidth))),
+        y: Math.max(0, Math.min(pixelHeight - 1, Math.round((localY / rect.height) * pixelHeight))),
+      };
     }
 
     function toBase64Utf8(text) {
@@ -794,6 +1149,9 @@ export class HumanAuthRelayServer {
             track.stop();
           }
         }
+        stopTakeoverPolling();
+        takeoverRunning = false;
+        takeoverStreamEl.removeAttribute("src");
       } catch (err) {
         statusEl.textContent = "Request failed: " + (err && err.message ? err.message : String(err));
       }
@@ -808,7 +1166,59 @@ export class HumanAuthRelayServer {
     photoInputEl.addEventListener("change", onPhotoChange);
     document.getElementById("approve").addEventListener("click", () => submitDecision(true));
     document.getElementById("reject").addEventListener("click", () => submitDecision(false));
+    document.getElementById("takeoverStart").addEventListener("click", startTakeoverStream);
+    document.getElementById("takeoverStop").addEventListener("click", stopTakeoverStream);
+    document.getElementById("takeoverRefresh").addEventListener("click", () => {
+      loadTakeoverSnapshot(false).catch((err) => {
+        setTakeoverStatus("Snapshot refresh failed: " + (err && err.message ? err.message : String(err)));
+      });
+    });
+    document.getElementById("takeoverSendText").addEventListener("click", () => {
+      const text = String(takeoverTextEl.value || "").trim();
+      if (!text) {
+        setTakeoverStatus("Text is empty.");
+        return;
+      }
+      sendTakeoverAction({ type: "type", text }, false)
+        .then(() => {
+          loadTakeoverSnapshot(true).catch(() => {});
+        })
+        .catch(() => {});
+    });
+    document.getElementById("keyBack").addEventListener("click", () => {
+      sendTakeoverAction({ type: "keyevent", keycode: "KEYCODE_BACK" }, false).catch(() => {});
+    });
+    document.getElementById("keyHome").addEventListener("click", () => {
+      sendTakeoverAction({ type: "keyevent", keycode: "KEYCODE_HOME" }, false).catch(() => {});
+    });
+    document.getElementById("keyRecents").addEventListener("click", () => {
+      sendTakeoverAction({ type: "keyevent", keycode: "KEYCODE_APP_SWITCH" }, false).catch(() => {});
+    });
+    document.getElementById("keyEnter").addEventListener("click", () => {
+      sendTakeoverAction({ type: "keyevent", keycode: "KEYCODE_ENTER" }, false).catch(() => {});
+    });
+    takeoverStreamEl.addEventListener("click", (event) => {
+      const p = streamToDeviceCoordinates(event.clientX, event.clientY);
+      if (!p) {
+        setTakeoverStatus("Tap mapping failed. Refresh snapshot first.");
+        return;
+      }
+      sendTakeoverAction({ type: "tap", x: p.x, y: p.y }, false)
+        .then(() => {
+          loadTakeoverSnapshot(true).catch(() => {});
+        })
+        .catch(() => {});
+    });
+    takeoverStreamEl.addEventListener("error", () => {
+      if (!takeoverRunning) {
+        return;
+      }
+      setTakeoverStatus("Live stream interrupted. Falling back to snapshot polling.");
+      startTakeoverPolling();
+      loadTakeoverSnapshot(true).catch(() => {});
+    });
     configureByCapability();
+    startTakeoverStream();
   </script>
 </body>
 </html>`;
@@ -892,6 +1302,12 @@ export class HumanAuthRelayServer {
         openUrl,
         pollToken,
         expiresAt,
+        takeover: {
+          enabled: Boolean(this.options.takeoverRuntime),
+          snapshotUrl: `${publicBaseUrl}/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/snapshot?token=${encodeURIComponent(openToken)}`,
+          streamUrl: `${publicBaseUrl}/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/stream?token=${encodeURIComponent(openToken)}`,
+          actionPath: `/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/action`,
+        },
       });
       return;
     }
@@ -979,6 +1395,186 @@ export class HumanAuthRelayServer {
         status: record.status,
         decidedAt: record.decidedAt,
       });
+      return;
+    }
+
+    const takeoverSnapshotMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/takeover\/snapshot$/);
+    if (method === "GET" && takeoverSnapshotMatch) {
+      const requestId = decodeURIComponent(takeoverSnapshotMatch[1]);
+      const record = this.records.get(requestId);
+      if (!record) {
+        sendJson(res, 404, { error: "Request not found." });
+        return;
+      }
+      this.updateTimeoutStatus(record);
+      if (record.status !== "pending") {
+        sendJson(res, 409, { error: `Request already ${record.status}.` });
+        return;
+      }
+      const auth = this.verifyOpenToken(record, requestUrl.searchParams.get("token"));
+      if (!auth.ok) {
+        sendJson(res, auth.status, { error: auth.error });
+        return;
+      }
+      const runtime = this.ensureTakeoverRuntime();
+      if (!runtime) {
+        sendJson(res, 501, { error: "Remote takeover runtime is not configured." });
+        return;
+      }
+      try {
+        const frame = await runtime.captureFrame();
+        sendJson(res, 200, {
+          requestId: record.requestId,
+          status: record.status,
+          frame,
+        });
+      } catch (error) {
+        sendJson(res, 500, { error: `Failed to capture takeover snapshot: ${(error as Error).message}` });
+      }
+      return;
+    }
+
+    const takeoverActionMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/takeover\/action$/);
+    if (method === "POST" && takeoverActionMatch) {
+      const requestId = decodeURIComponent(takeoverActionMatch[1]);
+      const record = this.records.get(requestId);
+      if (!record) {
+        sendJson(res, 404, { error: "Request not found." });
+        return;
+      }
+      this.updateTimeoutStatus(record);
+      if (record.status !== "pending") {
+        sendJson(res, 409, { error: `Request already ${record.status}.` });
+        return;
+      }
+      const runtime = this.ensureTakeoverRuntime();
+      if (!runtime) {
+        sendJson(res, 501, { error: "Remote takeover runtime is not configured." });
+        return;
+      }
+      let body: unknown;
+      try {
+        body = await readJsonBody(req, 500_000);
+      } catch (error) {
+        sendJson(res, 400, { error: (error as Error).message });
+        return;
+      }
+      if (!isObject(body)) {
+        sendJson(res, 400, { error: "Invalid body." });
+        return;
+      }
+      const auth = this.verifyOpenToken(record, body.token);
+      if (!auth.ok) {
+        sendJson(res, auth.status, { error: auth.error });
+        return;
+      }
+      const action = this.parseTakeoverAction(body.action);
+      if (!action) {
+        sendJson(res, 400, { error: "Invalid takeover action." });
+        return;
+      }
+      try {
+        const message = await runtime.execute(action);
+        sendJson(res, 200, {
+          requestId: record.requestId,
+          status: record.status,
+          message,
+        });
+      } catch (error) {
+        sendJson(res, 500, { error: `Failed to execute takeover action: ${(error as Error).message}` });
+      }
+      return;
+    }
+
+    const takeoverStreamMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/takeover\/stream$/);
+    if (method === "GET" && takeoverStreamMatch) {
+      const requestId = decodeURIComponent(takeoverStreamMatch[1]);
+      const record = this.records.get(requestId);
+      if (!record) {
+        sendText(res, 404, "Request not found.");
+        return;
+      }
+      this.updateTimeoutStatus(record);
+      if (record.status !== "pending") {
+        sendText(res, 409, `Request already ${record.status}.`);
+        return;
+      }
+      const auth = this.verifyOpenToken(record, requestUrl.searchParams.get("token"));
+      if (!auth.ok) {
+        sendText(res, auth.status, auth.error);
+        return;
+      }
+      const runtime = this.ensureTakeoverRuntime();
+      if (!runtime) {
+        sendText(res, 501, "Remote takeover runtime is not configured.");
+        return;
+      }
+
+      res.statusCode = 200;
+      res.setHeader("content-type", "multipart/x-mixed-replace; boundary=frame");
+      res.setHeader("cache-control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("pragma", "no-cache");
+      res.setHeader("connection", "keep-alive");
+      res.setHeader("x-accel-buffering", "no");
+      res.flushHeaders?.();
+
+      const frameIntervalMs = Math.max(180, Math.round(1000 / Math.max(1, Number(this.options.takeoverFps ?? 2))));
+      let closed = false;
+      let running = false;
+      let timer: NodeJS.Timeout | null = null;
+
+      const stop = (): void => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        if (timer) {
+          clearInterval(timer);
+          timer = null;
+        }
+        try {
+          res.write("--frame--\r\n");
+        } catch {
+          // Ignore write errors during close.
+        }
+        try {
+          res.end();
+        } catch {
+          // Ignore close errors.
+        }
+      };
+
+      req.on("close", stop);
+      res.on("close", stop);
+      res.on("error", stop);
+
+      const pushFrame = async (): Promise<void> => {
+        if (closed || running) {
+          return;
+        }
+        running = true;
+        try {
+          this.updateTimeoutStatus(record);
+          if (record.status !== "pending") {
+            stop();
+            return;
+          }
+          const frame = await runtime.captureFrame();
+          if (closed) {
+            return;
+          }
+          await this.writeMjpegFrame(res, frame);
+        } catch {
+          stop();
+        } finally {
+          running = false;
+        }
+      };
+
+      timer = setInterval(() => {
+        void pushFrame();
+      }, frameIntervalMs);
+      void pushFrame();
       return;
     }
 
