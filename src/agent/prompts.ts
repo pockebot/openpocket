@@ -190,6 +190,57 @@ export function buildSystemPrompt(
   ].filter(Boolean).join("\n");
 }
 
+/**
+ * Map current app (or task keywords) to efficient shell intent shortcuts.
+ * Returns hints only when intents are clearly better than UI tapping.
+ */
+function getIntentShortcuts(currentApp: string, task: string): string[] {
+  const hints: string[] = [];
+  const app = currentApp.toLowerCase();
+  const t = task.toLowerCase();
+
+  // Phone / Dialer
+  if (app.includes("dialer") || app.includes("phone") || t.includes("call") || t.includes("dial")) {
+    hints.push('Dial a number: shell("am start -a android.intent.action.DIAL -d tel:<number>")');
+    hints.push('Call directly: shell("am start -a android.intent.action.CALL -d tel:<number>")');
+  }
+
+  // Browser / URLs
+  if (app.includes("chrome") || app.includes("browser") || t.includes("open") && (t.includes("url") || t.includes("website") || t.includes("http"))) {
+    hints.push('Open URL: shell("am start -a android.intent.action.VIEW -d <url>")');
+  }
+
+  // SMS / Messaging
+  if (app.includes("messaging") || app.includes("sms") || t.includes("text") && t.includes("send") || t.includes("sms")) {
+    hints.push('Send SMS: shell("am start -a android.intent.action.SENDTO -d sms:<number> --es sms_body \\"<message>\\"")');
+  }
+
+  // Maps / Navigation
+  if (app.includes("maps") || t.includes("navigate") || t.includes("directions")) {
+    hints.push('Search location: shell("am start -a android.intent.action.VIEW -d \\"geo:0,0?q=<query>\\"")');
+    hints.push('Get directions: shell("am start -a android.intent.action.VIEW -d \\"google.navigation:q=<destination>\\"")');
+  }
+
+  // Email
+  if (app.includes("gm") || app.includes("mail") || t.includes("email") || t.includes("compose")) {
+    hints.push('Compose email: shell("am start -a android.intent.action.SENDTO -d mailto:<address> --es android.intent.extra.SUBJECT \\"<subject>\\"")');
+  }
+
+  // Settings
+  if (t.includes("wifi") || t.includes("bluetooth") || t.includes("setting")) {
+    hints.push('Open WiFi settings: shell("am start -a android.settings.WIFI_SETTINGS")');
+    hints.push('Open Bluetooth settings: shell("am start -a android.settings.BLUETOOTH_SETTINGS")');
+    hints.push('Open App settings: shell("am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:<pkg>")');
+  }
+
+  // Search
+  if (t.includes("search") || t.includes("google")) {
+    hints.push('Web search: shell("am start -a android.intent.action.WEB_SEARCH --es query \\"<query>\\"")');
+  }
+
+  return hints;
+}
+
 export function buildUserPrompt(
   task: string,
   step: number,
@@ -242,6 +293,15 @@ export function buildUserPrompt(
     `- trailing app streak: ${appStreak.value || "(none)"} x ${appStreak.count}`,
     `- unknown-app streak: ${unknownAppStreak}`,
     `- focus-loop risk: ${focusLoopRisk ? "high" : "low"}`,
+    ...(() => {
+      const shortcuts = getIntentShortcuts(snapshot.currentApp, task);
+      if (shortcuts.length === 0) return [];
+      return [
+        "",
+        "Intent shortcuts (prefer these over UI tapping when applicable):",
+        ...shortcuts.map((s) => `- ${s}`),
+      ];
+    })(),
     "",
     "Decision checklist:",
     "1) What sub-goal is active right now?",
