@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import type {
   AgentProgressUpdate,
@@ -8,6 +9,8 @@ import type {
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
+  UserDecisionRequest,
+  UserDecisionResponse,
   OpenPocketConfig,
   SkillInfo,
 } from "../types";
@@ -154,6 +157,23 @@ type PermissionDialogNode = {
   bottom: number;
 };
 
+type ResolvedTapElementContext = {
+  id: string;
+  label: string;
+  className: string;
+  clickable: boolean;
+  center: { x: number; y: number };
+  scaledCenter: { x: number; y: number };
+  bounds: { left: number; top: number; right: number; bottom: number };
+  scaledBounds: { left: number; top: number; right: number; bottom: number };
+};
+
+type SnapshotObservation = {
+  app: string;
+  uiHash: string;
+  labels: string[];
+};
+
 export class AgentRuntime {
   private readonly config: OpenPocketConfig;
   private readonly workspace: WorkspaceStore;
@@ -170,6 +190,7 @@ export class AgentRuntime {
   private currentTask: string | null = null;
   private currentTaskStartedAtMs: number | null = null;
   private lastSystemPromptReport: WorkspacePromptContextReport | null = null;
+  private lastResolvedTapElementContext: ResolvedTapElementContext | null = null;
 
   constructor(config: OpenPocketConfig) {
     this.config = config;
@@ -802,8 +823,22 @@ export class AgentRuntime {
 
   private resolveTapElementAction(
     action: AgentAction,
-    snapshot: { uiElements: Array<{ id: string; center: { x: number; y: number } }> },
+    snapshot: {
+      uiElements: Array<{
+        id: string;
+        text: string;
+        contentDesc: string;
+        resourceId: string;
+        className: string;
+        clickable: boolean;
+        center: { x: number; y: number };
+        scaledCenter: { x: number; y: number };
+        bounds: { left: number; top: number; right: number; bottom: number };
+        scaledBounds: { left: number; top: number; right: number; bottom: number };
+      }>;
+    },
   ): AgentAction {
+    this.lastResolvedTapElementContext = null;
     if (action.type !== "tap_element") {
       return action;
     }
@@ -815,6 +850,17 @@ export class AgentRuntime {
         reason: `tap_element target not found: ${action.elementId}`,
       };
     }
+    const label = target.text || target.contentDesc || target.resourceId || target.className || "(unlabeled)";
+    this.lastResolvedTapElementContext = {
+      id: target.id,
+      label,
+      className: target.className,
+      clickable: target.clickable,
+      center: target.center,
+      scaledCenter: target.scaledCenter,
+      bounds: target.bounds,
+      scaledBounds: target.scaledBounds,
+    };
     return {
       type: "tap",
       x: target.center.x,
@@ -852,6 +898,66 @@ export class AgentRuntime {
       score = Math.max(0, score - 40);
     }
     return score;
+  }
+
+  private observeSnapshotState(snapshot: {
+    currentApp: string;
+    uiElements: Array<{
+      text: string;
+      contentDesc: string;
+      resourceId: string;
+      className: string;
+      clickable: boolean;
+      scaledBounds: { left: number; top: number; right: number; bottom: number };
+    }>;
+  }): SnapshotObservation {
+    const tuples = snapshot.uiElements
+      .map((item) => {
+        const label = (item.text || item.contentDesc || item.resourceId || item.className || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        return {
+          label,
+          className: item.className || "",
+          clickable: Boolean(item.clickable),
+          bounds: item.scaledBounds,
+        };
+      })
+      .sort((a, b) => {
+        if (a.bounds.top !== b.bounds.top) return a.bounds.top - b.bounds.top;
+        if (a.bounds.left !== b.bounds.left) return a.bounds.left - b.bounds.left;
+        return a.label.localeCompare(b.label);
+      });
+
+    const labels = tuples
+      .map((item) => item.label)
+      .filter(Boolean)
+      .slice(0, 6);
+
+    const hashInput = JSON.stringify({
+      app: snapshot.currentApp,
+      nodes: tuples.slice(0, 80),
+    });
+    const uiHash = createHash("sha1").update(hashInput).digest("hex").slice(0, 12);
+    return {
+      app: snapshot.currentApp || "unknown",
+      uiHash,
+      labels,
+    };
+  }
+
+  private buildStateDeltaLine(before: SnapshotObservation, after: SnapshotObservation, actionType: string): string {
+    const changed = before.uiHash !== after.uiHash || before.app !== after.app;
+    const note = changed ? "state_changed" : "no_visible_change";
+    return [
+      `state_delta changed=${changed}`,
+      `action=${actionType}`,
+      `app=${before.app}->${after.app}`,
+      `ui=${before.uiHash}->${after.uiHash}`,
+      `labels_before=${JSON.stringify(before.labels)}`,
+      `labels_after=${JSON.stringify(after.labels)}`,
+      `note=${note}`,
+    ].join(" ");
   }
 
   private pickPermissionDialogNode(
@@ -1133,6 +1239,7 @@ export class AgentRuntime {
     onProgress?: (update: AgentProgressUpdate) => Promise<void> | void,
     onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision,
     promptMode?: "full" | "minimal" | "none",
+    onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
   ): Promise<AgentRunResult> {
     if (this.busy) {
       return {
@@ -1597,6 +1704,123 @@ export class AgentRuntime {
           continue;
         }
 
+        if (output.action.type === "request_user_decision") {
+          const timeoutSec = Math.max(20, Math.round(output.action.timeoutSec ?? 300));
+          if (!onUserDecision) {
+            const message = "User decision required, but no decision handler is configured.";
+            const stepResult = screenshotPath
+              ? `${message}\nlocal_screenshot=${screenshotPath}`
+              : message;
+            this.workspace.appendStep(
+              session,
+              step,
+              output.thought,
+              JSON.stringify(output.action, null, 2),
+              stepResult,
+            );
+            traces.push({
+              step,
+              action: output.action,
+              result: stepResult,
+              thought: output.thought,
+              currentApp: snapshot.currentApp,
+            });
+            this.workspace.finalizeSession(session, false, message);
+            this.workspace.appendDailyMemory(profileKey, task, false, message);
+            return {
+              ok: false,
+              message,
+              sessionPath: session.path,
+              skillPath: null,
+              scriptPath: null,
+            };
+          }
+
+          let decision: UserDecisionResponse;
+          try {
+            decision = await onUserDecision({
+              sessionId: session.id,
+              sessionPath: session.path,
+              task,
+              step,
+              question: output.action.question,
+              options: output.action.options,
+              timeoutSec,
+              currentApp: snapshot.currentApp,
+              screenshotPath,
+            });
+          } catch (error) {
+            const message = `User decision wait failed: ${(error as Error).message}`;
+            const stepResult = screenshotPath
+              ? `${message}\nlocal_screenshot=${screenshotPath}`
+              : message;
+            this.workspace.appendStep(
+              session,
+              step,
+              output.thought,
+              JSON.stringify(output.action, null, 2),
+              stepResult,
+            );
+            traces.push({
+              step,
+              action: output.action,
+              result: stepResult,
+              thought: output.thought,
+              currentApp: snapshot.currentApp,
+            });
+            this.workspace.finalizeSession(session, false, message);
+            this.workspace.appendDailyMemory(profileKey, task, false, message);
+            return {
+              ok: false,
+              message,
+              sessionPath: session.path,
+              skillPath: null,
+              scriptPath: null,
+            };
+          }
+
+          const choiceLine = `user_decision selected="${decision.selectedOption}" raw="${decision.rawInput}" at=${decision.resolvedAt}`;
+          const stepResult = screenshotPath
+            ? `${choiceLine}\nlocal_screenshot=${screenshotPath}`
+            : choiceLine;
+          this.workspace.appendStep(
+            session,
+            step,
+            output.thought,
+            JSON.stringify(output.action, null, 2),
+            stepResult,
+          );
+          traces.push({
+            step,
+            action: output.action,
+            result: stepResult,
+            thought: output.thought,
+            currentApp: snapshot.currentApp,
+          });
+          history.push(
+            `step ${step}: app=${snapshot.currentApp} action=request_user_decision question=${JSON.stringify(output.action.question)} selected=${JSON.stringify(decision.selectedOption)}`,
+          );
+          history.push(`user decision raw input: ${decision.rawInput}`);
+
+          if (onProgress && step % this.config.agent.progressReportInterval === 0) {
+            try {
+              await onProgress({
+                step,
+                maxSteps: this.config.agent.maxSteps,
+                currentApp: snapshot.currentApp,
+                actionType: output.action.type,
+                message: `User selected: ${decision.selectedOption}`,
+                thought: output.thought,
+                screenshotPath,
+              });
+            } catch {
+              // Keep task execution unaffected when progress callback fails.
+            }
+          }
+          await sleep(Math.min(this.config.agent.loopDelayMs, 600));
+          continue;
+        }
+
         output.action = this.resolveTapElementAction(output.action, snapshot);
 
         // Save debug screenshot with marker overlay before scaling coordinates.
@@ -1644,6 +1868,7 @@ export class AgentRuntime {
         }
 
         let executionResult = "";
+        let stateDeltaLine = "";
         try {
           if (output.action.type === "run_script") {
             const scriptResult = await this.scriptExecutor.execute(
@@ -1675,8 +1900,36 @@ export class AgentRuntime {
           } else {
             executionResult = await this.adb.executeAction(output.action, this.config.agent.deviceId);
           }
+
+          const shouldObserveDelta =
+            output.action.type === "tap" ||
+            output.action.type === "swipe" ||
+            output.action.type === "type" ||
+            output.action.type === "keyevent" ||
+            output.action.type === "launch_app" ||
+            output.action.type === "shell";
+          if (shouldObserveDelta) {
+            try {
+              const afterSnapshot = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, profile.model);
+              const beforeState = this.observeSnapshotState(snapshot);
+              const afterState = this.observeSnapshotState(afterSnapshot);
+              stateDeltaLine = this.buildStateDeltaLine(beforeState, afterState, output.action.type);
+            } catch {
+              stateDeltaLine = "";
+            }
+          }
         } catch (error) {
           executionResult = `Action execution error: ${(error as Error).message}`;
+        }
+
+        if (this.lastResolvedTapElementContext) {
+          const mark = this.lastResolvedTapElementContext;
+          const markLine =
+            `tap_mark id=${mark.id} label=${JSON.stringify(mark.label)} class=${mark.className || "unknown"} clickable=${mark.clickable} center=(${mark.center.x},${mark.center.y}) scaled_center=(${mark.scaledCenter.x},${mark.scaledCenter.y}) bounds=[${mark.bounds.left},${mark.bounds.top}][${mark.bounds.right},${mark.bounds.bottom}] scaled_bounds=[${mark.scaledBounds.left},${mark.scaledBounds.top}][${mark.scaledBounds.right},${mark.scaledBounds.bottom}]`;
+          executionResult = `${executionResult}\n${markLine}`;
+        }
+        if (stateDeltaLine) {
+          executionResult = `${executionResult}\n${stateDeltaLine}`;
         }
 
         const stepResult = screenshotPath

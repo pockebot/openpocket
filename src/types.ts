@@ -145,6 +145,24 @@ export interface HumanAuthDecision {
   artifactPath: string | null;
 }
 
+export interface UserDecisionRequest {
+  sessionId: string;
+  sessionPath: string;
+  task: string;
+  step: number;
+  question: string;
+  options: string[];
+  timeoutSec: number;
+  currentApp: string;
+  screenshotPath: string | null;
+}
+
+export interface UserDecisionResponse {
+  selectedOption: string;
+  rawInput: string;
+  resolvedAt: string;
+}
+
 export interface ModelProfile {
   baseUrl: string;
   model: string;
@@ -280,6 +298,13 @@ export type AgentAction =
       type: "request_human_auth";
       capability: HumanAuthCapability;
       instruction: string;
+      timeoutSec?: number;
+      reason?: string;
+    }
+  | {
+      type: "request_user_decision";
+      question: string;
+      options: string[];
       timeoutSec?: number;
       reason?: string;
     }

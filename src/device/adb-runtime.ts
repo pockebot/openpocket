@@ -450,6 +450,9 @@ export class AdbRuntime {
       case "request_human_auth": {
         return `Human authorization requested: capability=${action.capability}`;
       }
+      case "request_user_decision": {
+        return "request_user_decision is handled by AgentRuntime via gateway callback.";
+      }
       case "wait": {
         const durationMs = Math.max(100, Math.round(action.durationMs ?? 1000));
         await sleep(durationMs);
