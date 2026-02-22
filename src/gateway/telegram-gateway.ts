@@ -6,6 +6,7 @@ import type { AgentProgressUpdate, CronJob, OpenPocketConfig, UserDecisionReques
 import { saveConfig } from "../config";
 import { AgentRuntime } from "../agent/agent-runtime";
 import { EmulatorManager } from "../device/emulator-manager";
+import { extractPackageName } from "../device/adb-runtime";
 import { HumanAuthBridge } from "../human-auth/bridge";
 import { LocalHumanAuthStack } from "../human-auth/local-stack";
 import { ChatAssistant } from "./chat-assistant";
@@ -194,22 +195,8 @@ export class TelegramGateway {
   }
 
   private extractPackageNameFromWindowDump(windowDump: string): string | null {
-    const patterns = [
-      /mCurrentFocus=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
-      /mFocusedApp=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
-      /topResumedActivity=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
-    ];
-    for (const pattern of patterns) {
-      const matched = windowDump.match(pattern);
-      if (!matched?.[1]) {
-        continue;
-      }
-      const normalized = this.normalizeHumanAuthCurrentAppToken(matched[1]);
-      if (normalized) {
-        return normalized;
-      }
-    }
-    return null;
+    const result = extractPackageName(windowDump);
+    return this.normalizeHumanAuthCurrentAppToken(result);
   }
 
   private resolveHumanAuthCurrentApp(appHint: string): string | null {

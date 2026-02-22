@@ -4,7 +4,7 @@ import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale";
 import { sleep } from "../utils/time";
 import { EmulatorManager } from "./emulator-manager";
 
-function extractPackageName(input: string): string {
+export function extractPackageName(input: string): string {
   const patterns = [
     /mCurrentFocus=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
     /mFocusedApp=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,

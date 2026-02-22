@@ -800,12 +800,13 @@ export class AgentRuntime {
       );
     }
 
+    // Redact credential details from logs — only report which fields were filled.
     const filled: string[] = [];
     if (username) {
-      filled.push(`username(${username.length} chars)`);
+      filled.push("username");
     }
     if (password) {
-      filled.push(`password(${password.length} chars)`);
+      filled.push("password");
     }
     return {
       message: `delegated credentials typed: ${filled.join(" + ")}`,
@@ -965,16 +966,25 @@ export class AgentRuntime {
   }
 
   private captureUiDumpXml(deviceId: string): string {
+    // Use a unique temp file per call to avoid race conditions when the agent loop
+    // and a human-auth credential delegation run concurrently.
+    const dumpFile = `/sdcard/openpocket-uidump-${Date.now()}.xml`;
     let uiDumpXml = "";
     try {
       this.emulator.runAdb(
-        ["-s", deviceId, "shell", "uiautomator", "dump", "/sdcard/openpocket-window.xml"],
+        ["-s", deviceId, "shell", "uiautomator", "dump", dumpFile],
         15_000,
       );
       uiDumpXml = this.emulator.runAdb(
-        ["-s", deviceId, "shell", "cat", "/sdcard/openpocket-window.xml"],
+        ["-s", deviceId, "shell", "cat", dumpFile],
         15_000,
       );
+      // Clean up temp file on device.
+      try {
+        this.emulator.runAdb(["-s", deviceId, "shell", "rm", "-f", dumpFile], 5_000);
+      } catch {
+        // Best-effort cleanup.
+      }
       if (!uiDumpXml.includes("<hierarchy")) {
         uiDumpXml = this.emulator.runAdb(
           ["-s", deviceId, "shell", "cat", "/sdcard/window_dump.xml"],
@@ -1411,6 +1421,14 @@ export class AgentRuntime {
 
     try {
       const artifactJson = this.readJsonArtifact(decision.artifactPath);
+      // Immediately delete credential artifacts from disk to avoid plaintext password lingering.
+      if (artifactJson?.kind === "credentials") {
+        try {
+          fs.unlinkSync(decision.artifactPath);
+        } catch {
+          // Best-effort cleanup; file may already be removed.
+        }
+      }
       let artifactResult: DelegationApplyResult | null = null;
 
       if (capability === "location") {
@@ -1420,7 +1438,8 @@ export class AgentRuntime {
         }
       }
 
-      if (!artifactResult && capability === "oauth") {
+      // Credential delegation: match by oauth capability OR by artifact kind=credentials.
+      if (!artifactResult && (capability === "oauth" || artifactJson?.kind === "credentials")) {
         const credentials = this.extractDelegatedCredentials(artifactJson);
         if (credentials) {
           artifactResult = await this.applyCredentialDelegation(credentials.username, credentials.password);
@@ -1431,13 +1450,6 @@ export class AgentRuntime {
         const text = this.extractDelegatedText(artifactJson);
         if (text) {
           artifactResult = await this.applyTextDelegation(text);
-        }
-      }
-
-      if (!artifactResult && artifactJson?.kind === "credentials") {
-        const credentials = this.extractDelegatedCredentials(artifactJson);
-        if (credentials) {
-          artifactResult = await this.applyCredentialDelegation(credentials.username, credentials.password);
         }
       }
 

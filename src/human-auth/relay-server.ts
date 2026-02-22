@@ -116,6 +116,12 @@ export class HumanAuthRelayServer {
   private readonly options: HumanAuthRelayServerOptions;
   private readonly records = new Map<string, RelayRecord>();
   private server: http.Server | null = null;
+  /** Per-request rate limiting: track last takeover action timestamp. */
+  private readonly takeoverActionTimestamps = new Map<string, number>();
+  /** Maximum concurrent takeover streams per request. */
+  private readonly takeoverStreamCounts = new Map<string, number>();
+  private static readonly TAKEOVER_ACTION_COOLDOWN_MS = 200;
+  private static readonly TAKEOVER_MAX_CONCURRENT_STREAMS = 2;
 
   constructor(options: HumanAuthRelayServerOptions) {
     this.options = options;
@@ -1644,6 +1650,14 @@ export class HumanAuthRelayServer {
         sendJson(res, 400, { error: "Invalid takeover action." });
         return;
       }
+      // Rate-limit takeover actions to prevent ADB overload.
+      const now = Date.now();
+      const lastActionAt = this.takeoverActionTimestamps.get(requestId) ?? 0;
+      if (now - lastActionAt < HumanAuthRelayServer.TAKEOVER_ACTION_COOLDOWN_MS) {
+        sendJson(res, 429, { error: "Too many takeover actions. Please slow down." });
+        return;
+      }
+      this.takeoverActionTimestamps.set(requestId, now);
       try {
         const message = await runtime.execute(action);
         sendJson(res, 200, {
@@ -1681,6 +1695,14 @@ export class HumanAuthRelayServer {
         return;
       }
 
+      // Limit concurrent streams per request to prevent ADB overload.
+      const currentStreams = this.takeoverStreamCounts.get(requestId) ?? 0;
+      if (currentStreams >= HumanAuthRelayServer.TAKEOVER_MAX_CONCURRENT_STREAMS) {
+        sendText(res, 429, "Too many concurrent takeover streams. Close an existing one first.");
+        return;
+      }
+      this.takeoverStreamCounts.set(requestId, currentStreams + 1);
+
       res.statusCode = 200;
       res.setHeader("content-type", "multipart/x-mixed-replace; boundary=frame");
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate, private");
@@ -1699,6 +1721,13 @@ export class HumanAuthRelayServer {
           return;
         }
         closed = true;
+        // Decrement the concurrent stream counter for this request.
+        const count = this.takeoverStreamCounts.get(requestId) ?? 1;
+        if (count <= 1) {
+          this.takeoverStreamCounts.delete(requestId);
+        } else {
+          this.takeoverStreamCounts.set(requestId, count - 1);
+        }
         if (timer) {
           clearInterval(timer);
           timer = null;
@@ -1719,6 +1748,9 @@ export class HumanAuthRelayServer {
       res.on("close", stop);
       res.on("error", stop);
 
+      let consecutiveErrors = 0;
+      const MAX_CONSECUTIVE_ERRORS = 5;
+
       const pushFrame = async (): Promise<void> => {
         if (closed || running) {
           return;
@@ -1735,8 +1767,13 @@ export class HumanAuthRelayServer {
             return;
           }
           await this.writeMjpegFrame(res, frame);
+          consecutiveErrors = 0;
         } catch {
-          stop();
+          consecutiveErrors += 1;
+          // Tolerate transient ADB timeouts; only stop stream after repeated failures.
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            stop();
+          }
         } finally {
           running = false;
         }

@@ -816,7 +816,8 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
   };
   runtime.emulator = {
     runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat") && args.includes("/sdcard/openpocket-window.xml")) {
+      // Match the dynamic temp file path used by captureUiDumpXml (openpocket-uidump-*.xml).
+      if (Array.isArray(args) && args.includes("cat") && args.some((a) => String(a).includes("openpocket-uidump"))) {
         return [
           "<hierarchy>",
           '<node index="0" text="" resource-id="com.demo:id/username" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[60,320][1020,430]" />',

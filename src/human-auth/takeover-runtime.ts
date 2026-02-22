@@ -1,6 +1,7 @@
 import type { OpenPocketConfig } from "../types";
 import { nowIso } from "../utils/paths";
 import { EmulatorManager } from "../device/emulator-manager";
+import { extractPackageName } from "../device/adb-runtime";
 
 export type HumanAuthTakeoverAction =
   | { type: "tap"; x: number; y: number }
@@ -20,21 +21,6 @@ export interface HumanAuthTakeoverFrame {
 export interface HumanAuthTakeoverRuntime {
   captureFrame(): Promise<HumanAuthTakeoverFrame>;
   execute(action: HumanAuthTakeoverAction): Promise<string>;
-}
-
-function extractPackageName(input: string): string {
-  const patterns = [
-    /mCurrentFocus=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
-    /mFocusedApp=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
-    /topResumedActivity=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
-  ];
-  for (const pattern of patterns) {
-    const matched = input.match(pattern);
-    if (matched?.[1]) {
-      return matched[1];
-    }
-  }
-  return "unknown";
 }
 
 function parseScreenSize(output: string): { width: number; height: number } {
