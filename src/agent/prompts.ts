@@ -84,6 +84,7 @@ export function buildSystemPrompt(
       "## Core Rules",
       "- Call exactly one tool per step.",
       "- Pick the smallest deterministic action that progresses the task.",
+      "- For app-open tasks, first check whether the app is already installed/present; only go to Play Store if it is missing.",
       "- For Android in-emulator permission dialogs, tap Allow locally; do not call request_human_auth for these dialogs.",
       "- If blocked by sensitive checkpoints, call request_human_auth.",
       "- If done, call finish with key outputs.",
@@ -118,6 +119,10 @@ export function buildSystemPrompt(
     "",
     "## Execution Policy",
     "- Prefer the smallest safe action that increases certainty.",
+    "- App-first policy: for requests to open/use an app, first verify app presence (launcher/app drawer/search).",
+    "- If app is present, launch it directly; do not open web/Play Store first.",
+    "- Only use Play Store install flow when app is confirmed missing.",
+    "- If multiple similar apps match, ask user to confirm before installing a new one.",
     "- If UI candidates are provided, prefer tap_element over raw coordinate tap.",
     "- Keep coordinates inside the provided screen bounds.",
     "- Before type_text, ensure the intended input field is focused.",
@@ -260,7 +265,7 @@ export function buildUserPrompt(
       .slice(0, 20)
       .map((item) => {
         const label = item.text || item.contentDesc || item.resourceId || item.className || "(unlabeled)";
-        return `- ${item.id}: label="${label}" clickable=${item.clickable} class=${item.className || "unknown"} center=(${item.scaledCenter.x},${item.scaledCenter.y}) bounds=[${item.scaledBounds.left},${item.scaledBounds.top}][${item.scaledBounds.right},${item.scaledBounds.bottom}]`;
+        return `- mark ${item.id}: label="${label}" clickable=${item.clickable} class=${item.className || "unknown"} center=(${item.scaledCenter.x},${item.scaledCenter.y}) bounds=[${item.scaledBounds.left},${item.scaledBounds.top}][${item.scaledBounds.right},${item.scaledBounds.bottom}]`;
       })
       .join("\n")
     : "(none)";
@@ -283,6 +288,10 @@ export function buildUserPrompt(
       null,
       2,
     ),
+    "",
+    snapshot.somScreenshotBase64
+      ? "Image notes: first image is Set-of-Mark overlay with numbered boxes; second image is raw screenshot."
+      : "Image notes: single raw screenshot only (no Set-of-Mark overlay available).",
     "",
     "UI candidates (scaled coordinate space):",
     uiCandidatesText,
@@ -309,7 +318,8 @@ export function buildUserPrompt(
     "1) What sub-goal is active right now?",
     "2) What evidence on screen/history supports the next action?",
     "3) If recently stuck, what alternative path should be tried now?",
-    "3.1) If UI candidates exist, pick one element id and use tap_element.",
+    "3.0) If task is app usage, verify whether app already exists before install/web flow.",
+    "3.1) If UI candidates exist, pick one mark id and use tap_element(mark_id).",
     "4) If this is text-entry intent: max 2 focus taps, then type_text once and submit with keyevent if needed.",
     "5) Never type logs/history/JSON strings; text must come from user intent or on-screen content.",
     "6) For in-emulator permission dialogs, tap Allow locally. Use request_human_auth only for real-device data/authorization.",

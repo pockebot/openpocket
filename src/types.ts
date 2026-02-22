@@ -187,6 +187,8 @@ export interface ScreenSnapshot {
   width: number;
   height: number;
   screenshotBase64: string;
+  /** Set-of-Mark overlay image (same scaled resolution) with numbered UI boxes. */
+  somScreenshotBase64: string | null;
   capturedAt: string;
   /** Multiply model X coordinates by this to get original-resolution X. */
   scaleX: number;

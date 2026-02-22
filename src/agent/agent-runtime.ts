@@ -24,7 +24,7 @@ import { ScriptExecutor } from "../tools/script-executor";
 import { CodingExecutor } from "../tools/coding-executor";
 import { MemoryExecutor } from "../tools/memory-executor";
 import { ModelClient } from "./model-client";
-import { buildSystemPrompt, type SystemPromptMode } from "./prompts";
+import { buildSystemPrompt, buildUserPrompt, type SystemPromptMode } from "./prompts";
 import { CHAT_TOOLS } from "./tools";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale";
 
@@ -720,6 +720,86 @@ export class AgentRuntime {
     return nodes;
   }
 
+  private modelInputDirForSession(sessionId: string): string {
+    const dir = path.join(this.config.workspaceDir, "sessions", "model-inputs", `session-${sessionId}`);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  private saveModelInputArtifacts(params: {
+    sessionId: string;
+    step: number;
+    task: string;
+    profileModel: string;
+    promptMode: SystemPromptMode;
+    systemPrompt: string;
+    userPrompt: string;
+    snapshot: {
+      currentApp: string;
+      width: number;
+      height: number;
+      scaledWidth: number;
+      scaledHeight: number;
+      capturedAt: string;
+      screenshotBase64: string;
+      somScreenshotBase64: string | null;
+      uiElements: unknown[];
+    };
+    history: string[];
+  }): void {
+    try {
+      const dir = this.modelInputDirForSession(params.sessionId);
+      const stepTag = String(params.step).padStart(3, "0");
+      const systemPromptPath = path.join(dir, "system-prompt.txt");
+      if (!fs.existsSync(systemPromptPath)) {
+        fs.writeFileSync(systemPromptPath, `${params.systemPrompt}\n`, "utf-8");
+      }
+      const userPromptPath = path.join(dir, `step-${stepTag}-user-prompt.txt`);
+      fs.writeFileSync(userPromptPath, `${params.userPrompt}\n`, "utf-8");
+
+      const rawPngPath = path.join(dir, `step-${stepTag}-raw.png`);
+      fs.writeFileSync(rawPngPath, Buffer.from(params.snapshot.screenshotBase64, "base64"));
+
+      const somPngPath = params.snapshot.somScreenshotBase64
+        ? path.join(dir, `step-${stepTag}-som.png`)
+        : null;
+      if (somPngPath && params.snapshot.somScreenshotBase64) {
+        fs.writeFileSync(somPngPath, Buffer.from(params.snapshot.somScreenshotBase64, "base64"));
+      }
+
+      const meta = {
+        step: params.step,
+        task: params.task,
+        model: params.profileModel,
+        promptMode: params.promptMode,
+        systemPromptPath,
+        userPromptPath,
+        imagePaths: {
+          raw: rawPngPath,
+          som: somPngPath,
+        },
+        snapshot: {
+          currentApp: params.snapshot.currentApp,
+          width: params.snapshot.width,
+          height: params.snapshot.height,
+          scaledWidth: params.snapshot.scaledWidth,
+          scaledHeight: params.snapshot.scaledHeight,
+          capturedAt: params.snapshot.capturedAt,
+          uiElementsCount: Array.isArray(params.snapshot.uiElements) ? params.snapshot.uiElements.length : 0,
+          uiElements: params.snapshot.uiElements,
+        },
+        historyTail: params.history.slice(-8),
+      };
+      fs.writeFileSync(
+        path.join(dir, `step-${stepTag}-input.json`),
+        `${JSON.stringify(meta, null, 2)}\n`,
+        "utf-8",
+      );
+    } catch {
+      // Debug artifact persistence is best-effort; do not break task execution.
+    }
+  }
+
   private resolveTapElementAction(
     action: AgentAction,
     snapshot: { uiElements: Array<{ id: string; center: { x: number; y: number } }> },
@@ -1200,6 +1280,19 @@ export class AgentRuntime {
             continue;
           }
         }
+
+        const userPrompt = buildUserPrompt(task, step, snapshot, history);
+        this.saveModelInputArtifacts({
+          sessionId: session.id,
+          step,
+          task,
+          profileModel: profile.model,
+          promptMode: effectivePromptMode,
+          systemPrompt,
+          userPrompt,
+          snapshot,
+          history,
+        });
 
         const output = await model.nextStep({
           systemPrompt,

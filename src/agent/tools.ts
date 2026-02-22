@@ -55,7 +55,7 @@ const TOOL_DEFS: ToolDef[] = [
       type: "object",
       properties: {
         thought: thoughtParam,
-        elementId: { type: "string", description: "Element id (e.g. e3) from the prompt's UI candidates list." },
+        elementId: { type: "string", description: "Element id (e.g. 3) from the prompt's UI candidates list." },
         reason: reasonParam,
       },
       required: ["thought", "elementId"],

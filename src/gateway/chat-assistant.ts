@@ -795,7 +795,7 @@ export class ChatAssistant {
     ]);
     const assistantPersona = this.extractByPatterns(normalized, [
       /(?:人设|风格|语气|设定)\s*[:：]?\s*([^。;；\n]+)/i,
-      /(?:persona|tone|style)\s*(?:is|:)?\s*([^.;\n]+)/i,
+      /(?:\bpersona\b|\btone\b|\bstyle\b)\s*(?:is|:)?\s*([^.;\n]+)/i,
     ]);
 
     if (userPreferredAddress) {
@@ -809,6 +809,15 @@ export class ChatAssistant {
     }
 
     return out;
+  }
+
+  private looksLikeTaskInstruction(input: string): boolean {
+    const t = this.normalizeOneLine(input).toLowerCase();
+    if (!t) {
+      return false;
+    }
+    return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start)\b/.test(t)
+      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用)/.test(t);
   }
 
   private personaPresetFromAnswer(answer: string, locale: OnboardingLocale): string {
@@ -1531,6 +1540,9 @@ export class ChatAssistant {
   private applyProfileUpdate(chatId: number, inputText: string): string | null {
     const activeOnboarding = this.profileOnboarding.get(chatId);
     if (activeOnboarding || this.bootstrapOnboarding.has(chatId) || this.needsBootstrapOnboarding()) {
+      return null;
+    }
+    if (this.looksLikeTaskInstruction(inputText)) {
       return null;
     }
 

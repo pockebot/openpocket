@@ -62,6 +62,14 @@ export class ModelClient {
               type: "text",
               text: params.userText,
             },
+            ...(params.snapshot.somScreenshotBase64
+              ? [{
+                type: "image_url" as const,
+                image_url: {
+                  url: `data:image/png;base64,${params.snapshot.somScreenshotBase64}`,
+                },
+              }]
+              : []),
             {
               type: "image_url",
               image_url: {
@@ -101,6 +109,12 @@ export class ModelClient {
           role: "user",
           content: [
             { type: "input_text", text: params.userText },
+            ...(params.snapshot.somScreenshotBase64
+              ? [{
+                type: "input_image" as const,
+                image_url: `data:image/png;base64,${params.snapshot.somScreenshotBase64}`,
+              }]
+              : []),
             {
               type: "input_image",
               image_url: `data:image/png;base64,${params.snapshot.screenshotBase64}`,

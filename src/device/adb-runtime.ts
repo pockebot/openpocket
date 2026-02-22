@@ -1,6 +1,6 @@
 import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types";
 import { nowIso } from "../utils/paths";
-import { scaleScreenshot } from "../utils/image-scale";
+import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale";
 import { sleep } from "../utils/time";
 import { EmulatorManager } from "./emulator-manager";
 
@@ -256,6 +256,13 @@ export class AdbRuntime {
       scaled.width,
       scaled.height,
     );
+    const somBuffer = await drawSetOfMarkOverlay(
+      scaled.data,
+      uiElements.map((item) => ({
+        id: item.id,
+        bounds: item.scaledBounds,
+      })),
+    );
 
     return {
       deviceId,
@@ -263,6 +270,7 @@ export class AdbRuntime {
       width,
       height,
       screenshotBase64: scaled.data.toString("base64"),
+      somScreenshotBase64: somBuffer.toString("base64"),
       capturedAt: nowIso(),
       scaleX: scaled.scaleX,
       scaleY: scaled.scaleY,
@@ -312,7 +320,7 @@ export class AdbRuntime {
       const scaledCenterX = Math.max(0, Math.min(scaledWidth - 1, Math.round(centerX * scaleDownX)));
       const scaledCenterY = Math.max(0, Math.min(scaledHeight - 1, Math.round(centerY * scaleDownY)));
       return {
-        id: `e${index + 1}`,
+        id: String(index + 1),
         text: node.text.trim(),
         contentDesc: node.contentDesc.trim(),
         resourceId: node.resourceId.trim(),
