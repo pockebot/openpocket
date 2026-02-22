@@ -73,3 +73,13 @@ test("buildAvdManagerOpts preserves existing flags and avoids duplicate toolsdir
   const opts = buildAvdManagerOpts(sdkRoot, existing);
   assert.equal(opts, existing);
 });
+
+test("shouldRunSdkBootstrap only skips bootstrap when AVD exists and essentials are present", () => {
+  const { shouldRunSdkBootstrap } = require("../dist/environment/android-prerequisites.js");
+  assert.equal(typeof shouldRunSdkBootstrap, "function");
+
+  assert.equal(shouldRunSdkBootstrap(true, 0), false);
+  assert.equal(shouldRunSdkBootstrap(true, 1), true);
+  assert.equal(shouldRunSdkBootstrap(false, 0), true);
+  assert.equal(shouldRunSdkBootstrap(false, 2), true);
+});
