@@ -10,7 +10,8 @@
   "homepage": "https://github.com/SergioChan/openpocket",
   "main": "dist/cli.js",
   "bin": {
-    "openpocket": "dist/cli.js"
+    "openpocket": "dist/cli.js",
+    "openpocket-mcp": "dist/mcp/server.js"
   },
   "files": [
     "dist",
@@ -35,9 +36,11 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "node-telegram-bot-api": "^0.66.0",
     "openai": "^4.0.0",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
