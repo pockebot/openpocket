@@ -14,6 +14,8 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /Available Skills/);
   assert.match(prompt, /Skill Selection Protocol/);
   assert.match(prompt, /Memory Recall Protocol/);
+  assert.match(prompt, /memory_search/);
+  assert.match(prompt, /memory_get/);
   assert.match(prompt, /Write thought and all text fields in English/);
   assert.match(prompt, /Input-focus anti-loop/);
   assert.match(prompt, /Never type internal logs\/history\/JSON/);

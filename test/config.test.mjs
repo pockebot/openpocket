@@ -50,6 +50,10 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", () => {
     assert.equal(cfg.agent.returnHomeOnTaskEnd, true);
     assert.equal(cfg.agent.systemPromptMode, "full");
     assert.equal(cfg.agent.contextBudgetChars, 150_000);
+    assert.equal(cfg.memoryTools.enabled, true);
+    assert.equal(cfg.memoryTools.maxResults, 6);
+    assert.equal(cfg.memoryTools.minScore, 0.2);
+    assert.equal(cfg.memoryTools.maxSnippetChars, 1200);
     assert.equal(cfg.humanAuth.enabled, false);
     assert.equal(cfg.humanAuth.useLocalRelay, true);
     assert.equal(cfg.humanAuth.localRelayPort, 8787);
@@ -126,6 +130,12 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
             port: 51999,
             auto_open_browser: true,
           },
+          memory_tools: {
+            enabled: true,
+            max_results: 12,
+            min_score: 0.35,
+            max_snippet_chars: 2048,
+          },
         },
         null,
         2,
@@ -150,6 +160,10 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
     assert.equal(cfg.dashboard.host, "0.0.0.0");
     assert.equal(cfg.dashboard.port, 51999);
     assert.equal(cfg.dashboard.autoOpenBrowser, true);
+    assert.equal(cfg.memoryTools.enabled, true);
+    assert.equal(cfg.memoryTools.maxResults, 12);
+    assert.equal(cfg.memoryTools.minScore, 0.35);
+    assert.equal(cfg.memoryTools.maxSnippetChars, 2048);
 
     saveConfig(cfg);
     const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
@@ -163,6 +177,8 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
     assert.equal(saved.humanAuth.localRelayPort, 9898);
     assert.equal(saved.humanAuth.tunnel.provider, "ngrok");
     assert.equal(saved.human_auth, undefined);
+    assert.equal(saved.memoryTools.maxResults, 12);
+    assert.equal(saved.memory_tools, undefined);
   });
 });
 

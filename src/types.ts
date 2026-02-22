@@ -50,6 +50,13 @@ export interface CodingToolsConfig {
   allowedCommands: string[];
 }
 
+export interface MemoryToolsConfig {
+  enabled: boolean;
+  maxResults: number;
+  minScore: number;
+  maxSnippetChars: number;
+}
+
 export interface HeartbeatConfig {
   enabled: boolean;
   everySec: number;
@@ -159,6 +166,7 @@ export interface OpenPocketConfig {
   screenshots: ScreenshotConfig;
   scriptExecutor: ScriptExecutorConfig;
   codingTools: CodingToolsConfig;
+  memoryTools: MemoryToolsConfig;
   heartbeat: HeartbeatConfig;
   cron: CronConfig;
   dashboard: DashboardConfig;
@@ -227,6 +235,20 @@ export type AgentAction =
       offset?: number;
       limit?: number;
       timeoutMs?: number;
+      reason?: string;
+    }
+  | {
+      type: "memory_search";
+      query: string;
+      maxResults?: number;
+      minScore?: number;
+      reason?: string;
+    }
+  | {
+      type: "memory_get";
+      path: string;
+      from?: number;
+      lines?: number;
       reason?: string;
     }
   | {

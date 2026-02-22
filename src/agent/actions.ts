@@ -186,6 +186,26 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "memory_search") {
+    return {
+      type,
+      query: String(input.query ?? ""),
+      maxResults: toNumber(input.maxResults, 6),
+      minScore: toNumber(input.minScore, 0.2),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "memory_get") {
+    return {
+      type,
+      path: String(input.path ?? ""),
+      from: toNumber(input.from, 1),
+      lines: toNumber(input.lines, 120),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "request_human_auth") {
     const capabilityRaw = String(input.capability ?? "unknown").trim().toLowerCase();
     return {

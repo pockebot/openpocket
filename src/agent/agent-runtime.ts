@@ -22,6 +22,7 @@ import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-bui
 import { SkillLoader } from "../skills/skill-loader";
 import { ScriptExecutor } from "../tools/script-executor";
 import { CodingExecutor } from "../tools/coding-executor";
+import { MemoryExecutor } from "../tools/memory-executor";
 import { ModelClient } from "./model-client";
 import { buildSystemPrompt } from "./prompts";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale";
@@ -134,6 +135,7 @@ export class AgentRuntime {
   private readonly autoArtifactBuilder: AutoArtifactBuilder;
   private readonly scriptExecutor: ScriptExecutor;
   private readonly codingExecutor: CodingExecutor;
+  private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
   private busy = false;
   private stopRequested = false;
@@ -149,6 +151,7 @@ export class AgentRuntime {
     this.autoArtifactBuilder = new AutoArtifactBuilder(config);
     this.scriptExecutor = new ScriptExecutor(config);
     this.codingExecutor = new CodingExecutor(config);
+    this.memoryExecutor = new MemoryExecutor(config);
     this.screenshotStore = new ScreenshotStore(
       config.screenshots.directory,
       config.screenshots.maxCount,
@@ -1410,6 +1413,11 @@ export class AgentRuntime {
             output.action.type === "process"
           ) {
             executionResult = await this.codingExecutor.execute(output.action);
+          } else if (
+            output.action.type === "memory_search" ||
+            output.action.type === "memory_get"
+          ) {
+            executionResult = this.memoryExecutor.execute(output.action);
           } else {
             executionResult = await this.adb.executeAction(output.action, this.config.agent.deviceId);
           }

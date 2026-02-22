@@ -89,6 +89,12 @@
       "prettier"
     ]
   },
+  "memoryTools": {
+    "enabled": true,
+    "maxResults": 6,
+    "minScore": 0.2,
+    "maxSnippetChars": 1200
+  },
   "heartbeat": {
     "enabled": true,
     "everySec": 30,

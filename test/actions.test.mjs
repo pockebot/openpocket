@@ -61,3 +61,17 @@ test("normalizeAction falls back for unknown action", () => {
   assert.equal(out.type, "wait");
   assert.match(out.reason, /unknown action type/);
 });
+
+test("normalizeAction supports memory tools with defaults", () => {
+  const search = normalizeAction({ type: "memory_search", query: "weather preferences" });
+  assert.equal(search.type, "memory_search");
+  assert.equal(search.query, "weather preferences");
+  assert.equal(search.maxResults, 6);
+  assert.equal(search.minScore, 0.2);
+
+  const get = normalizeAction({ type: "memory_get", path: "memory/2026-02-22.md" });
+  assert.equal(get.type, "memory_get");
+  assert.equal(get.path, "memory/2026-02-22.md");
+  assert.equal(get.from, 1);
+  assert.equal(get.lines, 120);
+});

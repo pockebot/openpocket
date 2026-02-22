@@ -231,6 +231,10 @@ export class AdbRuntime {
       case "process": {
         return `${action.type} is handled by CodingExecutor in AgentRuntime.`;
       }
+      case "memory_search":
+      case "memory_get": {
+        return `${action.type} is handled by MemoryExecutor in AgentRuntime.`;
+      }
       case "request_human_auth": {
         return `Human authorization requested: capability=${action.capability}`;
       }

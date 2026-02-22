@@ -229,6 +229,36 @@ const TOOL_DEFS: ToolDef[] = [
     },
   },
   {
+    name: "memory_search",
+    description: "Search MEMORY.md and memory/*.md for relevant snippets before memory-based answers.",
+    parameters: {
+      type: "object",
+      properties: {
+        thought: thoughtParam,
+        query: { type: "string", description: "What memory to search for." },
+        maxResults: { type: "number", description: "Max result count override." },
+        minScore: { type: "number", description: "Minimum score threshold (0-1)." },
+        reason: reasonParam,
+      },
+      required: ["thought", "query"],
+    },
+  },
+  {
+    name: "memory_get",
+    description: "Read a safe snippet from MEMORY.md or memory/*.md with line range.",
+    parameters: {
+      type: "object",
+      properties: {
+        thought: thoughtParam,
+        path: { type: "string", description: "Path returned by memory_search." },
+        from: { type: "number", description: "1-based start line." },
+        lines: { type: "number", description: "Maximum lines to read." },
+        reason: reasonParam,
+      },
+      required: ["thought", "path"],
+    },
+  },
+  {
     name: "request_human_auth",
     description:
       "Request human authorization for actions requiring real-device capabilities (camera, SMS/2FA, biometric, payment, OAuth, etc.).",
