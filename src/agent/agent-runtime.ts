@@ -1713,7 +1713,7 @@ export class AgentRuntime {
         }
 
         if (output.action.type === "request_user_decision") {
-          const timeoutSec = Math.max(20, Math.round(output.action.timeoutSec ?? 300));
+          const timeoutSec = Math.max(20, Math.round(output.action.timeoutSec ?? 600));
           if (!onUserDecision) {
             const message = "User decision required, but no decision handler is configured.";
             const stepResult = screenshotPath

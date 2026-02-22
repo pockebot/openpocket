@@ -924,8 +924,9 @@ export class TelegramGateway {
       const options = request.options.length > 0
         ? request.options.map((item, index) => `${index + 1}. ${item}`).join("\n")
         : "(no options provided)";
+      const waitMinutes = Math.round(request.timeoutSec / 60);
       const prompt = [
-        "I need your decision to continue:",
+        `I need your decision to continue (waiting up to ${waitMinutes} minutes):`,
         `Question: ${request.question}`,
         "",
         "Options:",
@@ -1325,21 +1326,21 @@ export class TelegramGateway {
 
             const decision = useLlm
               ? await this.chat.narrateTaskProgress({
-                  task,
-                  locale: progressLocale,
-                  progress,
-                  recentProgress,
-                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                  skippedSteps: progressNarrationState.skippedSteps,
-                })
+                task,
+                locale: progressLocale,
+                progress,
+                recentProgress,
+                lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                skippedSteps: progressNarrationState.skippedSteps,
+              })
               : this.chat.fallbackTaskProgressNarration({
-                  task,
-                  locale: progressLocale,
-                  progress,
-                  recentProgress,
-                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                  skippedSteps: progressNarrationState.skippedSteps,
-                });
+                task,
+                locale: progressLocale,
+                progress,
+                recentProgress,
+                lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                skippedSteps: progressNarrationState.skippedSteps,
+              });
 
             if (!decision.notify) {
               progressNarrationState.skippedSteps += 1;
@@ -1380,70 +1381,70 @@ export class TelegramGateway {
           chatId === null
             ? undefined
             : async (progress) => {
-                enqueueProgressNarration(progress);
-              },
+              enqueueProgressNarration(progress);
+            },
           chatId === null
             ? undefined
             : async (request) => {
-                const timeoutSec = Math.max(30, Math.round(request.timeoutSec));
-                return this.humanAuth.requestAndWait(
-                  { chatId, task, request: { ...request, timeoutSec } },
-                  async (opened) => {
-                    const isCodeFlow = this.isCodeBasedHumanAuthCapability(request.capability);
-                    const lines = [
-                      `Human authorization required (${request.capability}).`,
-                      `Request ID: ${opened.requestId}`,
-                      `Current app: ${request.currentApp}`,
-                      `Instruction: ${request.instruction}`,
-                      `Reason: ${request.reason || "no reason provided"}`,
-                      `Expires at: ${opened.expiresAt}`,
-                      "",
-                      "Fallback manual commands:",
-                      opened.manualApproveCommand,
-                      opened.manualRejectCommand,
-                    ];
+              const timeoutSec = Math.max(30, Math.round(request.timeoutSec));
+              return this.humanAuth.requestAndWait(
+                { chatId, task, request: { ...request, timeoutSec } },
+                async (opened) => {
+                  const isCodeFlow = this.isCodeBasedHumanAuthCapability(request.capability);
+                  const lines = [
+                    `Human authorization required (${request.capability}).`,
+                    `Request ID: ${opened.requestId}`,
+                    `Current app: ${request.currentApp}`,
+                    `Instruction: ${request.instruction}`,
+                    `Reason: ${request.reason || "no reason provided"}`,
+                    `Expires at: ${opened.expiresAt}`,
+                    "",
+                    "Fallback manual commands:",
+                    opened.manualApproveCommand,
+                    opened.manualRejectCommand,
+                  ];
 
-                    if (isCodeFlow) {
-                      await this.bot.sendMessage(
-                        chatId,
-                        [
-                          ...lines,
-                          "",
-                          "Code flow (recommended):",
-                          `- reply plain code (4-10 digits), for example: 123456`,
-                          `- or run: ${opened.manualApproveCommand} <code>`,
-                          `- reject with: ${opened.manualRejectCommand}`,
-                          opened.openUrl
-                            ? "- web page is optional for SMS/2FA; Telegram code reply is faster."
-                            : "- web page is unavailable; use Telegram code reply.",
-                        ].join("\n"),
-                      );
-                      return;
-                    }
-
-                    if (opened.openUrl) {
-                      await this.bot.sendMessage(chatId, lines.join("\n"), {
-                        reply_markup: {
-                          inline_keyboard: [
-                            [
-                              {
-                                text: "Open Human Auth",
-                                url: opened.openUrl,
-                              },
-                            ],
-                          ],
-                        },
-                      });
-                      return;
-                    }
-
+                  if (isCodeFlow) {
                     await this.bot.sendMessage(
                       chatId,
-                      `${lines.join("\n")}\n\nWeb link is unavailable. Use manual approve/reject commands.`,
+                      [
+                        ...lines,
+                        "",
+                        "Code flow (recommended):",
+                        `- reply plain code (4-10 digits), for example: 123456`,
+                        `- or run: ${opened.manualApproveCommand} <code>`,
+                        `- reject with: ${opened.manualRejectCommand}`,
+                        opened.openUrl
+                          ? "- web page is optional for SMS/2FA; Telegram code reply is faster."
+                          : "- web page is unavailable; use Telegram code reply.",
+                      ].join("\n"),
                     );
-                  },
-                );
-              },
+                    return;
+                  }
+
+                  if (opened.openUrl) {
+                    await this.bot.sendMessage(chatId, lines.join("\n"), {
+                      reply_markup: {
+                        inline_keyboard: [
+                          [
+                            {
+                              text: "Open Human Auth",
+                              url: opened.openUrl,
+                            },
+                          ],
+                        ],
+                      },
+                    });
+                    return;
+                  }
+
+                  await this.bot.sendMessage(
+                    chatId,
+                    `${lines.join("\n")}\n\nWeb link is unavailable. Use manual approve/reject commands.`,
+                  );
+                },
+              );
+            },
           source === "cron" ? "minimal" : undefined,
           chatId === null
             ? undefined
@@ -1479,7 +1480,7 @@ export class TelegramGateway {
           message: result.message,
         };
       } catch (error) {
-        await progressWork.catch(() => {});
+        await progressWork.catch(() => { });
         const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
         this.log(`task crash source=${source} chat=${chatId ?? "(none)"} error=${(error as Error).message}`);
         if (chatId !== null) {
