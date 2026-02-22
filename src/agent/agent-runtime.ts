@@ -328,12 +328,12 @@ export class AgentRuntime {
     const hookPath = path.join(this.config.workspaceDir, SYSTEM_PROMPT_CONTEXT_HOOK_FILE);
     const hookRaw = fs.existsSync(hookPath)
       ? (() => {
-          try {
-            return fs.readFileSync(hookPath, "utf-8");
-          } catch {
-            return "";
-          }
-        })()
+        try {
+          return fs.readFileSync(hookPath, "utf-8");
+        } catch {
+          return "";
+        }
+      })()
       : "";
     const hookNormalized = hookRaw.replace(/\r\n/g, "\n").trim();
     if (hookNormalized && remaining > 256) {
@@ -434,9 +434,9 @@ export class AgentRuntime {
     const text = blocks.length === 0
       ? ""
       : [
-          "Instruction priority inside workspace context: AGENTS.md > BOOTSTRAP.md > SOUL.md > other files.",
-          ...blocks,
-        ].join("\n\n");
+        "Instruction priority inside workspace context: AGENTS.md > BOOTSTRAP.md > SOUL.md > other files.",
+        ...blocks,
+      ].join("\n\n");
 
     const baseReport = {
       maxCharsPerFile: SYSTEM_PROMPT_MAX_CHARS_PER_FILE,
@@ -1109,8 +1109,8 @@ export class AgentRuntime {
     };
     return {
       type: "tap",
-      x: target.center.x,
-      y: target.center.y,
+      x: target.scaledCenter.x,
+      y: target.scaledCenter.y,
       reason: action.reason
         ? `${action.reason} [resolved:${action.elementId}]`
         : `resolved tap_element ${action.elementId}`,
@@ -1713,10 +1713,10 @@ export class AgentRuntime {
             const autoAction: AgentAction = autoDecision?.action?.type === "tap"
               ? autoDecision.action
               : {
-                  type: "wait",
-                  durationMs: 600,
-                  reason: "auto_vm_permission_no_button_detected",
-                };
+                type: "wait",
+                durationMs: 600,
+                reason: "auto_vm_permission_no_button_detected",
+              };
             if (autoDecision?.action?.type === "tap") {
               lastAutoPermissionAllowAtMs = Date.now();
             }
