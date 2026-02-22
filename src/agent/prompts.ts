@@ -265,6 +265,7 @@ export function buildUserPrompt(
   step: number,
   snapshot: ScreenSnapshot,
   history: string[],
+  recentSnapshots: ScreenSnapshot[] = [],
 ): string {
   const recentHistory = history.slice(-8);
   const recentActions = recentHistory.map(parseActionFromHistoryLine);
@@ -279,6 +280,18 @@ export function buildUserPrompt(
       .map((item) => {
         const label = item.text || item.contentDesc || item.resourceId || item.className || "(unlabeled)";
         return `- mark ${item.id}: label="${label}" clickable=${item.clickable} class=${item.className || "unknown"} center=(${item.scaledCenter.x},${item.scaledCenter.y}) bounds=[${item.scaledBounds.left},${item.scaledBounds.top}][${item.scaledBounds.right},${item.scaledBounds.bottom}]`;
+      })
+      .join("\n")
+    : "(none)";
+  const recentFramesText = recentSnapshots.length > 0
+    ? recentSnapshots
+      .slice(-3)
+      .map((item, idx) => {
+        const labels = (item.uiElements || [])
+          .map((n) => n.text || n.contentDesc || n.resourceId || n.className || "")
+          .filter(Boolean)
+          .slice(0, 4);
+        return `- frame-${idx + 1}: app=${item.currentApp} capturedAt=${item.capturedAt} size=${item.scaledWidth}x${item.scaledHeight} labels=${JSON.stringify(labels)}`;
       })
       .join("\n")
     : "(none)";
@@ -303,8 +316,11 @@ export function buildUserPrompt(
     ),
     "",
     snapshot.somScreenshotBase64
-      ? "Image notes: first image is Set-of-Mark overlay with numbered boxes; second image is raw screenshot."
-      : "Image notes: single raw screenshot only (no Set-of-Mark overlay available).",
+      ? "Image notes: previous frames (if any) appear first; the final images are current-frame SoM overlay then current raw screenshot."
+      : "Image notes: previous frames (if any) appear first; final image is current raw screenshot.",
+    "",
+    "Recent visual frames (oldest -> newest, excluding current frame):",
+    recentFramesText,
     "",
     "UI candidates (scaled coordinate space):",
     uiCandidatesText,

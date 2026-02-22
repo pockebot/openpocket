@@ -13,6 +13,7 @@ import type {
   UserDecisionResponse,
   OpenPocketConfig,
   SkillInfo,
+  ScreenSnapshot,
 } from "../types";
 import { getModelProfile, resolveModelAuth } from "../config";
 import { WorkspaceStore } from "../memory/workspace";
@@ -1284,6 +1285,7 @@ export class AgentRuntime {
         baseUrl: auth.baseUrl,
         preferredMode: auth.preferredMode,
       });
+      const snapshotContextWindow: ScreenSnapshot[] = [];
       const history: string[] = [];
       const traces: StepTrace[] = [];
       const skillsSummary = this.skillLoader.summaryText();
@@ -1318,6 +1320,7 @@ export class AgentRuntime {
 
         const snapshot = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, profile.model);
         snapshot.installedPackages = launchablePackages;
+        const recentSnapshots = snapshotContextWindow.slice(-2) as typeof snapshot[];
         shouldReturnHome = true;
         let screenshotPath: string | null = null;
         if (this.config.screenshots.saveStepScreenshots) {
@@ -1400,12 +1403,17 @@ export class AgentRuntime {
           snapshot,
           history,
         });
+        snapshotContextWindow.push(snapshot);
+        if (snapshotContextWindow.length > 2) {
+          snapshotContextWindow.shift();
+        }
 
         const output = await model.nextStep({
           systemPrompt,
           task,
           step,
           snapshot,
+          recentSnapshots,
           history,
         });
 
