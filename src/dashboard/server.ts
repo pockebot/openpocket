@@ -524,10 +524,7 @@ export class DashboardServer {
       defaultModel: selectedModelProfile,
     };
 
-    if (!useEnvKey) {
-      if (!rawApiKey) {
-        throw new Error("API key cannot be empty when not using env variable.");
-      }
+    if (!useEnvKey && rawApiKey) {
       const selected = nextConfig.models[selectedModelProfile];
       const providerHost = (() => {
         try {
@@ -1696,7 +1693,18 @@ export class DashboardServer {
       });
 
       $("#onboard-model-select").addEventListener("change", () => {
-        renderOnboarding();
+        const select = $("#onboard-model-select");
+        const selected = select.value || state.config?.defaultModel;
+        const profile = state.config?.models?.[selected];
+        const provider = profile?.baseUrl || "unknown";
+        const envName = profile?.apiKeyEnv || "N/A";
+        const modelId = profile?.model || "unknown";
+        const status = state.credentialStatus[selected] || "";
+        $("#onboard-model-meta").innerHTML =
+          "<div>Model ID: <code>" + modelId + "</code></div>" +
+          "<div>Provider: <code>" + provider + "</code></div>" +
+          "<div>Provider API env: <code>" + envName + "</code></div>" +
+          "<div>" + status + "</div>";
       });
 
       $("#onboard-save-btn").addEventListener("click", () => {
