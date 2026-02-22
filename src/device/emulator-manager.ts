@@ -145,6 +145,51 @@ export class EmulatorManager {
     return this.status();
   }
 
+  /**
+   * Apply post-boot settings: high contrast, dark theme, suppress first-run dialogs,
+   * pre-grant notification permissions, and disable captive portal checks.
+   */
+  private applyPostBootSettings(deviceId: string): void {
+    const run = (args: string[]) => {
+      try {
+        this.runAdb(["-s", deviceId, ...args]);
+      } catch {
+        // best-effort
+      }
+    };
+
+    // High contrast text + dark theme
+    run(["shell", "settings", "put", "secure", "high_text_contrast_enabled", "1"]);
+    run(["shell", "cmd", "uimode", "night", "yes"]);
+
+    // Suppress first-run hints and setup wizard
+    run(["shell", "settings", "put", "secure", "skip_first_use_hints", "1"]);
+    run(["shell", "settings", "put", "global", "device_provisioned", "1"]);
+    run(["shell", "settings", "put", "secure", "user_setup_complete", "1"]);
+
+    // Disable notification popups and WiFi nags
+    run(["shell", "settings", "put", "global", "heads_up_notifications_enabled", "0"]);
+    run(["shell", "settings", "put", "global", "wifi_networks_available_notification_on", "0"]);
+
+    // Disable captive portal detection (fixes "no internet" warning on emulator WiFi)
+    run(["shell", "settings", "put", "global", "captive_portal_detection_enabled", "0"]);
+    run(["shell", "settings", "put", "global", "captive_portal_mode", "0"]);
+
+    // Pre-grant notification permission to common apps
+    const commonApps = [
+      "com.google.android.gm",
+      "com.google.android.apps.photos",
+      "com.google.android.youtube",
+      "com.android.chrome",
+      "com.google.android.apps.messaging",
+      "com.google.android.calendar",
+      "com.google.android.apps.maps",
+    ];
+    for (const pkg of commonApps) {
+      run(["shell", "pm", "grant", pkg, "android.permission.POST_NOTIFICATIONS"]);
+    }
+  }
+
   private async waitForShutdown(timeoutMs: number): Promise<boolean> {
     const startAt = Date.now();
     while (Date.now() - startAt < timeoutMs) {
@@ -444,6 +489,7 @@ export class EmulatorManager {
 
     const waited = await this.waitForBoot(timeoutMs);
     if (waited.bootedDevices.length > 0) {
+      this.applyPostBootSettings(waited.bootedDevices[0]);
       const prefix = fallback
         ? `Configured AVD '${this.config.emulator.avdName}' not found; used '${avdName}'. `
         : "";
