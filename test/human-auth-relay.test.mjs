@@ -149,6 +149,15 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
     const token = openUrl.searchParams.get("token");
     assert.equal(Boolean(token), true);
 
+    const portalRes = await fetch(
+      `${base}/human-auth/req-takeover-1?token=${encodeURIComponent(String(token || ""))}`,
+    );
+    assert.equal(portalRes.status, 200);
+    const portalHtml = await portalRes.text();
+    assert.match(portalHtml, /Login Credentials \(Recommended\)/);
+    assert.match(portalHtml, /Optional Remote Takeover \(Live\)/);
+    assert.match(portalHtml, /Open Live Stream/);
+
     const snapshotRes = await fetch(
       `${base}/v1/human-auth/requests/req-takeover-1/takeover/snapshot?token=${encodeURIComponent(token)}`,
     );

@@ -537,7 +537,7 @@ export class HumanAuthRelayServer {
       color: #a63a1a;
       border-color: #e7b7aa;
     }
-    #attachText, #useGeo, #attachGeo, #startCam, #snapCam, #pickPhoto {
+    #attachText, #attachCredentials, #clearCredentials, #useGeo, #attachGeo, #startCam, #snapCam, #pickPhoto {
       background: #f7f8fb;
       color: #2d3136;
       border-color: #d9dfe8;
@@ -553,6 +553,22 @@ export class HumanAuthRelayServer {
       font-size: 12px;
       line-height: 1.5;
       margin-top: 8px;
+    }
+    .passwordRow {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .passwordRow input {
+      flex: 1;
+    }
+    #togglePassword {
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: #f7f8fb;
+      color: #2d3136;
+      border-color: #d9dfe8;
+      white-space: nowrap;
     }
     .hidden { display: none !important; }
     .grid2 { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -708,8 +724,38 @@ export class HumanAuthRelayServer {
       <p class="brief"><b>${capability}</b> requested. ${instructionBrief}</p>
       <div class="capabilityLine" id="capabilityHint"></div>
 
+      <div class="section hidden" id="credentialDelegation">
+        <h2>Login Credentials (Recommended)</h2>
+        <div class="muted">Use this form first for account login walls. Agent will auto-fill credentials in the emulator login form.</div>
+        <label for="credUsername">Username / Email</label>
+        <input
+          id="credUsername"
+          type="text"
+          placeholder="Enter username, email, or phone"
+          autocomplete="username"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+        <label for="credPassword">Password</label>
+        <div class="passwordRow">
+          <input
+            id="credPassword"
+            type="password"
+            placeholder="Enter password"
+            autocomplete="current-password"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+          <button id="togglePassword" type="button">Show</button>
+        </div>
+        <div class="actions">
+          <button id="attachCredentials" type="button">Attach Credentials</button>
+          <button id="clearCredentials" type="button">Clear</button>
+        </div>
+      </div>
+
       <div class="section">
-        <label for="note">Optional note</label>
+        <label for="note">Decision Note (Optional)</label>
         <textarea id="note" placeholder="e.g., approved with Face ID, verification done"></textarea>
         <div class="actions">
           <button id="approve" type="button">Approve</button>
@@ -720,11 +766,11 @@ export class HumanAuthRelayServer {
 
       <div class="section">
         <div class="takeover-head">
-          <h2>Remote Takeover (Live)</h2>
+          <h2>Optional Remote Takeover (Live)</h2>
           <div class="takeover-meta" id="takeoverMeta">Preparing stream...</div>
         </div>
         <div class="takeover-actions">
-          <button id="takeoverStart" type="button">Start Live Stream</button>
+          <button id="takeoverStart" type="button">Open Live Stream</button>
           <button id="takeoverStop" type="button">Stop Stream</button>
           <button id="takeoverRefresh" type="button">Refresh Snapshot</button>
         </div>
@@ -745,10 +791,10 @@ export class HumanAuthRelayServer {
         <div class="takeover-status" id="takeoverStatus">Tip: tap inside live view to control emulator directly.</div>
       </div>
 
-      <div class="section">
+      <div class="section" id="delegatedDataSection">
         <h2>Optional Delegated Data</h2>
         <div id="textDelegation">
-          <label for="resultText">Text / Code</label>
+          <label for="resultText">OTP / Code / Short Text</label>
           <input id="resultText" type="text" placeholder="e.g., OTP, SMS code, QR result text" />
           <div class="actions">
             <button id="attachText" type="button">Attach Text</button>
@@ -767,16 +813,18 @@ export class HumanAuthRelayServer {
           </div>
         </div>
 
-        <div class="actions">
-          <button id="startCam" type="button">Enable Camera</button>
-          <button id="snapCam" type="button">Capture Snapshot</button>
-          <button id="pickPhoto" type="button">Capture / Upload Photo</button>
+        <div id="cameraDelegation">
+          <div class="actions">
+            <button id="startCam" type="button">Enable Camera</button>
+            <button id="snapCam" type="button">Capture Snapshot</button>
+            <button id="pickPhoto" type="button">Capture / Upload Photo</button>
+          </div>
+          <div class="muted">Camera attachment is optional. You can approve/reject without photo.</div>
+          <video id="video" autoplay playsinline hidden></video>
+          <canvas id="canvas" hidden></canvas>
+          <img id="photoPreview" alt="Captured preview" hidden />
+          <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
         </div>
-        <div class="muted">Camera attachment is optional. You can approve/reject without photo.</div>
-        <video id="video" autoplay playsinline hidden></video>
-        <canvas id="canvas" hidden></canvas>
-        <img id="photoPreview" alt="Captured preview" hidden />
-        <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
       </div>
 
       <details class="context">
@@ -804,6 +852,9 @@ export class HumanAuthRelayServer {
     const photoInputEl = document.getElementById("photoInput");
     const photoPreviewEl = document.getElementById("photoPreview");
     const resultTextEl = document.getElementById("resultText");
+    const credUsernameEl = document.getElementById("credUsername");
+    const credPasswordEl = document.getElementById("credPassword");
+    const togglePasswordEl = document.getElementById("togglePassword");
     const geoLatEl = document.getElementById("geoLat");
     const geoLonEl = document.getElementById("geoLon");
     const takeoverStreamEl = document.getElementById("takeoverStream");
@@ -816,7 +867,6 @@ export class HumanAuthRelayServer {
     let takeoverPollingTimer = null;
     let takeoverRunning = false;
     const takeoverControlIds = [
-      "takeoverStart",
       "takeoverStop",
       "takeoverRefresh",
       "takeoverSendText",
@@ -836,6 +886,7 @@ export class HumanAuthRelayServer {
     function capabilityHintText(cap) {
       if (cap === "location") return "Recommended: attach location. VM will receive geo coordinates.";
       if (cap === "camera") return "Recommended: attach a photo if app flow needs image input.";
+      if (cap === "oauth") return "Recommended: fill username/password above, then Approve. Remote takeover below is optional.";
       if (cap === "2fa" || cap === "sms") return "Recommended: attach OTP/code text.";
       if (cap === "qr") return "Recommended: attach decoded QR text or photo.";
       return "Attach optional evidence/data to help the agent continue in VM.";
@@ -843,14 +894,21 @@ export class HumanAuthRelayServer {
 
     function configureByCapability() {
       capabilityHintEl.textContent = capabilityHintText(capability);
+      show("credentialDelegation", capability === "oauth");
+      show("delegatedDataSection", capability !== "oauth");
       show("geoDelegation", capability === "location");
-      show("textDelegation", capability !== "location");
+      show("textDelegation", capability !== "location" && capability !== "oauth");
+      show("cameraDelegation", capability === "camera" || capability === "qr");
       if (capability === "location") {
         resultTextEl.placeholder = "Optional location note";
       } else if (capability === "sms" || capability === "2fa") {
         resultTextEl.placeholder = "e.g., 6-digit OTP";
       } else if (capability === "qr") {
         resultTextEl.placeholder = "Paste QR decoded content";
+      } else if (capability === "oauth") {
+        resultTextEl.placeholder = "Not used in oauth flow";
+      } else {
+        resultTextEl.placeholder = "Optional delegated text";
       }
     }
 
@@ -1008,6 +1066,8 @@ export class HumanAuthRelayServer {
       takeoverStreamEl.removeAttribute("src");
       takeoverStreamEl.hidden = true;
       takeoverEmptyEl.style.display = "flex";
+      takeoverEmptyEl.textContent = "Remote takeover not started.";
+      setTakeoverControlsEnabled(false);
       setTakeoverStatus("Live stream stopped.");
     }
 
@@ -1038,6 +1098,43 @@ export class HumanAuthRelayServer {
         mimeType: "application/json",
         base64: toBase64Utf8(JSON.stringify(payload)),
       };
+    }
+
+    function attachCredentialsArtifact() {
+      const username = String(credUsernameEl.value || "").trim();
+      const password = String(credPasswordEl.value || "");
+      if (!username && !password) {
+        statusEl.textContent = "Username and password are both empty.";
+        return;
+      }
+      setJsonArtifact({
+        kind: "credentials",
+        username,
+        password,
+        capability,
+        capturedAt: new Date().toISOString(),
+      });
+      const parts = [];
+      if (username) {
+        parts.push("username");
+      }
+      if (password) {
+        parts.push("password");
+      }
+      statusEl.textContent = "Credentials attached (" + parts.join(" + ") + ").";
+    }
+
+    function clearCredentialsArtifact() {
+      credUsernameEl.value = "";
+      credPasswordEl.value = "";
+      artifact = null;
+      statusEl.textContent = "Credentials cleared.";
+    }
+
+    function togglePasswordVisibility() {
+      const asText = credPasswordEl.type === "password";
+      credPasswordEl.type = asText ? "text" : "password";
+      togglePasswordEl.textContent = asText ? "Hide" : "Show";
     }
 
     function humanErrorMessage(err) {
@@ -1207,6 +1304,9 @@ export class HumanAuthRelayServer {
     document.getElementById("snapCam").addEventListener("click", captureSnapshot);
     document.getElementById("pickPhoto").addEventListener("click", pickPhoto);
     document.getElementById("attachText").addEventListener("click", attachTextArtifact);
+    document.getElementById("attachCredentials").addEventListener("click", attachCredentialsArtifact);
+    document.getElementById("clearCredentials").addEventListener("click", clearCredentialsArtifact);
+    document.getElementById("togglePassword").addEventListener("click", togglePasswordVisibility);
     document.getElementById("useGeo").addEventListener("click", useCurrentLocation);
     document.getElementById("attachGeo").addEventListener("click", attachGeoArtifact);
     photoInputEl.addEventListener("change", onPhotoChange);
@@ -1264,7 +1364,9 @@ export class HumanAuthRelayServer {
       loadTakeoverSnapshot(true).catch(() => {});
     });
     configureByCapability();
-    startTakeoverStream();
+    setTakeoverControlsEnabled(false);
+    takeoverEmptyEl.textContent = "Remote takeover not started.";
+    setTakeoverStatus("Remote takeover is optional. Open live stream only if you need direct control.");
   </script>
 </body>
 </html>`;

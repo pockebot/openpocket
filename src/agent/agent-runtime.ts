@@ -154,6 +154,17 @@ type PermissionDialogNode = {
   bottom: number;
 };
 
+type CredentialInputNode = {
+  resourceId: string;
+  className: string;
+  hint: string;
+  password: boolean;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
 export class AgentRuntime {
   private readonly config: OpenPocketConfig;
   private readonly workspace: WorkspaceStore;
@@ -573,6 +584,25 @@ export class AgentRuntime {
     return { lat, lon };
   }
 
+  private extractDelegatedCredentials(
+    artifactJson: Record<string, unknown> | null,
+  ): { username: string; password: string } | null {
+    if (!artifactJson) {
+      return null;
+    }
+    if (String(artifactJson.kind ?? "") !== "credentials") {
+      return null;
+    }
+    const usernameRaw = artifactJson.username;
+    const passwordRaw = artifactJson.password;
+    const username = typeof usernameRaw === "string" ? usernameRaw.trim() : "";
+    const password = typeof passwordRaw === "string" ? passwordRaw : "";
+    if (!username && !password) {
+      return null;
+    }
+    return { username, password };
+  }
+
   private async applyLocationDelegation(lat: number, lon: number): Promise<DelegationApplyResult> {
     const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
     this.emulator.runAdb(
@@ -605,6 +635,159 @@ export class AgentRuntime {
     return {
       message: `delegated text typed (${text.length} chars): ${result}`,
       templateHint: "text_typed_continue_flow",
+    };
+  }
+
+  private credentialHintScore(node: CredentialInputNode, target: "username" | "password"): number {
+    const resource = this.normalizePermissionUiText(node.resourceId);
+    const hint = this.normalizePermissionUiText(node.hint);
+    const className = this.normalizePermissionUiText(node.className);
+    const combined = `${resource} ${hint} ${className}`;
+
+    if (target === "password") {
+      let score = 0;
+      if (node.password) {
+        score += 140;
+      }
+      if (combined.includes("password") || combined.includes("passcode") || combined.includes("pwd")) {
+        score += 110;
+      }
+      return score;
+    }
+
+    let score = 0;
+    if (!node.password) {
+      score += 20;
+    }
+    if (
+      combined.includes("username") ||
+      combined.includes("user name") ||
+      combined.includes("email") ||
+      combined.includes("account") ||
+      combined.includes("phone")
+    ) {
+      score += 120;
+    }
+    return score;
+  }
+
+  private pickCredentialInputNode(
+    nodes: CredentialInputNode[],
+    target: "username" | "password",
+    exclude: CredentialInputNode | null,
+  ): CredentialInputNode | null {
+    const filtered = nodes.filter((node) => node !== exclude);
+    if (filtered.length === 0) {
+      return null;
+    }
+    const scored = filtered
+      .map((node) => ({
+        node,
+        score: this.credentialHintScore(node, target),
+      }))
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        if (a.node.top !== b.node.top) {
+          return a.node.top - b.node.top;
+        }
+        return a.node.left - b.node.left;
+      });
+    if ((scored[0]?.score ?? 0) > 0) {
+      return scored[0]?.node ?? null;
+    }
+    if (target === "password") {
+      const passwordNode = filtered.find((node) => node.password);
+      if (passwordNode) {
+        return passwordNode;
+      }
+      return filtered[filtered.length - 1] ?? null;
+    }
+    const textNode = filtered.find((node) => !node.password);
+    if (textNode) {
+      return textNode;
+    }
+    return filtered[0] ?? null;
+  }
+
+  private async tapCredentialNode(
+    node: CredentialInputNode,
+    reason: string,
+  ): Promise<void> {
+    const tapX = Math.max(0, Math.round((node.left + node.right) / 2));
+    const tapY = Math.max(0, Math.round((node.top + node.bottom) / 2));
+    await this.adb.executeAction(
+      {
+        type: "tap",
+        x: tapX,
+        y: tapY,
+        reason,
+      },
+      this.config.agent.deviceId,
+    );
+    await sleep(120);
+  }
+
+  private async applyCredentialDelegation(
+    username: string,
+    password: string,
+  ): Promise<DelegationApplyResult> {
+    const deviceId = this.resolveDelegationDeviceId();
+    const uiDumpXml = this.captureUiDumpXml(deviceId);
+    const nodes = this.parseCredentialInputNodes(uiDumpXml);
+    let focusedUsernameNode: CredentialInputNode | null = null;
+
+    if (username) {
+      focusedUsernameNode = this.pickCredentialInputNode(nodes, "username", null);
+      if (focusedUsernameNode) {
+        await this.tapCredentialNode(focusedUsernameNode, "human_auth_focus_username");
+      }
+      await this.adb.executeAction(
+        {
+          type: "type",
+          text: username,
+          reason: "human_auth_delegate_username",
+        },
+        this.config.agent.deviceId,
+      );
+    }
+
+    if (password) {
+      const passwordNode = this.pickCredentialInputNode(nodes, "password", focusedUsernameNode);
+      if (passwordNode) {
+        await this.tapCredentialNode(passwordNode, "human_auth_focus_password");
+      } else if (username) {
+        await this.adb.executeAction(
+          {
+            type: "keyevent",
+            keycode: "KEYCODE_TAB",
+            reason: "human_auth_focus_password_tab",
+          },
+          this.config.agent.deviceId,
+        );
+        await sleep(80);
+      }
+      await this.adb.executeAction(
+        {
+          type: "type",
+          text: password,
+          reason: "human_auth_delegate_password",
+        },
+        this.config.agent.deviceId,
+      );
+    }
+
+    const filled: string[] = [];
+    if (username) {
+      filled.push(`username(${username.length} chars)`);
+    }
+    if (password) {
+      filled.push(`password(${password.length} chars)`);
+    }
+    return {
+      message: `delegated credentials typed: ${filled.join(" + ")}`,
+      templateHint: "oauth_credentials_typed_continue_flow",
     };
   }
 
@@ -718,6 +901,68 @@ export class AgentRuntime {
       match = nodeRe.exec(uiDumpXml);
     }
     return nodes;
+  }
+
+  private parseCredentialInputNodes(uiDumpXml: string): CredentialInputNode[] {
+    const nodes: CredentialInputNode[] = [];
+    const nodeRe = /<node\s+([^>]*?)\/>/g;
+    let match = nodeRe.exec(uiDumpXml);
+    while (match) {
+      const attrs = this.parseUiNodeAttributes(match[1] ?? "");
+      const className = String(attrs.class ?? "");
+      const classNormalized = this.normalizePermissionUiText(className);
+      const parsedBounds = this.parseBounds(String(attrs.bounds ?? "").trim());
+      if (!parsedBounds || !classNormalized.includes("edittext")) {
+        match = nodeRe.exec(uiDumpXml);
+        continue;
+      }
+      const enabled = String(attrs.enabled ?? "").toLowerCase() !== "false";
+      if (!enabled) {
+        match = nodeRe.exec(uiDumpXml);
+        continue;
+      }
+      nodes.push({
+        resourceId: String(attrs["resource-id"] ?? ""),
+        className,
+        hint: String(attrs.hint ?? attrs.text ?? attrs["content-desc"] ?? ""),
+        password: String(attrs.password ?? "").toLowerCase() === "true",
+        left: parsedBounds.left,
+        top: parsedBounds.top,
+        right: parsedBounds.right,
+        bottom: parsedBounds.bottom,
+      });
+      match = nodeRe.exec(uiDumpXml);
+    }
+    nodes.sort((a, b) => {
+      if (a.top !== b.top) {
+        return a.top - b.top;
+      }
+      return a.left - b.left;
+    });
+    return nodes;
+  }
+
+  private captureUiDumpXml(deviceId: string): string {
+    let uiDumpXml = "";
+    try {
+      this.emulator.runAdb(
+        ["-s", deviceId, "shell", "uiautomator", "dump", "/sdcard/openpocket-window.xml"],
+        15_000,
+      );
+      uiDumpXml = this.emulator.runAdb(
+        ["-s", deviceId, "shell", "cat", "/sdcard/openpocket-window.xml"],
+        15_000,
+      );
+      if (!uiDumpXml.includes("<hierarchy")) {
+        uiDumpXml = this.emulator.runAdb(
+          ["-s", deviceId, "shell", "cat", "/sdcard/window_dump.xml"],
+          15_000,
+        );
+      }
+    } catch {
+      uiDumpXml = "";
+    }
+    return uiDumpXml;
   }
 
   private resolveTapElementAction(
@@ -870,25 +1115,7 @@ export class AgentRuntime {
     }
 
     const deviceId = this.resolveDelegationDeviceId();
-    let uiDumpXml = "";
-    try {
-      this.emulator.runAdb(
-        ["-s", deviceId, "shell", "uiautomator", "dump", "/sdcard/openpocket-window.xml"],
-        15_000,
-      );
-      uiDumpXml = this.emulator.runAdb(
-        ["-s", deviceId, "shell", "cat", "/sdcard/openpocket-window.xml"],
-        15_000,
-      );
-      if (!uiDumpXml.includes("<hierarchy")) {
-        uiDumpXml = this.emulator.runAdb(
-          ["-s", deviceId, "shell", "cat", "/sdcard/window_dump.xml"],
-          15_000,
-        );
-      }
-    } catch {
-      uiDumpXml = "";
-    }
+    const uiDumpXml = this.captureUiDumpXml(deviceId);
 
     const nodes = this.parsePermissionDialogNodes(uiDumpXml);
     const targetNode = this.pickPermissionDialogNode(nodes, decision.approved);
@@ -1006,10 +1233,24 @@ export class AgentRuntime {
         }
       }
 
+      if (!artifactResult && capability === "oauth") {
+        const credentials = this.extractDelegatedCredentials(artifactJson);
+        if (credentials) {
+          artifactResult = await this.applyCredentialDelegation(credentials.username, credentials.password);
+        }
+      }
+
       if (!artifactResult && (capability === "sms" || capability === "2fa" || capability === "qr" || capability === "voice")) {
         const text = this.extractDelegatedText(artifactJson);
         if (text) {
           artifactResult = await this.applyTextDelegation(text);
+        }
+      }
+
+      if (!artifactResult && artifactJson?.kind === "credentials") {
+        const credentials = this.extractDelegatedCredentials(artifactJson);
+        if (credentials) {
+          artifactResult = await this.applyCredentialDelegation(credentials.username, credentials.password);
         }
       }
 
