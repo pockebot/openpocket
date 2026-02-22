@@ -10,18 +10,8 @@ read_when:
 
 ## zh
 
-会话已重置。请先完成 Session Startup：
-
-1. 快速确认当前任务目标与约束。
-2. 读取 `AGENTS.md`、`SOUL.md`、`USER.md`、`IDENTITY.md` 最新内容。
-3. 如果 `BOOTSTRAP.md` 仍存在，先完成初始化再执行任务。
-4. 之后再进入正常对话或执行流程。
+会话已重置。请先执行 Session Startup：读取并遵循 `AGENTS.md`、`SOUL.md`、`USER.md`、`IDENTITY.md` 最新内容；如果 `BOOTSTRAP.md` 仍在，先完成初始化。完成后用当前人设自然打招呼（1-3 句），询问用户接下来要做什么，不要暴露内部流程或文件细节。
 
 ## en
 
-Session reset complete. Run Session Startup first:
-
-1. Reconfirm current goal and constraints.
-2. Read latest `AGENTS.md`, `SOUL.md`, `USER.md`, and `IDENTITY.md`.
-3. If `BOOTSTRAP.md` still exists, finish onboarding before task execution.
-4. Then continue normal chat or execution flow.
+Session reset complete. Run Session Startup first: read and follow latest `AGENTS.md`, `SOUL.md`, `USER.md`, and `IDENTITY.md`; if `BOOTSTRAP.md` still exists, finish onboarding first. Then greet the user naturally in your current persona (1-3 sentences), ask what they want to do, and do not expose internal steps/files/tools.

@@ -639,10 +639,13 @@ export class ChatAssistant {
     return false;
   }
 
-  private isProfileSnapshotComplete(snapshot: ProfileSnapshot): boolean {
-    return !this.isPlaceholderValue(snapshot.userPreferredAddress)
-      && !this.isPlaceholderValue(snapshot.assistantName, ["openpocket"])
-      && !this.isPlaceholderValue(snapshot.assistantPersona);
+  private isProfileSnapshotComplete(snapshot: ProfileSnapshot, locale: OnboardingLocale): boolean {
+    return !this.isPlaceholderValue(snapshot.userPreferredAddress, [this.pickFallback(locale, "user")])
+      && !this.isPlaceholderValue(
+        snapshot.assistantName,
+        ["openpocket", this.pickFallback(locale, "assistant")],
+      )
+      && !this.isPlaceholderValue(snapshot.assistantPersona, [this.pickFallback(locale, "persona")]);
   }
 
   private applyModelProfilePatch(
@@ -785,6 +788,37 @@ export class ChatAssistant {
     return null;
   }
 
+  private firstMissingSnapshotStep(
+    snapshot: ProfileSnapshot,
+    locale: OnboardingLocale,
+  ): OnboardingStep | null {
+    if (this.isPlaceholderValue(snapshot.userPreferredAddress, [this.pickFallback(locale, "user")])) {
+      return 1;
+    }
+    if (
+      this.isPlaceholderValue(
+        snapshot.assistantName,
+        ["openpocket", this.pickFallback(locale, "assistant")],
+      )
+    ) {
+      return 2;
+    }
+    if (this.isPlaceholderValue(snapshot.assistantPersona, [this.pickFallback(locale, "persona")])) {
+      return 3;
+    }
+    return null;
+  }
+
+  private bootstrapFallbackQuestion(locale: OnboardingLocale, snapshot: ProfileSnapshot): string {
+    const step = this.firstMissingSnapshotStep(snapshot, locale);
+    if (step === null) {
+      return locale === "zh"
+        ? "初始化信息我已经拿到了。你可以直接告诉我要做什么。"
+        : "I already have your onboarding profile. Tell me what you want to do next.";
+    }
+    return this.questionForStep(step, locale);
+  }
+
   private readBootstrapGuide(): string {
     const bootstrap = this.readTextSafe(this.bootstrapFilePath()).trim();
     if (bootstrap) {
@@ -837,6 +871,7 @@ export class ChatAssistant {
       "2) Offer options/examples when asking about persona/tone.",
       "3) Mark onboardingComplete=true only when required fields are all available.",
       "4) Required fields: userPreferredAddress, assistantName, assistantPersona.",
+      "5) Do not force a rigid fixed-question script; adapt naturally to what user already provided.",
       `Locale hint: ${state.locale}`,
       `Current profile snapshot: ${JSON.stringify(state.profile, null, 2)}`,
       "",
@@ -1447,6 +1482,7 @@ export class ChatAssistant {
       return null;
     }
 
+    const continuingFlow = Boolean(active);
     const locale = active?.locale ?? this.detectOnboardingLocale(inputText);
     const parsedFromInput = this.parseOnboardingFields(inputText);
     const state: BootstrapOnboardingState = active ?? {
@@ -1470,11 +1506,45 @@ export class ChatAssistant {
       state.turns.push({ role: "user", content: userLine });
     }
 
+    const parsedStructured = Boolean(
+      parsedFromInput.userPreferredAddress
+      || parsedFromInput.assistantName
+      || parsedFromInput.assistantPersona,
+    );
+    if (continuingFlow && userLine && !parsedStructured) {
+      const step = this.firstMissingSnapshotStep(state.profile, locale);
+      if (step === 1) {
+        state.profile.userPreferredAddress = userLine;
+      } else if (step === 2) {
+        state.profile.assistantName = this.normalizeAssistantName(userLine);
+      } else if (step === 3) {
+        state.profile.assistantPersona = this.resolvePersonaAnswer(userLine, locale);
+      }
+    }
+
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
-      this.bootstrapOnboarding.delete(chatId);
-      return this.applyProfileOnboarding(chatId, inputText);
+      if (this.isProfileSnapshotComplete(state.profile, locale)) {
+        this.completeWorkspaceBootstrap(state.profile);
+        this.bootstrapOnboarding.delete(chatId);
+        this.profileOnboarding.delete(chatId);
+        this.pendingProfileUpdates.set(chatId, {
+          assistantName: state.profile.assistantName,
+          locale,
+        });
+        return this.renderTemplate(this.localeTemplate(locale).onboardingSaved, {
+          userPreferredAddress: state.profile.userPreferredAddress,
+          assistantName: state.profile.assistantName,
+          assistantPersona: state.profile.assistantPersona,
+        });
+      }
+      this.bootstrapOnboarding.set(chatId, {
+        locale,
+        profile: state.profile,
+        turns: state.turns.slice(-20),
+      });
+      return this.bootstrapFallbackQuestion(locale, state.profile);
     }
 
     const client = new OpenAI({
@@ -1496,8 +1566,26 @@ export class ChatAssistant {
     }
 
     if (!decision?.reply) {
-      this.bootstrapOnboarding.delete(chatId);
-      return this.applyProfileOnboarding(chatId, inputText);
+      if (this.isProfileSnapshotComplete(state.profile, locale)) {
+        this.completeWorkspaceBootstrap(state.profile);
+        this.bootstrapOnboarding.delete(chatId);
+        this.profileOnboarding.delete(chatId);
+        this.pendingProfileUpdates.set(chatId, {
+          assistantName: state.profile.assistantName,
+          locale,
+        });
+        return this.renderTemplate(this.localeTemplate(locale).onboardingSaved, {
+          userPreferredAddress: state.profile.userPreferredAddress,
+          assistantName: state.profile.assistantName,
+          assistantPersona: state.profile.assistantPersona,
+        });
+      }
+      this.bootstrapOnboarding.set(chatId, {
+        locale,
+        profile: state.profile,
+        turns: state.turns.slice(-20),
+      });
+      return this.bootstrapFallbackQuestion(locale, state.profile);
     }
 
     state.profile = this.applyModelProfilePatch(state.profile, decision.profile, locale);
@@ -1513,8 +1601,10 @@ export class ChatAssistant {
     }
 
     const completeByModel = Boolean(decision.onboardingComplete);
-    const completeByData = this.isProfileSnapshotComplete(state.profile) && !this.hasBootstrapOnboardingFile();
-    const shouldComplete = (completeByModel && this.isProfileSnapshotComplete(state.profile)) || completeByData;
+    const completeByData =
+      this.isProfileSnapshotComplete(state.profile, locale) && !this.hasBootstrapOnboardingFile();
+    const shouldComplete =
+      (completeByModel && this.isProfileSnapshotComplete(state.profile, locale)) || completeByData;
     if (!shouldComplete) {
       return decision.reply;
     }

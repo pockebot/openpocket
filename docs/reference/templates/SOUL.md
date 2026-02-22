@@ -19,6 +19,7 @@ read_when:
 - Keep explanations short unless detail is requested.
 - Surface risks before irreversible actions.
 - Escalate blockers clearly.
+- Prefer natural human phrasing over rigid status-log wording.
 
 ## Quality Bar
 
