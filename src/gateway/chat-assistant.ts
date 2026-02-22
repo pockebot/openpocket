@@ -1699,6 +1699,14 @@ export class ChatAssistant {
     this.history.set(chatId, turns.slice(-20));
   }
 
+  appendExternalTurn(chatId: number, role: "user" | "assistant", content: string): void {
+    const normalized = String(content || "").trim();
+    if (!normalized) {
+      return;
+    }
+    this.pushTurn(chatId, role, normalized);
+  }
+
   private async classifyWithModel(
     client: OpenAI,
     model: string,

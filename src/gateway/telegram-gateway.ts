@@ -1002,19 +1002,23 @@ export class TelegramGateway {
     }
 
     if (text.startsWith("/screen")) {
+      this.chat.appendExternalTurn(chatId, "user", text);
       const screenshotPath = await this.agent.captureManualScreenshot();
       this.log(`manual screenshot chat=${chatId} path=${screenshotPath}`);
       try {
         await this.bot.sendPhoto(chatId, screenshotPath, {
           caption: "Current emulator screenshot.",
         });
+        this.chat.appendExternalTurn(chatId, "assistant", "[shared current emulator screenshot]");
       } catch (error) {
         const detail = (error as Error).message || "unknown upload error";
         this.log(`manual screenshot upload failed chat=${chatId} path=${screenshotPath} error=${detail}`);
+        const fallback = `Screenshot saved locally but upload failed: ${detail}\nPath: ${screenshotPath}`;
         await this.bot.sendMessage(
           chatId,
-          `Screenshot saved locally but upload failed: ${detail}\nPath: ${screenshotPath}`,
+          fallback,
         );
+        this.chat.appendExternalTurn(chatId, "assistant", fallback);
       }
       return;
     }
@@ -1098,6 +1102,7 @@ export class TelegramGateway {
         await this.bot.sendMessage(chatId, "Usage: /run <task>");
         return;
       }
+      this.chat.appendExternalTurn(chatId, "user", task);
       await this.runTaskAsync(chatId, task);
       return;
     }
@@ -1117,6 +1122,7 @@ export class TelegramGateway {
     );
     if (decision.mode === "task") {
       const task = decision.task || text;
+      this.chat.appendExternalTurn(chatId, "user", task);
       await this.runTaskAsync(chatId, task);
       return;
     }
@@ -1132,14 +1138,18 @@ export class TelegramGateway {
   private async runTaskAsync(chatId: number, task: string): Promise<void> {
     if (this.agent.isBusy()) {
       this.log(`task rejected busy chat=${chatId} task=${JSON.stringify(task)}`);
-      await this.bot.sendMessage(chatId, "A previous task is still running. Please wait.");
+      const busyText = "A previous task is still running. Please wait.";
+      await this.bot.sendMessage(chatId, busyText);
+      this.chat.appendExternalTurn(chatId, "assistant", busyText);
       return;
     }
     const locale = this.inferTaskLocale(task);
+    const acceptedMessage = this.renderTaskAcceptedMessage(task, locale);
     await this.bot.sendMessage(
       chatId,
-      this.renderTaskAcceptedMessage(task, locale),
+      acceptedMessage,
     );
+    this.chat.appendExternalTurn(chatId, "assistant", acceptedMessage);
     void this.runTaskAndReport({ chatId, task, source: "chat", modelName: null });
   }
 
@@ -1358,6 +1368,7 @@ export class TelegramGateway {
               1800,
             ),
           );
+          this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
         }
 
         return {
@@ -1370,7 +1381,9 @@ export class TelegramGateway {
         const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
         this.log(`task crash source=${source} chat=${chatId ?? "(none)"} error=${(error as Error).message}`);
         if (chatId !== null) {
-          await this.bot.sendMessage(chatId, this.sanitizeForChat(message, 600));
+          const sanitized = this.sanitizeForChat(message, 600);
+          await this.bot.sendMessage(chatId, sanitized);
+          this.chat.appendExternalTurn(chatId, "assistant", sanitized);
         }
         return {
           accepted: true,
