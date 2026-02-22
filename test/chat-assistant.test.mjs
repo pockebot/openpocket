@@ -10,12 +10,12 @@ const { loadConfig } = require("../dist/config/index.js");
 const { ChatAssistant } = require("../dist/gateway/chat-assistant.js");
 const { markWorkspaceOnboardingCompleted, isWorkspaceOnboardingCompleted } = require("../dist/memory/workspace.js");
 
-function withTempCodexHome(prefix, fn) {
+async function withTempCodexHome(prefix, fn) {
   const prev = process.env.CODEX_HOME;
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   process.env.CODEX_HOME = codexHome;
   try {
-    return fn(codexHome);
+    return await fn(codexHome);
   } finally {
     if (prev === undefined) {
       delete process.env.CODEX_HOME;
