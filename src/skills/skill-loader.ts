@@ -88,14 +88,24 @@ export class SkillLoader {
     return [...selected.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  summaryEntries(maxItems = 20): Array<{
+    skill: SkillInfo;
+    line: string;
+  }> {
+    return this.loadAll()
+      .slice(0, Math.max(1, maxItems))
+      .map((skill) => ({
+        skill,
+        line: `- [${skill.source}] ${skill.name} (${skill.path}): ${skill.description}`,
+      }));
+  }
+
   summaryText(maxItems = 20): string {
-    const skills = this.loadAll().slice(0, Math.max(1, maxItems));
-    if (skills.length === 0) {
+    const entries = this.summaryEntries(maxItems);
+    if (entries.length === 0) {
       return "(no skills loaded)";
     }
 
-    return skills
-      .map((skill) => `- [${skill.source}] ${skill.name} (${skill.path}): ${skill.description}`)
-      .join("\n");
+    return entries.map((entry) => entry.line).join("\n");
   }
 }

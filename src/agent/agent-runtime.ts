@@ -24,7 +24,8 @@ import { ScriptExecutor } from "../tools/script-executor";
 import { CodingExecutor } from "../tools/coding-executor";
 import { MemoryExecutor } from "../tools/memory-executor";
 import { ModelClient } from "./model-client";
-import { buildSystemPrompt } from "./prompts";
+import { buildSystemPrompt, type SystemPromptMode } from "./prompts";
+import { CHAT_TOOLS } from "./tools";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
@@ -105,6 +106,33 @@ export type WorkspacePromptContextReport = {
   totalIncludedChars: number;
   files: WorkspacePromptFileReport[];
   hookApplied: boolean;
+  source: "estimate" | "run";
+  generatedAt: string;
+  promptMode: SystemPromptMode;
+  systemPrompt: {
+    chars: number;
+    workspaceContextChars: number;
+    nonWorkspaceChars: number;
+  };
+  skills: {
+    promptChars: number;
+    entries: Array<{
+      name: string;
+      source: "workspace" | "local" | "bundled";
+      path: string;
+      blockChars: number;
+    }>;
+  };
+  tools: {
+    listChars: number;
+    schemaChars: number;
+    entries: Array<{
+      name: string;
+      summaryChars: number;
+      schemaChars: number;
+      propertiesCount: number | null;
+    }>;
+  };
 };
 
 type DelegationApplyResult = {
@@ -141,6 +169,7 @@ export class AgentRuntime {
   private stopRequested = false;
   private currentTask: string | null = null;
   private currentTaskStartedAtMs: number | null = null;
+  private lastSystemPromptReport: WorkspacePromptContextReport | null = null;
 
   constructor(config: OpenPocketConfig) {
     this.config = config;
@@ -376,20 +405,115 @@ export class AgentRuntime {
           ...blocks,
         ].join("\n\n");
 
+    const baseReport = {
+      maxCharsPerFile: SYSTEM_PROMPT_MAX_CHARS_PER_FILE,
+      maxCharsTotal: totalBudget,
+      totalIncludedChars: reports.reduce((sum, item) => sum + item.includedChars, 0),
+      files: reports,
+      hookApplied,
+    };
+
     return {
       text,
       report: {
-        maxCharsPerFile: SYSTEM_PROMPT_MAX_CHARS_PER_FILE,
-        maxCharsTotal: totalBudget,
-        totalIncludedChars: reports.reduce((sum, item) => sum + item.includedChars, 0),
-        files: reports,
-        hookApplied,
+        ...baseReport,
+        source: "estimate",
+        generatedAt: nowIso(),
+        promptMode: "full",
+        systemPrompt: {
+          chars: 0,
+          workspaceContextChars: text.length,
+          nonWorkspaceChars: 0,
+        },
+        skills: {
+          promptChars: 0,
+          entries: [],
+        },
+        tools: {
+          listChars: 0,
+          schemaChars: 0,
+          entries: [],
+        },
       },
     };
   }
 
+  private buildToolPromptReport(): WorkspacePromptContextReport["tools"] {
+    const entries = CHAT_TOOLS.map((tool) => {
+      const schemaChars = JSON.stringify(tool.function.parameters).length;
+      const properties = tool.function.parameters.properties;
+      const propertiesCount = properties && typeof properties === "object"
+        ? Object.keys(properties).length
+        : null;
+      return {
+        name: tool.function.name,
+        summaryChars: (tool.function.description || "").trim().length,
+        schemaChars,
+        propertiesCount,
+      };
+    });
+
+    const listText = CHAT_TOOLS
+      .map((tool) => `- ${tool.function.name}: ${tool.function.description}`)
+      .join("\n");
+    return {
+      listChars: listText.length,
+      schemaChars: entries.reduce((sum, item) => sum + item.schemaChars, 0),
+      entries,
+    };
+  }
+
+  private buildSystemPromptReport(params: {
+    source: "estimate" | "run";
+    promptMode: SystemPromptMode;
+    systemPrompt: string;
+    skillsSummary: string;
+    workspaceReport: WorkspacePromptContextReport;
+  }): WorkspacePromptContextReport {
+    const skillsEntries = this.skillLoader.summaryEntries().map((entry) => ({
+      name: entry.skill.name,
+      source: entry.skill.source,
+      path: entry.skill.path,
+      blockChars: entry.line.length,
+    }));
+    const workspaceContextChars = params.workspaceReport.files
+      .reduce((sum, file) => sum + file.includedChars, 0);
+    const tools = this.buildToolPromptReport();
+    return {
+      ...params.workspaceReport,
+      source: params.source,
+      generatedAt: nowIso(),
+      promptMode: params.promptMode,
+      systemPrompt: {
+        chars: params.systemPrompt.length,
+        workspaceContextChars,
+        nonWorkspaceChars: Math.max(0, params.systemPrompt.length - workspaceContextChars),
+      },
+      skills: {
+        promptChars: params.skillsSummary.length,
+        entries: skillsEntries,
+      },
+      tools,
+    };
+  }
+
   getWorkspacePromptContextReport(): WorkspacePromptContextReport {
-    return this.buildWorkspacePromptContext().report;
+    if (this.lastSystemPromptReport) {
+      return this.lastSystemPromptReport;
+    }
+    const skillsSummary = this.skillLoader.summaryText();
+    const workspacePromptContext = this.buildWorkspacePromptContext();
+    const promptMode = this.config.agent.systemPromptMode;
+    const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
+      mode: promptMode,
+    });
+    return this.buildSystemPromptReport({
+      source: "estimate",
+      promptMode,
+      systemPrompt,
+      skillsSummary,
+      workspaceReport: workspacePromptContext.report,
+    });
   }
 
   private isImageArtifactPath(artifactPath: string): boolean {
@@ -955,6 +1079,13 @@ export class AgentRuntime {
       const effectivePromptMode = promptMode ?? this.config.agent.systemPromptMode;
       const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
         mode: effectivePromptMode,
+      });
+      this.lastSystemPromptReport = this.buildSystemPromptReport({
+        source: "run",
+        promptMode: effectivePromptMode,
+        systemPrompt,
+        skillsSummary,
+        workspaceReport: workspacePromptContext.report,
       });
 
       for (let step = 1; step <= this.config.agent.maxSteps; step += 1) {

@@ -332,27 +332,95 @@ export class TelegramGateway {
     return true;
   }
 
+  private estimateTokens(chars: number): number {
+    return Math.ceil(Math.max(0, chars) / 4);
+  }
+
+  private formatChars(chars: number): string {
+    return `${chars} chars (~${this.estimateTokens(chars)} tok)`;
+  }
+
   private buildContextSummaryMessage(): string {
     const report = this.agent.getWorkspacePromptContextReport();
     const lines = [
-      "Workspace prompt context report:",
+      "Context breakdown:",
+      `- source: ${report.source}`,
+      `- prompt mode: ${report.promptMode}`,
+      `- system prompt: ${this.formatChars(report.systemPrompt?.chars ?? 0)}`,
+      `- workspace context: ${this.formatChars(report.totalIncludedChars)}`,
       `- limits: per-file=${report.maxCharsPerFile}, total=${report.maxCharsTotal}`,
-      `- included chars: ${report.totalIncludedChars}`,
-      `- bootstrap hook applied: ${report.hookApplied}`,
-      "- files:",
+      `- hook applied: ${Boolean(report.hookApplied)}`,
+      `- skills: ${this.formatChars(report.skills?.promptChars ?? 0)} (${report.skills?.entries?.length ?? 0})`,
+      `- tools list: ${this.formatChars(report.tools?.listChars ?? 0)}`,
+      `- tools schema: ${this.formatChars(report.tools?.schemaChars ?? 0)}`,
+      "",
+      "Injected files:",
     ];
     for (const file of report.files) {
       const status = file.included ? "included" : file.budgetExhausted ? "budget-exhausted" : "skipped";
       lines.push(
-        `  - ${file.fileName}: ${status}`
-        + `, missing=${file.missing}, truncated=${file.truncated}, chars=${file.includedChars}/${file.originalChars}`,
+        `- ${file.fileName}: ${status}, missing=${file.missing}, truncated=${file.truncated}, chars=${file.includedChars}/${file.originalChars}`,
       );
     }
-    lines.push("Use `/context detail <fileName>` to inspect one snippet.");
+    lines.push("");
+    lines.push("Try `/context detail` for full breakdown, `/context detail <fileName>` for snippet, `/context json` for raw JSON.");
     return lines.join("\n");
   }
 
-  private buildContextDetailMessage(target: string): string {
+  private buildContextDeepDetailMessage(): string {
+    const report = this.agent.getWorkspacePromptContextReport();
+    const topSkills = [...(report.skills?.entries ?? [])]
+      .sort((a, b) => b.blockChars - a.blockChars)
+      .slice(0, 20);
+    const topToolsBySchema = [...(report.tools?.entries ?? [])]
+      .sort((a, b) => b.schemaChars - a.schemaChars)
+      .slice(0, 20);
+
+    const lines = [
+      "Context breakdown (detailed):",
+      `- source: ${report.source}`,
+      `- generatedAt: ${report.generatedAt}`,
+      `- prompt mode: ${report.promptMode}`,
+      `- system prompt: ${this.formatChars(report.systemPrompt?.chars ?? 0)}`,
+      `  - workspace context chars: ${this.formatChars(report.systemPrompt?.workspaceContextChars ?? 0)}`,
+      `  - non-workspace chars: ${this.formatChars(report.systemPrompt?.nonWorkspaceChars ?? 0)}`,
+      `- workspace limits: per-file=${report.maxCharsPerFile}, total=${report.maxCharsTotal}`,
+      `- workspace included: ${this.formatChars(report.totalIncludedChars)}`,
+      "",
+      "Injected workspace files:",
+    ];
+
+    for (const file of report.files) {
+      const status = file.missing ? "MISSING" : file.truncated ? "TRUNCATED" : file.included ? "OK" : "SKIPPED";
+      lines.push(
+        `- ${file.fileName}: ${status} | raw ${this.formatChars(file.originalChars)} | injected ${this.formatChars(file.includedChars)}`,
+      );
+    }
+
+    lines.push("");
+    lines.push(`Skills prompt: ${this.formatChars(report.skills?.promptChars ?? 0)} (${report.skills?.entries?.length ?? 0} skills)`);
+    if (topSkills.length > 0) {
+      lines.push("Top skills by entry size:");
+      for (const skill of topSkills) {
+        lines.push(`- ${skill.name}: ${this.formatChars(skill.blockChars)} (${skill.source})`);
+      }
+    }
+
+    lines.push("");
+    lines.push(`Tools list: ${this.formatChars(report.tools?.listChars ?? 0)}`);
+    lines.push(`Tools schema: ${this.formatChars(report.tools?.schemaChars ?? 0)} (${report.tools?.entries?.length ?? 0} tools)`);
+    if (topToolsBySchema.length > 0) {
+      lines.push("Top tools by schema size:");
+      for (const tool of topToolsBySchema) {
+        const paramsCount = tool.propertiesCount ?? 0;
+        lines.push(`- ${tool.name}: ${this.formatChars(tool.schemaChars)} (${paramsCount} params)`);
+      }
+    }
+
+    return lines.join("\n");
+  }
+
+  private buildContextFileDetailMessage(target: string): string {
     const report = this.agent.getWorkspacePromptContextReport();
     const normalizedTarget = target.trim().toLowerCase();
     if (!normalizedTarget) {
@@ -365,8 +433,8 @@ export class TelegramGateway {
     if (!file.included || !file.snippet) {
       return `No injected snippet for ${file.fileName} (missing=${file.missing}).`;
     }
-    const snippet = file.snippet.length > 2200
-      ? `${file.snippet.slice(0, 2200)}\n...[detail truncated]`
+    const snippet = file.snippet.length > 2400
+      ? `${file.snippet.slice(0, 2400)}\n...[detail truncated]`
       : file.snippet;
     return [
       `${file.fileName}`,
@@ -817,7 +885,7 @@ export class TelegramGateway {
         [
           "OpenPocket commands:",
           "/start",
-          "/context",
+          "/context [list|detail|json]",
           "/context detail <fileName>",
           "/status",
           "/model [name]",
@@ -844,17 +912,29 @@ export class TelegramGateway {
     }
 
     if (text.startsWith("/context")) {
-      const detailArg = text.replace("/context", "").trim();
-      if (!detailArg || /^list$/i.test(detailArg)) {
+      const contextArg = text.replace("/context", "").trim();
+      if (!contextArg || /^list$/i.test(contextArg) || /^show$/i.test(contextArg)) {
         await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextSummaryMessage(), 3500));
         return;
       }
-      if (/^detail(\s+.+)?$/i.test(detailArg)) {
-        const target = detailArg.replace(/^detail\s*/i, "");
-        await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextDetailMessage(target), 3500));
+      if (/^json$/i.test(contextArg)) {
+        const report = this.agent.getWorkspacePromptContextReport();
+        await this.bot.sendMessage(chatId, this.sanitizeForChat(JSON.stringify(report, null, 2), 3800));
         return;
       }
-      await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextDetailMessage(detailArg), 3500));
+      if (/^detail$/i.test(contextArg) || /^deep$/i.test(contextArg)) {
+        await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextDeepDetailMessage(), 3800));
+        return;
+      }
+      if (/^detail\s+.+/i.test(contextArg)) {
+        const target = contextArg.replace(/^detail\s*/i, "");
+        await this.bot.sendMessage(chatId, this.sanitizeForChat(this.buildContextFileDetailMessage(target), 3500));
+        return;
+      }
+      await this.bot.sendMessage(
+        chatId,
+        "Usage: /context [list|detail|json] or /context detail <fileName>",
+      );
       return;
     }
 

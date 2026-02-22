@@ -513,6 +513,23 @@ test("TelegramGateway /context returns summary report", async () => {
       maxCharsTotal: 150000,
       totalIncludedChars: 1024,
       hookApplied: false,
+      source: "estimate",
+      generatedAt: new Date().toISOString(),
+      promptMode: "full",
+      systemPrompt: {
+        chars: 4096,
+        workspaceContextChars: 1024,
+        nonWorkspaceChars: 3072,
+      },
+      skills: {
+        promptChars: 300,
+        entries: [],
+      },
+      tools: {
+        listChars: 500,
+        schemaChars: 700,
+        entries: [],
+      },
       files: [
         {
           fileName: "AGENTS.md",
@@ -532,7 +549,7 @@ test("TelegramGateway /context returns summary report", async () => {
     });
 
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /Workspace prompt context report/);
+    assert.match(sent[0].text, /Context breakdown/);
     assert.match(sent[0].text, /AGENTS\.md/);
   });
 });
@@ -556,6 +573,23 @@ test("TelegramGateway /context detail returns file snippet", async () => {
       maxCharsTotal: 150000,
       totalIncludedChars: 2048,
       hookApplied: true,
+      source: "run",
+      generatedAt: new Date().toISOString(),
+      promptMode: "full",
+      systemPrompt: {
+        chars: 5000,
+        workspaceContextChars: 2048,
+        nonWorkspaceChars: 2952,
+      },
+      skills: {
+        promptChars: 420,
+        entries: [],
+      },
+      tools: {
+        listChars: 640,
+        schemaChars: 860,
+        entries: [],
+      },
       files: [
         {
           fileName: "SOUL.md",
@@ -577,6 +611,66 @@ test("TelegramGateway /context detail returns file snippet", async () => {
     assert.equal(sent.length, 1);
     assert.match(sent[0].text, /SOUL\.md/);
     assert.match(sent[0].text, /soul-snippet-body/);
+  });
+});
+
+test("TelegramGateway /context json returns machine-readable report", async () => {
+  await withTempHome("openpocket-telegram-context-json-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.agent.getWorkspacePromptContextReport = () => ({
+      maxCharsPerFile: 20000,
+      maxCharsTotal: 150000,
+      totalIncludedChars: 1280,
+      hookApplied: false,
+      source: "estimate",
+      generatedAt: new Date().toISOString(),
+      promptMode: "full",
+      systemPrompt: {
+        chars: 4600,
+        workspaceContextChars: 1280,
+        nonWorkspaceChars: 3320,
+      },
+      skills: {
+        promptChars: 320,
+        entries: [],
+      },
+      tools: {
+        listChars: 590,
+        schemaChars: 810,
+        entries: [],
+      },
+      files: [
+        {
+          fileName: "AGENTS.md",
+          originalChars: 400,
+          includedChars: 400,
+          truncated: false,
+          included: true,
+          missing: false,
+          snippet: "agents-snippet",
+        },
+      ],
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 9107 },
+      text: "/context json",
+    });
+
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /"promptMode": "full"/);
+    assert.match(sent[0].text, /"systemPrompt"/);
   });
 });
 
