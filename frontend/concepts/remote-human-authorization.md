@@ -99,6 +99,62 @@ Security characteristics:
 - timeout auto-resolution (`pending -> timeout`)
 - optional relay API bearer auth (`humanAuth.apiKey` / `humanAuth.apiKeyEnv`)
 
+## Credential Login Flow (OAuth / Username+Password)
+
+This is the critical privacy path for account login walls.
+
+### User Experience (what user sees)
+
+1. Agent reaches login wall in emulator app and emits `request_human_auth` with `capability=oauth`.
+2. Telegram receives a one-tap auth link.
+3. Phone opens Human Auth page with:
+   - dedicated `Username / Email` and `Password` inputs
+   - `Approve` / `Reject`
+   - optional `Decision Note`
+   - optional live `Remote Takeover` (stream + control) if user wants direct emulator control
+4. User can either:
+   - enter credentials in the dedicated form and tap `Approve` (recommended), or
+   - use remote takeover to type directly inside emulator, then approve/reject.
+5. Agent resumes and continues login flow in emulator.
+
+### Credential Data Path (exact channels)
+
+```mermaid
+sequenceDiagram
+  participant Agent as "AgentRuntime (local)"
+  participant Bridge as "HumanAuthBridge (local)"
+  participant Relay as "HumanAuthRelayServer (local)"
+  participant TG as "Telegram"
+  participant Phone as "Phone Browser"
+  participant VM as "Emulator (local)"
+
+  Agent->>Bridge: request_human_auth(capability=oauth)
+  Bridge->>Relay: create request (local)
+  Bridge-->>TG: send message + auth link (no password payload)
+  Phone->>Relay: open one-time token page
+  Phone->>Relay: submit credentials artifact on Approve
+  Bridge->>Relay: poll decision (local)
+  Relay-->>Bridge: approved + artifact
+  Bridge-->>Agent: HumanAuthDecision + artifactPath
+  Agent->>VM: auto-apply credentials (type/fill) and continue
+```
+
+### Hosting, Transport, and Storage Guarantees
+
+| Stage | Where it runs | Transport channel | Persistent storage |
+| --- | --- | --- | --- |
+| Request creation/polling | User local machine (`Gateway` + `HumanAuthBridge` + `Relay`) | Loopback/local network | `state/human-auth-relay/requests.json` (local) |
+| Credential form handling | User local relay server | Browser -> local relay (LAN mode), or browser -> TLS ngrok tunnel -> local relay (ngrok mode) | same local state file |
+| Credential artifact bytes | User local relay + bridge | same channel as above | `state/human-auth-artifacts/<requestId>.json` (local) |
+| Runtime apply to app | User local machine (`AgentRuntime` + `adb`) | local process + adb | session trace under `workspace/sessions/` |
+
+Security boundary:
+
+- OpenPocket does **not** use a centralized OpenPocket credential relay service.
+- Relay server and artifact storage are on the user machine.
+- For strict zero-third-party network hop, use LAN mode (`humanAuth.tunnel.provider=none`).
+- In ngrok mode, ngrok is transport only; OpenPocket runtime/state/artifacts still stay local.
+
 ## Delegation Artifact Types
 
 Remote approval may include optional artifact payload.
@@ -114,6 +170,38 @@ After image injection, runtime may append deterministic hint in history:
 - `delegation_template=gallery_import_template: ...`
 
 So the next model step can follow stable upload flow (open picker -> Downloads -> select file -> confirm).
+
+## Scenario-by-Scenario Behavior
+
+### 1) User account login (`oauth`)
+
+- Trigger: app login wall requires sensitive credentials.
+- User action: fill credentials on Human Auth page (or use Remote Takeover), then `Approve`.
+- Runtime effect: credentials artifact is applied inside emulator login form; agent continues.
+- Privacy focus: credentials are handled by user-local relay and local artifact storage.
+
+### 2) Permission authorization
+
+- Android runtime permission dialogs inside emulator are handled locally by policy (no remote interrupt for those dialogs).
+- Real-device capability needs (camera capture, real location, NFC-like data, etc.) are escalated to Human Auth.
+- User action: provide delegated data (photo/location/text) and approve/reject.
+- Runtime effect: delegated payload is injected/applied in emulator flow and task resumes.
+
+### 3) SMS verification code (`sms`)
+
+- Trigger: task needs a one-time SMS code.
+- User action:
+  - fastest: reply plain 4-10 digit code directly in Telegram, or
+  - use Human Auth web page text attachment and approve.
+- Runtime effect: code is typed into focused input field and flow continues.
+
+### 4) 2FA/TOTP (`2fa`)
+
+- Trigger: app/site asks for authenticator 2FA code.
+- User action:
+  - reply code directly in Telegram, or
+  - submit code via Human Auth web page and approve.
+- Runtime effect: code is applied as text artifact; agent continues immediately.
 
 ## Relay Modes
 
