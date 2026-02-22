@@ -39,26 +39,6 @@ const server = new Server(
 
 const TOOLS = [
   {
-    name: "emulator_status",
-    description: "Get the current Android emulator status (AVD name, online devices, booted devices)",
-    inputSchema: { type: "object" as const, properties: {} },
-  },
-  {
-    name: "emulator_start",
-    description: "Start the Android emulator. Returns device ID once booted.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        headless: { type: "boolean", description: "Start in headless mode (no window). Default: false" },
-      },
-    },
-  },
-  {
-    name: "emulator_stop",
-    description: "Stop the running Android emulator",
-    inputSchema: { type: "object" as const, properties: {} },
-  },
-  {
     name: "screenshot",
     description:
       "Capture the current emulator screen. Returns base64 PNG image, current foreground app, screen dimensions, and interactive UI elements with their IDs, text, bounds, and clickability.",
@@ -192,21 +172,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
-      case "emulator_status": {
-        const status = emulator.status();
-        return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
-      }
-
-      case "emulator_start": {
-        const id = await emulator.start(Boolean(args.headless));
-        return { content: [{ type: "text", text: `Emulator started. Device: ${id}` }] };
-      }
-
-      case "emulator_stop": {
-        const result = emulator.stop();
-        return { content: [{ type: "text", text: result }] };
-      }
-
       case "screenshot": {
         const snap = await adb.captureScreenSnapshot(deviceId);
         const metadata = {

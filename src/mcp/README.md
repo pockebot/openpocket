@@ -1,6 +1,6 @@
 # OpenPocket Emulator MCP Server
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes Android emulator control as tools for Claude Code and other MCP clients.
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes Android phone interaction as tools for Claude Code and other MCP clients. Focused on device control (tap, type, swipe, screenshot) — emulator lifecycle management is handled separately.
 
 ## Prerequisites
 
@@ -39,9 +39,6 @@ claude mcp add --transport stdio openpocket-emulator -- node /path/to/openpocket
 
 | Tool | Description |
 |------|-------------|
-| `emulator_status` | Get AVD name, online devices, booted devices |
-| `emulator_start` | Boot the emulator (optional headless mode) |
-| `emulator_stop` | Stop the running emulator |
 | `screenshot` | Capture screen as base64 PNG with UI element metadata |
 | `tap` | Tap at pixel coordinates |
 | `tap_element` | Tap a UI element by ID (from screenshot metadata) |
@@ -61,4 +58,4 @@ After registering, check that the server is running inside Claude Code:
 /mcp
 ```
 
-You should see `openpocket-emulator` listed with 13 tools.
+You should see `openpocket-emulator` listed with 10 tools.
