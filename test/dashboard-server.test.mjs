@@ -9,12 +9,12 @@ const require = createRequire(import.meta.url);
 const { loadConfig } = require("../dist/config/index.js");
 const { DashboardServer } = require("../dist/dashboard/server.js");
 
-function withTempHome(prefix, fn) {
+async function withTempHome(prefix, fn) {
   const prevHome = process.env.OPENPOCKET_HOME;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   process.env.OPENPOCKET_HOME = home;
   try {
-    return fn(home);
+    return await fn(home);
   } finally {
     if (prevHome === undefined) {
       delete process.env.OPENPOCKET_HOME;

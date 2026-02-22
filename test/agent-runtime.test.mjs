@@ -55,6 +55,7 @@ test("AgentRuntime injects BOOTSTRAP guidance into system prompt context", async
   );
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async () => "ok",
   };
@@ -90,6 +91,7 @@ test("AgentRuntime injects BOOTSTRAP guidance into system prompt context", async
 test("AgentRuntime supports none system prompt mode for constrained runs", async () => {
   const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async () => "ok",
   };
@@ -147,6 +149,7 @@ test("AgentRuntime returns home after successful task by default", async () => {
   const actionCalls = [];
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async (action) => {
       actionCalls.push(action);
@@ -181,6 +184,7 @@ test("AgentRuntime does not return home when config is disabled", async () => {
   const actionCalls = [];
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async (action) => {
       actionCalls.push(action);
@@ -216,6 +220,7 @@ test("AgentRuntime pauses for request_human_auth and resumes after approval", as
   const authRequests = [];
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async (action) => {
       actions.push(action);
@@ -278,6 +283,7 @@ test("AgentRuntime pauses for request_human_auth and resumes after approval", as
 test("AgentRuntime fails when request_human_auth is rejected", async () => {
   const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async () => "ok",
   };
@@ -331,6 +337,7 @@ test("AgentRuntime auto-approves Android permission dialog app without human aut
   let snapshotCount = 0;
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => {
       snapshotCount += 1;
       if (snapshotCount === 1) {
@@ -411,6 +418,7 @@ test("AgentRuntime does not call human auth when model asks permission capabilit
   const authRequests = [];
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async (action) => {
       actions.push(action);
@@ -482,6 +490,7 @@ test("AgentRuntime auto-approves permission dialog even when model asks permissi
   ].join("");
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => ({
       ...makeSnapshot(),
       currentApp: "com.android.permissioncontroller",
@@ -573,6 +582,7 @@ test("AgentRuntime still requests human auth for camera capability after auto-al
   ].join("");
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => ({
       ...makeSnapshot(),
       currentApp: "com.android.permissioncontroller",
@@ -659,6 +669,7 @@ test("AgentRuntime applies OTP code from manual approval note when no artifact i
   const actions = [];
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
     executeAction: async (action) => {
@@ -732,6 +743,7 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
   );
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
     executeAction: async (action) => {
@@ -973,6 +985,7 @@ test("AgentRuntime applies delegated location artifact after human auth approval
   );
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
     executeAction: async (action) => {
@@ -1057,6 +1070,7 @@ test("AgentRuntime appends gallery template hint after delegated image artifact"
   fs.writeFileSync(artifactFile, Buffer.from("fake-image-bytes"));
 
   runtime.adb = {
+    queryLaunchablePackages: async () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
     executeAction: async () => "ok",

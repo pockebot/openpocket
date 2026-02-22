@@ -9,12 +9,12 @@ const require = createRequire(import.meta.url);
 const { loadConfig } = require("../dist/config/index.js");
 const { ensureAndroidPrerequisites } = require("../dist/environment/android-prerequisites.js");
 
-function withTempHome(prefix, fn) {
+async function withTempHome(prefix, fn) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const prev = process.env.OPENPOCKET_HOME;
   process.env.OPENPOCKET_HOME = home;
   try {
-    return fn(home);
+    return await fn(home);
   } finally {
     if (prev === undefined) {
       delete process.env.OPENPOCKET_HOME;

@@ -4,6 +4,7 @@
 [![TypeScript](https://img.shields.io/badge/language-TypeScript-2563eb.svg)](https://www.typescriptlang.org/)
 [![Runtime](https://img.shields.io/badge/runtime-Local--emulator--first-0f172a.svg)](#architecture)
 [![Docs](https://img.shields.io/badge/docs-VitePress-0a9396.svg)](./frontend/index.md)
+[![OpenPocket CI](https://github.com/SergioChan/openpocket/actions/workflows/node-tests.yml/badge.svg)](https://github.com/SergioChan/openpocket/actions/workflows/node-tests.yml)
 
 An Intelligent Phone That Never Sleeps.  
 OpenPocket runs an always-on agent phone locally, with privacy first.
