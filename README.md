@@ -94,6 +94,13 @@ openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
 
 Or send plain text directly to your Telegram bot after `gateway start`.
 
+### 5. Persistence and storage locations
+
+For a full persistence map (OpenPocket runtime files + Android AVD/image storage and deletion/reset flow), see:
+
+- [Filesystem Layout](./frontend/reference/filesystem-layout.md)
+- [Session and Memory Formats](./frontend/reference/session-memory-formats.md)
+
 ## Deployment Playbook by OS
 
 This section focuses on production-style runtime deployment for:
@@ -575,6 +582,15 @@ When the agent emits `request_human_auth`, Telegram users can:
 - or run fallback commands:
   - `/auth approve <request-id> [note]`
   - `/auth reject <request-id> [note]`
+- for `oauth` login walls, use dedicated credential inputs on the Human Auth page
+  (or optional live remote takeover), then approve/reject
+
+Credential security notes:
+
+- relay server and request state are hosted on the user machine
+- approval artifacts are persisted locally (`state/human-auth-artifacts/`)
+- no centralized OpenPocket credential relay service is used
+- use LAN mode (`humanAuth.tunnel.provider=none`) for zero third-party network hop
 
 To inspect current chat allow policy and discover recent chat IDs for your bot:
 

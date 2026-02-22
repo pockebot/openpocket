@@ -349,6 +349,10 @@ export function buildAvdManagerOpts(sdkRoot: string, existingOpts: string | unde
   return current ? `${current} ${toolsDirOpt}` : toolsDirOpt;
 }
 
+export function shouldRunSdkBootstrap(hasAnyAvd: boolean, essentialMissingCount: number): boolean {
+  return !hasAnyAvd || essentialMissingCount > 0;
+}
+
 function extendProcessPathForBrew(): void {
   const extra = ["/opt/homebrew/bin", "/usr/local/bin"];
   const entries = (process.env.PATH ?? "")
@@ -646,7 +650,6 @@ export async function ensureAndroidPrerequisites(
 
   // --- Phase 1: Ensure essential tools (adb + emulator) exist ---
   let essentialMissing = missingEssentialTools(tools);
-  let allMissing = missingTools(tools);
 
   if (essentialMissing.length > 0) {
     if (!autoInstall) {
@@ -677,11 +680,6 @@ export async function ensureAndroidPrerequisites(
 
     tools = detectTools(sdkRoot);
     essentialMissing = missingEssentialTools(tools);
-    allMissing = missingTools(tools);
-  }
-
-  if (essentialMissing.length > 0) {
-    throw new Error(`Missing essential Android tools after installation: ${essentialMissing.join(", ")}`);
   }
 
   // --- Phase 2: Early AVD check (scan ~/.android/avd/ directly, no Java needed) ---
@@ -691,8 +689,9 @@ export async function ensureAndroidPrerequisites(
     { ...process.env, ANDROID_SDK_ROOT: sdkRoot, ANDROID_HOME: sdkRoot },
   );
   const hasAnyAvdEarly = earlyAvds.length > 0;
+  const needsSdkBootstrap = shouldRunSdkBootstrap(hasAnyAvdEarly, essentialMissing.length);
 
-  if (hasAnyAvdEarly) {
+  if (!needsSdkBootstrap && hasAnyAvdEarly) {
     // Reuse an existing AVD — no need for heavy SDK setup.
     if (!earlyAvds.includes(config.emulator.avdName)) {
       const fallback = earlyAvds[0];
@@ -713,18 +712,21 @@ export async function ensureAndroidPrerequisites(
     };
   }
 
-  // --- Phase 3: No AVD found — need Java + sdkmanager + avdmanager to create one ---
-  if (allMissing.length > 0) {
-    throw new Error(
-      `No existing AVD found and missing tools to create one: ${allMissing.join(", ")}. ` +
-      "Install Android Studio or run sdkmanager to set up an AVD.",
-    );
-  }
-
+  // --- Phase 3: Need SDK bootstrap ---
+  // Run SDK bootstrap when:
+  // - no AVD exists (need to create one), or
+  // - essential runtime tools are still missing (for example emulator binary).
   const sdkmanager = tools.sdkmanager;
   const avdmanager = tools.avdmanager;
   if (!sdkmanager || !avdmanager) {
-    throw new Error("sdkmanager or avdmanager is not available.");
+    const missingBootstrapTools = [
+      sdkmanager ? null : "sdkmanager",
+      avdmanager ? null : "avdmanager",
+    ].filter(Boolean) as string[];
+    throw new Error(
+      `Cannot continue Android SDK bootstrap; missing tools: ${missingBootstrapTools.join(", ")}. ` +
+      "Install Android Studio (or Android command line tools) and retry onboarding.",
+    );
   }
 
   let javaRuntime = detectBestJavaRuntime();
@@ -769,6 +771,12 @@ export async function ensureAndroidPrerequisites(
   installSdkPackages(sdkmanager, sdkRoot, logger, toolEnv);
   installedSteps.push("sdk:platform-tools,emulator,platforms;android-34");
 
+  tools = detectTools(sdkRoot);
+  essentialMissing = missingEssentialTools(tools);
+  if (essentialMissing.length > 0) {
+    throw new Error(`Missing essential Android tools after SDK bootstrap: ${essentialMissing.join(", ")}`);
+  }
+
   let currentAvds = listAvdNames(avdmanager, toolEnv);
   if (!currentAvds.includes(config.emulator.avdName) && currentAvds.length > 0) {
     const fallback = currentAvds[0];
@@ -795,6 +803,10 @@ export async function ensureAndroidPrerequisites(
   }
 
   tools = detectTools(sdkRoot);
+  essentialMissing = missingEssentialTools(tools);
+  if (essentialMissing.length > 0) {
+    throw new Error(`Missing essential Android tools after onboarding setup: ${essentialMissing.join(", ")}`);
+  }
 
   return {
     skipped: false,

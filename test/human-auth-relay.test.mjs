@@ -95,3 +95,104 @@ test("HumanAuthRelayServer create, resolve, and poll lifecycle", async () => {
     await relay.stop();
   }
 });
+
+test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-auth-relay-takeover-"));
+  const stateFile = path.join(temp, "relay-state.json");
+  const executed = [];
+  const frame = {
+    deviceId: "emulator-5554",
+    currentApp: "com.android.chrome",
+    width: 1080,
+    height: 2400,
+    screenshotBase64: Buffer.from("png").toString("base64"),
+    capturedAt: new Date().toISOString(),
+  };
+
+  const relay = new HumanAuthRelayServer({
+    host: "127.0.0.1",
+    port: 0,
+    publicBaseUrl: "",
+    apiKey: "",
+    apiKeyEnv: "",
+    stateFile,
+    takeoverRuntime: {
+      captureFrame: async () => frame,
+      execute: async (action) => {
+        executed.push(action);
+        return "action-ok";
+      },
+    },
+  });
+
+  await relay.start();
+  const base = relay.address;
+
+  try {
+    const createResponse = await fetch(`${base}/v1/human-auth/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: "req-takeover-1",
+        task: "oauth login",
+        sessionId: "session-takeover",
+        step: 3,
+        capability: "oauth",
+        instruction: "Remote login takeover",
+        reason: "Need human account authorization",
+        timeoutSec: 180,
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const created = await createResponse.json();
+    const openUrl = new URL(created.openUrl);
+    const token = openUrl.searchParams.get("token");
+    assert.equal(Boolean(token), true);
+
+    const portalRes = await fetch(
+      `${base}/human-auth/req-takeover-1?token=${encodeURIComponent(String(token || ""))}`,
+    );
+    assert.equal(portalRes.status, 200);
+    const portalHtml = await portalRes.text();
+    assert.match(portalHtml, /Login Credentials \(Recommended\)/);
+    assert.match(portalHtml, /Optional Remote Takeover \(Live\)/);
+    assert.match(portalHtml, /Open Live Stream/);
+
+    const snapshotRes = await fetch(
+      `${base}/v1/human-auth/requests/req-takeover-1/takeover/snapshot?token=${encodeURIComponent(token)}`,
+    );
+    assert.equal(snapshotRes.status, 200);
+    const snapshotBody = await snapshotRes.json();
+    assert.equal(snapshotBody.frame.currentApp, "com.android.chrome");
+    assert.equal(snapshotBody.frame.width, 1080);
+
+    const actionRes = await fetch(`${base}/v1/human-auth/requests/req-takeover-1/takeover/action`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token,
+        action: { type: "tap", x: 320, y: 640 },
+      }),
+    });
+    assert.equal(actionRes.status, 200);
+    const actionBody = await actionRes.json();
+    assert.equal(actionBody.message, "action-ok");
+    assert.equal(executed.length, 1);
+    assert.equal(executed[0].type, "tap");
+    assert.equal(executed[0].x, 320);
+    assert.equal(executed[0].y, 640);
+
+    const streamRes = await fetch(
+      `${base}/v1/human-auth/requests/req-takeover-1/takeover/stream?token=${encodeURIComponent(token)}`,
+    );
+    assert.equal(streamRes.status, 200);
+    assert.match(String(streamRes.headers.get("content-type") || ""), /multipart\/x-mixed-replace/i);
+    const reader = streamRes.body?.getReader();
+    if (reader) {
+      await reader.read();
+      await reader.cancel();
+    }
+  } finally {
+    await relay.stop();
+  }
+});

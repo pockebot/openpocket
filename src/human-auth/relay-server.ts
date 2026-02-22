@@ -4,6 +4,11 @@ import http from "node:http";
 import path from "node:path";
 
 import { ensureDir, nowIso } from "../utils/paths";
+import type {
+  HumanAuthTakeoverAction,
+  HumanAuthTakeoverFrame,
+  HumanAuthTakeoverRuntime,
+} from "./takeover-runtime";
 
 type RelayStatus = "pending" | "approved" | "rejected" | "timeout";
 
@@ -103,12 +108,20 @@ export interface HumanAuthRelayServerOptions {
   apiKey: string;
   apiKeyEnv: string;
   stateFile: string;
+  takeoverRuntime?: HumanAuthTakeoverRuntime;
+  takeoverFps?: number;
 }
 
 export class HumanAuthRelayServer {
   private readonly options: HumanAuthRelayServerOptions;
   private readonly records = new Map<string, RelayRecord>();
   private server: http.Server | null = null;
+  /** Per-request rate limiting: track last takeover action timestamp. */
+  private readonly takeoverActionTimestamps = new Map<string, number>();
+  /** Maximum concurrent takeover streams per request. */
+  private readonly takeoverStreamCounts = new Map<string, number>();
+  private static readonly TAKEOVER_ACTION_COOLDOWN_MS = 200;
+  private static readonly TAKEOVER_MAX_CONCURRENT_STREAMS = 2;
 
   constructor(options: HumanAuthRelayServerOptions) {
     this.options = options;
@@ -270,6 +283,99 @@ export class HumanAuthRelayServer {
     }
   }
 
+  private verifyOpenToken(record: RelayRecord, tokenRaw: unknown): { ok: true } | { ok: false; error: string; status: number } {
+    const token = String(tokenRaw ?? "");
+    if (!token || hashToken(token) !== record.openTokenHash) {
+      return { ok: false, error: "Invalid or expired token.", status: 403 };
+    }
+    return { ok: true };
+  }
+
+  private ensureTakeoverRuntime(): HumanAuthTakeoverRuntime | null {
+    return this.options.takeoverRuntime ?? null;
+  }
+
+  private sanitizeHeaderValue(input: string): string {
+    return String(input || "").replace(/[\r\n]+/g, " ").slice(0, 200);
+  }
+
+  private parseTakeoverAction(input: unknown): HumanAuthTakeoverAction | null {
+    if (!isObject(input)) {
+      return null;
+    }
+    const type = String(input.type ?? "").trim().toLowerCase();
+    if (type === "tap") {
+      const x = Number(input.x);
+      const y = Number(input.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+      }
+      return {
+        type: "tap",
+        x: Math.max(0, Math.round(x)),
+        y: Math.max(0, Math.round(y)),
+      };
+    }
+    if (type === "swipe") {
+      const x1 = Number(input.x1);
+      const y1 = Number(input.y1);
+      const x2 = Number(input.x2);
+      const y2 = Number(input.y2);
+      const durationMs = Number(input.durationMs ?? 260);
+      if (![x1, y1, x2, y2, durationMs].every((value) => Number.isFinite(value))) {
+        return null;
+      }
+      return {
+        type: "swipe",
+        x1: Math.max(0, Math.round(x1)),
+        y1: Math.max(0, Math.round(y1)),
+        x2: Math.max(0, Math.round(x2)),
+        y2: Math.max(0, Math.round(y2)),
+        durationMs: Math.max(80, Math.min(3000, Math.round(durationMs))),
+      };
+    }
+    if (type === "type") {
+      const text = String(input.text ?? "");
+      if (!text.trim()) {
+        return null;
+      }
+      if (text.length > 2000) {
+        return null;
+      }
+      return { type: "type", text };
+    }
+    if (type === "keyevent") {
+      const keycode = String(input.keycode ?? "").trim().toUpperCase();
+      if (!keycode) {
+        return null;
+      }
+      if (!/^KEYCODE_[A-Z0-9_]+$/.test(keycode)) {
+        return null;
+      }
+      return { type: "keyevent", keycode };
+    }
+    return null;
+  }
+
+  private async writeMjpegFrame(
+    res: http.ServerResponse,
+    frame: HumanAuthTakeoverFrame,
+  ): Promise<void> {
+    const imageBuffer = Buffer.from(frame.screenshotBase64, "base64");
+    const appHeader = this.sanitizeHeaderValue(frame.currentApp || "unknown");
+    const capturedAt = this.sanitizeHeaderValue(frame.capturedAt || nowIso());
+    const resolution = this.sanitizeHeaderValue(`${frame.width || 0}x${frame.height || 0}`);
+    res.write(`--frame\r\n`);
+    res.write("Content-Type: image/png\r\n");
+    res.write(`Content-Length: ${imageBuffer.length}\r\n`);
+    res.write(`X-OpenPocket-App: ${appHeader}\r\n`);
+    res.write(`X-OpenPocket-Captured-At: ${capturedAt}\r\n`);
+    res.write(`X-OpenPocket-Resolution: ${resolution}\r\n`);
+    res.write("\r\n");
+    res.write(imageBuffer);
+    res.write("\r\n");
+  }
+
   private renderPortalPage(record: RelayRecord, token: string): string {
     const requestId = escapeHtml(record.requestId);
     const capability = escapeHtml(record.capability);
@@ -278,7 +384,7 @@ export class HumanAuthRelayServer {
       (record.instruction || "No instruction provided.")
         .replace(/\s+/g, " ")
         .trim()
-        .slice(0, 180),
+        .slice(0, 120),
     );
     const reason = escapeHtml(record.reason || "(no reason)");
     const task = escapeHtml(record.task || "(no task)");
@@ -330,23 +436,9 @@ export class HumanAuthRelayServer {
     .brandRow {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-end;
       gap: 10px;
-      margin-bottom: 10px;
-    }
-    .brandPill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      background: var(--op-chip);
-      color: var(--op-brand-dark);
-      border: 1px solid rgba(255, 138, 0, 0.3);
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 600;
-      padding: 6px 10px;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
+      margin-bottom: 4px;
     }
     .requestId {
       color: var(--op-ink-soft);
@@ -357,24 +449,24 @@ export class HumanAuthRelayServer {
     }
     h1 {
       margin: 0;
-      font-size: 24px;
+      font-size: 22px;
       line-height: 1.25;
       font-weight: 600;
     }
     .brief {
-      margin: 8px 0 0;
+      margin: 6px 0 0;
       color: var(--op-ink-soft);
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.42;
     }
     .capabilityLine {
-      margin: 10px 0 0;
+      margin: 12px 0 0;
       font-size: 13px;
       color: #8b4a07;
       background: rgba(255, 138, 0, 0.1);
       border: 1px solid rgba(255, 138, 0, 0.24);
       border-radius: 10px;
-      padding: 8px 10px;
+      padding: 7px 10px;
     }
     .section {
       margin-top: 14px;
@@ -454,8 +546,131 @@ export class HumanAuthRelayServer {
       line-height: 1.5;
       margin-top: 8px;
     }
+    .securityHint {
+      margin-top: 6px;
+      margin-bottom: 8px;
+      color: #5a4a38;
+    }
+    .passwordRow {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .passwordRow .inputWrap {
+      flex: 1;
+    }
+    .inputWrap {
+      position: relative;
+    }
+    .inputWrap input {
+      padding-right: 36px;
+    }
+    .clearInputBtn {
+      position: absolute;
+      top: 50%;
+      right: 8px;
+      transform: translateY(-50%);
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      border: 1px solid #d9dfe8;
+      background: #fff;
+      color: #5f6368;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 0;
+      line-height: 1;
+    }
+    #togglePassword {
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: #f7f8fb;
+      color: #2d3136;
+      border-color: #d9dfe8;
+      white-space: nowrap;
+    }
+    .decisionActions {
+      margin-top: 0;
+      margin-bottom: 10px;
+    }
     .hidden { display: none !important; }
     .grid2 { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .takeover-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .takeover-meta {
+      font-size: 12px;
+      color: #5f6368;
+      overflow-wrap: anywhere;
+    }
+    .stream-wrap {
+      position: relative;
+      margin-top: 8px;
+      border-radius: 14px;
+      border: 1px solid #d9dfe8;
+      background: #050912;
+      min-height: 280px;
+      overflow: hidden;
+    }
+    .stream-wrap img {
+      width: 100%;
+      height: auto;
+      display: block;
+      object-fit: contain;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .stream-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #b2bfd3;
+      font-size: 13px;
+      padding: 18px;
+      text-align: center;
+    }
+    .quick-keys {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .quick-keys button {
+      border-radius: 12px;
+      padding: 8px 10px;
+      font-size: 13px;
+      background: #0f1725;
+      border-color: #202b40;
+      color: #f4f8ff;
+    }
+    .takeover-input {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .takeover-input input {
+      flex: 1;
+    }
+    .takeover-status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #5f6368;
+    }
+    .takeover-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
     video, canvas, #photoPreview {
       width: 100%;
       border-radius: 12px;
@@ -511,6 +726,13 @@ export class HumanAuthRelayServer {
       .grid2 { grid-template-columns: 1fr; }
       .brandRow { flex-direction: column; align-items: flex-start; }
       .requestId { text-align: left; }
+      .quick-keys {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .takeover-input {
+        flex-direction: column;
+        align-items: stretch;
+      }
     }
   </style>
 </head>
@@ -518,27 +740,86 @@ export class HumanAuthRelayServer {
   <div class="wrap">
     <div class="card">
       <div class="brandRow">
-        <div class="brandPill">OpenPocket Human Auth</div>
         <div class="requestId">Request: ${requestId}</div>
       </div>
-      <h1>Approve Or Reject To Continue</h1>
+      <h1>Authorization Required</h1>
       <p class="brief"><b>${capability}</b> requested. ${instructionBrief}</p>
-      <div class="capabilityLine" id="capabilityHint"></div>
+
+      <div class="section hidden" id="credentialDelegation">
+        <h2>Login Credentials (Recommended)</h2>
+        <div class="muted securityHint">Security: credentials are submitted to your local OpenPocket relay on your own computer through this one-time auth link.</div>
+        <label for="credUsername">Username / Email</label>
+        <div class="inputWrap">
+          <input
+            id="credUsername"
+            type="text"
+            placeholder="Enter username, email, or phone"
+            autocomplete="username"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+          <button id="clearUsername" class="clearInputBtn" type="button" aria-label="Clear username">×</button>
+        </div>
+        <label for="credPassword">Password</label>
+        <div class="passwordRow">
+          <div class="inputWrap">
+            <input
+              id="credPassword"
+              type="password"
+              placeholder="Enter password"
+              autocomplete="current-password"
+              autocapitalize="off"
+              spellcheck="false"
+            />
+            <button id="clearPassword" class="clearInputBtn" type="button" aria-label="Clear password">×</button>
+          </div>
+          <button id="togglePassword" type="button">Show</button>
+        </div>
+      </div>
 
       <div class="section">
-        <label for="note">Optional note</label>
-        <textarea id="note" placeholder="e.g., approved with Face ID, verification done"></textarea>
-        <div class="actions">
+        <div class="actions decisionActions">
           <button id="approve" type="button">Approve</button>
           <button id="reject" type="button">Reject</button>
         </div>
+        <label for="note">Decision Note (Optional)</label>
+        <textarea id="note" placeholder="Optional message to agent"></textarea>
         <div class="status" id="status"></div>
       </div>
 
+      <div class="capabilityLine" id="capabilityHint"></div>
+
       <div class="section">
+        <div class="takeover-head">
+          <h2>Optional Remote Takeover (Live)</h2>
+          <div class="takeover-meta" id="takeoverMeta">Preparing stream...</div>
+        </div>
+        <div class="takeover-actions">
+          <button id="takeoverStart" type="button">Open Live Stream</button>
+          <button id="takeoverStop" type="button">Stop Stream</button>
+          <button id="takeoverRefresh" type="button">Refresh Snapshot</button>
+        </div>
+        <div class="stream-wrap">
+          <img id="takeoverStream" alt="Emulator live stream" hidden />
+          <div class="stream-empty" id="takeoverEmpty">Connecting to emulator live stream...</div>
+        </div>
+        <div class="quick-keys">
+          <button id="keyBack" type="button">Back</button>
+          <button id="keyHome" type="button">Home</button>
+          <button id="keyRecents" type="button">Recents</button>
+          <button id="keyEnter" type="button">Enter</button>
+        </div>
+        <div class="takeover-input">
+          <input id="takeoverText" type="text" placeholder="Type text to emulator input field" />
+          <button id="takeoverSendText" type="button">Send Text</button>
+        </div>
+        <div class="takeover-status" id="takeoverStatus">Tip: tap inside live view to control emulator directly.</div>
+      </div>
+
+      <div class="section" id="delegatedDataSection">
         <h2>Optional Delegated Data</h2>
         <div id="textDelegation">
-          <label for="resultText">Text / Code</label>
+          <label for="resultText">OTP / Code / Short Text</label>
           <input id="resultText" type="text" placeholder="e.g., OTP, SMS code, QR result text" />
           <div class="actions">
             <button id="attachText" type="button">Attach Text</button>
@@ -557,16 +838,18 @@ export class HumanAuthRelayServer {
           </div>
         </div>
 
-        <div class="actions">
-          <button id="startCam" type="button">Enable Camera</button>
-          <button id="snapCam" type="button">Capture Snapshot</button>
-          <button id="pickPhoto" type="button">Capture / Upload Photo</button>
+        <div id="cameraDelegation">
+          <div class="actions">
+            <button id="startCam" type="button">Enable Camera</button>
+            <button id="snapCam" type="button">Capture Snapshot</button>
+            <button id="pickPhoto" type="button">Capture / Upload Photo</button>
+          </div>
+          <div class="muted">Camera attachment is optional. You can approve/reject without photo.</div>
+          <video id="video" autoplay playsinline hidden></video>
+          <canvas id="canvas" hidden></canvas>
+          <img id="photoPreview" alt="Captured preview" hidden />
+          <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
         </div>
-        <div class="muted">Camera attachment is optional. You can approve/reject without photo.</div>
-        <video id="video" autoplay playsinline hidden></video>
-        <canvas id="canvas" hidden></canvas>
-        <img id="photoPreview" alt="Captured preview" hidden />
-        <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
       </div>
 
       <details class="context">
@@ -594,10 +877,30 @@ export class HumanAuthRelayServer {
     const photoInputEl = document.getElementById("photoInput");
     const photoPreviewEl = document.getElementById("photoPreview");
     const resultTextEl = document.getElementById("resultText");
+    const credUsernameEl = document.getElementById("credUsername");
+    const credPasswordEl = document.getElementById("credPassword");
+    const togglePasswordEl = document.getElementById("togglePassword");
     const geoLatEl = document.getElementById("geoLat");
     const geoLonEl = document.getElementById("geoLon");
+    const takeoverStreamEl = document.getElementById("takeoverStream");
+    const takeoverEmptyEl = document.getElementById("takeoverEmpty");
+    const takeoverMetaEl = document.getElementById("takeoverMeta");
+    const takeoverStatusEl = document.getElementById("takeoverStatus");
+    const takeoverTextEl = document.getElementById("takeoverText");
     let stream = null;
     let artifact = null;
+    let takeoverPollingTimer = null;
+    let takeoverRunning = false;
+    const takeoverControlIds = [
+      "takeoverStop",
+      "takeoverRefresh",
+      "takeoverSendText",
+      "keyBack",
+      "keyHome",
+      "keyRecents",
+      "keyEnter",
+      "takeoverText",
+    ];
 
     function show(id, visible) {
       const el = document.getElementById(id);
@@ -606,24 +909,211 @@ export class HumanAuthRelayServer {
     }
 
     function capabilityHintText(cap) {
-      if (cap === "location") return "Recommended: attach location. VM will receive geo coordinates.";
-      if (cap === "camera") return "Recommended: attach a photo if app flow needs image input.";
-      if (cap === "2fa" || cap === "sms") return "Recommended: attach OTP/code text.";
-      if (cap === "qr") return "Recommended: attach decoded QR text or photo.";
-      return "Attach optional evidence/data to help the agent continue in VM.";
+      if (cap === "location") return "Recommended: attach location and approve.";
+      if (cap === "camera") return "Recommended: capture/upload photo and approve.";
+      if (cap === "oauth") return "Recommended: fill credentials above, then approve. Remote takeover is optional.";
+      if (cap === "2fa" || cap === "sms") return "Recommended: attach OTP/code and approve.";
+      if (cap === "qr") return "Recommended: attach QR text or photo and approve.";
+      return "Recommended: attach needed data, then approve.";
     }
 
     function configureByCapability() {
       capabilityHintEl.textContent = capabilityHintText(capability);
+      show("credentialDelegation", capability === "oauth");
+      show("delegatedDataSection", capability !== "oauth");
       show("geoDelegation", capability === "location");
-      show("textDelegation", capability !== "location");
+      show("textDelegation", capability !== "location" && capability !== "oauth");
+      show("cameraDelegation", capability === "camera" || capability === "qr");
       if (capability === "location") {
         resultTextEl.placeholder = "Optional location note";
       } else if (capability === "sms" || capability === "2fa") {
         resultTextEl.placeholder = "e.g., 6-digit OTP";
       } else if (capability === "qr") {
         resultTextEl.placeholder = "Paste QR decoded content";
+      } else if (capability === "oauth") {
+        resultTextEl.placeholder = "Not used in oauth flow";
+      } else {
+        resultTextEl.placeholder = "Optional delegated text";
       }
+    }
+
+    /** Build takeover URL. For stream (img src), token stays in query string.
+     *  For fetch-based calls (snapshot/action), we send via header instead. */
+    function takeoverBasePath(path) {
+      return "/v1/human-auth/requests/" + encodeURIComponent(requestId) + path;
+    }
+    function takeoverStreamUrl(path) {
+      return (
+        takeoverBasePath(path) +
+        (path.includes("?") ? "&" : "?") +
+        "token=" +
+        encodeURIComponent(token)
+      );
+    }
+    var authHeaders = { "X-OpenPocket-Auth": token };
+
+    function setTakeoverStatus(text) {
+      takeoverStatusEl.textContent = text;
+    }
+
+    function setTakeoverControlsEnabled(enabled) {
+      for (const id of takeoverControlIds) {
+        const el = document.getElementById(id);
+        if (!el) {
+          continue;
+        }
+        if ("disabled" in el) {
+          el.disabled = !enabled;
+        }
+      }
+    }
+
+    function setTakeoverMeta(frame) {
+      if (!frame) {
+        takeoverMetaEl.textContent = "No frame metadata.";
+        return;
+      }
+      takeoverMetaEl.textContent =
+        "App: " +
+        (frame.currentApp || "unknown") +
+        " | " +
+        (frame.width || "?") +
+        "x" +
+        (frame.height || "?") +
+        " | " +
+        new Date(frame.capturedAt || Date.now()).toLocaleTimeString();
+      takeoverStreamEl.dataset.pixelWidth = String(frame.width || 0);
+      takeoverStreamEl.dataset.pixelHeight = String(frame.height || 0);
+    }
+
+    async function loadTakeoverSnapshot(silent) {
+      const response = await fetch(takeoverBasePath("/takeover/snapshot"), {
+        method: "GET",
+        headers: authHeaders,
+        cache: "no-store",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = body.error || response.statusText || "unknown error";
+        if (response.status === 403 || response.status === 409) {
+          stopTakeoverForTerminalState(message);
+          return;
+        }
+        if (!silent) {
+          setTakeoverStatus("Snapshot failed: " + message);
+        }
+        return;
+      }
+      const frame = body.frame || null;
+      if (!frame || !frame.screenshotBase64) {
+        if (!silent) {
+          setTakeoverStatus("Snapshot unavailable.");
+        }
+        return;
+      }
+      takeoverStreamEl.src = "data:image/png;base64," + frame.screenshotBase64;
+      takeoverStreamEl.hidden = false;
+      takeoverEmptyEl.style.display = "none";
+      setTakeoverMeta(frame);
+      if (!silent) {
+        setTakeoverStatus("Snapshot refreshed.");
+      }
+    }
+
+    async function sendTakeoverAction(action, silent) {
+      const response = await fetch(
+        takeoverBasePath("/takeover/action"),
+        {
+          method: "POST",
+          headers: Object.assign({ "content-type": "application/json" }, authHeaders),
+          body: JSON.stringify({ action }),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = body.error || response.statusText || "unknown error";
+        if (response.status === 403 || response.status === 409) {
+          stopTakeoverForTerminalState(message);
+          throw new Error(message);
+        }
+        if (!silent) {
+          setTakeoverStatus("Action failed: " + message);
+        }
+        throw new Error(message);
+      }
+      if (!silent) {
+        setTakeoverStatus(body.message || "Action sent.");
+      }
+    }
+
+    function startTakeoverPolling() {
+      if (takeoverPollingTimer) {
+        clearInterval(takeoverPollingTimer);
+        takeoverPollingTimer = null;
+      }
+      takeoverPollingTimer = setInterval(() => {
+        if (!takeoverRunning) {
+          return;
+        }
+        loadTakeoverSnapshot(true).catch(() => {});
+      }, 1200);
+    }
+
+    function stopTakeoverPolling() {
+      if (!takeoverPollingTimer) {
+        return;
+      }
+      clearInterval(takeoverPollingTimer);
+      takeoverPollingTimer = null;
+    }
+
+    function stopTakeoverForTerminalState(message) {
+      takeoverRunning = false;
+      stopTakeoverPolling();
+      takeoverStreamEl.removeAttribute("src");
+      takeoverStreamEl.hidden = true;
+      takeoverEmptyEl.style.display = "flex";
+      takeoverEmptyEl.textContent = "Takeover ended: " + message;
+      setTakeoverStatus(message);
+      setTakeoverControlsEnabled(false);
+    }
+
+    function startTakeoverStream() {
+      takeoverRunning = true;
+      stopTakeoverPolling();
+      setTakeoverControlsEnabled(true);
+      takeoverStreamEl.hidden = false;
+      takeoverEmptyEl.style.display = "none";
+      const url = takeoverStreamUrl("/takeover/stream") + "&ts=" + Date.now();
+      takeoverStreamEl.src = url;
+      setTakeoverStatus("Live stream connected. Tap image to control emulator.");
+      loadTakeoverSnapshot(true).catch(() => {});
+    }
+
+    function stopTakeoverStream() {
+      takeoverRunning = false;
+      stopTakeoverPolling();
+      takeoverStreamEl.removeAttribute("src");
+      takeoverStreamEl.hidden = true;
+      takeoverEmptyEl.style.display = "flex";
+      takeoverEmptyEl.textContent = "Remote takeover not started.";
+      setTakeoverControlsEnabled(false);
+      setTakeoverStatus("Live stream stopped.");
+    }
+
+    function streamToDeviceCoordinates(clientX, clientY) {
+      const rect = takeoverStreamEl.getBoundingClientRect();
+      const pixelWidth = Number(takeoverStreamEl.dataset.pixelWidth || takeoverStreamEl.naturalWidth || "0");
+      const pixelHeight = Number(takeoverStreamEl.dataset.pixelHeight || takeoverStreamEl.naturalHeight || "0");
+      if (!pixelWidth || !pixelHeight || !rect.width || !rect.height) {
+        return null;
+      }
+      const localX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+      const localY = Math.max(0, Math.min(rect.height, clientY - rect.top));
+      return {
+        x: Math.max(0, Math.min(pixelWidth - 1, Math.round((localX / rect.width) * pixelWidth))),
+        y: Math.max(0, Math.min(pixelHeight - 1, Math.round((localY / rect.height) * pixelHeight))),
+      };
     }
 
     function toBase64Utf8(text) {
@@ -638,6 +1128,35 @@ export class HumanAuthRelayServer {
         mimeType: "application/json",
         base64: toBase64Utf8(JSON.stringify(payload)),
       };
+    }
+
+    function buildCredentialsArtifactPayload() {
+      const username = String(credUsernameEl.value || "").trim();
+      const password = String(credPasswordEl.value || "");
+      if (!username && !password) {
+        return null;
+      }
+      return {
+        kind: "credentials",
+        username,
+        password,
+        capability,
+        capturedAt: new Date().toISOString(),
+      };
+    }
+
+    function clearCredentialInput(inputEl) {
+      if (!inputEl) {
+        return;
+      }
+      inputEl.value = "";
+      inputEl.focus();
+    }
+
+    function togglePasswordVisibility() {
+      const asText = credPasswordEl.type === "password";
+      credPasswordEl.type = asText ? "text" : "password";
+      togglePasswordEl.textContent = asText ? "Hide" : "Show";
     }
 
     function humanErrorMessage(err) {
@@ -773,6 +1292,18 @@ export class HumanAuthRelayServer {
     async function submitDecision(approved) {
       statusEl.textContent = "Submitting...";
       try {
+        if (capability === "oauth") {
+          if (approved) {
+            const payload = buildCredentialsArtifactPayload();
+            if (payload) {
+              setJsonArtifact(payload);
+            } else {
+              artifact = null;
+            }
+          } else {
+            artifact = null;
+          }
+        }
         const response = await fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -794,6 +1325,10 @@ export class HumanAuthRelayServer {
             track.stop();
           }
         }
+        stopTakeoverPolling();
+        takeoverRunning = false;
+        takeoverStreamEl.removeAttribute("src");
+        setTakeoverControlsEnabled(false);
       } catch (err) {
         statusEl.textContent = "Request failed: " + (err && err.message ? err.message : String(err));
       }
@@ -803,12 +1338,69 @@ export class HumanAuthRelayServer {
     document.getElementById("snapCam").addEventListener("click", captureSnapshot);
     document.getElementById("pickPhoto").addEventListener("click", pickPhoto);
     document.getElementById("attachText").addEventListener("click", attachTextArtifact);
+    document.getElementById("clearUsername").addEventListener("click", () => clearCredentialInput(credUsernameEl));
+    document.getElementById("clearPassword").addEventListener("click", () => clearCredentialInput(credPasswordEl));
+    document.getElementById("togglePassword").addEventListener("click", togglePasswordVisibility);
     document.getElementById("useGeo").addEventListener("click", useCurrentLocation);
     document.getElementById("attachGeo").addEventListener("click", attachGeoArtifact);
     photoInputEl.addEventListener("change", onPhotoChange);
     document.getElementById("approve").addEventListener("click", () => submitDecision(true));
     document.getElementById("reject").addEventListener("click", () => submitDecision(false));
+    document.getElementById("takeoverStart").addEventListener("click", startTakeoverStream);
+    document.getElementById("takeoverStop").addEventListener("click", stopTakeoverStream);
+    document.getElementById("takeoverRefresh").addEventListener("click", () => {
+      loadTakeoverSnapshot(false).catch((err) => {
+        setTakeoverStatus("Snapshot refresh failed: " + (err && err.message ? err.message : String(err)));
+      });
+    });
+    document.getElementById("takeoverSendText").addEventListener("click", () => {
+      const text = String(takeoverTextEl.value || "").trim();
+      if (!text) {
+        setTakeoverStatus("Text is empty.");
+        return;
+      }
+      sendTakeoverAction({ type: "type", text }, false)
+        .then(() => {
+          loadTakeoverSnapshot(true).catch(() => {});
+        })
+        .catch(() => {});
+    });
+    document.getElementById("keyBack").addEventListener("click", () => {
+      sendTakeoverAction({ type: "keyevent", keycode: "KEYCODE_BACK" }, false).catch(() => {});
+    });
+    document.getElementById("keyHome").addEventListener("click", () => {
+      sendTakeoverAction({ type: "keyevent", keycode: "KEYCODE_HOME" }, false).catch(() => {});
+    });
+    document.getElementById("keyRecents").addEventListener("click", () => {
+      sendTakeoverAction({ type: "keyevent", keycode: "KEYCODE_APP_SWITCH" }, false).catch(() => {});
+    });
+    document.getElementById("keyEnter").addEventListener("click", () => {
+      sendTakeoverAction({ type: "keyevent", keycode: "KEYCODE_ENTER" }, false).catch(() => {});
+    });
+    takeoverStreamEl.addEventListener("click", (event) => {
+      const p = streamToDeviceCoordinates(event.clientX, event.clientY);
+      if (!p) {
+        setTakeoverStatus("Tap mapping failed. Refresh snapshot first.");
+        return;
+      }
+      sendTakeoverAction({ type: "tap", x: p.x, y: p.y }, false)
+        .then(() => {
+          loadTakeoverSnapshot(true).catch(() => {});
+        })
+        .catch(() => {});
+    });
+    takeoverStreamEl.addEventListener("error", () => {
+      if (!takeoverRunning) {
+        return;
+      }
+      setTakeoverStatus("Live stream interrupted. Falling back to snapshot polling.");
+      startTakeoverPolling();
+      loadTakeoverSnapshot(true).catch(() => {});
+    });
     configureByCapability();
+    setTakeoverControlsEnabled(false);
+    takeoverEmptyEl.textContent = "Remote takeover not started.";
+    setTakeoverStatus("Remote takeover is optional. Open live stream only if you need direct control.");
   </script>
 </body>
 </html>`;
@@ -892,6 +1484,12 @@ export class HumanAuthRelayServer {
         openUrl,
         pollToken,
         expiresAt,
+        takeover: {
+          enabled: Boolean(this.options.takeoverRuntime),
+          snapshotPath: `/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/snapshot`,
+          streamUrl: `${publicBaseUrl}/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/stream?token=${encodeURIComponent(openToken)}`,
+          actionPath: `/v1/human-auth/requests/${encodeURIComponent(requestId)}/takeover/action`,
+        },
       });
       return;
     }
@@ -979,6 +1577,223 @@ export class HumanAuthRelayServer {
         status: record.status,
         decidedAt: record.decidedAt,
       });
+      return;
+    }
+
+    const takeoverSnapshotMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/takeover\/snapshot$/);
+    if (method === "GET" && takeoverSnapshotMatch) {
+      const requestId = decodeURIComponent(takeoverSnapshotMatch[1]);
+      const record = this.records.get(requestId);
+      if (!record) {
+        sendJson(res, 404, { error: "Request not found." });
+        return;
+      }
+      this.updateTimeoutStatus(record);
+      if (record.status !== "pending") {
+        sendJson(res, 409, { error: `Request already ${record.status}.` });
+        return;
+      }
+      // Accept token from header (preferred) or query string (fallback).
+      const headerToken = req.headers["x-openpocket-auth"];
+      const tokenRaw = typeof headerToken === "string" ? headerToken : requestUrl.searchParams.get("token");
+      const auth = this.verifyOpenToken(record, tokenRaw);
+      if (!auth.ok) {
+        sendJson(res, auth.status, { error: auth.error });
+        return;
+      }
+      const runtime = this.ensureTakeoverRuntime();
+      if (!runtime) {
+        sendJson(res, 501, { error: "Remote takeover runtime is not configured." });
+        return;
+      }
+      try {
+        const frame = await runtime.captureFrame();
+        sendJson(res, 200, {
+          requestId: record.requestId,
+          status: record.status,
+          frame,
+        });
+      } catch (error) {
+        sendJson(res, 500, { error: `Failed to capture takeover snapshot: ${(error as Error).message}` });
+      }
+      return;
+    }
+
+    const takeoverActionMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/takeover\/action$/);
+    if (method === "POST" && takeoverActionMatch) {
+      const requestId = decodeURIComponent(takeoverActionMatch[1]);
+      const record = this.records.get(requestId);
+      if (!record) {
+        sendJson(res, 404, { error: "Request not found." });
+        return;
+      }
+      this.updateTimeoutStatus(record);
+      if (record.status !== "pending") {
+        sendJson(res, 409, { error: `Request already ${record.status}.` });
+        return;
+      }
+      const runtime = this.ensureTakeoverRuntime();
+      if (!runtime) {
+        sendJson(res, 501, { error: "Remote takeover runtime is not configured." });
+        return;
+      }
+      let body: unknown;
+      try {
+        body = await readJsonBody(req, 500_000);
+      } catch (error) {
+        sendJson(res, 400, { error: (error as Error).message });
+        return;
+      }
+      if (!isObject(body)) {
+        sendJson(res, 400, { error: "Invalid body." });
+        return;
+      }
+      // Accept token from header (preferred) or body (legacy fallback).
+      const headerToken = req.headers["x-openpocket-auth"];
+      const tokenRaw = typeof headerToken === "string" ? headerToken : body.token;
+      const auth = this.verifyOpenToken(record, tokenRaw);
+      if (!auth.ok) {
+        sendJson(res, auth.status, { error: auth.error });
+        return;
+      }
+      const action = this.parseTakeoverAction(body.action);
+      if (!action) {
+        sendJson(res, 400, { error: "Invalid takeover action." });
+        return;
+      }
+      // Rate-limit takeover actions to prevent ADB overload.
+      const now = Date.now();
+      const lastActionAt = this.takeoverActionTimestamps.get(requestId) ?? 0;
+      if (now - lastActionAt < HumanAuthRelayServer.TAKEOVER_ACTION_COOLDOWN_MS) {
+        sendJson(res, 429, { error: "Too many takeover actions. Please slow down." });
+        return;
+      }
+      this.takeoverActionTimestamps.set(requestId, now);
+      try {
+        const message = await runtime.execute(action);
+        sendJson(res, 200, {
+          requestId: record.requestId,
+          status: record.status,
+          message,
+        });
+      } catch (error) {
+        sendJson(res, 500, { error: `Failed to execute takeover action: ${(error as Error).message}` });
+      }
+      return;
+    }
+
+    const takeoverStreamMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/takeover\/stream$/);
+    if (method === "GET" && takeoverStreamMatch) {
+      const requestId = decodeURIComponent(takeoverStreamMatch[1]);
+      const record = this.records.get(requestId);
+      if (!record) {
+        sendText(res, 404, "Request not found.");
+        return;
+      }
+      this.updateTimeoutStatus(record);
+      if (record.status !== "pending") {
+        sendText(res, 409, `Request already ${record.status}.`);
+        return;
+      }
+      const auth = this.verifyOpenToken(record, requestUrl.searchParams.get("token"));
+      if (!auth.ok) {
+        sendText(res, auth.status, auth.error);
+        return;
+      }
+      const runtime = this.ensureTakeoverRuntime();
+      if (!runtime) {
+        sendText(res, 501, "Remote takeover runtime is not configured.");
+        return;
+      }
+
+      // Limit concurrent streams per request to prevent ADB overload.
+      const currentStreams = this.takeoverStreamCounts.get(requestId) ?? 0;
+      if (currentStreams >= HumanAuthRelayServer.TAKEOVER_MAX_CONCURRENT_STREAMS) {
+        sendText(res, 429, "Too many concurrent takeover streams. Close an existing one first.");
+        return;
+      }
+      this.takeoverStreamCounts.set(requestId, currentStreams + 1);
+
+      res.statusCode = 200;
+      res.setHeader("content-type", "multipart/x-mixed-replace; boundary=frame");
+      res.setHeader("cache-control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("pragma", "no-cache");
+      res.setHeader("connection", "keep-alive");
+      res.setHeader("x-accel-buffering", "no");
+      res.flushHeaders?.();
+
+      const frameIntervalMs = Math.max(180, Math.round(1000 / Math.max(1, Number(this.options.takeoverFps ?? 2))));
+      let closed = false;
+      let running = false;
+      let timer: NodeJS.Timeout | null = null;
+
+      const stop = (): void => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        // Decrement the concurrent stream counter for this request.
+        const count = this.takeoverStreamCounts.get(requestId) ?? 1;
+        if (count <= 1) {
+          this.takeoverStreamCounts.delete(requestId);
+        } else {
+          this.takeoverStreamCounts.set(requestId, count - 1);
+        }
+        if (timer) {
+          clearInterval(timer);
+          timer = null;
+        }
+        try {
+          res.write("--frame--\r\n");
+        } catch {
+          // Ignore write errors during close.
+        }
+        try {
+          res.end();
+        } catch {
+          // Ignore close errors.
+        }
+      };
+
+      req.on("close", stop);
+      res.on("close", stop);
+      res.on("error", stop);
+
+      let consecutiveErrors = 0;
+      const MAX_CONSECUTIVE_ERRORS = 5;
+
+      const pushFrame = async (): Promise<void> => {
+        if (closed || running) {
+          return;
+        }
+        running = true;
+        try {
+          this.updateTimeoutStatus(record);
+          if (record.status !== "pending") {
+            stop();
+            return;
+          }
+          const frame = await runtime.captureFrame();
+          if (closed) {
+            return;
+          }
+          await this.writeMjpegFrame(res, frame);
+          consecutiveErrors = 0;
+        } catch {
+          consecutiveErrors += 1;
+          // Tolerate transient ADB timeouts; only stop stream after repeated failures.
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            stop();
+          }
+        } finally {
+          running = false;
+        }
+      };
+
+      timer = setInterval(() => {
+        void pushFrame();
+      }, frameIntervalMs);
+      void pushFrame();
       return;
     }
 

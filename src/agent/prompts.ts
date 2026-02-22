@@ -71,6 +71,7 @@ export function buildSystemPrompt(
       "Call exactly one tool step at a time.",
       "For Android in-emulator permission dialogs, approve locally with Allow and do not request human auth.",
       "If blocked by real-device authorization, use request_human_auth.",
+      "For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
       "When the task is complete, call finish with concise results.",
     ].join("\n");
   }
@@ -88,7 +89,9 @@ export function buildSystemPrompt(
       "- For app-open tasks, first check whether the app is already installed/present; only go to Play Store if it is missing.",
       "- For Android in-emulator permission dialogs, tap Allow locally; do not call request_human_auth for these dialogs.",
       "- If blocked by sensitive checkpoints, call request_human_auth.",
-      "- If task requires user preference/choice, call request_user_decision with clear options.",
+      "- For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
+      "- Use request_user_decision only for non-sensitive preference/choice disambiguation.",
+      "- Never use request_user_decision to collect credentials/OTP/payment or personal identity data.",
       "- If done, call finish with key outputs.",
       "",
       "## Available Skills",
@@ -148,13 +151,16 @@ export function buildSystemPrompt(
     "- Android in-emulator permission dialogs (notifications/photos/files/network/etc.) must be handled locally by tapping Allow.",
     "- Do not call request_human_auth for in-emulator permission dialogs.",
     "- If blocked by real-device authorization or sensitive checkpoints, call request_human_auth.",
+    "- For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
     "- If progress depends on user preference (choice among visible options), call request_user_decision.",
+    "- request_user_decision must not be used to collect credentials, OTP, payment, or personal identity values.",
     `- Allowed capability values: ${HUMAN_AUTH_CAPABILITIES}.`,
     "- request_human_auth must include a clear instruction that a human can execute directly.",
     "",
     "## Mandatory User-Input Gate",
-    "- If screen requires user-owned account/personal data, do not guess or invent values; call request_user_decision first.",
-    "- Trigger request_user_decision for fields/prompts like: username, email, phone, password, OTP/code, DOB, address, payment, legal consent, profile identity.",
+    "- If screen requires sensitive user data (username/email/phone/password, OTP/code, payment, legal identity), do not guess or invent values.",
+    "- For sensitive values, call request_human_auth with the correct capability (oauth, sms, 2fa, payment, biometric, files, etc.).",
+    "- Use request_user_decision only for non-sensitive preference choices (e.g., choose one visible option or confirm route).",
     "- Trigger request_user_decision when multiple plausible choices exist or confidence is low.",
     "- request_user_decision.question must be concise and specific to current screen.",
     "- request_user_decision.options should provide 2-6 concrete options, plus a custom/free-text option when applicable.",
@@ -267,15 +273,17 @@ export function buildUserPrompt(
   history: string[],
   recentSnapshots: ScreenSnapshot[] = [],
 ): string {
-  const recentHistory = history.slice(-8);
+  const safeHistory = Array.isArray(history) ? history : [];
+  const uiElements = Array.isArray(snapshot.uiElements) ? snapshot.uiElements : [];
+  const recentHistory = safeHistory.slice(-8);
   const recentActions = recentHistory.map(parseActionFromHistoryLine);
   const recentApps = recentHistory.map(parseAppFromHistoryLine);
   const actionStreak = trailingStreak(recentActions);
   const appStreak = trailingStreak(recentApps);
   const focusLoopRisk = actionStreak.value === "tap" && actionStreak.count >= 3;
   const unknownAppStreak = appStreak.value === "unknown" ? appStreak.count : 0;
-  const uiCandidatesText = (snapshot.uiElements?.length ?? 0) > 0
-    ? snapshot.uiElements
+  const uiCandidatesText = uiElements.length > 0
+    ? uiElements
       .slice(0, 20)
       .map((item) => {
         const label = item.text || item.contentDesc || item.resourceId || item.className || "(unlabeled)";
@@ -326,7 +334,7 @@ export function buildUserPrompt(
     uiCandidatesText,
     "",
     "Recent execution history (oldest -> newest):",
-    recentHistory.length > 0 ? recentHistory.join("\n") : "(none)",
+    safeHistory.length > 0 ? safeHistory.slice(-8).join("\n") : "(none)",
     "",
     "Runtime stuck signals:",
     `- trailing action streak: ${actionStreak.value || "(none)"} x ${actionStreak.count}`,
@@ -354,7 +362,7 @@ export function buildUserPrompt(
     "5) Never type logs/history/JSON strings; text must come from user intent or on-screen content.",
     "6) For in-emulator permission dialogs, tap Allow locally. Use request_human_auth only for real-device data/authorization.",
     "7) If done, use finish with a complete summary.",
-    "8) If this step asks for user-owned identity/account data, call request_user_decision before entering anything.",
+    "8) If this step asks for sensitive user identity/account/payment data, call request_human_auth (not request_user_decision).",
     "",
     "Call exactly one tool now.",
   ].join("\n");

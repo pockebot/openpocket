@@ -67,6 +67,7 @@ Recommended scenario matrix:
 - `--case camera` for image delegation
 - `--case location` for geo delegation
 - `--case sms` or `--case 2fa` for text/code delegation
+- real app login wall (`capability=oauth`) for credential delegation or optional remote takeover validation
 
 ## Automated Agent E2E (Local)
 

@@ -16,6 +16,7 @@ import { DashboardServer, type DashboardGatewayStatus } from "./dashboard/server
 import { HumanAuthBridge } from "./human-auth/bridge";
 import { LocalHumanAuthStack } from "./human-auth/local-stack";
 import { HumanAuthRelayServer } from "./human-auth/relay-server";
+import { LocalHumanAuthTakeoverRuntime } from "./human-auth/takeover-runtime";
 import { SkillLoader } from "./skills/skill-loader";
 import { ScriptExecutor } from "./tools/script-executor";
 import { runSetupWizard } from "./onboarding/setup-wizard";
@@ -52,7 +53,17 @@ function printStep(step: number, total: number, title: string, status: CliStepSt
   printRaw(cliTheme.step(step, total, title, status, detail));
 }
 
+function shouldSuppressRuntimeLine(line: string): boolean {
+  const normalized = line.toLowerCase();
+  const isHeartbeat = normalized.includes("[heartbeat]");
+  const isWarning = normalized.includes("[warn]");
+  return isHeartbeat && !isWarning;
+}
+
 function printRuntimeLine(line: string): void {
+  if (shouldSuppressRuntimeLine(line)) {
+    return;
+  }
   printRaw(cliTheme.classifyRuntimeLine(line));
 }
 
@@ -1304,6 +1315,7 @@ async function runHumanAuthRelayCommand(
     stateFile:
       stateFile?.trim() ||
       cfg.humanAuth.localRelayStateFile,
+    takeoverRuntime: new LocalHumanAuthTakeoverRuntime(cfg),
   });
 
   await relay.start();

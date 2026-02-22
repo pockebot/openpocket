@@ -158,6 +158,17 @@ type PermissionDialogNode = {
   bottom: number;
 };
 
+type CredentialInputNode = {
+  resourceId: string;
+  className: string;
+  hint: string;
+  password: boolean;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
 type ResolvedTapElementContext = {
   id: string;
   label: string;
@@ -595,6 +606,25 @@ export class AgentRuntime {
     return { lat, lon };
   }
 
+  private extractDelegatedCredentials(
+    artifactJson: Record<string, unknown> | null,
+  ): { username: string; password: string } | null {
+    if (!artifactJson) {
+      return null;
+    }
+    if (String(artifactJson.kind ?? "") !== "credentials") {
+      return null;
+    }
+    const usernameRaw = artifactJson.username;
+    const passwordRaw = artifactJson.password;
+    const username = typeof usernameRaw === "string" ? usernameRaw.trim() : "";
+    const password = typeof passwordRaw === "string" ? passwordRaw : "";
+    if (!username && !password) {
+      return null;
+    }
+    return { username, password };
+  }
+
   private async applyLocationDelegation(lat: number, lon: number): Promise<DelegationApplyResult> {
     const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
     this.emulator.runAdb(
@@ -627,6 +657,160 @@ export class AgentRuntime {
     return {
       message: `delegated text typed (${text.length} chars): ${result}`,
       templateHint: "text_typed_continue_flow",
+    };
+  }
+
+  private credentialHintScore(node: CredentialInputNode, target: "username" | "password"): number {
+    const resource = this.normalizePermissionUiText(node.resourceId);
+    const hint = this.normalizePermissionUiText(node.hint);
+    const className = this.normalizePermissionUiText(node.className);
+    const combined = `${resource} ${hint} ${className}`;
+
+    if (target === "password") {
+      let score = 0;
+      if (node.password) {
+        score += 140;
+      }
+      if (combined.includes("password") || combined.includes("passcode") || combined.includes("pwd")) {
+        score += 110;
+      }
+      return score;
+    }
+
+    let score = 0;
+    if (!node.password) {
+      score += 20;
+    }
+    if (
+      combined.includes("username") ||
+      combined.includes("user name") ||
+      combined.includes("email") ||
+      combined.includes("account") ||
+      combined.includes("phone")
+    ) {
+      score += 120;
+    }
+    return score;
+  }
+
+  private pickCredentialInputNode(
+    nodes: CredentialInputNode[],
+    target: "username" | "password",
+    exclude: CredentialInputNode | null,
+  ): CredentialInputNode | null {
+    const filtered = nodes.filter((node) => node !== exclude);
+    if (filtered.length === 0) {
+      return null;
+    }
+    const scored = filtered
+      .map((node) => ({
+        node,
+        score: this.credentialHintScore(node, target),
+      }))
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        if (a.node.top !== b.node.top) {
+          return a.node.top - b.node.top;
+        }
+        return a.node.left - b.node.left;
+      });
+    if ((scored[0]?.score ?? 0) > 0) {
+      return scored[0]?.node ?? null;
+    }
+    if (target === "password") {
+      const passwordNode = filtered.find((node) => node.password);
+      if (passwordNode) {
+        return passwordNode;
+      }
+      return filtered[filtered.length - 1] ?? null;
+    }
+    const textNode = filtered.find((node) => !node.password);
+    if (textNode) {
+      return textNode;
+    }
+    return filtered[0] ?? null;
+  }
+
+  private async tapCredentialNode(
+    node: CredentialInputNode,
+    reason: string,
+  ): Promise<void> {
+    const tapX = Math.max(0, Math.round((node.left + node.right) / 2));
+    const tapY = Math.max(0, Math.round((node.top + node.bottom) / 2));
+    await this.adb.executeAction(
+      {
+        type: "tap",
+        x: tapX,
+        y: tapY,
+        reason,
+      },
+      this.config.agent.deviceId,
+    );
+    await sleep(120);
+  }
+
+  private async applyCredentialDelegation(
+    username: string,
+    password: string,
+  ): Promise<DelegationApplyResult> {
+    const deviceId = this.resolveDelegationDeviceId();
+    const uiDumpXml = this.captureUiDumpXml(deviceId);
+    const nodes = this.parseCredentialInputNodes(uiDumpXml);
+    let focusedUsernameNode: CredentialInputNode | null = null;
+
+    if (username) {
+      focusedUsernameNode = this.pickCredentialInputNode(nodes, "username", null);
+      if (focusedUsernameNode) {
+        await this.tapCredentialNode(focusedUsernameNode, "human_auth_focus_username");
+      }
+      await this.adb.executeAction(
+        {
+          type: "type",
+          text: username,
+          reason: "human_auth_delegate_username",
+        },
+        this.config.agent.deviceId,
+      );
+    }
+
+    if (password) {
+      const passwordNode = this.pickCredentialInputNode(nodes, "password", focusedUsernameNode);
+      if (passwordNode) {
+        await this.tapCredentialNode(passwordNode, "human_auth_focus_password");
+      } else if (username) {
+        await this.adb.executeAction(
+          {
+            type: "keyevent",
+            keycode: "KEYCODE_TAB",
+            reason: "human_auth_focus_password_tab",
+          },
+          this.config.agent.deviceId,
+        );
+        await sleep(80);
+      }
+      await this.adb.executeAction(
+        {
+          type: "type",
+          text: password,
+          reason: "human_auth_delegate_password",
+        },
+        this.config.agent.deviceId,
+      );
+    }
+
+    // Redact credential details from logs — only report which fields were filled.
+    const filled: string[] = [];
+    if (username) {
+      filled.push("username");
+    }
+    if (password) {
+      filled.push("password");
+    }
+    return {
+      message: `delegated credentials typed: ${filled.join(" + ")}`,
+      templateHint: "oauth_credentials_typed_continue_flow",
     };
   }
 
@@ -740,6 +924,77 @@ export class AgentRuntime {
       match = nodeRe.exec(uiDumpXml);
     }
     return nodes;
+  }
+
+  private parseCredentialInputNodes(uiDumpXml: string): CredentialInputNode[] {
+    const nodes: CredentialInputNode[] = [];
+    const nodeRe = /<node\s+([^>]*?)\/>/g;
+    let match = nodeRe.exec(uiDumpXml);
+    while (match) {
+      const attrs = this.parseUiNodeAttributes(match[1] ?? "");
+      const className = String(attrs.class ?? "");
+      const classNormalized = this.normalizePermissionUiText(className);
+      const parsedBounds = this.parseBounds(String(attrs.bounds ?? "").trim());
+      if (!parsedBounds || !classNormalized.includes("edittext")) {
+        match = nodeRe.exec(uiDumpXml);
+        continue;
+      }
+      const enabled = String(attrs.enabled ?? "").toLowerCase() !== "false";
+      if (!enabled) {
+        match = nodeRe.exec(uiDumpXml);
+        continue;
+      }
+      nodes.push({
+        resourceId: String(attrs["resource-id"] ?? ""),
+        className,
+        hint: String(attrs.hint ?? attrs.text ?? attrs["content-desc"] ?? ""),
+        password: String(attrs.password ?? "").toLowerCase() === "true",
+        left: parsedBounds.left,
+        top: parsedBounds.top,
+        right: parsedBounds.right,
+        bottom: parsedBounds.bottom,
+      });
+      match = nodeRe.exec(uiDumpXml);
+    }
+    nodes.sort((a, b) => {
+      if (a.top !== b.top) {
+        return a.top - b.top;
+      }
+      return a.left - b.left;
+    });
+    return nodes;
+  }
+
+  private captureUiDumpXml(deviceId: string): string {
+    // Use a unique temp file per call to avoid race conditions when the agent loop
+    // and a human-auth credential delegation run concurrently.
+    const dumpFile = `/sdcard/openpocket-uidump-${Date.now()}.xml`;
+    let uiDumpXml = "";
+    try {
+      this.emulator.runAdb(
+        ["-s", deviceId, "shell", "uiautomator", "dump", dumpFile],
+        15_000,
+      );
+      uiDumpXml = this.emulator.runAdb(
+        ["-s", deviceId, "shell", "cat", dumpFile],
+        15_000,
+      );
+      // Clean up temp file on device.
+      try {
+        this.emulator.runAdb(["-s", deviceId, "shell", "rm", "-f", dumpFile], 5_000);
+      } catch {
+        // Best-effort cleanup.
+      }
+      if (!uiDumpXml.includes("<hierarchy")) {
+        uiDumpXml = this.emulator.runAdb(
+          ["-s", deviceId, "shell", "cat", "/sdcard/window_dump.xml"],
+          15_000,
+        );
+      }
+    } catch {
+      uiDumpXml = "";
+    }
+    return uiDumpXml;
   }
 
   private modelInputDirForSession(sessionId: string): string {
@@ -1057,25 +1312,7 @@ export class AgentRuntime {
     }
 
     const deviceId = this.resolveDelegationDeviceId();
-    let uiDumpXml = "";
-    try {
-      this.emulator.runAdb(
-        ["-s", deviceId, "shell", "uiautomator", "dump", "/sdcard/openpocket-window.xml"],
-        15_000,
-      );
-      uiDumpXml = this.emulator.runAdb(
-        ["-s", deviceId, "shell", "cat", "/sdcard/openpocket-window.xml"],
-        15_000,
-      );
-      if (!uiDumpXml.includes("<hierarchy")) {
-        uiDumpXml = this.emulator.runAdb(
-          ["-s", deviceId, "shell", "cat", "/sdcard/window_dump.xml"],
-          15_000,
-        );
-      }
-    } catch {
-      uiDumpXml = "";
-    }
+    const uiDumpXml = this.captureUiDumpXml(deviceId);
 
     const nodes = this.parsePermissionDialogNodes(uiDumpXml);
     const targetNode = this.pickPermissionDialogNode(nodes, decision.approved);
@@ -1184,12 +1421,28 @@ export class AgentRuntime {
 
     try {
       const artifactJson = this.readJsonArtifact(decision.artifactPath);
+      // Immediately delete credential artifacts from disk to avoid plaintext password lingering.
+      if (artifactJson?.kind === "credentials") {
+        try {
+          fs.unlinkSync(decision.artifactPath);
+        } catch {
+          // Best-effort cleanup; file may already be removed.
+        }
+      }
       let artifactResult: DelegationApplyResult | null = null;
 
       if (capability === "location") {
         const geo = this.extractDelegatedGeo(artifactJson);
         if (geo) {
           artifactResult = await this.applyLocationDelegation(geo.lat, geo.lon);
+        }
+      }
+
+      // Credential delegation: match by oauth capability OR by artifact kind=credentials.
+      if (!artifactResult && (capability === "oauth" || artifactJson?.kind === "credentials")) {
+        const credentials = this.extractDelegatedCredentials(artifactJson);
+        if (credentials) {
+          artifactResult = await this.applyCredentialDelegation(credentials.username, credentials.password);
         }
       }
 
@@ -1302,7 +1555,9 @@ export class AgentRuntime {
         workspaceReport: workspacePromptContext.report,
       });
 
-      const launchablePackages = this.adb.queryLaunchablePackages(this.config.agent.deviceId);
+      const launchablePackages = typeof this.adb.queryLaunchablePackages === "function"
+        ? this.adb.queryLaunchablePackages(this.config.agent.deviceId)
+        : [];
 
       for (let step = 1; step <= this.config.agent.maxSteps; step += 1) {
         if (this.stopRequested) {
@@ -1787,7 +2042,14 @@ export class AgentRuntime {
             };
           }
 
-          const choiceLine = `user_decision selected="${decision.selectedOption}" raw="${decision.rawInput}" at=${decision.resolvedAt}`;
+          const normalizedSelected = String(decision.selectedOption || "").trim();
+          const matchedOption = output.action.options.find(
+            (item) => item.trim().toLowerCase() === normalizedSelected.toLowerCase(),
+          );
+          const selectedForLog = matchedOption || "[custom-input]";
+          const selectedSource = matchedOption ? "listed_option" : "custom_input";
+          const choiceLine =
+            `user_decision selected="${selectedForLog}" source=${selectedSource} input_len=${String(decision.rawInput || "").length} at=${decision.resolvedAt}`;
           const stepResult = screenshotPath
             ? `${choiceLine}\nlocal_screenshot=${screenshotPath}`
             : choiceLine;
@@ -1806,9 +2068,8 @@ export class AgentRuntime {
             currentApp: snapshot.currentApp,
           });
           history.push(
-            `step ${step}: app=${snapshot.currentApp} action=request_user_decision question=${JSON.stringify(output.action.question)} selected=${JSON.stringify(decision.selectedOption)}`,
+            `step ${step}: app=${snapshot.currentApp} action=request_user_decision question=${JSON.stringify(output.action.question)} selected=${JSON.stringify(selectedForLog)} source=${selectedSource}`,
           );
-          history.push(`user decision raw input: ${decision.rawInput}`);
 
           if (onProgress && step % this.config.agent.progressReportInterval === 0) {
             try {
@@ -1817,7 +2078,7 @@ export class AgentRuntime {
                 maxSteps: this.config.agent.maxSteps,
                 currentApp: snapshot.currentApp,
                 actionType: output.action.type,
-                message: `User selected: ${decision.selectedOption}`,
+                message: `User decision received (${selectedSource}).`,
                 thought: output.thought,
                 screenshotPath,
               });

@@ -803,6 +803,171 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
   }
 });
 
+test("AgentRuntime applies delegated oauth credentials artifact after human auth approval", async () => {
+  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
+  const actions = [];
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-${Date.now()}.json`);
+  fs.writeFileSync(
+    artifactFile,
+    JSON.stringify({
+      kind: "credentials",
+      username: "alice@example.com",
+      password: "S3cret-987",
+      capability: "oauth",
+    }),
+    "utf-8",
+  );
+
+  runtime.adb = {
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
+  };
+  runtime.emulator = {
+    runAdb: (args) => {
+      // Match the dynamic temp file path used by captureUiDumpXml (openpocket-uidump-*.xml).
+      if (Array.isArray(args) && args.includes("cat") && args.some((a) => String(a).includes("openpocket-uidump"))) {
+        return [
+          "<hierarchy>",
+          '<node index="0" text="" resource-id="com.demo:id/username" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[60,320][1020,430]" />',
+          '<node index="1" text="" resource-id="com.demo:id/password" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="true" selected="false" bounds="[60,460][1020,570]" />',
+          "</hierarchy>",
+        ].join("");
+      }
+      return "ok";
+    },
+  };
+  runtime.autoArtifactBuilder = {
+    build: () => ({ skillPath: null, scriptPath: null }),
+  };
+
+  let callCount = 0;
+  const originalNextStep = ModelClient.prototype.nextStep;
+  ModelClient.prototype.nextStep = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return {
+        thought: "Need account login",
+        action: {
+          type: "request_human_auth",
+          capability: "oauth",
+          instruction: "Provide account credentials.",
+          timeoutSec: 120,
+        },
+        raw: '{"thought":"Need account login","action":{"type":"request_human_auth","capability":"oauth","instruction":"Provide account credentials.","timeoutSec":120}}',
+      };
+    }
+    return {
+      thought: "Done",
+      action: { type: "finish", message: "Completed after credential delegation" },
+      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after credential delegation"}}',
+    };
+  };
+
+  try {
+    const result = await runtime.runTask(
+      "delegated oauth credentials test",
+      undefined,
+      undefined,
+      async () => ({
+        requestId: "req-oauth",
+        approved: true,
+        status: "approved",
+        message: "Credentials shared",
+        decidedAt: new Date().toISOString(),
+        artifactPath: artifactFile,
+      }),
+    );
+    assert.equal(result.ok, true);
+    assert.equal(
+      actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_username"),
+      true,
+    );
+    assert.equal(
+      actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_password"),
+      true,
+    );
+    assert.equal(
+      actions.some((action) => action.type === "type" && action.text === "alice@example.com"),
+      true,
+    );
+    assert.equal(
+      actions.some((action) => action.type === "type" && action.text === "S3cret-987"),
+      true,
+    );
+  } finally {
+    ModelClient.prototype.nextStep = originalNextStep;
+    fs.rmSync(artifactFile, { force: true });
+  }
+});
+
+test("AgentRuntime redacts custom user decision input from logs/history", async () => {
+  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
+  const actions = [];
+
+  runtime.adb = {
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
+  };
+  runtime.autoArtifactBuilder = {
+    build: () => ({ skillPath: null, scriptPath: null }),
+  };
+
+  let callCount = 0;
+  const originalNextStep = ModelClient.prototype.nextStep;
+  ModelClient.prototype.nextStep = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return {
+        thought: "Need user choice",
+        action: {
+          type: "request_user_decision",
+          question: "Which login route do you prefer?",
+          options: ["Use Google", "Use Email"],
+          timeoutSec: 90,
+        },
+        raw: '{"thought":"Need user choice","action":{"type":"request_user_decision","question":"Which login route do you prefer?","options":["Use Google","Use Email"],"timeoutSec":90}}',
+      };
+    }
+    return {
+      thought: "Done",
+      action: { type: "finish", message: "Completed after user decision" },
+      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after user decision"}}',
+    };
+  };
+
+  try {
+    const secretInput = "my-sensitive-free-text";
+    const result = await runtime.runTask(
+      "user decision redaction test",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => ({
+        selectedOption: secretInput,
+        rawInput: secretInput,
+        resolvedAt: new Date().toISOString(),
+      }),
+    );
+    assert.equal(result.ok, true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /selected="\[custom-input\]"/);
+    assert.match(sessionText, /source=custom_input/);
+    assert.doesNotMatch(sessionText, /my-sensitive-free-text/);
+    assert.doesNotMatch(sessionText, /user decision raw input:/i);
+  } finally {
+    ModelClient.prototype.nextStep = originalNextStep;
+  }
+});
+
 test("AgentRuntime applies delegated location artifact after human auth approval", async () => {
   const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const adbActions = [];

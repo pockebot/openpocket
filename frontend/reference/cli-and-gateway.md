@@ -184,9 +184,11 @@ When onboarding/profile update changes assistant name:
 When task emits `request_human_auth`:
 
 - gateway creates pending request through `HumanAuthBridge`
-- sends Telegram message with request summary and fallback commands
+- sends Telegram message with auth link and fallback commands
 - if URL is available, includes one-tap web button
 - supports inline OTP resolution for `sms`/`2fa` (plain 4-10 digits)
+- for `oauth`, web page provides dedicated username/password inputs plus optional remote takeover
+- approval artifacts are stored locally under `state/human-auth-artifacts/`
 
 Manual fallback commands remain available:
 

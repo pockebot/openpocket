@@ -1,6 +1,7 @@
 import type { OpenPocketConfig } from "../types";
 import { HumanAuthRelayServer } from "./relay-server";
 import { NgrokTunnel } from "./ngrok-tunnel";
+import { LocalHumanAuthTakeoverRuntime } from "./takeover-runtime";
 
 export interface LocalHumanAuthStackStartResult {
   relayBaseUrl: string;
@@ -40,6 +41,7 @@ export class LocalHumanAuthStack {
         apiKey: this.config.humanAuth.apiKey,
         apiKeyEnv: this.config.humanAuth.apiKeyEnv,
         stateFile: this.config.humanAuth.localRelayStateFile,
+        takeoverRuntime: new LocalHumanAuthTakeoverRuntime(this.config),
       });
       await this.relay.start();
 
