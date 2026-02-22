@@ -891,6 +891,70 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
   }
 });
 
+test("AgentRuntime redacts custom user decision input from logs/history", async () => {
+  const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
+  const actions = [];
+
+  runtime.adb = {
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
+  };
+  runtime.autoArtifactBuilder = {
+    build: () => ({ skillPath: null, scriptPath: null }),
+  };
+
+  let callCount = 0;
+  const originalNextStep = ModelClient.prototype.nextStep;
+  ModelClient.prototype.nextStep = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return {
+        thought: "Need user choice",
+        action: {
+          type: "request_user_decision",
+          question: "Which login route do you prefer?",
+          options: ["Use Google", "Use Email"],
+          timeoutSec: 90,
+        },
+        raw: '{"thought":"Need user choice","action":{"type":"request_user_decision","question":"Which login route do you prefer?","options":["Use Google","Use Email"],"timeoutSec":90}}',
+      };
+    }
+    return {
+      thought: "Done",
+      action: { type: "finish", message: "Completed after user decision" },
+      raw: '{"thought":"Done","action":{"type":"finish","message":"Completed after user decision"}}',
+    };
+  };
+
+  try {
+    const secretInput = "my-sensitive-free-text";
+    const result = await runtime.runTask(
+      "user decision redaction test",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => ({
+        selectedOption: secretInput,
+        rawInput: secretInput,
+        resolvedAt: new Date().toISOString(),
+      }),
+    );
+    assert.equal(result.ok, true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /selected="\[custom-input\]"/);
+    assert.match(sessionText, /source=custom_input/);
+    assert.doesNotMatch(sessionText, /my-sensitive-free-text/);
+    assert.doesNotMatch(sessionText, /user decision raw input:/i);
+  } finally {
+    ModelClient.prototype.nextStep = originalNextStep;
+  }
+});
+
 test("AgentRuntime applies delegated location artifact after human auth approval", async () => {
   const runtime = setupRuntime({ returnHomeOnTaskEnd: false });
   const adbActions = [];

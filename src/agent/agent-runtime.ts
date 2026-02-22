@@ -2030,7 +2030,14 @@ export class AgentRuntime {
             };
           }
 
-          const choiceLine = `user_decision selected="${decision.selectedOption}" raw="${decision.rawInput}" at=${decision.resolvedAt}`;
+          const normalizedSelected = String(decision.selectedOption || "").trim();
+          const matchedOption = output.action.options.find(
+            (item) => item.trim().toLowerCase() === normalizedSelected.toLowerCase(),
+          );
+          const selectedForLog = matchedOption || "[custom-input]";
+          const selectedSource = matchedOption ? "listed_option" : "custom_input";
+          const choiceLine =
+            `user_decision selected="${selectedForLog}" source=${selectedSource} input_len=${String(decision.rawInput || "").length} at=${decision.resolvedAt}`;
           const stepResult = screenshotPath
             ? `${choiceLine}\nlocal_screenshot=${screenshotPath}`
             : choiceLine;
@@ -2049,9 +2056,8 @@ export class AgentRuntime {
             currentApp: snapshot.currentApp,
           });
           history.push(
-            `step ${step}: app=${snapshot.currentApp} action=request_user_decision question=${JSON.stringify(output.action.question)} selected=${JSON.stringify(decision.selectedOption)}`,
+            `step ${step}: app=${snapshot.currentApp} action=request_user_decision question=${JSON.stringify(output.action.question)} selected=${JSON.stringify(selectedForLog)} source=${selectedSource}`,
           );
-          history.push(`user decision raw input: ${decision.rawInput}`);
 
           if (onProgress && step % this.config.agent.progressReportInterval === 0) {
             try {
@@ -2060,7 +2066,7 @@ export class AgentRuntime {
                 maxSteps: this.config.agent.maxSteps,
                 currentApp: snapshot.currentApp,
                 actionType: output.action.type,
-                message: `User selected: ${decision.selectedOption}`,
+                message: `User decision received (${selectedSource}).`,
                 thought: output.thought,
                 screenshotPath,
               });

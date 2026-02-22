@@ -892,7 +892,7 @@ export class TelegramGateway {
       rawInput: normalized,
       resolvedAt: new Date().toISOString(),
     });
-    await this.bot.sendMessage(chatId, `Got it. Continuing with: ${selected}`);
+    await this.bot.sendMessage(chatId, "Got it. Continuing.");
     return true;
   }
 
