@@ -32,7 +32,7 @@ function defaultConfigObject() {
       pollTimeoutSec: 25,
     },
     agent: {
-      maxSteps: 50,
+      maxSteps: 100,
       loopDelayMs: 1200,
       progressReportInterval: 1,
       returnHomeOnTaskEnd: true,
@@ -598,7 +598,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       pollTimeoutSec: Number(telegram.pollTimeoutSec ?? 25),
     },
     agent: {
-      maxSteps: Number(agent.maxSteps ?? 50),
+      maxSteps: Number(agent.maxSteps ?? 100),
       loopDelayMs: Number(agent.loopDelayMs ?? 1200),
       progressReportInterval: Math.max(1, Number(agent.progressReportInterval ?? 1)),
       returnHomeOnTaskEnd: Boolean(agent.returnHomeOnTaskEnd ?? true),

@@ -24,7 +24,7 @@ This page is the source-of-truth for current default config values and normaliza
     "pollTimeoutSec": 25
   },
   "agent": {
-    "maxSteps": 50,
+    "maxSteps": 100,
     "loopDelayMs": 1200,
     "progressReportInterval": 1,
     "returnHomeOnTaskEnd": true,
