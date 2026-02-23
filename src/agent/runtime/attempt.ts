@@ -82,7 +82,10 @@ export async function runRuntimeAttempt(
     const skillsSummary = deps.skillLoader.summaryText();
     const workspacePromptContext = deps.buildWorkspacePromptContext();
     const effectivePromptMode = request.promptMode ?? deps.config.agent.systemPromptMode;
-    const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, { mode: effectivePromptMode });
+    const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
+      mode: effectivePromptMode,
+      availableToolNames: request.availableToolNames,
+    });
     const report = deps.buildSystemPromptReport({
       source: "run",
       promptMode: effectivePromptMode,
@@ -119,7 +122,7 @@ export async function runRuntimeAttempt(
       onProgress: request.onProgress,
     };
 
-    const tools = deps.buildPhoneAgentTools(ctx);
+    const tools = deps.buildPhoneAgentTools(ctx, request.availableToolNames);
     const apiKey = auth.apiKey;
     const turnFallbackTasks: Promise<void>[] = [];
 

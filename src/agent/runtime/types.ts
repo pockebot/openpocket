@@ -27,6 +27,7 @@ export interface RunTaskRequest {
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
   promptMode?: SystemPromptMode;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
+  availableToolNames?: string[];
 }
 
 export interface RunTaskAttemptOutcome {
@@ -92,7 +93,7 @@ export interface RuntimeAttemptDependencies {
   buildWorkspacePromptContext: () => { text: string; report: unknown };
   buildSystemPromptReport: (params: BuildSystemPromptReportParams) => unknown;
   setLastSystemPromptReport: (report: unknown) => void;
-  buildPhoneAgentTools: (ctx: PhoneAgentRunContext) => AgentTool<any>[];
+  buildPhoneAgentTools: (ctx: PhoneAgentRunContext, availableToolNames?: string[]) => AgentTool<any>[];
   parseTextualToolFallback: (message: PiAssistantMessage, task?: string) => ParsedTextualToolFallback | null;
   isPermissionDialogApp: (currentApp: string) => boolean;
   autoApprovePermissionDialog: (currentApp: string) => Promise<DelegationApplyLike | null>;

@@ -2167,6 +2167,7 @@ export class AgentRuntime {
     promptMode?: "full" | "minimal" | "none",
     onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
   ): Promise<AgentRunResult> {
+    const activeToolNames = this.resolveToolMetasForTask(task).map((item) => item.name);
     const request: RunTaskRequest = {
       task,
       modelName,
@@ -2174,6 +2175,7 @@ export class AgentRuntime {
       onHumanAuth,
       promptMode,
       onUserDecision,
+      availableToolNames: activeToolNames,
     };
 
     return runRuntimeTask(
@@ -2206,7 +2208,12 @@ export class AgentRuntime {
             setLastSystemPromptReport: (report) => {
               this.lastSystemPromptReport = report as WorkspacePromptContextReport;
             },
-            buildPhoneAgentTools: (ctx) => this.buildPhoneAgentTools(ctx, this),
+            buildPhoneAgentTools: (ctx, availableToolNames) => {
+              const toolMetas = Array.isArray(availableToolNames) && availableToolNames.length > 0
+                ? TOOL_METAS.filter((meta) => availableToolNames.includes(meta.name))
+                : TOOL_METAS;
+              return this.buildPhoneAgentTools(ctx, this, toolMetas);
+            },
             parseTextualToolFallback: (message, fallbackTask) => this.parseTextualToolFallback(message, fallbackTask),
             isPermissionDialogApp: (currentApp) => this.isPermissionDialogApp(currentApp),
             autoApprovePermissionDialog: (currentApp) => this.autoApprovePermissionDialog(currentApp),
