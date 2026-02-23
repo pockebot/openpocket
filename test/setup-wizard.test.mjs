@@ -18,11 +18,14 @@ class FakePrompter {
       texts: [...(script.texts ?? [])],
       pauseCount: script.pauseCount ?? 0,
     };
+    this.notes = [];
     this.closed = false;
   }
 
   async intro() {}
-  async note() {}
+  async note(title, body) {
+    this.notes.push({ title, body });
+  }
   async outro() {}
 
   async select(_message, _options) {
@@ -220,6 +223,28 @@ test("setup wizard configures local human-auth ngrok mode", async () => {
     assert.equal(savedCfg.humanAuth.tunnel.ngrok.enabled, true);
     assert.equal(savedCfg.humanAuth.tunnel.ngrok.authtoken, "");
     assert.equal(savedCfg.humanAuth.localRelayHost, "127.0.0.1");
+  });
+});
+
+test("setup wizard includes ngrok setup guide when ngrok CLI is missing", async () => {
+  await withTempHome("openpocket-setup-ngrok-guide-", async () => {
+    const cfg = loadConfig();
+    cfg.humanAuth.tunnel.ngrok.executable = "missing-ngrok-binary-for-test";
+    const prompter = new FakePrompter({
+      confirms: [true],
+      selects: ["gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "skip"],
+      texts: [],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const ngrokNote = prompter.notes.find(
+      (note) => note.title === "ngrok Setup" && note.body.includes("https://ngrok.com/download"),
+    );
+    assert.equal(Boolean(ngrokNote), true);
+    assert.equal(ngrokNote.body.includes("config add-authtoken"), true);
   });
 });
 

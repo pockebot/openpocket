@@ -1117,6 +1117,20 @@ function detectCommandVersion(command: string): string {
   }
 }
 
+function buildNgrokSetupGuide(executable: string, envName: string): string {
+  return [
+    `Could not run \`${executable} version\`.`,
+    "Quick setup guide:",
+    "1) Create a free ngrok account: https://dashboard.ngrok.com/signup",
+    "2) Install ngrok CLI: https://ngrok.com/download",
+    `3) Authenticate once: ${executable} config add-authtoken <YOUR_NGROK_AUTHTOKEN>`,
+    `4) Optional env for OpenPocket:`,
+    `   macOS/Linux: export ${envName}=\"<YOUR_NGROK_AUTHTOKEN>\"`,
+    `   Windows PowerShell: $env:${envName}=\"<YOUR_NGROK_AUTHTOKEN>\"`,
+    "You can continue below and paste token into local config.json if preferred.",
+  ].join("\n");
+}
+
 async function runHumanAuthStep(
   config: OpenPocketConfig,
   prompter: SetupPrompter,
@@ -1198,15 +1212,15 @@ async function runHumanAuthStep(
   config.humanAuth.localRelayHost = "127.0.0.1";
   config.humanAuth.publicBaseUrl = "";
 
+  const envName = config.humanAuth.tunnel.ngrok.authtokenEnv || "NGROK_AUTHTOKEN";
   const ngrokVersion = detectCommandVersion(config.humanAuth.tunnel.ngrok.executable);
   await prompter.note(
     "ngrok Setup",
     ngrokVersion
       ? `Detected ${config.humanAuth.tunnel.ngrok.executable}: ${ngrokVersion}`
-      : `Could not run \`${config.humanAuth.tunnel.ngrok.executable} version\`. Install ngrok before gateway start.`,
+      : buildNgrokSetupGuide(config.humanAuth.tunnel.ngrok.executable, envName),
   );
 
-  const envName = config.humanAuth.tunnel.ngrok.authtokenEnv || "NGROK_AUTHTOKEN";
   const envToken = process.env[envName]?.trim() ?? "";
   const tokenMethod = await prompter.select(
     "How should OpenPocket read ngrok authtoken?",
