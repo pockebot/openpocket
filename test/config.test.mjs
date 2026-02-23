@@ -45,6 +45,8 @@ async function withTempCodexHome(prefix, fn) {
 test("loadConfig creates defaults including returnHomeOnTaskEnd", () => {
   withTempHome("openpocket-config-default-", (home) => {
     const cfg = loadConfig();
+    assert.equal(cfg.sessionStorage.backend, "markdown");
+    assert.equal(cfg.sessionStorage.dualWriteJsonl, false);
     assert.equal(cfg.agent.returnHomeOnTaskEnd, true);
     assert.equal(cfg.agent.systemPromptMode, "full");
     assert.equal(cfg.agent.contextBudgetChars, 150_000);
@@ -82,6 +84,10 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
           project_name: "OpenPocket",
           workspace_dir: path.join(home, "workspace"),
           state_dir: path.join(home, "state"),
+          session_storage: {
+            storage_backend: "markdown",
+            dual_write_jsonl: true,
+          },
           default_model: "gpt-5.2-codex",
           emulator: {
             avd_name: "TestAVD",
@@ -142,6 +148,8 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
     );
 
     const cfg = loadConfig();
+    assert.equal(cfg.sessionStorage.backend, "markdown");
+    assert.equal(cfg.sessionStorage.dualWriteJsonl, true);
     assert.equal(cfg.agent.returnHomeOnTaskEnd, false);
     assert.equal(cfg.agent.systemPromptMode, "minimal");
     assert.equal(cfg.agent.contextBudgetChars, 30000);
@@ -165,6 +173,9 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
 
     saveConfig(cfg);
     const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    assert.equal(saved.sessionStorage.backend, "markdown");
+    assert.equal(saved.sessionStorage.dualWriteJsonl, true);
+    assert.equal(saved.session_storage, undefined);
     assert.equal(saved.agent.returnHomeOnTaskEnd, false);
     assert.equal(saved.agent.systemPromptMode, "minimal");
     assert.equal(saved.agent.contextBudgetChars, 30000);

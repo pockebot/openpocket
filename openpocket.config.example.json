@@ -2,6 +2,10 @@
   "projectName": "OpenPocket",
   "workspaceDir": "~/.openpocket/workspace",
   "stateDir": "~/.openpocket/state",
+  "sessionStorage": {
+    "backend": "markdown",
+    "dualWriteJsonl": false
+  },
   "defaultModel": "gpt-5.2-codex",
   "emulator": {
     "avdName": "OpenPocket_AVD",

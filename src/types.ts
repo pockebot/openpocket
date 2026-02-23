@@ -77,6 +77,11 @@ export interface DashboardConfig {
   autoOpenBrowser: boolean;
 }
 
+export interface SessionStorageConfig {
+  backend: "markdown";
+  dualWriteJsonl: boolean;
+}
+
 export interface HumanAuthTunnelNgrokConfig {
   enabled: boolean;
   executable: string;
@@ -177,6 +182,7 @@ export interface OpenPocketConfig {
   projectName: string;
   workspaceDir: string;
   stateDir: string;
+  sessionStorage: SessionStorageConfig;
   defaultModel: string;
   emulator: EmulatorConfig;
   telegram: TelegramConfig;
