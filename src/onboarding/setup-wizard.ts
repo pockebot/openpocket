@@ -73,6 +73,7 @@ type SetupPrompter = {
   select: <T extends string>(message: string, options: SelectOption<T>[], initialValue?: T) => Promise<T>;
   confirm: (message: string, initialValue?: boolean) => Promise<boolean>;
   text: (message: string, initialValue?: string, validate?: (value: string) => string | null) => Promise<string>;
+  secret: (message: string, validate?: (value: string) => string | null) => Promise<string>;
   pause: (message: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   close: () => Promise<void>;
@@ -499,6 +500,77 @@ function makeConsolePrompter(): SetupPrompter {
     return rl.question(message);
   }
 
+  async function askSecret(message: string): Promise<string> {
+    if (!input.isTTY || !output.isTTY) {
+      return ask(message);
+    }
+
+    rl.pause();
+    readline.emitKeypressEvents(input);
+
+    const previousRaw = Boolean((input as NodeJS.ReadStream).isRaw);
+    if (input.setRawMode) {
+      input.setRawMode(true);
+    }
+    input.resume();
+    output.write(message);
+
+    return new Promise<string>((resolve, reject) => {
+      let raw = "";
+
+      const cleanup = () => {
+        if (activeKeypressHandler) {
+          input.removeListener("keypress", activeKeypressHandler);
+          activeKeypressHandler = null;
+        } else {
+          input.removeListener("keypress", onKeypress);
+        }
+        if (input.setRawMode && rawModeEnabledBySelect) {
+          try {
+            input.setRawMode(previousRaw);
+          } catch {
+            // Ignore raw mode restore errors on shutdown paths.
+          }
+        }
+        rawModeEnabledBySelect = false;
+        rl.resume();
+      };
+
+      const onKeypress = (char: string, key: { name?: string; ctrl?: boolean }) => {
+        if (key.ctrl && key.name === "c") {
+          cleanup();
+          output.write("^C\n");
+          reject(new Error("Setup cancelled by user."));
+          return;
+        }
+        if (key.name === "return" || key.name === "enter") {
+          cleanup();
+          output.write("\n");
+          resolve(raw);
+          return;
+        }
+        if (key.name === "backspace") {
+          if (raw.length > 0) {
+            raw = raw.slice(0, -1);
+            output.write("\b \b");
+          }
+          return;
+        }
+        if (key.ctrl || key.name === "tab") {
+          return;
+        }
+        if (char && char.length > 0) {
+          raw += char;
+          output.write("*");
+        }
+      };
+
+      activeKeypressHandler = onKeypress;
+      rawModeEnabledBySelect = Boolean(input.setRawMode);
+      input.on("keypress", onKeypress);
+    });
+  }
+
   function sectionHeader(title: string): string {
     return `\n${colorize("===", ANSI_DIM, useColor)} ${colorize(title, ANSI_BOLD_CYAN, useColor)} ${colorize("===", ANSI_DIM, useColor)}`;
   }
@@ -658,6 +730,17 @@ function makeConsolePrompter(): SetupPrompter {
         const err = validate ? validate(finalValue) : null;
         if (!err) {
           return finalValue;
+        }
+        // eslint-disable-next-line no-console
+        console.log(`Invalid input: ${err}`);
+      }
+    },
+    secret: async (message, validate) => {
+      while (true) {
+        const raw = (await askSecret(`\n${colorize("[INPUT]", ANSI_BOLD_YELLOW, useColor)} ${message}: `)).trim();
+        const err = validate ? validate(raw) : null;
+        if (!err) {
+          return raw;
         }
         // eslint-disable-next-line no-console
         console.log(`Invalid input: ${err}`);
@@ -889,9 +972,8 @@ async function runApiKeyStep(
     return;
   }
 
-  const inputKey = await prompter.text(
+  const inputKey = await prompter.secret(
     `Enter API key for ${provider}`,
-    "",
     (value) => (value.trim() ? null : "API key cannot be empty"),
   );
   const confirmed = await prompter.confirm(
@@ -1034,9 +1116,8 @@ async function runTelegramStep(
       );
     }
   } else if (tokenChoice === "config") {
-    const token = await prompter.text(
+    const token = await prompter.secret(
       "Enter Telegram bot token",
-      "",
       (value) => (value.trim() ? null : "Telegram bot token cannot be empty."),
     );
     const confirmed = await prompter.confirm(
@@ -1251,9 +1332,8 @@ async function runHumanAuthStep(
       );
     }
   } else if (tokenMethod === "config") {
-    const token = await prompter.text(
+    const token = await prompter.secret(
       "Enter ngrok authtoken",
-      "",
       (value) => (value.trim() ? null : "Token cannot be empty."),
     );
     const confirmed = await prompter.confirm(

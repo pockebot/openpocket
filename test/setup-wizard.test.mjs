@@ -16,6 +16,7 @@ class FakePrompter {
       selects: [...(script.selects ?? [])],
       confirms: [...(script.confirms ?? [])],
       texts: [...(script.texts ?? [])],
+      secrets: [...(script.secrets ?? [])],
       pauseCount: script.pauseCount ?? 0,
     };
     this.notes = [];
@@ -47,6 +48,16 @@ class FakePrompter {
       throw new Error("No scripted text value.");
     }
     return this.script.texts.shift();
+  }
+
+  async secret() {
+    if (this.script.secrets.length > 0) {
+      return this.script.secrets.shift();
+    }
+    if (this.script.texts.length > 0) {
+      return this.script.texts.shift();
+    }
+    throw new Error("No scripted secret value.");
   }
 
   async pause() {
@@ -145,7 +156,8 @@ test("setup wizard configures OpenAI key and records Gmail onboarding state", as
     const prompter = new FakePrompter({
       confirms: [true, true, true],
       selects: ["gpt-5.2-codex", "config", "skip", "keep", "start", "disabled"],
-      texts: ["sk-test-openpocket"],
+      texts: ["sk-should-not-be-used"],
+      secrets: ["sk-test-openpocket"],
       pauseCount: 1,
     });
     const emulator = new FakeEmulator();
@@ -254,7 +266,8 @@ test("setup wizard can configure Telegram token and allowlist in config", async 
     const prompter = new FakePrompter({
       confirms: [true, true],
       selects: ["gpt-5.2-codex", "skip", "config", "set", "skip", "disabled"],
-      texts: ["telegram-test-token", "123456789, 987654321"],
+      texts: ["123456789, 987654321"],
+      secrets: ["telegram-test-token"],
       pauseCount: 0,
     });
     const emulator = new FakeEmulator();
@@ -264,6 +277,25 @@ test("setup wizard can configure Telegram token and allowlist in config", async 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
     assert.equal(savedCfg.telegram.botToken, "telegram-test-token");
     assert.deepEqual(savedCfg.telegram.allowedChatIds, [123456789, 987654321]);
+  });
+});
+
+test("setup wizard can configure ngrok authtoken in config using secret input", async () => {
+  await withTempHome("openpocket-setup-ngrok-config-token-", async () => {
+    const cfg = loadConfig();
+    const prompter = new FakePrompter({
+      confirms: [true, true],
+      selects: ["gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config"],
+      texts: [],
+      secrets: ["ngrok-config-token"],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
+    assert.equal(savedCfg.humanAuth.tunnel.ngrok.authtoken, "ngrok-config-token");
   });
 });
 
