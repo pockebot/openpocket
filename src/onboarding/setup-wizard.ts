@@ -3,7 +3,8 @@ import path from "node:path";
 import * as readline from "node:readline";
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 
 import type { EmulatorStatus, ModelProfile, OpenPocketConfig } from "../types.js";
@@ -73,6 +74,7 @@ type SetupPrompter = {
   select: <T extends string>(message: string, options: SelectOption<T>[], initialValue?: T) => Promise<T>;
   confirm: (message: string, initialValue?: boolean) => Promise<boolean>;
   text: (message: string, initialValue?: string, validate?: (value: string) => string | null) => Promise<string>;
+  secret: (message: string, validate?: (value: string) => string | null) => Promise<string>;
   pause: (message: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   close: () => Promise<void>;
@@ -90,7 +92,7 @@ export type RunSetupOptions = {
   emulator?: SetupEmulator;
   skipTtyCheck?: boolean;
   printHeader?: boolean;
-  codexCliLoginRunner?: () => Promise<{ ok: boolean; detail: string }>;
+  codexCliLoginRunner?: () => Promise<CodexCliLoginResult>;
 };
 
 function shouldUseColor(stream: NodeJS.WriteStream = output): boolean {
@@ -256,45 +258,176 @@ function resolveCodexHomeForDisplay(): string {
   return raw ? raw : "~/.codex";
 }
 
-async function runCodexCliLoginCommand(): Promise<{ ok: boolean; detail: string }> {
-  try {
-    const result = spawnSync("codex", ["login"], {
-      stdio: "inherit",
-      timeout: 15 * 60 * 1000,
-    });
-    if (result.error) {
-      const error = result.error as NodeJS.ErrnoException;
-      if (error.code === "ENOENT") {
-        return {
+export type CodexCliLoginCommandOptions = {
+  spawnProcess?: typeof spawn;
+  signalSource?: Pick<NodeJS.Process, "on" | "removeListener">;
+  timeoutMs?: number;
+};
+
+export type CodexCliLoginResult = {
+  ok: boolean;
+  detail: string;
+  cancelled?: boolean;
+};
+
+export async function runCodexCliLoginCommand(
+  options: CodexCliLoginCommandOptions = {},
+): Promise<CodexCliLoginResult> {
+  const spawnProcess = options.spawnProcess ?? spawn;
+  const signalSource = options.signalSource ?? process;
+  const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
+    ? Number(options.timeoutMs)
+    : 15 * 60 * 1000;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let cancelledByUser = false;
+    let timedOut = false;
+
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    let terminateTimer: NodeJS.Timeout | null = null;
+    let forceKillTimer: NodeJS.Timeout | null = null;
+
+    const clearTimers = () => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      if (terminateTimer) {
+        clearTimeout(terminateTimer);
+        terminateTimer = null;
+      }
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+        forceKillTimer = null;
+      }
+    };
+
+    const settle = (result: CodexCliLoginResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      signalSource.removeListener("SIGINT", onInterrupt);
+      signalSource.removeListener("SIGTERM", onInterrupt);
+      resolve(result);
+    };
+
+    let child: ChildProcess;
+    try {
+      child = spawnProcess("codex", ["login"], {
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+    } catch (error) {
+      const castError = error as NodeJS.ErrnoException;
+      if (castError.code === "ENOENT") {
+        settle({
           ok: false,
           detail: "`codex` command not found in PATH",
-        };
+        });
+      } else {
+        settle({
+          ok: false,
+          detail: castError.message || "codex login failed to start",
+        });
       }
-      return {
+      return;
+    }
+
+    const terminateChildWithEscalation = () => {
+      if (child.exitCode !== null) {
+        return;
+      }
+      try {
+        child.kill("SIGINT");
+      } catch {
+        // Ignore terminate errors while cleaning up.
+      }
+      if (!terminateTimer) {
+        terminateTimer = setTimeout(() => {
+          if (child.exitCode === null) {
+            try {
+              child.kill("SIGTERM");
+            } catch {
+              // Ignore terminate errors while cleaning up.
+            }
+          }
+        }, 1_000);
+      }
+      if (!forceKillTimer) {
+        forceKillTimer = setTimeout(() => {
+          if (child.exitCode === null) {
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              // Ignore terminate errors while cleaning up.
+            }
+          }
+        }, 3_000);
+      }
+    };
+
+    const onInterrupt = () => {
+      cancelledByUser = true;
+      terminateChildWithEscalation();
+    };
+
+    signalSource.on("SIGINT", onInterrupt);
+    signalSource.on("SIGTERM", onInterrupt);
+
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      terminateChildWithEscalation();
+    }, timeoutMs);
+
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") {
+        settle({
+          ok: false,
+          detail: "`codex` command not found in PATH",
+        });
+        return;
+      }
+      settle({
         ok: false,
         detail: error.message || "codex login failed to start",
-      };
-    }
-    if ((result.status ?? 1) === 0) {
-      return { ok: true, detail: "codex login completed" };
-    }
-    if (result.signal) {
-      return {
+      });
+    });
+
+    child.once("exit", (code, signal) => {
+      if (cancelledByUser) {
+        settle({
+          ok: false,
+          detail: "codex login cancelled by user",
+          cancelled: true,
+        });
+        return;
+      }
+      if (timedOut) {
+        settle({
+          ok: false,
+          detail: `codex login timed out after ${Math.ceil(timeoutMs / 1000)}s`,
+        });
+        return;
+      }
+      if ((code ?? 1) === 0) {
+        settle({ ok: true, detail: "codex login completed" });
+        return;
+      }
+      if (signal) {
+        settle({
+          ok: false,
+          detail: `codex login terminated by signal ${signal}`,
+        });
+        return;
+      }
+      settle({
         ok: false,
-        detail: `codex login terminated by signal ${result.signal}`,
-      };
-    }
-    const stderr = (result.stderr ?? "").toString().trim();
-    return {
-      ok: false,
-      detail: stderr || `codex login exited with status ${result.status ?? "unknown"}`,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      detail: (error as Error).message,
-    };
-  }
+        detail: `codex login exited with status ${code ?? "unknown"}`,
+      });
+    });
+  });
 }
 
 function detectPlayStore(emulator: SetupEmulator, preferredDeviceId: string | null): boolean | null {
@@ -366,6 +499,77 @@ function makeConsolePrompter(): SetupPrompter {
 
   async function ask(message: string): Promise<string> {
     return rl.question(message);
+  }
+
+  async function askSecret(message: string): Promise<string> {
+    if (!input.isTTY || !output.isTTY) {
+      return ask(message);
+    }
+
+    rl.pause();
+    readline.emitKeypressEvents(input);
+
+    const previousRaw = Boolean((input as NodeJS.ReadStream).isRaw);
+    if (input.setRawMode) {
+      input.setRawMode(true);
+    }
+    input.resume();
+    output.write(message);
+
+    return new Promise<string>((resolve, reject) => {
+      let raw = "";
+
+      const cleanup = () => {
+        if (activeKeypressHandler) {
+          input.removeListener("keypress", activeKeypressHandler);
+          activeKeypressHandler = null;
+        } else {
+          input.removeListener("keypress", onKeypress);
+        }
+        if (input.setRawMode && rawModeEnabledBySelect) {
+          try {
+            input.setRawMode(previousRaw);
+          } catch {
+            // Ignore raw mode restore errors on shutdown paths.
+          }
+        }
+        rawModeEnabledBySelect = false;
+        rl.resume();
+      };
+
+      const onKeypress = (char: string, key: { name?: string; ctrl?: boolean }) => {
+        if (key.ctrl && key.name === "c") {
+          cleanup();
+          output.write("^C\n");
+          reject(new Error("Setup cancelled by user."));
+          return;
+        }
+        if (key.name === "return" || key.name === "enter") {
+          cleanup();
+          output.write("\n");
+          resolve(raw);
+          return;
+        }
+        if (key.name === "backspace") {
+          if (raw.length > 0) {
+            raw = raw.slice(0, -1);
+            output.write("\b \b");
+          }
+          return;
+        }
+        if (key.ctrl || key.name === "tab") {
+          return;
+        }
+        if (char && char.length > 0) {
+          raw += char;
+          output.write("*");
+        }
+      };
+
+      activeKeypressHandler = onKeypress;
+      rawModeEnabledBySelect = Boolean(input.setRawMode);
+      input.on("keypress", onKeypress);
+    });
   }
 
   function sectionHeader(title: string): string {
@@ -532,6 +736,17 @@ function makeConsolePrompter(): SetupPrompter {
         console.log(`Invalid input: ${err}`);
       }
     },
+    secret: async (message, validate) => {
+      while (true) {
+        const raw = (await askSecret(`\n${colorize("[INPUT]", ANSI_BOLD_YELLOW, useColor)} ${message}: `)).trim();
+        const err = validate ? validate(raw) : null;
+        if (!err) {
+          return raw;
+        }
+        // eslint-disable-next-line no-console
+        console.log(`Invalid input: ${err}`);
+      }
+    },
     pause: async (message) => {
       await ask(`\n${message}\n${colorize("[INPUT]", ANSI_BOLD_YELLOW, useColor)} Press Enter to continue...`);
     },
@@ -665,6 +880,9 @@ async function runApiKeyStep(
 
     const loginRunner = options?.codexCliLoginRunner ?? runCodexCliLoginCommand;
     const loginResult = await loginRunner();
+    if (loginResult.cancelled) {
+      throw new Error("Setup cancelled by user.");
+    }
     const credential = readCodexCliCredential();
     if (credential) {
       state.apiKeySource = "codex-cli";
@@ -755,9 +973,8 @@ async function runApiKeyStep(
     return;
   }
 
-  const inputKey = await prompter.text(
+  const inputKey = await prompter.secret(
     `Enter API key for ${provider}`,
-    "",
     (value) => (value.trim() ? null : "API key cannot be empty"),
   );
   const confirmed = await prompter.confirm(
@@ -900,9 +1117,8 @@ async function runTelegramStep(
       );
     }
   } else if (tokenChoice === "config") {
-    const token = await prompter.text(
+    const token = await prompter.secret(
       "Enter Telegram bot token",
-      "",
       (value) => (value.trim() ? null : "Telegram bot token cannot be empty."),
     );
     const confirmed = await prompter.confirm(
@@ -981,6 +1197,20 @@ function detectCommandVersion(command: string): string {
   } catch {
     return "";
   }
+}
+
+function buildNgrokSetupGuide(executable: string, envName: string): string {
+  return [
+    `Could not run \`${executable} version\`.`,
+    "Quick setup guide:",
+    "1) Create a free ngrok account: https://dashboard.ngrok.com/signup",
+    "2) Install ngrok CLI: https://ngrok.com/download",
+    `3) Authenticate once: ${executable} config add-authtoken <YOUR_NGROK_AUTHTOKEN>`,
+    `4) Optional env for OpenPocket:`,
+    `   macOS/Linux: export ${envName}=\"<YOUR_NGROK_AUTHTOKEN>\"`,
+    `   Windows PowerShell: $env:${envName}=\"<YOUR_NGROK_AUTHTOKEN>\"`,
+    "You can continue below and paste token into local config.json if preferred.",
+  ].join("\n");
 }
 
 async function runHumanAuthStep(
@@ -1064,15 +1294,15 @@ async function runHumanAuthStep(
   config.humanAuth.localRelayHost = "127.0.0.1";
   config.humanAuth.publicBaseUrl = "";
 
+  const envName = config.humanAuth.tunnel.ngrok.authtokenEnv || "NGROK_AUTHTOKEN";
   const ngrokVersion = detectCommandVersion(config.humanAuth.tunnel.ngrok.executable);
   await prompter.note(
     "ngrok Setup",
     ngrokVersion
       ? `Detected ${config.humanAuth.tunnel.ngrok.executable}: ${ngrokVersion}`
-      : `Could not run \`${config.humanAuth.tunnel.ngrok.executable} version\`. Install ngrok before gateway start.`,
+      : buildNgrokSetupGuide(config.humanAuth.tunnel.ngrok.executable, envName),
   );
 
-  const envName = config.humanAuth.tunnel.ngrok.authtokenEnv || "NGROK_AUTHTOKEN";
   const envToken = process.env[envName]?.trim() ?? "";
   const tokenMethod = await prompter.select(
     "How should OpenPocket read ngrok authtoken?",
@@ -1103,9 +1333,8 @@ async function runHumanAuthStep(
       );
     }
   } else if (tokenMethod === "config") {
-    const token = await prompter.text(
+    const token = await prompter.secret(
       "Enter ngrok authtoken",
-      "",
       (value) => (value.trim() ? null : "Token cannot be empty."),
     );
     const confirmed = await prompter.confirm(

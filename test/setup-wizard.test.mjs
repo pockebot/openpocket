@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createRequire } from "node:module";
 
-const { loadConfig } = await import("../dist/config/index.js");
-const { runSetupWizard } = await import("../dist/onboarding/setup-wizard.js");
+const require = createRequire(import.meta.url);
+const { loadConfig } = require("../dist/config/index.js");
+const { runSetupWizard, runCodexCliLoginCommand } = require("../dist/onboarding/setup-wizard.js");
 
 class FakePrompter {
   constructor(script) {
@@ -13,13 +16,17 @@ class FakePrompter {
       selects: [...(script.selects ?? [])],
       confirms: [...(script.confirms ?? [])],
       texts: [...(script.texts ?? [])],
+      secrets: [...(script.secrets ?? [])],
       pauseCount: script.pauseCount ?? 0,
     };
+    this.notes = [];
     this.closed = false;
   }
 
   async intro() {}
-  async note() {}
+  async note(title, body) {
+    this.notes.push({ title, body });
+  }
   async outro() {}
 
   async select(_message, _options) {
@@ -41,6 +48,16 @@ class FakePrompter {
       throw new Error("No scripted text value.");
     }
     return this.script.texts.shift();
+  }
+
+  async secret() {
+    if (this.script.secrets.length > 0) {
+      return this.script.secrets.shift();
+    }
+    if (this.script.texts.length > 0) {
+      return this.script.texts.shift();
+    }
+    throw new Error("No scripted secret value.");
   }
 
   async pause() {
@@ -139,7 +156,8 @@ test("setup wizard configures OpenAI key and records Gmail onboarding state", as
     const prompter = new FakePrompter({
       confirms: [true, true, true],
       selects: ["gpt-5.2-codex", "config", "skip", "keep", "start", "disabled"],
-      texts: ["sk-test-openpocket"],
+      texts: ["sk-should-not-be-used"],
+      secrets: ["sk-test-openpocket"],
       pauseCount: 1,
     });
     const emulator = new FakeEmulator();
@@ -220,13 +238,36 @@ test("setup wizard configures local human-auth ngrok mode", async () => {
   });
 });
 
+test("setup wizard includes ngrok setup guide when ngrok CLI is missing", async () => {
+  await withTempHome("openpocket-setup-ngrok-guide-", async () => {
+    const cfg = loadConfig();
+    cfg.humanAuth.tunnel.ngrok.executable = "missing-ngrok-binary-for-test";
+    const prompter = new FakePrompter({
+      confirms: [true],
+      selects: ["gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "skip"],
+      texts: [],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const ngrokNote = prompter.notes.find(
+      (note) => note.title === "ngrok Setup" && note.body.includes("https://ngrok.com/download"),
+    );
+    assert.equal(Boolean(ngrokNote), true);
+    assert.equal(ngrokNote.body.includes("config add-authtoken"), true);
+  });
+});
+
 test("setup wizard can configure Telegram token and allowlist in config", async () => {
   await withTempHome("openpocket-setup-telegram-config-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true],
       selects: ["gpt-5.2-codex", "skip", "config", "set", "skip", "disabled"],
-      texts: ["telegram-test-token", "123456789, 987654321"],
+      texts: ["123456789, 987654321"],
+      secrets: ["telegram-test-token"],
       pauseCount: 0,
     });
     const emulator = new FakeEmulator();
@@ -236,6 +277,25 @@ test("setup wizard can configure Telegram token and allowlist in config", async 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
     assert.equal(savedCfg.telegram.botToken, "telegram-test-token");
     assert.deepEqual(savedCfg.telegram.allowedChatIds, [123456789, 987654321]);
+  });
+});
+
+test("setup wizard can configure ngrok authtoken in config using secret input", async () => {
+  await withTempHome("openpocket-setup-ngrok-config-token-", async () => {
+    const cfg = loadConfig();
+    const prompter = new FakePrompter({
+      confirms: [true, true],
+      selects: ["gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config"],
+      texts: [],
+      secrets: ["ngrok-config-token"],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
+    assert.equal(savedCfg.humanAuth.tunnel.ngrok.authtoken, "ngrok-config-token");
   });
 });
 
@@ -355,4 +415,116 @@ test("setup wizard uses existing codex credential when codex login command fails
       assert.equal(typeof state.apiKeyConfiguredAt, "string");
     });
   });
+});
+
+test("setup wizard exits immediately when codex oauth login is cancelled", async () => {
+  await withTempHome("openpocket-setup-codex-cli-cancelled-", async () => {
+    const cfg = loadConfig();
+    const prompter = new FakePrompter({
+      confirms: [true],
+      selects: ["gpt-5.2-codex::codex-cli"],
+      texts: [],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await assert.rejects(
+      () => runSetupWizard(cfg, {
+        prompter,
+        emulator,
+        skipTtyCheck: true,
+        printHeader: false,
+        codexCliLoginRunner: async () => ({
+          ok: false,
+          detail: "codex login cancelled by user",
+          cancelled: true,
+        }),
+      }),
+      /setup cancelled by user/i,
+    );
+    assert.equal(prompter.closed, true);
+    assert.equal(fs.existsSync(path.join(cfg.stateDir, "onboarding.json")), false);
+  });
+});
+
+test("codex login runner cancels cleanly on interrupt signal", async () => {
+  class FakeChildProcess extends EventEmitter {
+    constructor() {
+      super();
+      this.exitCode = null;
+      this.killSignals = [];
+    }
+
+    kill(signal = "SIGTERM") {
+      this.killSignals.push(signal);
+      if (this.exitCode !== null) {
+        return true;
+      }
+      this.exitCode = signal === "SIGINT" ? 130 : 1;
+      setImmediate(() => {
+        this.emit("exit", this.exitCode, null);
+      });
+      return true;
+    }
+  }
+
+  const signalSource = new EventEmitter();
+  const child = new FakeChildProcess();
+  const spawnCalls = [];
+
+  const resultPromise = runCodexCliLoginCommand({
+    spawnProcess: (command, args, options) => {
+      spawnCalls.push({ command, args, options });
+      return child;
+    },
+    signalSource,
+    timeoutMs: 10_000,
+  });
+
+  setTimeout(() => {
+    signalSource.emit("SIGINT");
+  }, 5);
+
+  const result = await resultPromise;
+  assert.equal(result.ok, false);
+  assert.equal(result.detail, "codex login cancelled by user");
+  assert.equal(result.cancelled, true);
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0].command, "codex");
+  assert.deepEqual(spawnCalls[0].args, ["login"]);
+  assert.deepEqual(spawnCalls[0].options.stdio, ["ignore", "inherit", "inherit"]);
+  assert.equal(child.killSignals.includes("SIGINT"), true);
+});
+
+test("codex login runner returns timeout when oauth flow does not complete", async () => {
+  class FakeChildProcess extends EventEmitter {
+    constructor() {
+      super();
+      this.exitCode = null;
+      this.killSignals = [];
+    }
+
+    kill(signal = "SIGTERM") {
+      this.killSignals.push(signal);
+      if (this.exitCode !== null) {
+        return true;
+      }
+      this.exitCode = 1;
+      setImmediate(() => {
+        this.emit("exit", this.exitCode, signal);
+      });
+      return true;
+    }
+  }
+
+  const child = new FakeChildProcess();
+  const result = await runCodexCliLoginCommand({
+    spawnProcess: () => child,
+    signalSource: new EventEmitter(),
+    timeoutMs: 25,
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.detail, /timed out/i);
+  assert.equal(child.killSignals.includes("SIGINT"), true);
 });
