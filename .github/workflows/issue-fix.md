@@ -8,6 +8,12 @@ on:
 engine: codex
 strict: true
 
+permissions:
+  actions: read
+  contents: read
+  issues: read
+  pull-requests: read
+
 network:
   allowed:
     - defaults

@@ -7,6 +7,10 @@ on:
 engine: codex
 strict: true
 
+permissions:
+  contents: read
+  issues: read
+
 network:
   allowed:
     - defaults
