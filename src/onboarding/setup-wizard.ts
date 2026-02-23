@@ -90,7 +90,7 @@ export type RunSetupOptions = {
   emulator?: SetupEmulator;
   skipTtyCheck?: boolean;
   printHeader?: boolean;
-  codexCliLoginRunner?: () => Promise<{ ok: boolean; detail: string }>;
+  codexCliLoginRunner?: () => Promise<CodexCliLoginResult>;
 };
 
 function shouldUseColor(stream: NodeJS.WriteStream = output): boolean {
@@ -262,9 +262,15 @@ export type CodexCliLoginCommandOptions = {
   timeoutMs?: number;
 };
 
+export type CodexCliLoginResult = {
+  ok: boolean;
+  detail: string;
+  cancelled?: boolean;
+};
+
 export async function runCodexCliLoginCommand(
   options: CodexCliLoginCommandOptions = {},
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<CodexCliLoginResult> {
   const spawnProcess = options.spawnProcess ?? spawn;
   const signalSource = options.signalSource ?? process;
   const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
@@ -295,7 +301,7 @@ export async function runCodexCliLoginCommand(
       }
     };
 
-    const settle = (result: { ok: boolean; detail: string }) => {
+    const settle = (result: CodexCliLoginResult) => {
       if (settled) {
         return;
       }
@@ -390,6 +396,7 @@ export async function runCodexCliLoginCommand(
         settle({
           ok: false,
           detail: "codex login cancelled by user",
+          cancelled: true,
         });
         return;
       }
@@ -787,6 +794,9 @@ async function runApiKeyStep(
 
     const loginRunner = options?.codexCliLoginRunner ?? runCodexCliLoginCommand;
     const loginResult = await loginRunner();
+    if (loginResult.cancelled) {
+      throw new Error("Setup cancelled by user.");
+    }
     const credential = readCodexCliCredential();
     if (credential) {
       state.apiKeySource = "codex-cli";

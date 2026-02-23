@@ -360,6 +360,36 @@ test("setup wizard uses existing codex credential when codex login command fails
   });
 });
 
+test("setup wizard exits immediately when codex oauth login is cancelled", async () => {
+  await withTempHome("openpocket-setup-codex-cli-cancelled-", async () => {
+    const cfg = loadConfig();
+    const prompter = new FakePrompter({
+      confirms: [true],
+      selects: ["gpt-5.2-codex::codex-cli"],
+      texts: [],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await assert.rejects(
+      () => runSetupWizard(cfg, {
+        prompter,
+        emulator,
+        skipTtyCheck: true,
+        printHeader: false,
+        codexCliLoginRunner: async () => ({
+          ok: false,
+          detail: "codex login cancelled by user",
+          cancelled: true,
+        }),
+      }),
+      /setup cancelled by user/i,
+    );
+    assert.equal(prompter.closed, true);
+    assert.equal(fs.existsSync(path.join(cfg.stateDir, "onboarding.json")), false);
+  });
+});
+
 test("codex login runner cancels cleanly on interrupt signal", async () => {
   class FakeChildProcess extends EventEmitter {
     constructor() {
@@ -401,6 +431,7 @@ test("codex login runner cancels cleanly on interrupt signal", async () => {
   const result = await resultPromise;
   assert.equal(result.ok, false);
   assert.equal(result.detail, "codex login cancelled by user");
+  assert.equal(result.cancelled, true);
   assert.equal(spawnCalls.length, 1);
   assert.equal(spawnCalls[0].command, "codex");
   assert.deepEqual(spawnCalls[0].args, ["login"]);
