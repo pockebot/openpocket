@@ -138,7 +138,25 @@ function looksLikeClipboardCommandError(text: string): boolean {
   if (!normalized) {
     return false;
   }
-  return /(^|\s)(error|unknown|usage|exception|not found|unsupported)(\s|:|$)/i.test(normalized);
+  if (normalized.includes("no shell command implementation")) {
+    return true;
+  }
+  return /(^|\s)(error|unknown|usage|exception|not found|unsupported|no shell command implementation)(\s|:|$)/i.test(normalized);
+}
+
+function looksLikeBroadcastFailure(text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return /no receivers|unable to resolve|exception|error/.test(normalized);
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error || "unknown error");
 }
 
 export class AdbRuntime {
@@ -157,24 +175,32 @@ export class AdbRuntime {
       .trim();
   }
 
-  private verifyClipboardContains(deviceId: string, expected: string): boolean {
+  private verifyClipboardContains(deviceId: string, expected: string): "verified" | "unsupported" | "mismatch" {
     const sample = expected.trim().slice(0, 16);
     if (!sample) {
-      return true;
+      return "verified";
     }
     try {
       const output = this.emulator.runAdb(["-s", deviceId, "shell", "cmd", "clipboard", "get", "text"]);
       if (looksLikeClipboardCommandError(output)) {
-        return false;
+        return "unsupported";
       }
       const normalizedOutput = this.normalizeClipboardText(output).toLowerCase();
       const normalizedSample = this.normalizeClipboardText(sample).toLowerCase();
       if (!normalizedOutput || !normalizedSample) {
-        return false;
+        return "mismatch";
       }
-      return normalizedOutput.includes(normalizedSample);
+      if (normalizedOutput.includes(normalizedSample)) {
+        return "verified";
+      }
+      const compactOutput = normalizedOutput.replace(/\s+/g, "");
+      const compactSample = normalizedSample.replace(/\s+/g, "");
+      if (compactOutput && compactSample && compactOutput.includes(compactSample)) {
+        return "verified";
+      }
+      return "mismatch";
     } catch {
-      return false;
+      return "unsupported";
     }
   }
 
@@ -183,11 +209,80 @@ export class AdbRuntime {
     if (looksLikeClipboardCommandError(setOutput)) {
       throw new Error(`clipboard set command failed: ${this.normalizeClipboardText(setOutput)}`);
     }
-    if (!this.verifyClipboardContains(deviceId, text)) {
+    const verification = this.verifyClipboardContains(deviceId, text);
+    if (verification === "mismatch") {
       throw new Error("clipboard set could not be verified; skip paste to avoid stale clipboard content");
     }
     this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_PASTE"]);
+    if (verification === "unsupported") {
+      return `Typed text via clipboard paste (unverified) length=${text.length}`;
+    }
     return `Typed text via clipboard paste length=${text.length}`;
+  }
+
+  private hasInputMethod(deviceId: string, imeId: string): boolean {
+    try {
+      const raw = this.emulator.runAdb(["-s", deviceId, "shell", "ime", "list", "-s"]);
+      return raw
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .includes(imeId);
+    } catch {
+      return false;
+    }
+  }
+
+  private getDefaultInputMethod(deviceId: string): string | null {
+    try {
+      const raw = this.emulator.runAdb(["-s", deviceId, "shell", "settings", "get", "secure", "default_input_method"]);
+      const imeId = raw.trim();
+      if (!imeId || imeId.toLowerCase() === "null") {
+        return null;
+      }
+      return imeId;
+    } catch {
+      return null;
+    }
+  }
+
+  private inputByAdbKeyboard(deviceId: string, text: string): string {
+    const adbIme = "com.android.adbkeyboard/.AdbIME";
+    if (!this.hasInputMethod(deviceId, adbIme)) {
+      throw new Error("adb keyboard IME is unavailable");
+    }
+
+    const previousIme = this.getDefaultInputMethod(deviceId);
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "ime", "enable", adbIme]);
+      this.emulator.runAdb(["-s", deviceId, "shell", "ime", "set", adbIme]);
+
+      const base64Text = Buffer.from(text, "utf8").toString("base64");
+      const output = this.emulator.runAdb([
+        "-s",
+        deviceId,
+        "shell",
+        "am",
+        "broadcast",
+        "-a",
+        "ADB_INPUT_B64",
+        "--es",
+        "msg",
+        base64Text,
+      ]);
+      if (looksLikeBroadcastFailure(output)) {
+        throw new Error(this.normalizeClipboardText(output));
+      }
+      return `Typed text via adb keyboard length=${text.length}`;
+    } finally {
+      if (previousIme && previousIme !== adbIme) {
+        try {
+          this.emulator.runAdb(["-s", deviceId, "shell", "ime", "set", previousIme]);
+        } catch {
+          // best effort restore
+        }
+      }
+    }
   }
 
   resolveDeviceId(preferred?: string | null): string {
@@ -390,13 +485,18 @@ export class AdbRuntime {
       case "type": {
         const encoded = encodeInputText(action.text);
         // On some emulator images, `input text` throws NPE for unicode text.
-        // Try clipboard paste first for non-ASCII; verify write before paste.
+        // Use clipboard/ADB keyboard for non-ASCII and never call `input text`.
         if (hasNonAscii(action.text)) {
           try {
             return this.inputByClipboardPaste(deviceId, action.text);
-          } catch {
-            this.emulator.runAdb(["-s", deviceId, "shell", "input", "text", encoded]);
-            return `Typed text length=${action.text.length}`;
+          } catch (clipboardError) {
+            try {
+              return this.inputByAdbKeyboard(deviceId, action.text);
+            } catch (imeError) {
+              throw new Error(
+                `Non-ASCII text input failed (clipboard + adb keyboard): clipboard=${errorMessage(clipboardError)}; adbKeyboard=${errorMessage(imeError)}`,
+              );
+            }
           }
         }
         try {
