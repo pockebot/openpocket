@@ -41,7 +41,7 @@ import {
 } from "@mariozechner/pi-ai";
 import { buildPiAiModel } from "./model-client.js";
 import { buildSystemPrompt, buildUserPrompt, type SystemPromptMode } from "./prompts.js";
-import { CHAT_TOOLS, TOOL_METAS, toolNameToActionType } from "./tools.js";
+import { CHAT_TOOLS, TOOL_METAS, toolNameToActionType, type ToolMeta } from "./tools.js";
 import { normalizeAction } from "./actions.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
 
@@ -107,6 +107,9 @@ const SYSTEM_PROMPT_MAX_CHARS_TOTAL_DEFAULT = 150_000;
 const ACTION_TYPE_TO_TOOL_NAME = new Map<string, string>(
   TOOL_METAS.map((meta) => [toolNameToActionType(meta.name), meta.name]),
 );
+const CODING_TOOL_NAMES = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
+const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const WORKSPACE_TOOL_NAMES = new Set([...CODING_TOOL_NAMES, ...MEMORY_TOOL_NAMES]);
 
 type WorkspacePromptFileReport = {
   fileName: string;
@@ -1651,10 +1654,11 @@ export class AgentRuntime {
   private buildPhoneAgentTools(
     ctx: PhoneAgentRunContext,
     runtime: AgentRuntime,
+    toolMetas: ToolMeta[] = TOOL_METAS,
   ): AgentTool<any>[] {
     const tools: AgentTool<any>[] = [];
 
-    for (const meta of TOOL_METAS) {
+    for (const meta of toolMetas) {
       const toolName = meta.name;
       tools.push({
         name: meta.name,
@@ -1848,6 +1852,100 @@ export class AgentRuntime {
       });
     }
     return tools;
+  }
+
+  private shouldEnableWorkspaceToolsForTask(task: string): boolean {
+    const normalized = String(task || "").toLowerCase();
+    if (!normalized.trim()) {
+      return false;
+    }
+    const keywordHints = [
+      "code",
+      "coding",
+      "repo",
+      "repository",
+      "git",
+      "commit",
+      "branch",
+      "pull request",
+      "pr ",
+      "file",
+      "files",
+      "folder",
+      "directory",
+      "workspace",
+      "patch",
+      "apply_patch",
+      "read ",
+      "write ",
+      "edit ",
+      "grep",
+      "sed",
+      "awk",
+      "npm",
+      "pnpm",
+      "yarn",
+      "tsc",
+      "eslint",
+      "prettier",
+      "test",
+      "lint",
+      "build",
+      "script",
+      "shell command",
+      "terminal",
+      "agents.md",
+      "identity.md",
+      "user.md",
+      "tools.md",
+      "memory.md",
+      "代码",
+      "仓库",
+      "分支",
+      "提交",
+      "文件",
+      "目录",
+      "工作区",
+      "补丁",
+      "脚本",
+      "终端",
+      "命令行",
+      "读取",
+      "写入",
+      "编辑",
+      "搜索文件",
+      "构建",
+      "测试",
+      "格式化",
+      "记忆",
+      "历史记录",
+    ];
+    return keywordHints.some((hint) => normalized.includes(hint));
+  }
+
+  private resolveToolMetasForTask(task: string): ToolMeta[] {
+    const workspaceToolsAllowed = this.shouldEnableWorkspaceToolsForTask(task);
+    return TOOL_METAS.filter((meta) => {
+      if (CODING_TOOL_NAMES.has(meta.name)) {
+        if (!this.config.codingTools.enabled) {
+          return false;
+        }
+        return workspaceToolsAllowed;
+      }
+      if (MEMORY_TOOL_NAMES.has(meta.name)) {
+        if (!this.config.memoryTools.enabled) {
+          return false;
+        }
+        return workspaceToolsAllowed;
+      }
+      if (WORKSPACE_TOOL_NAMES.has(meta.name)) {
+        return workspaceToolsAllowed;
+      }
+      if (meta.name === "run_script" && !this.config.scriptExecutor.enabled) {
+        return false;
+      }
+      return true;
+    });
   }
 
   private parseToolFallbackLiteral(raw: string): unknown {
@@ -2118,10 +2216,14 @@ export class AgentRuntime {
         }
       }
 
+      const activeToolMetas = this.resolveToolMetasForTask(task);
       const skillsSummary = this.skillLoader.summaryText();
       const workspacePromptContext = this.buildWorkspacePromptContext();
       const effectivePromptMode = promptMode ?? this.config.agent.systemPromptMode;
-      const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, { mode: effectivePromptMode });
+      const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
+        mode: effectivePromptMode,
+        availableToolNames: activeToolMetas.map((item) => item.name),
+      });
       this.lastSystemPromptReport = this.buildSystemPromptReport({
         source: "run", promptMode: effectivePromptMode, systemPrompt, skillsSummary,
         workspaceReport: workspacePromptContext.report,
@@ -2143,7 +2245,7 @@ export class AgentRuntime {
         onHumanAuth, onUserDecision, onProgress,
       };
 
-      const tools = this.buildPhoneAgentTools(ctx, this);
+      const tools = this.buildPhoneAgentTools(ctx, this, activeToolMetas);
       const apiKey = auth.apiKey;
       const runtime = this;
       const turnFallbackTasks: Promise<void>[] = [];

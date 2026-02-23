@@ -340,6 +340,58 @@ test("AgentRuntime injects BOOTSTRAP guidance into system prompt context", async
   assert.match(capturedSystemPrompt, /runtime-bootstrap-check/);
 });
 
+test("AgentRuntime hides workspace tools for phone-style tasks", async () => {
+  let capturedToolNames = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedToolNames = (options.initialState?.tools ?? []).map((tool) => tool.name);
+      },
+    },
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("查询旧金山的天气");
+  assert.equal(result.ok, true);
+  assert.equal(capturedToolNames.includes("read"), false);
+  assert.equal(capturedToolNames.includes("exec"), false);
+  assert.equal(capturedToolNames.includes("memory_search"), false);
+  assert.equal(capturedToolNames.includes("tap"), true);
+  assert.equal(capturedToolNames.includes("finish"), true);
+});
+
+test("AgentRuntime keeps workspace tools for workspace-oriented tasks", async () => {
+  let capturedToolNames = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedToolNames = (options.initialState?.tools ?? []).map((tool) => tool.name);
+      },
+    },
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("read AGENTS.md and summarize workspace rules");
+  assert.equal(result.ok, true);
+  assert.equal(capturedToolNames.includes("read"), true);
+  assert.equal(capturedToolNames.includes("exec"), true);
+  assert.equal(capturedToolNames.includes("memory_search"), true);
+});
+
 test("AgentRuntime supports none system prompt mode for constrained runs", async () => {
   let capturedSystemPrompt = "";
   const runtime = setupRuntime({
