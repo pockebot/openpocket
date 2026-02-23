@@ -104,6 +104,9 @@ const SYSTEM_PROMPT_CONTEXT_HOOK_FILE = path.join(".openpocket", "bootstrap-cont
 const SYSTEM_PROMPT_MAX_CHARS_PER_FILE = 20_000;
 /** Default total char budget. Overridden by config.agent.contextBudgetChars at runtime. */
 const SYSTEM_PROMPT_MAX_CHARS_TOTAL_DEFAULT = 150_000;
+const ACTION_TYPE_TO_TOOL_NAME = new Map<string, string>(
+  TOOL_METAS.map((meta) => [toolNameToActionType(meta.name), meta.name]),
+);
 
 type WorkspacePromptFileReport = {
   fileName: string;
@@ -246,7 +249,9 @@ interface PhoneAgentRunContext {
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
 }
 
-type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle">;
+type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {
+  abort?: () => void;
+};
 type AgentFactory = (options: AgentOptions) => AgentLike;
 
 export interface AgentRuntimeOptions {
@@ -1845,6 +1850,210 @@ export class AgentRuntime {
     return tools;
   }
 
+  private parseToolFallbackLiteral(raw: string): unknown {
+    const value = raw.trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      const inner = value.slice(1, -1);
+      return inner
+        .replace(/\\\\/g, "\\")
+        .replace(/\\"/g, "\"")
+        .replace(/\\'/g, "'")
+        .replace(/\\n/g, "\n");
+    }
+    if (/^[+-]?\d+(?:\.\d+)?$/.test(value)) {
+      return Number(value);
+    }
+    if (value === "true") return true;
+    if (value === "false") return false;
+    if (value === "null") return null;
+    return value;
+  }
+
+  private collectAssistantText(message: PiAssistantMessage): string {
+    const chunks: string[] = [];
+    if (!Array.isArray(message.content)) {
+      return "";
+    }
+    for (const item of message.content) {
+      if (
+        item &&
+        typeof item === "object" &&
+        "text" in item &&
+        typeof (item as { text?: unknown }).text === "string"
+      ) {
+        chunks.push((item as { text: string }).text);
+        continue;
+      }
+      if (
+        item &&
+        typeof item === "object" &&
+        "content" in item &&
+        typeof (item as { content?: unknown }).content === "string"
+      ) {
+        chunks.push((item as { content: string }).content);
+        continue;
+      }
+      if (
+        item &&
+        typeof item === "object" &&
+        "thinking" in item &&
+        typeof (item as { thinking?: unknown }).thinking === "string"
+      ) {
+        chunks.push((item as { thinking: string }).thinking);
+      }
+    }
+    return chunks.join("\n").trim();
+  }
+
+  private normalizeTextFallbackToolName(name: string): string | null {
+    const normalized = name.trim().toLowerCase();
+    if (TOOL_METAS.some((meta) => meta.name === normalized)) {
+      return normalized;
+    }
+    if (normalized === "type") {
+      return "type_text";
+    }
+    return ACTION_TYPE_TO_TOOL_NAME.get(normalized) ?? null;
+  }
+
+  private parseTextFallbackFromJson(text: string): { toolName: string; params: Record<string, unknown> } | null {
+    const candidates: string[] = [];
+    const fencedRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+    let fencedMatch: RegExpExecArray | null;
+    while ((fencedMatch = fencedRe.exec(text)) !== null) {
+      if (fencedMatch[1]) {
+        candidates.push(fencedMatch[1]);
+      }
+    }
+    candidates.push(text);
+    for (const candidate of candidates) {
+      const trimmed = candidate.trim();
+      if (!trimmed.includes("{") || !trimmed.includes("}")) {
+        continue;
+      }
+      const firstBrace = trimmed.indexOf("{");
+      const lastBrace = trimmed.lastIndexOf("}");
+      if (firstBrace < 0 || lastBrace <= firstBrace) {
+        continue;
+      }
+      const jsonSlice = trimmed.slice(firstBrace, lastBrace + 1);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(jsonSlice);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== "object") {
+        continue;
+      }
+      const actionRecord = parsed as Record<string, unknown>;
+      if (typeof actionRecord.type !== "string") {
+        continue;
+      }
+      const normalizedAction = normalizeAction(actionRecord);
+      const toolName = ACTION_TYPE_TO_TOOL_NAME.get(normalizedAction.type);
+      if (!toolName) {
+        continue;
+      }
+      const { type: _ignoreType, ...actionArgs } = normalizedAction as Record<string, unknown> & { type: string };
+      const thought =
+        typeof actionRecord.thought === "string" && actionRecord.thought.trim()
+          ? actionRecord.thought
+          : "Parsed textual action fallback";
+      return {
+        toolName,
+        params: { thought, ...actionArgs },
+      };
+    }
+    return null;
+  }
+
+  private parseTextFallbackFromFunction(text: string): { toolName: string; params: Record<string, unknown> } | null {
+    const candidates = [
+      text.trim(),
+      ...text.split(/\r?\n/g).map((line) => line.trim()).filter(Boolean),
+    ];
+    const argRe = /([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[+-]?\d+(?:\.\d+)?|true|false|null)/g;
+    for (const candidate of candidates) {
+      const fnMatch = candidate.match(/([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/);
+      if (!fnMatch) {
+        continue;
+      }
+      const toolName = this.normalizeTextFallbackToolName(fnMatch[1]);
+      if (!toolName) {
+        continue;
+      }
+      const args: Record<string, unknown> = { thought: "Parsed textual tool call fallback" };
+      const callStart = (fnMatch.index ?? 0) + fnMatch[0].length;
+      const argText = candidate.slice(callStart);
+      let match: RegExpExecArray | null;
+      while ((match = argRe.exec(argText)) !== null) {
+        args[match[1]] = this.parseToolFallbackLiteral(match[2]);
+      }
+      if (toolName === "finish" && typeof args.message !== "string") {
+        const quoted = argText.match(/["']([^"']{0,200})/);
+        args.message = quoted?.[1] ?? "Task completed.";
+      }
+      return { toolName, params: args };
+    }
+    return null;
+  }
+
+  private extractFinishMessageHint(text: string): string | null {
+    const directMessage = text.match(/message\s*[:=]?\s*["']([^"'\n]{1,200})["']/i);
+    if (directMessage?.[1]) {
+      return directMessage[1].trim();
+    }
+    const finishQuoted = text.match(/finish[\s\S]{0,120}?["']([^"'\n]{1,200})["']/i);
+    if (finishQuoted?.[1]) {
+      return finishQuoted[1].trim();
+    }
+    return null;
+  }
+
+  private parseNarrativeFinishFallback(
+    text: string,
+    task?: string,
+  ): { toolName: string; params: Record<string, unknown> } | null {
+    const finishIntentRe =
+      /\b(call\s+finish|should\s+finish|finish\s+the\s+task|complete\s+the\s+task|end\s+the\s+task)\b|完成任务|结束任务|应该结束|应当结束/i;
+    if (!finishIntentRe.test(text)) {
+      return null;
+    }
+    const message = this.extractFinishMessageHint(text)
+      ?? this.extractFinishMessageHint(task ?? "")
+      ?? "Task completed.";
+    return {
+      toolName: "finish",
+      params: {
+        thought: "Parsed narrative finish fallback",
+        message,
+      },
+    };
+  }
+
+  private parseTextualToolFallback(
+    message: PiAssistantMessage,
+    task?: string,
+  ): { toolName: string; params: Record<string, unknown> } | null {
+    const text = this.collectAssistantText(message);
+    if (!text) {
+      return null;
+    }
+    const jsonFallback = this.parseTextFallbackFromJson(text);
+    if (jsonFallback) {
+      return jsonFallback;
+    }
+    const functionFallback = this.parseTextFallbackFromFunction(text);
+    if (functionFallback) {
+      return functionFallback;
+    }
+    return this.parseNarrativeFinishFallback(text, task);
+  }
+
   // =========================================================================
   // runTask — powered by pi-agent-core Agent class
   // =========================================================================
@@ -1885,16 +2094,28 @@ export class AgentRuntime {
       // Build pi-ai model
       const effectiveProfile = auth.baseUrl ? { ...profile, baseUrl: auth.baseUrl } : profile;
       const piModel = buildPiAiModel(effectiveProfile);
+      const isCodexResponsesModel =
+        piModel.api === "openai-codex-responses" || piModel.provider === "openai-codex";
       // Override API if preferredMode is set
-      let finalModel: PiModel<PiApi> = auth.preferredMode === "responses"
-        ? { ...piModel, api: "openai-responses" as PiApi }
-        : auth.preferredMode === "completions"
-          ? { ...piModel, api: "openai-completions" as PiApi }
-          : piModel;
-      if (finalModel.api === "openai-responses" && auth.preferredMode !== "responses") {
-        // Keep the default tool-driven loop on the completions API because
-        // pi-ai's responses adapter does not expose tool_choice yet.
-        finalModel = { ...finalModel, api: "openai-completions" as PiApi };
+      let finalModel: PiModel<PiApi>;
+      if (isCodexResponsesModel) {
+        // Codex OAuth flows must use the dedicated Codex responses transport.
+        finalModel = {
+          ...piModel,
+          provider: "openai-codex",
+          api: "openai-codex-responses" as PiApi,
+        };
+      } else {
+        finalModel = auth.preferredMode === "responses"
+          ? { ...piModel, api: "openai-responses" as PiApi }
+          : auth.preferredMode === "completions"
+            ? { ...piModel, api: "openai-completions" as PiApi }
+            : piModel;
+        if (finalModel.api === "openai-responses" && auth.preferredMode !== "responses") {
+          // Keep the default tool-driven loop on the completions API because
+          // pi-ai's responses adapter does not expose tool_choice yet.
+          finalModel = { ...finalModel, api: "openai-completions" as PiApi };
+        }
       }
 
       const skillsSummary = this.skillLoader.summaryText();
@@ -1925,6 +2146,7 @@ export class AgentRuntime {
       const tools = this.buildPhoneAgentTools(ctx, this);
       const apiKey = auth.apiKey;
       const runtime = this;
+      const turnFallbackTasks: Promise<void>[] = [];
 
       // Map reasoning effort to pi-ai ThinkingLevel
       const thinkingMap: Record<string, "low" | "medium" | "high" | "xhigh"> = {
@@ -1989,6 +2211,11 @@ export class AgentRuntime {
 
         // Inject a fresh screenshot before each LLM call.
         transformContext: async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
+          if (ctx.finishMessage || ctx.failMessage) {
+            // Finish/fail can be set by tool execution in the previous turn.
+            // Returning early avoids extra screenshot work while the loop winds down.
+            return messages;
+          }
           // Check stop / maxSteps
           if (ctx.stopRequested()) {
             ctx.failMessage = "Task stopped by user.";
@@ -2075,10 +2302,18 @@ export class AgentRuntime {
       // Follow-up: inject continuation messages to keep the agent loop running
       const checkContinuation = () => {
         if (ctx.finishMessage || ctx.failMessage || ctx.stopRequested()) {
+          // A tool already reached a terminal state. Abort the in-flight loop so
+          // pi-agent-core does not enter another turn after the tool call.
+          if (typeof agent.abort === "function") {
+            agent.abort();
+          }
           return; // Don't queue follow-up — agent will stop
         }
         if (ctx.stepCount >= ctx.maxSteps) {
           ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+          if (typeof agent.abort === "function") {
+            agent.abort();
+          }
           return;
         }
         agent.followUp({
@@ -2102,7 +2337,26 @@ export class AgentRuntime {
           }
           const hasToolCall = assistantMessage.content.some((item) => item.type === "toolCall");
           if (!hasToolCall && !ctx.finishMessage && !ctx.failMessage) {
-            ctx.failMessage = "Model response did not include a tool call.";
+            const fallbackTask = (async () => {
+              const parsed = runtime.parseTextualToolFallback(assistantMessage, ctx.task);
+              if (!parsed) {
+                ctx.failMessage = "Model response did not include a tool call.";
+                return;
+              }
+              const fallbackTool = tools.find((item) => item.name === parsed.toolName);
+              if (!fallbackTool) {
+                ctx.failMessage = `Model textual fallback resolved unknown tool '${parsed.toolName}'.`;
+                return;
+              }
+              try {
+                await fallbackTool.execute(`text-fallback-${Date.now()}`, parsed.params);
+              } catch (error) {
+                ctx.failMessage = `Textual tool fallback execution error: ${(error as Error).message}`;
+                return;
+              }
+              checkContinuation();
+            })();
+            turnFallbackTasks.push(fallbackTask);
             return;
           }
           checkContinuation();
@@ -2114,6 +2368,9 @@ export class AgentRuntime {
       console.log(`[OpenPocket][agent-core] starting task: ${task}`);
       await agent.prompt(`Task: ${task}`);
       await agent.waitForIdle();
+      if (turnFallbackTasks.length > 0) {
+        await Promise.allSettled(turnFallbackTasks);
+      }
       const agentStateError = (agent as { state?: { error?: string } }).state?.error;
       if (!ctx.finishMessage && !ctx.failMessage && typeof agentStateError === "string" && agentStateError.trim()) {
         ctx.failMessage = `Model response error: ${agentStateError}`;

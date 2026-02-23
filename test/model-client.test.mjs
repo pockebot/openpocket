@@ -26,6 +26,17 @@ test("buildPiAiModel selects openai-completions for codex models on OpenAI", () 
   assert.equal(model.id, "gpt-5.2-codex");
 });
 
+test("buildPiAiModel selects openai-codex-responses for Codex backend URLs", () => {
+  const profile = {
+    ...makeProfile(),
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    model: "gpt-5.3-codex",
+  };
+  const model = buildPiAiModel(profile);
+  assert.equal(model.api, "openai-codex-responses");
+  assert.equal(model.provider, "openai-codex");
+});
+
 test("buildPiAiModel selects openai-completions for non-codex models on OpenAI", () => {
   const profile = { ...makeProfile(), model: "gpt-4o" };
   const model = buildPiAiModel(profile);

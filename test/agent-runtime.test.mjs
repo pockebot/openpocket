@@ -52,6 +52,26 @@ function createAssistantMessage(stepIndex, toolName, args, model) {
   };
 }
 
+function createAssistantTextMessage(text, model) {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: model?.api ?? "openai-completions",
+    provider: model?.provider ?? "openai",
+    model: model?.id ?? "mock-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
 function createScriptedAgentFactory(steps, hooks = {}) {
   return (options) => {
     const listeners = new Set();
@@ -132,7 +152,116 @@ function createScriptedAgentFactory(steps, hooks = {}) {
   };
 }
 
-function setupRuntime({ returnHomeOnTaskEnd, scriptedSteps, hooks }) {
+function createFinishAbortProbeFactory(hooks = {}) {
+  return (options) => {
+    const listeners = new Set();
+    let idlePromise = Promise.resolve();
+    let aborted = false;
+
+    return {
+      followUp() {},
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      abort() {
+        aborted = true;
+        hooks.abortCalls = (hooks.abortCalls ?? 0) + 1;
+      },
+      async prompt() {
+        idlePromise = (async () => {
+          if (options.transformContext) {
+            await options.transformContext([]);
+          }
+          const finishTool = options.initialState?.tools?.find((item) => item.name === "finish");
+          if (!finishTool) {
+            throw new Error("finish tool not found");
+          }
+
+          await finishTool.execute("tc-1", {
+            thought: "probe-finish",
+            message: "probe finish ok",
+          });
+
+          const assistantMessage = createAssistantMessage(
+            1,
+            "finish",
+            { thought: "probe-finish", message: "probe finish ok" },
+            options.initialState?.model,
+          );
+          for (const listener of listeners) {
+            listener({
+              type: "turn_end",
+              message: assistantMessage,
+              toolResults: [],
+            });
+          }
+
+          // Emulate the extra continuation turn that happens after tool calls.
+          // Runtime should abort before this branch runs.
+          if (!aborted) {
+            hooks.secondTurnAttempted = true;
+            if (options.transformContext) {
+              await options.transformContext([]);
+            }
+          } else {
+            hooks.secondTurnAttempted = false;
+          }
+        })();
+        await idlePromise;
+      },
+      async waitForIdle() {
+        await idlePromise;
+      },
+      get queuedFollowUps() {
+        return [];
+      },
+    };
+  };
+}
+
+function createTextFallbackProbeFactory(text, hooks = {}) {
+  return (options) => {
+    const listeners = new Set();
+    let idlePromise = Promise.resolve();
+
+    return {
+      followUp() {},
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async prompt() {
+        idlePromise = (async () => {
+          if (options.transformContext) {
+            await options.transformContext([]);
+          }
+          const assistantMessage = createAssistantTextMessage(
+            text,
+            options.initialState?.model,
+          );
+          for (const listener of listeners) {
+            listener({
+              type: "turn_end",
+              message: assistantMessage,
+              toolResults: [],
+            });
+          }
+          hooks.emitCount = (hooks.emitCount ?? 0) + 1;
+        })();
+        await idlePromise;
+      },
+      async waitForIdle() {
+        await idlePromise;
+      },
+      get queuedFollowUps() {
+        return [];
+      },
+    };
+  };
+}
+
+function setupRuntime({ returnHomeOnTaskEnd, scriptedSteps, hooks, agentFactory }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-runtime-"));
   const prevHome = process.env.OPENPOCKET_HOME;
   process.env.OPENPOCKET_HOME = home;
@@ -146,7 +275,7 @@ function setupRuntime({ returnHomeOnTaskEnd, scriptedSteps, hooks }) {
   cfg.models[cfg.defaultModel].apiKeyEnv = "MISSING_OPENAI_KEY";
 
   const runtime = new AgentRuntime(cfg, {
-    agentFactory: createScriptedAgentFactory(scriptedSteps ?? [], hooks),
+    agentFactory: agentFactory ?? createScriptedAgentFactory(scriptedSteps ?? [], hooks),
   });
 
   if (prevHome === undefined) {
@@ -160,6 +289,21 @@ function setupRuntime({ returnHomeOnTaskEnd, scriptedSteps, hooks }) {
   };
 
   return runtime;
+}
+
+async function withTempCodexHome(prefix, fn) {
+  const prevCodexHome = process.env.CODEX_HOME;
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  process.env.CODEX_HOME = codexHome;
+  try {
+    return await fn(codexHome);
+  } finally {
+    if (prevCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = prevCodexHome;
+    }
+  }
 }
 
 test("AgentRuntime injects BOOTSTRAP guidance into system prompt context", async () => {
@@ -1023,4 +1167,127 @@ test("AgentRuntime appends gallery template hint after delegated image artifact"
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
+});
+
+test("AgentRuntime routes Codex CLI auth through openai-codex responses", async () => {
+  await withTempCodexHome("openpocket-runtime-codex-", async (codexHome) => {
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: "codex-access-token",
+          refresh_token: "codex-refresh-token",
+        },
+      }),
+      "utf-8",
+    );
+
+    const prevOpenAi = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    let capturedModel = null;
+    const runtime = setupRuntime({
+      returnHomeOnTaskEnd: false,
+      scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+      hooks: {
+        onInit: (options) => {
+          capturedModel = options.initialState?.model ?? null;
+        },
+      },
+    });
+
+    runtime.config.defaultModel = "gpt-5.3-codex";
+    runtime.config.models["gpt-5.3-codex"].apiKey = "";
+    runtime.config.models["gpt-5.3-codex"].apiKeyEnv = "OPENAI_API_KEY";
+    runtime.adb = {
+      queryLaunchablePackages: () => [],
+      captureScreenSnapshot: () => makeSnapshot(),
+      executeAction: async () => "ok",
+    };
+
+    try {
+      const result = await runtime.runTask("codex routing test");
+      assert.equal(result.ok, true);
+      assert.equal(capturedModel?.provider, "openai-codex");
+      assert.equal(capturedModel?.api, "openai-codex-responses");
+    } finally {
+      if (prevOpenAi === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = prevOpenAi;
+      }
+    }
+  });
+});
+
+test("AgentRuntime aborts continuation after finish to avoid post-finish hang", async () => {
+  const probe = { abortCalls: 0, secondTurnAttempted: false };
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [],
+    hooks: {},
+    agentFactory: createFinishAbortProbeFactory(probe),
+  });
+
+  runtime.config.defaultModel = "gpt-5.3-codex";
+  runtime.config.models["gpt-5.3-codex"].apiKey = "dummy";
+  runtime.config.models["gpt-5.3-codex"].apiKeyEnv = "MISSING_OPENAI_KEY";
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("finish abort probe");
+  assert.equal(result.ok, true);
+  assert.equal(probe.abortCalls > 0, true);
+  assert.equal(probe.secondTurnAttempted, false);
+});
+
+test("AgentRuntime parses textual finish(...) fallback when model omits tool_call", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [],
+    hooks: {},
+    agentFactory: createTextFallbackProbeFactory("finish(message=\"fallback finish ok\")"),
+  });
+
+  runtime.config.models["autoglm-phone"].apiKey = "dummy";
+  runtime.config.models["autoglm-phone"].apiKeyEnv = "MISSING_AUTOGLM_KEY";
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("text tool fallback test", "autoglm-phone");
+  assert.equal(result.ok, true);
+  assert.equal(result.message, "fallback finish ok");
+});
+
+test("AgentRuntime infers finish action from narrative text when tool_call is missing", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [],
+    hooks: {},
+    agentFactory: createTextFallbackProbeFactory(
+      [
+        "I can see the current screen is the Android home screen.",
+        "According to the task instruction: \"If the Android home screen is visible, call finish immediately with message 'autoglm fallback ok'.\"",
+        "Since the home screen is visible, I should finish the task immediately with the specified message.",
+      ].join("\n\n"),
+    ),
+  });
+
+  runtime.config.models["autoglm-phone"].apiKey = "dummy";
+  runtime.config.models["autoglm-phone"].apiKeyEnv = "MISSING_AUTOGLM_KEY";
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("If the Android home screen is visible, call finish immediately with message 'autoglm fallback ok'. Otherwise perform at most one action then finish.", "autoglm-phone");
+  assert.equal(result.ok, true);
+  assert.equal(result.message, "autoglm fallback ok");
 });

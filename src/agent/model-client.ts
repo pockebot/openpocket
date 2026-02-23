@@ -45,6 +45,14 @@ function stringifyError(error: unknown): string {
   return String(error);
 }
 
+function isChatGptBackendUrl(baseUrlLower: string): boolean {
+  return baseUrlLower.includes("chatgpt.com/backend-api");
+}
+
+function isCodexModelId(modelId: string): boolean {
+  return modelId.trim().toLowerCase().includes("codex");
+}
+
 /** Build a pi-ai Tool[] from our TOOL_METAS (schema-only, no execute). */
 function buildPiAiTools(): Tool[] {
   return TOOL_METAS.map((meta) => ({
@@ -92,7 +100,10 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
   let api: Api = "openai-completions";
   let provider = "openai";
 
-  if (baseUrlLower.includes("openrouter.ai")) {
+  if (isChatGptBackendUrl(baseUrlLower) && isCodexModelId(profile.model)) {
+    api = "openai-codex-responses";
+    provider = "openai-codex";
+  } else if (baseUrlLower.includes("openrouter.ai")) {
     provider = "openrouter";
   } else if (baseUrlLower.includes("blockrun.ai")) {
     provider = "openai"; // blockrun is OpenAI-compatible
@@ -144,19 +155,29 @@ export class ModelClient {
       ? { ...profile, baseUrl: options.baseUrl }
       : profile;
 
+    const baseModel = buildPiAiModel(effectiveProfile);
+    const isCodexResponsesModel =
+      baseModel.api === "openai-codex-responses" || baseModel.provider === "openai-codex";
+
     // Handle preferred mode override
-    if (options?.preferredMode === "responses") {
+    if (isCodexResponsesModel) {
       this.piModel = {
-        ...buildPiAiModel(effectiveProfile),
+        ...baseModel,
+        provider: "openai-codex",
+        api: "openai-codex-responses" as Api,
+      };
+    } else if (options?.preferredMode === "responses") {
+      this.piModel = {
+        ...baseModel,
         api: "openai-responses" as Api,
       };
     } else if (options?.preferredMode === "completions" || options?.preferredMode === "chat") {
       this.piModel = {
-        ...buildPiAiModel(effectiveProfile),
+        ...baseModel,
         api: "openai-completions" as Api,
       };
     } else {
-      this.piModel = buildPiAiModel(effectiveProfile);
+      this.piModel = baseModel;
     }
 
     this.piTools = buildPiAiTools();
