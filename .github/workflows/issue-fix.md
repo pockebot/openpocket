@@ -9,42 +9,36 @@ engine: codex
 strict: true
 
 permissions:
-  actions: read
   contents: read
   issues: read
-  pull-requests: read
 
 network:
   allowed:
     - defaults
-    - node
 
 tools:
   github:
-    toolsets: [repos, issues, pull_requests, actions]
-  edit:
+    toolsets: [repos, issues]
   bash: ["make", "git:*"]
 
 safe-outputs:
-  create-pull-request:
-    title-prefix: "[codex-fix] "
-    draft: true
   add-comment:
 ---
 
-# Fix issue via PR
+# Analyze issue and suggest fix
 
 Triggered when a maintainer comments `/fix`.
 
 Issue context (sanitized): "${{ needs.activation.outputs.text }}"
 
 Rules:
-1. Run `make ci` before changes and summarize baseline status.
-2. Make the smallest correct code changes to resolve the issue.
-3. Add or update tests that prove the fix.
-4. Run `make ci` after changes and summarize results.
-5. Create a draft PR that explains:
-   - what changed
-   - why it fixes the issue
-   - how to test
-   - remaining risks or limitations
+1. Do not create a PR and do not push code changes.
+2. Analyze the issue and provide a concrete recommendation comment containing:
+   - probable root cause(s)
+   - likely files/modules involved
+   - reproduction/verification steps
+   - minimal fix options (with one recommended approach)
+   - test cases to add/update
+   - risk and rollback notes
+3. If useful, run lightweight read-only checks and include what you observed.
+4. If key context is missing, ask focused follow-up questions in the comment.
