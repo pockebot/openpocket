@@ -314,7 +314,9 @@ export async function runCodexCliLoginCommand(
 
     let child: ChildProcess;
     try {
-      child = spawnProcess("codex", ["login"], { stdio: "inherit" });
+      child = spawnProcess("codex", ["login"], {
+        stdio: ["ignore", "inherit", "inherit"],
+      });
     } catch (error) {
       const castError = error as NodeJS.ErrnoException;
       if (castError.code === "ENOENT") {

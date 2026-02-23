@@ -435,6 +435,7 @@ test("codex login runner cancels cleanly on interrupt signal", async () => {
   assert.equal(spawnCalls.length, 1);
   assert.equal(spawnCalls[0].command, "codex");
   assert.deepEqual(spawnCalls[0].args, ["login"]);
+  assert.deepEqual(spawnCalls[0].options.stdio, ["ignore", "inherit", "inherit"]);
   assert.equal(child.killSignals.includes("SIGINT"), true);
 });
 
