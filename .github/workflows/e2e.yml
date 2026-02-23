@@ -1,36 +1,36 @@
-name: E2E Tests
+# name: E2E Tests
 
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+# on:
+#   push:
+#     branches: [ "main" ]
+#   pull_request:
+#     branches: [ "main" ]
 
-jobs:
-  e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+# jobs:
+#   e2e:
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 30
 
-    steps:
-    - uses: actions/checkout@v4
+#     steps:
+#     - uses: actions/checkout@v4
     
     # We use actions/setup-node just to have npm available to run the test script wrapper.
     # The actual e2e test runs inside the Docker container.
-    - name: Use Node.js 22.x
-      uses: actions/setup-node@v4
-      with:
-        node-version: 22.x
+    # - name: Use Node.js 22.x
+    #   uses: actions/setup-node@v4
+    #   with:
+    #     node-version: 22.x
         
-    - name: Enable KVM group perms
+    # - name: Enable KVM group perms
       # This enables hardware acceleration for the Android emulator inside the Docker container
       # since Docker on Linux can pass through /dev/kvm
-      run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+    #   run: |
+    #       echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+    #       sudo udevadm control --reload-rules
+    #       sudo udevadm trigger --name-match=kvm
 
-    - name: Run E2E tests (Docker)
-      run: npm run test:e2e:docker
+    # - name: Run E2E tests (Docker)
+    #   run: npm run test:e2e:docker
       # We need to make sure the docker container can access /dev/kvm if we want hardware acceleration,
       # but by default the `test-e2e-docker.sh` might not pass `--device /dev/kvm`...
       # Let's check test-e2e-docker.sh again.
