@@ -116,6 +116,41 @@ test("ChatAssistant decide keeps model task result", async () => {
   assert.equal(out.reason, "model_task");
 });
 
+test("ChatAssistant decide upgrades objective device lookup queries to task routing", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.classifyWithModel = async () => ({
+    mode: "chat",
+    task: "",
+    reply: "这看起来像普通问答。",
+    confidence: 0.78,
+    reason: "model_classify",
+  });
+
+  const input = "你运行的安卓系统版本是多少？";
+  const out = await assistant.decide(22, input);
+  assert.equal(out.mode, "task");
+  assert.equal(out.task, input);
+  assert.match(out.reason, /objective_lookup_prefers_task/);
+  assert.equal(out.reply, "");
+  assert.equal(out.confidence >= 0.75, true);
+});
+
+test("ChatAssistant decide respects explicit chat-only instruction", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.classifyWithModel = async () => ({
+    mode: "chat",
+    task: "",
+    reply: "这是概念解释。",
+    confidence: 0.82,
+    reason: "model_classify",
+  });
+
+  const input = "不要操作手机，只解释一下安卓系统版本号是什么意思";
+  const out = await assistant.decide(23, input);
+  assert.equal(out.mode, "chat");
+  assert.equal(out.reason, "model_classify");
+});
+
 test("ChatAssistant decide reports missing API key without heuristics", async () => {
   await withTempCodexHome("openpocket-codex-empty-", async () => {
     const { assistant } = createAssistant();

@@ -1988,7 +1988,9 @@ export class ChatAssistant {
       "1) mode=task when user wants the assistant to operate phone/apps.",
       "1.1) Treat operation as happening on phone by default.",
       "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
-      "2) mode=chat for small talk, explanation, status discussion, and generic questions.",
+      "1.3) mode=task for objective fact queries that require checking phone/runtime/tools (device status, app state, OS version, network, battery, installed packages, current screen/app, etc.), even if phrased as a question.",
+      "1.4) If uncertain between chat and task, choose mode=task when the request can be verified by executing tools/phone actions.",
+      "2) mode=chat only for pure conversation, opinions, or explanations that do not require external verification.",
       "3) task should be executable imperative sentence.",
       "4) for chat mode, reply should be concise.",
       `User message: ${inputText}`,
@@ -2034,6 +2036,166 @@ export class ChatAssistant {
         reason: "model_output_not_json",
       };
     }
+  }
+
+  private normalizeRoutingInput(input: string): string {
+    return String(input || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private isExplicitChatOnlyRequest(inputText: string): boolean {
+    const normalized = this.normalizeRoutingInput(inputText);
+    const markers = [
+      "just chat",
+      "chat only",
+      "no need to run",
+      "do not run",
+      "don't run",
+      "dont run",
+      "不用执行",
+      "不要执行",
+      "别执行",
+      "只回答",
+      "只聊",
+      "不需要操作手机",
+      "不要操作手机",
+      "别操作手机",
+      "不必操作手机",
+      "无需操作手机",
+    ];
+    return markers.some((marker) => normalized.includes(marker));
+  }
+
+  private isLikelyPureChatMessage(inputText: string): boolean {
+    const normalized = this.normalizeRoutingInput(inputText);
+    if (!normalized) {
+      return true;
+    }
+    const shortPhaticPatterns = [
+      /^(hi|hello|hey|yo|sup|thanks|thank you|thx|bye|good morning|good night)[!.,\s]*$/i,
+      /^(你好|嗨|哈喽|在吗|谢谢|多谢|再见|早上好|晚上好)[！。,\s]*$/i,
+    ];
+    return shortPhaticPatterns.some((pattern) => pattern.test(normalized));
+  }
+
+  private isObjectiveLookupIntent(inputText: string): boolean {
+    const normalized = this.normalizeRoutingInput(inputText);
+    if (!normalized) {
+      return false;
+    }
+
+    const contextHints = [
+      "android",
+      "ios",
+      "device",
+      "phone",
+      "emulator",
+      "runtime",
+      "running on",
+      "system version",
+      "os version",
+      "package",
+      "installed",
+      "battery",
+      "network",
+      "wifi",
+      "ip",
+      "current app",
+      "current screen",
+      "resolution",
+      "storage",
+      "memory usage",
+      "安卓",
+      "手机",
+      "设备",
+      "模拟器",
+      "系统",
+      "版本",
+      "包名",
+      "已安装",
+      "电量",
+      "网络",
+      "当前应用",
+      "当前 app",
+      "当前页面",
+      "当前屏幕",
+      "分辨率",
+      "存储",
+      "内存",
+      "运行环境",
+      "你运行的",
+      "运行的安卓",
+    ];
+    const hasContextHint = contextHints.some((hint) => normalized.includes(hint));
+    if (!hasContextHint) {
+      return false;
+    }
+
+    const questionSignals = [
+      "what",
+      "which",
+      "how many",
+      "is there",
+      "are there",
+      "tell me",
+      "can you check",
+      "check",
+      "verify",
+      "show me",
+      "status",
+      "version",
+      "是多少",
+      "是不是",
+      "有没有",
+      "是否",
+      "什么版本",
+      "是什么",
+      "状态",
+      "查一下",
+      "查看",
+      "确认",
+      "告诉我",
+      "看看",
+      "列出",
+      "读取",
+      "获取",
+    ];
+    const hasQuestionSignal =
+      /[?？]/.test(inputText) || questionSignals.some((signal) => normalized.includes(signal));
+
+    return hasQuestionSignal;
+  }
+
+  private arbitrateRoutingDecision(inputText: string, decided: ChatDecision): ChatDecision {
+    if (decided.mode === "task") {
+      if (!decided.task) {
+        return { ...decided, task: inputText.trim() };
+      }
+      return decided;
+    }
+
+    if (this.isExplicitChatOnlyRequest(inputText)) {
+      return decided;
+    }
+
+    if (this.isLikelyPureChatMessage(inputText)) {
+      return decided;
+    }
+
+    if (!this.isObjectiveLookupIntent(inputText)) {
+      return decided;
+    }
+
+    const reasonPrefix = decided.reason ? `${decided.reason};` : "";
+    return {
+      mode: "task",
+      task: inputText.trim(),
+      reply: "",
+      confidence: Math.max(0.75, decided.confidence),
+      reason: `${reasonPrefix}objective_lookup_prefers_task`,
+    };
   }
 
   private async askResponses(client: OpenAI, model: string, maxTokens: number, inputText: string, chatId: number): Promise<string> {
@@ -2506,10 +2668,7 @@ export class ChatAssistant {
         profile.maxTokens,
         normalizedInput,
       );
-      if (decided.mode === "task" && !decided.task) {
-        decided.task = normalizedInput;
-      }
-      return decided;
+      return this.arbitrateRoutingDecision(normalizedInput, decided);
     } catch {
       return {
         mode: "task",
