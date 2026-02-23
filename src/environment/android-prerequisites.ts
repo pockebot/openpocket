@@ -43,6 +43,8 @@ const DEFAULT_AVD_DATA_PARTITION_SIZE_GB = 24;
 const STANDARD_AVD_LCD_WIDTH = 1080;
 const STANDARD_AVD_LCD_HEIGHT = 2400;
 const STANDARD_AVD_LCD_DENSITY = 420;
+const PREFERRED_ANDROID_PLATFORM_PACKAGES = ["platforms;android-36", "platforms;android-34"] as const;
+const PREFERRED_SYSTEM_IMAGE_API_LEVELS = ["android-36.1", "android-34"] as const;
 
 function normalizeDataPartitionSizeGb(value: unknown): number {
   const parsed = Number(value);
@@ -477,21 +479,86 @@ function installSdkPackages(
   sdkRoot: string,
   logger: (line: string) => void,
   toolEnv: NodeJS.ProcessEnv,
-): void {
-  logger("Installing Android SDK packages: platform-tools, emulator, platforms;android-34 ...");
-  const result = run(
+): string {
+  logger("Installing Android SDK packages: platform-tools, emulator ...");
+  const baseResult = run(
     sdkmanager,
-    [`--sdk_root=${sdkRoot}`, "platform-tools", "emulator", "platforms;android-34"],
+    [`--sdk_root=${sdkRoot}`, "platform-tools", "emulator"],
     { inherit: true, env: toolEnv },
   );
-  if (!result.ok) {
+  if (!baseResult.ok) {
     throw new Error(
       [
-        "Failed to install required Android SDK packages.",
+        "Failed to install required Android SDK packages (platform-tools/emulator).",
         "This usually means Java runtime is below 17 or JAVA_HOME points to an old JDK.",
       ].join(" "),
     );
   }
+
+  for (const platformPkg of PREFERRED_ANDROID_PLATFORM_PACKAGES) {
+    logger(`Trying Android platform package: ${platformPkg}`);
+    const platformResult = run(sdkmanager, [`--sdk_root=${sdkRoot}`, platformPkg], { inherit: true, env: toolEnv });
+    if (platformResult.ok) {
+      logger(`Android platform ready: ${platformPkg}`);
+      return platformPkg;
+    }
+  }
+
+  throw new Error(
+    [
+      `Failed to install Android platform packages: ${PREFERRED_ANDROID_PLATFORM_PACKAGES.join(", ")}.`,
+      "This usually means Java runtime is below 17 or JAVA_HOME points to an old JDK.",
+    ].join(" "),
+  );
+}
+
+function buildSystemImageCandidatesForApiLevel(apiLevel: string, archTag: string): string[] {
+  return [
+    `system-images;${apiLevel};google_apis_playstore;${archTag}`,
+    `system-images;${apiLevel};google_apis_playstore;x86_64`,
+    `system-images;${apiLevel};google_apis_playstore;arm64-v8a`,
+  ];
+}
+
+function systemImageApiLevelPriority(pkg: string): number {
+  const parts = pkg.split(";");
+  if (parts.length < 2) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const apiLevel = parts[1];
+  const index = PREFERRED_SYSTEM_IMAGE_API_LEVELS.indexOf(apiLevel as (typeof PREFERRED_SYSTEM_IMAGE_API_LEVELS)[number]);
+  return index >= 0 ? index : Number.POSITIVE_INFINITY;
+}
+
+function prioritizeSystemImagePackages(pkgs: Iterable<string>): string[] {
+  return Array.from(new Set(pkgs)).sort((a, b) => systemImageApiLevelPriority(a) - systemImageApiLevelPriority(b));
+}
+
+function findAnyGooglePlaySystemImage(sdkRoot: string): string[] {
+  const imageRoot = path.join(sdkRoot, "system-images");
+  if (!fs.existsSync(imageRoot)) {
+    return [];
+  }
+  const results: string[] = [];
+  const apiLevels = fs.readdirSync(imageRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+  for (const apiLevel of apiLevels) {
+    const variantRoot = path.join(imageRoot, apiLevel, "google_apis_playstore");
+    if (!fs.existsSync(variantRoot)) {
+      continue;
+    }
+    const archDirs = fs.readdirSync(variantRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    for (const arch of archDirs) {
+      const full = path.join(variantRoot, arch);
+      if (fs.existsSync(path.join(full, "system.img"))) {
+        results.push(`system-images;${apiLevel};google_apis_playstore;${arch}`);
+      }
+    }
+  }
+  return prioritizeSystemImagePackages(results);
 }
 
 function detectHostArm64(): boolean {
@@ -519,13 +586,10 @@ function detectHostArm64(): boolean {
 
 export function getSystemImageCandidates(): string[] {
   const archTag = detectHostArm64() ? "arm64-v8a" : "x86_64";
-  return Array.from(
-    new Set([
-      `system-images;android-34;google_apis_playstore;${archTag}`,
-      "system-images;android-34;google_apis_playstore;x86_64",
-      "system-images;android-34;google_apis_playstore;arm64-v8a",
-    ]),
+  const candidates = PREFERRED_SYSTEM_IMAGE_API_LEVELS.flatMap((apiLevel) =>
+    buildSystemImageCandidatesForApiLevel(apiLevel, archTag),
   );
+  return Array.from(new Set(candidates));
 }
 
 function findExistingSystemImage(sdkRoot: string, logger: (line: string) => void): string | null {
@@ -533,9 +597,9 @@ function findExistingSystemImage(sdkRoot: string, logger: (line: string) => void
   // Also scan the well-known Android Studio SDK location in case sdkRoot differs.
   const androidStudioSdk = path.join(os.homedir(), "Library", "Android", "sdk");
   const sdkRootsToCheck = Array.from(new Set([sdkRoot, androidStudioSdk].filter((p) => fs.existsSync(p))));
-  const candidates = getSystemImageCandidates();
+  const preferredCandidates = getSystemImageCandidates();
 
-  for (const pkg of candidates) {
+  for (const pkg of preferredCandidates) {
     // Package name format: system-images;android-XX;variant;arch
     // Translates to: <sdk>/system-images/android-XX/variant/arch/
     const parts = pkg.split(";");
@@ -550,6 +614,15 @@ function findExistingSystemImage(sdkRoot: string, logger: (line: string) => void
         return pkg;
       }
     }
+  }
+
+  for (const root of sdkRootsToCheck) {
+    const discovered = findAnyGooglePlaySystemImage(root);
+    if (discovered.length === 0) {
+      continue;
+    }
+    logger(`Found existing fallback Google Play system image locally: ${discovered[0]} (at ${root})`);
+    return discovered[0];
   }
   return null;
 }
@@ -574,6 +647,13 @@ function installOneSystemImage(
       logger(`System image ready: ${pkg}`);
       return pkg;
     }
+  }
+
+  const fallbackInstalled = findAnyGooglePlaySystemImage(sdkRoot)
+    .filter((pkg) => !candidates.includes(pkg));
+  if (fallbackInstalled.length > 0) {
+    logger(`Using installed fallback Google Play system image: ${fallbackInstalled[0]}`);
+    return fallbackInstalled[0];
   }
 
   logger(
@@ -835,8 +915,8 @@ export async function ensureAndroidPrerequisites(
 
   // --- Phase 4: Install SDK packages and create AVD ---
   acceptSdkLicenses(sdkmanager, sdkRoot, logger, toolEnv);
-  installSdkPackages(sdkmanager, sdkRoot, logger, toolEnv);
-  installedSteps.push("sdk:platform-tools,emulator,platforms;android-34");
+  const installedPlatformPackage = installSdkPackages(sdkmanager, sdkRoot, logger, toolEnv);
+  installedSteps.push(`sdk:platform-tools,emulator,${installedPlatformPackage}`);
 
   tools = detectTools(sdkRoot);
   essentialMissing = missingEssentialTools(tools);

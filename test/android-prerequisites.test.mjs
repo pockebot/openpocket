@@ -53,6 +53,11 @@ test("strict mode uses only Google Play system image candidates", async () => {
     candidates.every((pkg) => pkg.includes(";google_apis_playstore;")),
     true,
   );
+  const first34 = candidates.findIndex((pkg) => pkg.includes("system-images;android-34;"));
+  const first361 = candidates.findIndex((pkg) => pkg.includes("system-images;android-36.1;"));
+  assert.equal(first34 >= 0, true);
+  assert.equal(first361 >= 0, true);
+  assert.equal(first361 < first34, true);
 });
 
 test("buildAvdManagerOpts pins avdmanager toolsdir to selected SDK root", async () => {
