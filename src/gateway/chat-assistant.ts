@@ -2234,6 +2234,47 @@ export class ChatAssistant {
     return [questionLine, optionsLine, actionLine].filter(Boolean).join(" ");
   }
 
+  private fallbackStartReadyReply(locale: OnboardingLocale): string {
+    return locale === "zh"
+      ? "我已就绪，直接告诉我你想在手机上完成什么任务；需要命令时发送 /help。"
+      : "I am ready. Send what you want done on the phone directly, or use /help for commands.";
+  }
+
+  async startReadyReply(locale: OnboardingLocale): Promise<string> {
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return this.fallbackStartReadyReply(locale);
+    }
+
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+    const prompt = [
+      "You are OpenPocket conversational assistant.",
+      "The user just sent /start in Telegram and onboarding is already complete.",
+      "Write one short welcome sentence in the target locale.",
+      "Include exactly these intents: user can send requests directly; /help shows commands.",
+      "Do not mention API keys, endpoints, providers, or internal implementation details.",
+      `Locale: ${locale}`,
+    ].join("\n");
+
+    try {
+      const output = await this.callModelRaw(
+        client,
+        profile.model,
+        Math.min(profile.maxTokens, 120),
+        prompt,
+        "start welcome",
+      );
+      const normalized = this.normalizeOneLine(output);
+      return normalized || this.fallbackStartReadyReply(locale);
+    } catch {
+      return this.fallbackStartReadyReply(locale);
+    }
+  }
+
   async narrateTaskProgress(input: TaskProgressNarrationInput): Promise<TaskProgressNarrationDecision> {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);

@@ -1035,12 +1035,8 @@ export class TelegramGateway {
         return;
       }
 
-      await this.bot.sendMessage(
-        chatId,
-        locale === "zh"
-          ? "OpenPocket 已就绪。直接发需求即可；发送 /help 查看命令。"
-          : "OpenPocket is ready. Send a request directly, or use /help for commands.",
-      );
+      const welcome = await this.chat.startReadyReply(locale);
+      await this.bot.sendMessage(chatId, this.sanitizeForChat(welcome, 1800));
       return;
     }
 

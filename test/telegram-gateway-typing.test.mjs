@@ -402,6 +402,12 @@ test("TelegramGateway /start replies with stable welcome when onboarding is comp
 
     let decideCalled = false;
     gateway.chat.isOnboardingPending = () => false;
+    let startReplyCalled = false;
+    gateway.chat.startReadyReply = async (locale) => {
+      startReplyCalled = true;
+      assert.equal(locale, "en");
+      return "Welcome back. Send your phone task directly, or use /help for commands.";
+    };
     gateway.chat.decide = async () => {
       decideCalled = true;
       return {
@@ -420,8 +426,9 @@ test("TelegramGateway /start replies with stable welcome when onboarding is comp
     });
 
     assert.equal(decideCalled, false);
+    assert.equal(startReplyCalled, true);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /OpenPocket is ready/);
+    assert.match(sent[0].text, /Welcome back/);
   });
 });
 
