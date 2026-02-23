@@ -11,7 +11,12 @@ echo "[e2e] Building Docker image: ${IMAGE_TAG}"
 docker build -f docker/e2e/Dockerfile -t "${IMAGE_TAG}" .
 
 echo "[e2e] Running Docker container"
-docker run --rm \
-  --shm-size="${SHM_SIZE}" \
+DOCKER_RUN_ARGS=(--rm --shm-size="${SHM_SIZE}")
+if [ -e /dev/kvm ]; then
+  echo "[e2e] Hardware virtualization (/dev/kvm) detected. Enabling KVM."
+  DOCKER_RUN_ARGS+=(--device /dev/kvm)
+fi
+
+docker run "${DOCKER_RUN_ARGS[@]}" \
   -e OPENPOCKET_E2E_TASK="${OPENPOCKET_E2E_TASK:-Open Android Settings, then return to the home screen, then finish.}" \
   "${IMAGE_TAG}"

@@ -364,7 +364,22 @@ async function waitForBootComplete(env, timeoutMs) {
         timeoutMs: 15000,
       });
       if (prop.status === 0 && prop.stdout.trim() === "1") {
-        return;
+        // Verify the ADB connection is stable before declaring boot complete.
+        // The device can briefly go offline right after sys.boot_completed fires,
+        // which would cause subsequent agent commands to fail with "device offline".
+        let stableCount = 0;
+        for (let i = 0; i < 15 && stableCount < 2; i++) {
+          await sleep(2000);
+          const ping = runCommand("adb", ["shell", "echo", "ping"], { env, timeoutMs: 8000 });
+          if (ping.status === 0 && ping.stdout.trim() === "ping") {
+            stableCount++;
+          } else {
+            stableCount = 0;
+          }
+        }
+        if (stableCount >= 2) {
+          return;
+        }
       }
     }
 
@@ -415,6 +430,7 @@ async function main() {
     cfg.defaultModel = "e2e-mock";
     cfg.emulator.headless = true;
     cfg.emulator.bootTimeoutSec = 60;
+    const kvmEnabled = fs.existsSync("/dev/kvm");
     cfg.emulator.extraArgs = [
       "-gpu",
       "swiftshader_indirect",
@@ -423,7 +439,7 @@ async function main() {
       "-cores",
       "1",
       "-accel",
-      "off",
+      kvmEnabled ? "kvm" : "off",
       "-no-audio",
       "-no-boot-anim",
       "-no-snapshot",
