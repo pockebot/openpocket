@@ -152,6 +152,50 @@ test("TelegramGateway startup sync reads assistant name from IDENTITY.md", async
   });
 });
 
+test("TelegramGateway startup sync prefers USER.md assistant name over default identity", async () => {
+  await withTempHome("openpocket-telegram-startup-name-user-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+    fs.writeFileSync(
+      path.join(cfg.workspaceDir, "IDENTITY.md"),
+      [
+        "# IDENTITY",
+        "",
+        "## Agent Identity",
+        "",
+        "- Name: OpenPocket",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(cfg.workspaceDir, "USER.md"),
+      [
+        "# USER",
+        "",
+        "## Interaction Preferences",
+        "",
+        "- Preferred assistant name: Jarvis-User",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const setNameCalls = [];
+    gateway.bot.setMyName = async (form) => {
+      setNameCalls.push(form);
+      return true;
+    };
+
+    await gateway.syncBotDisplayNameFromIdentity();
+
+    assert.equal(setNameCalls.length, 1);
+    assert.equal(setNameCalls[0].name, "Jarvis-User");
+  });
+});
+
 test("TelegramGateway startup sync backs off after Telegram rate limit", async () => {
   await withTempHome("openpocket-telegram-startup-name-rate-limit-", async () => {
     const cfg = loadConfig();

@@ -314,23 +314,50 @@ export class TelegramGateway {
   private readAssistantNameFromIdentity(): string {
     const identityPath = path.join(this.config.workspaceDir, "IDENTITY.md");
     if (!fs.existsSync(identityPath)) {
-      return "";
+      return this.readPreferredAssistantNameFromUser();
     }
     let raw = "";
     try {
       raw = fs.readFileSync(identityPath, "utf-8");
     } catch {
-      return "";
+      return this.readPreferredAssistantNameFromUser();
     }
     // Match "- Name:" only inside the "## Agent Identity" section to avoid
     // picking up unrelated Name bullets from other sections.
     const sectionMatch = raw.match(/##\s*Agent\s+Identity\b[\s\S]*?(?=\n##\s|\n#\s|$)/i);
     const section = sectionMatch ? sectionMatch[0] : raw;
     const match = section.match(/^\s*-\s*Name\s*:\s*(.+)$/im);
+    const identityName = match?.[1] ? this.normalizeBotDisplayName(match[1]) : "";
+    const preferredName = this.readPreferredAssistantNameFromUser();
+    if (identityName) {
+      if (this.isDefaultBotDisplayName(identityName) && preferredName && preferredName !== identityName) {
+        return preferredName;
+      }
+      return identityName;
+    }
+    return preferredName;
+  }
+
+  private readPreferredAssistantNameFromUser(): string {
+    const userPath = path.join(this.config.workspaceDir, "USER.md");
+    if (!fs.existsSync(userPath)) {
+      return "";
+    }
+    let raw = "";
+    try {
+      raw = fs.readFileSync(userPath, "utf-8");
+    } catch {
+      return "";
+    }
+    const match = raw.match(/^\s*-\s*Preferred assistant name\s*:\s*(.+)$/im);
     if (!match?.[1]) {
       return "";
     }
     return this.normalizeBotDisplayName(match[1]);
+  }
+
+  private isDefaultBotDisplayName(name: string): boolean {
+    return name.trim().toLowerCase() === "openpocket";
   }
 
   private async syncBotDisplayNameFromIdentity(): Promise<void> {
