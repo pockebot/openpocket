@@ -506,13 +506,14 @@ async function runBootstrapCommand(
     if (process.stdin.isTTY && process.stdout.isTTY) {
       const rl = createInterface({ input, output });
       try {
-        printRaw(cliTheme.section("AVD Storage"));
-        printInfo("Configure AVD data partition size for app installs.");
-        printInfo(`Press Enter to accept default ${targetSizeGb}G, or input a custom size in GB (8-512).`);
+        printRaw(cliTheme.section("Agent Phone Storage"));
+        printInfo("How much disk space do you want to allocate to your Agent Phone?");
+        printInfo(`Press Enter to use default ${targetSizeGb}G, or enter a custom size in GB (8-512).`);
+        printInfo("Tip: type `skip` to use the default value.");
         while (true) {
           const raw = (
             await rl.question(
-              `${cliTheme.paint("[INPUT]", "warn")} AVD data partition size in GB [${targetSizeGb}]: `,
+              `${cliTheme.paint("[INPUT]", "warn")} Agent Phone disk size (GB) [${targetSizeGb}]: `,
             )
           ).trim();
           if (!raw || raw.toLowerCase() === "skip") {
