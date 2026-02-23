@@ -7,6 +7,39 @@ import type { EmulatorStatus, OpenPocketConfig } from "../types.js";
 import { ensureDir, nowForFilename } from "../utils/paths.js";
 import { sleep } from "../utils/time.js";
 
+const STANDARD_SCREEN_WIDTH = 1080;
+const STANDARD_SCREEN_HEIGHT = 2400;
+const STANDARD_SCREEN_DENSITY = 420;
+
+export function buildEmulatorStartArgs(params: {
+  avdName: string;
+  headless: boolean;
+  extraArgs?: string[];
+}): string[] {
+  const args = ["-avd", params.avdName, "-gpu", "auto"];
+  const normalizedExtraArgs = Array.isArray(params.extraArgs)
+    ? params.extraArgs
+      .map((item) => String(item).trim())
+      .filter((item) => item.length > 0)
+    : [];
+  const hasCustomSkin = normalizedExtraArgs.includes("-skin");
+  const hasCustomDpi = normalizedExtraArgs.includes("-dpi-device");
+
+  if (!hasCustomSkin) {
+    args.push("-skin", `${STANDARD_SCREEN_WIDTH}x${STANDARD_SCREEN_HEIGHT}`);
+  }
+  if (!hasCustomDpi) {
+    args.push("-dpi-device", String(STANDARD_SCREEN_DENSITY));
+  }
+  if (params.headless) {
+    args.push("-no-window");
+  }
+  if (normalizedExtraArgs.length > 0) {
+    args.push(...normalizedExtraArgs);
+  }
+  return args;
+}
+
 export class EmulatorManager {
   private readonly config: OpenPocketConfig;
   private readonly stateDir: string;
@@ -161,6 +194,10 @@ export class EmulatorManager {
     // High contrast text + dark theme
     run(["shell", "settings", "put", "secure", "high_text_contrast_enabled", "1"]);
     run(["shell", "cmd", "uimode", "night", "yes"]);
+
+    // Keep a deterministic virtual display for cross-host UI consistency.
+    run(["shell", "wm", "size", `${STANDARD_SCREEN_WIDTH}x${STANDARD_SCREEN_HEIGHT}`]);
+    run(["shell", "wm", "density", String(STANDARD_SCREEN_DENSITY)]);
 
     // Suppress first-run hints and setup wizard
     run(["shell", "settings", "put", "secure", "skip_first_use_hints", "1"]);
@@ -437,11 +474,13 @@ export class EmulatorManager {
     const status = this.status();
     if (status.devices.length > 0) {
       if (status.bootedDevices.length > 0) {
+        this.applyPostBootSettings(status.bootedDevices[0]);
         return `Emulator already running: ${status.bootedDevices.join(", ")}`;
       }
 
       const waited = await this.waitForBoot(timeoutMs);
       if (waited.bootedDevices.length > 0) {
+        this.applyPostBootSettings(waited.bootedDevices[0]);
         return `Emulator booted: ${waited.bootedDevices.join(", ")}`;
       }
       return `Emulator already running (${status.devices.join(", ")}), but boot is still in progress.`;
@@ -460,17 +499,11 @@ export class EmulatorManager {
     }
 
     const useHeadless = headless ?? this.config.emulator.headless;
-    const args = ["-avd", avdName, "-gpu", "auto"];
-    if (useHeadless) {
-      args.push("-no-window");
-    }
-    if (Array.isArray(this.config.emulator.extraArgs)) {
-      args.push(
-        ...this.config.emulator.extraArgs
-          .map((item) => String(item).trim())
-          .filter((item) => item.length > 0),
-      );
-    }
+    const args = buildEmulatorStartArgs({
+      avdName,
+      headless: useHeadless,
+      extraArgs: this.config.emulator.extraArgs,
+    });
 
     ensureDir(path.dirname(this.logFile));
     const marker = `\n=== ${nowForFilename()} start ${this.emulatorBinary()} ${args.join(" ")} ===\n`;

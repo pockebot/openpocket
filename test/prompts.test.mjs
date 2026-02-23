@@ -20,6 +20,7 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /in-emulator permission dialogs/i);
   assert.match(prompt, /request_user_decision must not be used to collect credentials/i);
   assert.match(prompt, /For sensitive values, call request_human_auth/i);
+  assert.match(prompt, /Workspace context .* already injected/i);
   assert.doesNotMatch(
     prompt,
     /If screen requires user-owned account\/personal data, do not guess or invent values; call request_user_decision first\./,
@@ -40,10 +41,23 @@ test("buildSystemPrompt supports minimal mode", () => {
   assert.match(prompt, /tap Allow locally/i);
   assert.match(prompt, /Use request_user_decision only for non-sensitive preference\/choice disambiguation/i);
   assert.match(prompt, /Never use request_user_decision to collect credentials\/OTP\/payment/i);
+  assert.match(prompt, /already injected in this prompt/i);
   assert.match(prompt, /Workspace Prompt Context/);
   assert.match(prompt, /Tooling/);
   assert.match(prompt, /tap.*swipe/s);
   assert.doesNotMatch(prompt, /Planning Loop/);
+});
+
+test("buildSystemPrompt filters tool catalog when availableToolNames is provided", () => {
+  const prompt = buildSystemPrompt("- skill-a", "", {
+    mode: "full",
+    availableToolNames: ["tap", "launch_app", "finish"],
+  });
+  assert.match(prompt, /tap: tap/);
+  assert.match(prompt, /launch_app: launch_app/);
+  assert.match(prompt, /finish: finish/);
+  assert.doesNotMatch(prompt, /read: read/);
+  assert.doesNotMatch(prompt, /memory_search: memory_search/);
 });
 
 test("buildSystemPrompt supports none mode", () => {

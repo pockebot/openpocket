@@ -76,6 +76,12 @@ function createAssistant(options = {}) {
   }
 
   const assistant = new ChatAssistant(cfg);
+  assistant.auditGroundingNeed = async () => ({
+    requiresExternalObservation: false,
+    canAnswerDirectly: true,
+    confidence: 0.95,
+    reason: "test_default_grounding_audit",
+  });
   if (prev === undefined) {
     delete process.env.OPENPOCKET_HOME;
   } else {
@@ -96,7 +102,7 @@ test("ChatAssistant decide relies on model routing for greeting text", async () 
 
   const out = await assistant.decide(1, "hi");
   assert.equal(out.mode, "chat");
-  assert.equal(out.reason, "model_classify");
+  assert.match(out.reason, /model_classify/);
   assert.equal(out.reply, "");
 });
 
@@ -114,6 +120,71 @@ test("ChatAssistant decide keeps model task result", async () => {
   assert.equal(out.mode, "task");
   assert.equal(out.task, "search weather in san francisco");
   assert.equal(out.reason, "model_task");
+});
+
+test("ChatAssistant decide routes to task when model marks external observation required", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.classifyWithModel = async () => ({
+    mode: "chat",
+    task: "",
+    reply: "I can answer this without running tools.",
+    confidence: 0.92,
+    reason: "model_classify",
+    requiresExternalObservation: true,
+    canAnswerDirectly: false,
+  });
+
+  const input = "What Android version are you currently running on?";
+  const out = await assistant.decide(22, input);
+  assert.equal(out.mode, "task");
+  assert.equal(out.task, input);
+  assert.match(out.reason, /requires_external_observation/);
+  assert.equal(out.reply, "");
+  assert.equal(out.confidence >= 0.8, true);
+});
+
+test("ChatAssistant decide falls back to task on low-confidence chat classification", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.classifyWithModel = async () => ({
+    mode: "chat",
+    task: "",
+    reply: "",
+    confidence: 0.41,
+    reason: "model_classify",
+    requiresExternalObservation: false,
+    canAnswerDirectly: true,
+  });
+
+  const input = "Check whether the runtime is healthy and tell me the result";
+  const out = await assistant.decide(23, input);
+  assert.equal(out.mode, "task");
+  assert.equal(out.task, input);
+  assert.match(out.reason, /low_confidence_task_fallback/);
+});
+
+test("ChatAssistant decide upgrades high-confidence chat to task when grounding audit requires execution", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.classifyWithModel = async () => ({
+    mode: "chat",
+    task: "",
+    reply: "This looks answerable in chat.",
+    confidence: 0.97,
+    reason: "model_classify",
+    requiresExternalObservation: false,
+    canAnswerDirectly: true,
+  });
+  assistant.auditGroundingNeed = async () => ({
+    requiresExternalObservation: true,
+    canAnswerDirectly: false,
+    confidence: 0.86,
+    reason: "state_dependent_runtime_fact",
+  });
+
+  const input = "What app is currently open on the phone right now?";
+  const out = await assistant.decide(24, input);
+  assert.equal(out.mode, "task");
+  assert.equal(out.task, input);
+  assert.match(out.reason, /requires_external_observation/);
 });
 
 test("ChatAssistant decide reports missing API key without heuristics", async () => {
@@ -158,7 +229,7 @@ test("ChatAssistant decide uses Codex CLI credentials fallback", async () => {
 
     const out = await assistant.decide(5, "hello from codex auth fallback");
     assert.equal(out.mode, "chat");
-    assert.equal(out.reason, "model_classify");
+    assert.match(out.reason, /model_classify/);
   });
 });
 

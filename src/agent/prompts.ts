@@ -3,28 +3,58 @@ import type { ScreenSnapshot } from "../types.js";
 const HUMAN_AUTH_CAPABILITIES =
   "camera, qr, microphone, voice, nfc, sms, 2fa, location, biometric, notification, contacts, calendar, files, oauth, payment, permission, unknown";
 
-const TOOL_CATALOG = [
-  "- tap: tap(x, y[, reason])",
-  "- tap_element: tap_element(elementId[, reason])",
-  "- swipe: swipe(x1, y1, x2, y2[, durationMs, reason])",
-  "- type_text: type_text(text[, reason])",
-  "- keyevent: keyevent(keycode[, reason])",
-  "- launch_app: launch_app(packageName[, reason])",
-  "- shell: shell(command[, reason])",
-  "- run_script: run_script(script[, timeoutSec, reason])",
-  "- read: read(path[, from, lines, reason])",
-  "- write: write(path, content[, append, reason])",
-  "- edit: edit(path, find, replace[, replaceAll, reason])",
-  "- apply_patch: apply_patch(input[, reason])",
-  "- exec: exec(command[, workdir, yieldMs, background, timeoutSec, reason])",
-  "- process: process(action[, sessionId, input, offset, limit, timeoutMs, reason])",
-  "- memory_search: memory_search(query[, maxResults, minScore, reason])",
-  "- memory_get: memory_get(path[, from, lines, reason])",
-  "- request_human_auth: request_human_auth(capability, instruction[, timeoutSec, reason])",
-  "- request_user_decision: request_user_decision(question, options[, timeoutSec, reason])",
-  "- wait: wait([durationMs, reason])",
-  "- finish: finish(message)",
-].join("\n");
+const TOOL_CATALOG_ORDER = [
+  "tap",
+  "tap_element",
+  "swipe",
+  "type_text",
+  "keyevent",
+  "launch_app",
+  "shell",
+  "run_script",
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "memory_search",
+  "memory_get",
+  "request_human_auth",
+  "request_user_decision",
+  "wait",
+  "finish",
+] as const;
+
+const TOOL_CATALOG_LINES: Record<(typeof TOOL_CATALOG_ORDER)[number], string> = {
+  tap: "- tap: tap(x, y[, reason])",
+  tap_element: "- tap_element: tap_element(elementId[, reason])",
+  swipe: "- swipe: swipe(x1, y1, x2, y2[, durationMs, reason])",
+  type_text: "- type_text: type_text(text[, reason])",
+  keyevent: "- keyevent: keyevent(keycode[, reason])",
+  launch_app: "- launch_app: launch_app(packageName[, reason])",
+  shell: "- shell: shell(command[, reason])",
+  run_script: "- run_script: run_script(script[, timeoutSec, reason])",
+  read: "- read: read(path[, from, lines, reason])",
+  write: "- write: write(path, content[, append, reason])",
+  edit: "- edit: edit(path, find, replace[, replaceAll, reason])",
+  apply_patch: "- apply_patch: apply_patch(input[, reason])",
+  exec: "- exec: exec(command[, workdir, yieldMs, background, timeoutSec, reason])",
+  process: "- process: process(action[, sessionId, input, offset, limit, timeoutMs, reason])",
+  memory_search: "- memory_search: memory_search(query[, maxResults, minScore, reason])",
+  memory_get: "- memory_get: memory_get(path[, from, lines, reason])",
+  request_human_auth: "- request_human_auth: request_human_auth(capability, instruction[, timeoutSec, reason])",
+  request_user_decision: "- request_user_decision: request_user_decision(question, options[, timeoutSec, reason])",
+  wait: "- wait: wait([durationMs, reason])",
+  finish: "- finish: finish(message)",
+};
+
+function buildToolCatalog(availableToolNames?: string[]): string {
+  const selected = Array.isArray(availableToolNames) && availableToolNames.length > 0
+    ? TOOL_CATALOG_ORDER.filter((name) => availableToolNames.includes(name))
+    : [...TOOL_CATALOG_ORDER];
+  return selected.map((name) => TOOL_CATALOG_LINES[name]).join("\n");
+}
 
 export type SystemPromptMode = "full" | "minimal" | "none";
 
@@ -59,11 +89,12 @@ function parseAppFromHistoryLine(line: string): string {
 export function buildSystemPrompt(
   skillsSummary = "(no skills loaded)",
   workspaceContext = "",
-  options?: { mode?: SystemPromptMode },
+  options?: { mode?: SystemPromptMode; availableToolNames?: string[] },
 ): string {
   const mode = options?.mode ?? "full";
   const trimmedSkills = skillsSummary.trim() || "(no skills loaded)";
   const trimmedWorkspaceContext = workspaceContext.trim();
+  const toolCatalog = buildToolCatalog(options?.availableToolNames);
 
   if (mode === "none") {
     return [
@@ -81,11 +112,12 @@ export function buildSystemPrompt(
       "You are OpenPocket, an Android phone-use agent running one tool step at a time.",
       "",
       "## Tooling",
-      TOOL_CATALOG,
+      toolCatalog,
       "",
       "## Core Rules",
       "- Call exactly one tool per step.",
       "- Pick the smallest deterministic action that progresses the task.",
+      "- Workspace context (AGENTS/SOUL/USER/IDENTITY/TOOLS/MEMORY) is already injected in this prompt; treat startup checklist as satisfied and do not re-read those files unless user explicitly asks.",
       "- For app-open tasks, first check whether the app is already installed/present; only go to Play Store if it is missing.",
       "- For Android in-emulator permission dialogs, tap Allow locally; do not call request_human_auth for these dialogs.",
       "- If blocked by sensitive checkpoints, call request_human_auth.",
@@ -113,7 +145,7 @@ export function buildSystemPrompt(
     "",
     "## Tooling",
     "Available tools and argument expectations:",
-    TOOL_CATALOG,
+    toolCatalog,
     "",
     "## Planning Loop (mandatory every step)",
     "1) State the active sub-goal in thought and whether it is done/pending.",
@@ -124,6 +156,7 @@ export function buildSystemPrompt(
     "",
     "## Execution Policy",
     "- Prefer the smallest safe action that increases certainty.",
+    "- Workspace context (AGENTS/SOUL/USER/IDENTITY/TOOLS/MEMORY) is already injected in this prompt; treat startup checklist as satisfied and do not re-read those files unless user explicitly asks.",
     "- App-first policy: for requests to open/use an app, first verify app presence (launcher/app drawer/search).",
     "- If app is present, launch it directly; do not open web/Play Store first.",
     "- Only use Play Store install flow when app is confirmed missing.",
