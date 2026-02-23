@@ -43,6 +43,9 @@ import { buildPiAiModel } from "./model-client.js";
 import { buildSystemPrompt, buildUserPrompt, type SystemPromptMode } from "./prompts.js";
 import { CHAT_TOOLS, TOOL_METAS, toolNameToActionType } from "./tools.js";
 import { normalizeAction } from "./actions.js";
+import { runRuntimeAttempt } from "./runtime/attempt.js";
+import { runRuntimeTask } from "./runtime/run.js";
+import type { RunTaskRequest } from "./runtime/types.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
@@ -2066,347 +2069,64 @@ export class AgentRuntime {
     promptMode?: "full" | "minimal" | "none",
     onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
   ): Promise<AgentRunResult> {
-    if (this.busy) {
-      return { ok: false, message: "Agent is busy. Please retry later.", sessionPath: "", skillPath: null, scriptPath: null };
-    }
+    const request: RunTaskRequest = {
+      task,
+      modelName,
+      onProgress,
+      onHumanAuth,
+      promptMode,
+      onUserDecision,
+    };
 
-    this.busy = true;
-    this.stopRequested = false;
-    this.currentTask = task;
-    this.currentTaskStartedAtMs = Date.now();
-    let shouldReturnHome = false;
-
-    const profileKey = modelName ?? this.config.defaultModel;
-    const profile = getModelProfile(this.config, profileKey);
-    const session = this.workspace.createSession(task, profileKey, profile.model);
-
-    try {
-      const auth = resolveModelAuth(profile);
-      if (!auth) {
-        const codexHint = profile.model.toLowerCase().includes("codex")
-          ? " or login via Codex CLI (`~/.codex/auth.json`)" : "";
-        const message = `Missing API key for model '${profile.model}'. Set env ${profile.apiKeyEnv} or config.models.${profileKey}.apiKey${codexHint}`;
-            this.workspace.finalizeSession(session, false, message);
-            this.workspace.appendDailyMemory(profileKey, task, false, message);
-        return { ok: false, message, sessionPath: session.path, skillPath: null, scriptPath: null };
-      }
-
-      // Build pi-ai model
-      const effectiveProfile = auth.baseUrl ? { ...profile, baseUrl: auth.baseUrl } : profile;
-      const piModel = buildPiAiModel(effectiveProfile);
-      const isCodexResponsesModel =
-        piModel.api === "openai-codex-responses" || piModel.provider === "openai-codex";
-      // Override API if preferredMode is set
-      let finalModel: PiModel<PiApi>;
-      if (isCodexResponsesModel) {
-        // Codex OAuth flows must use the dedicated Codex responses transport.
-        finalModel = {
-          ...piModel,
-          provider: "openai-codex",
-          api: "openai-codex-responses" as PiApi,
-        };
-      } else {
-        finalModel = auth.preferredMode === "responses"
-          ? { ...piModel, api: "openai-responses" as PiApi }
-          : auth.preferredMode === "completions"
-            ? { ...piModel, api: "openai-completions" as PiApi }
-            : piModel;
-        if (finalModel.api === "openai-responses" && auth.preferredMode !== "responses") {
-          // Keep the default tool-driven loop on the completions API because
-          // pi-ai's responses adapter does not expose tool_choice yet.
-          finalModel = { ...finalModel, api: "openai-completions" as PiApi };
-        }
-      }
-
-      const skillsSummary = this.skillLoader.summaryText();
-      const workspacePromptContext = this.buildWorkspacePromptContext();
-      const effectivePromptMode = promptMode ?? this.config.agent.systemPromptMode;
-      const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, { mode: effectivePromptMode });
-      this.lastSystemPromptReport = this.buildSystemPromptReport({
-        source: "run", promptMode: effectivePromptMode, systemPrompt, skillsSummary,
-        workspaceReport: workspacePromptContext.report,
-      });
-
-      const launchablePackages = typeof this.adb.queryLaunchablePackages === "function"
-        ? this.adb.queryLaunchablePackages(this.config.agent.deviceId) : [];
-
-      // Mutable run context shared by tool closures
-      const ctx: PhoneAgentRunContext = {
-        task, profileKey, profile, session, stepCount: 0, maxSteps: this.config.agent.maxSteps,
-        latestSnapshot: null, recentSnapshotWindow: [], lastScreenshotPath: null,
-        history: [], traces: [],
-        finishMessage: null, failMessage: null,
-        stopRequested: () => this.stopRequested,
-        lastAutoPermissionAllowAtMs: 0,
-        launchablePackages,
-        effectivePromptMode, systemPrompt,
-        onHumanAuth, onUserDecision, onProgress,
-      };
-
-      const tools = this.buildPhoneAgentTools(ctx, this);
-      const apiKey = auth.apiKey;
-      const runtime = this;
-      const turnFallbackTasks: Promise<void>[] = [];
-
-      // Map reasoning effort to pi-ai ThinkingLevel
-      const thinkingMap: Record<string, "low" | "medium" | "high" | "xhigh"> = {
-        low: "low", medium: "medium", high: "high", xhigh: "xhigh",
-      };
-      const thinkingLevel = profile.reasoningEffort && profile.reasoningEffort in thinkingMap
-        ? thinkingMap[profile.reasoningEffort] : "off";
-
-      // Create pi-agent-core Agent
-      const agent = this.agentFactory({
-        initialState: {
-          systemPrompt,
-          model: finalModel,
-          tools,
-          thinkingLevel: thinkingLevel as any,
+    return runRuntimeTask(
+      {
+        isBusy: () => this.busy,
+        beginRun: (activeTask) => {
+          this.busy = true;
+          this.stopRequested = false;
+          this.currentTask = activeTask;
+          this.currentTaskStartedAtMs = Date.now();
         },
-
-        // Inject toolChoice when supported so each turn returns a tool call.
-        streamFn: (model, context, options) => {
-          const supportsToolChoice = model.api === "openai-completions";
-          const opts = supportsToolChoice
-            ? { ...options, toolChoice: "required" } as PiSimpleStreamOptions & { toolChoice: "required" }
-            : options;
-          return streamSimple(model, context, opts as PiSimpleStreamOptions);
+        executeAttempt: async (attemptRequest) => runRuntimeAttempt(
+          {
+            config: this.config,
+            workspace: this.workspace,
+            adb: this.adb,
+            skillLoader: this.skillLoader,
+            autoArtifactBuilder: this.autoArtifactBuilder,
+            screenshotStore: this.screenshotStore,
+            agentFactory: this.agentFactory,
+            getStopRequested: () => this.stopRequested,
+            buildWorkspacePromptContext: () => this.buildWorkspacePromptContext(),
+            buildSystemPromptReport: (params) => this.buildSystemPromptReport(params as {
+              source: "estimate" | "run";
+              promptMode: SystemPromptMode;
+              systemPrompt: string;
+              skillsSummary: string;
+              workspaceReport: WorkspacePromptContextReport;
+            }),
+            setLastSystemPromptReport: (report) => {
+              this.lastSystemPromptReport = report as WorkspacePromptContextReport;
+            },
+            buildPhoneAgentTools: (ctx) => this.buildPhoneAgentTools(ctx, this),
+            parseTextualToolFallback: (message, fallbackTask) => this.parseTextualToolFallback(message, fallbackTask),
+            isPermissionDialogApp: (currentApp) => this.isPermissionDialogApp(currentApp),
+            autoApprovePermissionDialog: (currentApp) => this.autoApprovePermissionDialog(currentApp),
+            saveModelInputArtifacts: (params) => this.saveModelInputArtifacts(params),
+          },
+          attemptRequest,
+        ),
+        finalizeRun: async (shouldReturnHome) => {
+          if (shouldReturnHome) {
+            await this.safeReturnToHome();
+          }
+          this.busy = false;
+          this.currentTask = null;
+          this.currentTaskStartedAtMs = null;
+          this.stopRequested = false;
         },
-
-        // Resolve API key dynamically (supports expiring tokens)
-        getApiKey: async () => apiKey,
-
-        // Convert AgentMessages to LLM-compatible messages.
-        // ScreenObservation custom messages become multimodal user messages.
-        convertToLlm: (messages: AgentMessage[]): PiMessage[] => {
-          return messages.flatMap((m): PiMessage[] => {
-            if (m.role === "screenObservation") {
-              const obs = m as ScreenObservationMessage;
-              const s = obs.snapshot;
-              const observationText = buildUserPrompt(ctx.task, obs.stepIndex, s, ctx.history, obs.recentSnapshots);
-              const content: Array<PiTextContent | PiImageContent> = [
-                { type: "text", text: observationText },
-              ];
-              // Add recent frame images (oldest → newest, before current)
-              for (const recent of obs.recentSnapshots) {
-                if (recent.somScreenshotBase64) {
-                  content.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });
-                } else {
-                  content.push({ type: "image", data: recent.screenshotBase64, mimeType: "image/png" });
-                }
-              }
-              // Add current snapshot SoM overlay + raw screenshot
-              if (s.somScreenshotBase64) {
-                content.push({ type: "image", data: s.somScreenshotBase64, mimeType: "image/png" });
-              }
-              content.push({ type: "image", data: s.screenshotBase64, mimeType: "image/png" });
-              return [{ role: "user", content, timestamp: m.timestamp }];
-            }
-            if (m.role === "user" || m.role === "assistant" || m.role === "toolResult") {
-              return [m as PiMessage];
-            }
-            return [];
-          });
-        },
-
-        // Inject a fresh screenshot before each LLM call.
-        transformContext: async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
-          if (ctx.finishMessage || ctx.failMessage) {
-            // Finish/fail can be set by tool execution in the previous turn.
-            // Returning early avoids extra screenshot work while the loop winds down.
-            return messages;
-          }
-          // Check stop / maxSteps
-          if (ctx.stopRequested()) {
-            ctx.failMessage = "Task stopped by user.";
-            return messages;  // Agent will stop because getFollowUpMessages returns []
-          }
-          if (ctx.stepCount >= ctx.maxSteps) {
-            ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
-            return messages;
-          }
-
-          // Capture fresh screenshot
-          const snapshot = await runtime.adb.captureScreenSnapshot(runtime.config.agent.deviceId, profile.model);
-          snapshot.installedPackages = launchablePackages;
-          ctx.latestSnapshot = snapshot;
-          shouldReturnHome = true;
-
-          // Save screenshot
-          if (runtime.config.screenshots.saveStepScreenshots) {
-            try {
-              ctx.lastScreenshotPath = runtime.screenshotStore.save(
-                Buffer.from(snapshot.screenshotBase64, "base64"),
-                { sessionId: session.id, step: ctx.stepCount + 1, currentApp: snapshot.currentApp },
-              );
-            } catch { ctx.lastScreenshotPath = null; }
-          }
-
-          // Auto-approve permission dialog before LLM sees the screen
-          if (
-            runtime.isPermissionDialogApp(snapshot.currentApp) &&
-            Date.now() - ctx.lastAutoPermissionAllowAtMs >= 1_200
-          ) {
-            const auto = await runtime.autoApprovePermissionDialog(snapshot.currentApp);
-            if (auto?.action?.type === "tap") {
-              ctx.lastAutoPermissionAllowAtMs = Date.now();
-              // Re-capture after approval
-              await sleep(300);
-              const refreshed = await runtime.adb.captureScreenSnapshot(runtime.config.agent.deviceId, profile.model);
-              refreshed.installedPackages = launchablePackages;
-              ctx.latestSnapshot = refreshed;
-            }
-          }
-
-          // Save model input artifacts for debugging (same as the old step loop)
-          const stepForArtifact = ctx.stepCount + 1;
-          const observationTextForArtifact = buildUserPrompt(ctx.task, stepForArtifact, ctx.latestSnapshot, ctx.history);
-          runtime.saveModelInputArtifacts({
-            sessionId: session.id,
-            step: stepForArtifact,
-            task: ctx.task,
-            profileModel: profile.model,
-            promptMode: ctx.effectivePromptMode,
-            systemPrompt: ctx.systemPrompt,
-            userPrompt: observationTextForArtifact,
-            snapshot: ctx.latestSnapshot,
-            history: ctx.history,
-          });
-
-          // Maintain a rolling window of recent snapshots (max 2) for multi-frame context
-          const recentSnapshots = ctx.recentSnapshotWindow.slice(-2);
-          ctx.recentSnapshotWindow.push(ctx.latestSnapshot);
-          if (ctx.recentSnapshotWindow.length > 3) {
-            ctx.recentSnapshotWindow = ctx.recentSnapshotWindow.slice(-3);
-          }
-
-          // Strip old screenshot observations (keep only text history, last 1 screenshot)
-          const filtered = messages.filter((m) => m.role !== "screenObservation");
-          const observation: ScreenObservationMessage = {
-            role: "screenObservation",
-            snapshot: ctx.latestSnapshot,
-            recentSnapshots,
-            stepIndex: ctx.stepCount + 1,
-            screenshotPath: ctx.lastScreenshotPath,
-            timestamp: Date.now(),
-          };
-          return [...filtered, observation];
-        },
-
-        // After each turn, inject follow-up to keep the loop going
-        // (the model returns exactly one tool call per turn, then the loop would
-        //  normally end — follow-up messages keep it alive until finish/fail/maxSteps).
-        followUpMode: "one-at-a-time",
-      });
-
-      // Follow-up: inject continuation messages to keep the agent loop running
-      const checkContinuation = () => {
-        if (ctx.finishMessage || ctx.failMessage || ctx.stopRequested()) {
-          // A tool already reached a terminal state. Abort the in-flight loop so
-          // pi-agent-core does not enter another turn after the tool call.
-          if (typeof agent.abort === "function") {
-            agent.abort();
-          }
-          return; // Don't queue follow-up — agent will stop
-        }
-        if (ctx.stepCount >= ctx.maxSteps) {
-          ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
-          if (typeof agent.abort === "function") {
-            agent.abort();
-          }
-          return;
-        }
-        agent.followUp({
-          role: "user",
-          content: [{ type: "text", text: `Step ${ctx.stepCount + 1}: continue executing the task.` }],
-          timestamp: Date.now(),
-        });
-      };
-
-      // Subscribe to events for continuation logic
-      agent.subscribe((event: AgentEvent) => {
-        if (event.type === "turn_end") {
-          const assistantMessage = event.message as PiAssistantMessage;
-          if (assistantMessage.role !== "assistant") {
-            return;
-          }
-          if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
-            const detail = assistantMessage.errorMessage || assistantMessage.stopReason;
-            ctx.failMessage = `Model response error: ${detail}`;
-            return;
-          }
-          const hasToolCall = assistantMessage.content.some((item) => item.type === "toolCall");
-          if (!hasToolCall && !ctx.finishMessage && !ctx.failMessage) {
-            const fallbackTask = (async () => {
-              const parsed = runtime.parseTextualToolFallback(assistantMessage, ctx.task);
-              if (!parsed) {
-                ctx.failMessage = "Model response did not include a tool call.";
-                return;
-              }
-              const fallbackTool = tools.find((item) => item.name === parsed.toolName);
-              if (!fallbackTool) {
-                ctx.failMessage = `Model textual fallback resolved unknown tool '${parsed.toolName}'.`;
-                return;
-              }
-              try {
-                await fallbackTool.execute(`text-fallback-${Date.now()}`, parsed.params);
-              } catch (error) {
-                ctx.failMessage = `Textual tool fallback execution error: ${(error as Error).message}`;
-                return;
-              }
-              checkContinuation();
-            })();
-            turnFallbackTasks.push(fallbackTask);
-            return;
-          }
-          checkContinuation();
-        }
-      });
-
-      // ---- Run the Agent ----
-          // eslint-disable-next-line no-console
-      console.log(`[OpenPocket][agent-core] starting task: ${task}`);
-      await agent.prompt(`Task: ${task}`);
-      await agent.waitForIdle();
-      if (turnFallbackTasks.length > 0) {
-        await Promise.allSettled(turnFallbackTasks);
-      }
-      const agentStateError = (agent as { state?: { error?: string } }).state?.error;
-      if (!ctx.finishMessage && !ctx.failMessage && typeof agentStateError === "string" && agentStateError.trim()) {
-        ctx.failMessage = `Model response error: ${agentStateError}`;
-      }
-
-      // ---- Determine result ----
-      if (ctx.finishMessage) {
-        this.workspace.finalizeSession(session, true, ctx.finishMessage);
-        this.workspace.appendDailyMemory(profileKey, task, true, ctx.finishMessage);
-        const artifacts = this.autoArtifactBuilder.build({
-          task, sessionPath: session.path, ok: true, finalMessage: ctx.finishMessage, traces: ctx.traces,
-        });
-        if (artifacts.skillPath) console.log(`[OpenPocket][artifact] auto skill: ${artifacts.skillPath}`);
-        if (artifacts.scriptPath) console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
-      return {
-          ok: true, message: ctx.finishMessage, sessionPath: session.path,
-          skillPath: artifacts.skillPath, scriptPath: artifacts.scriptPath,
-        };
-      }
-
-      const failMsg = ctx.failMessage || "Agent stopped without finishing.";
-      this.workspace.finalizeSession(session, false, failMsg);
-      this.workspace.appendDailyMemory(profileKey, task, false, failMsg);
-      return { ok: false, message: failMsg, sessionPath: session.path, skillPath: null, scriptPath: null };
-
-    } catch (error) {
-      const message = `Agent execution failed: ${(error as Error).message}`;
-      this.workspace.finalizeSession(session, false, message);
-      this.workspace.appendDailyMemory(profileKey, task, false, message);
-      return { ok: false, message, sessionPath: session.path, skillPath: null, scriptPath: null };
-    } finally {
-      if (shouldReturnHome) await this.safeReturnToHome();
-      this.busy = false;
-      this.currentTask = null;
-      this.currentTaskStartedAtMs = null;
-      this.stopRequested = false;
-    }
+      },
+      request,
+    );
   }
 }
