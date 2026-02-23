@@ -40,6 +40,9 @@ interface JavaRuntimeInfo {
 }
 
 const DEFAULT_AVD_DATA_PARTITION_SIZE_GB = 24;
+const STANDARD_AVD_LCD_WIDTH = 1080;
+const STANDARD_AVD_LCD_HEIGHT = 2400;
+const STANDARD_AVD_LCD_DENSITY = 420;
 
 function normalizeDataPartitionSizeGb(value: unknown): number {
   const parsed = Number(value);
@@ -47,6 +50,29 @@ function normalizeDataPartitionSizeGb(value: unknown): number {
     return DEFAULT_AVD_DATA_PARTITION_SIZE_GB;
   }
   return Math.max(8, Math.min(512, Math.round(parsed)));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+type AvdConfigOverride = {
+  key: string;
+  value: string;
+};
+
+export function upsertAvdConfigOverrides(content: string, overrides: AvdConfigOverride[]): string {
+  let next = content;
+  for (const override of overrides) {
+    const line = `${override.key}=${override.value}`;
+    const matcher = new RegExp(`^${escapeRegExp(override.key)}=.*$`, "m");
+    if (matcher.test(next)) {
+      next = next.replace(matcher, line);
+      continue;
+    }
+    next = `${next.trimEnd()}\n${line}\n`;
+  }
+  return next;
 }
 
 function run(
@@ -643,12 +669,17 @@ function createAvd(
       return true;
     }
     const configIni = fs.readFileSync(configIniPath, "utf-8");
-    const line = `disk.dataPartition.size=${desiredPartitionSize}`;
-    const patched = /^disk\.dataPartition\.size=.*/m.test(configIni)
-      ? configIni.replace(/^disk\.dataPartition\.size=.*/m, line)
-      : `${configIni.trimEnd()}\n${line}\n`;
+    const patched = upsertAvdConfigOverrides(configIni, [
+      { key: "disk.dataPartition.size", value: desiredPartitionSize },
+      { key: "hw.lcd.width", value: String(STANDARD_AVD_LCD_WIDTH) },
+      { key: "hw.lcd.height", value: String(STANDARD_AVD_LCD_HEIGHT) },
+      { key: "hw.lcd.density", value: String(STANDARD_AVD_LCD_DENSITY) },
+    ]);
     fs.writeFileSync(configIniPath, patched, "utf-8");
     logger(`AVD data partition target set to ${desiredPartitionSize}.`);
+    logger(
+      `AVD display target set to ${STANDARD_AVD_LCD_WIDTH}x${STANDARD_AVD_LCD_HEIGHT}@${STANDARD_AVD_LCD_DENSITY}dpi.`,
+    );
   } catch (error) {
     logger(`Failed to set AVD data partition size (${desiredPartitionSize}): ${(error as Error).message}`);
   }

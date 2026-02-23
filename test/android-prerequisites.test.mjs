@@ -81,3 +81,40 @@ test("shouldRunSdkBootstrap only skips bootstrap when AVD exists and essentials 
   assert.equal(shouldRunSdkBootstrap(false, 0), true);
   assert.equal(shouldRunSdkBootstrap(false, 2), true);
 });
+
+test("upsertAvdConfigOverrides updates existing keys and appends missing keys", async () => {
+  const { upsertAvdConfigOverrides } = await import("../dist/environment/android-prerequisites.js");
+  assert.equal(typeof upsertAvdConfigOverrides, "function");
+
+  const source = [
+    "disk.dataPartition.size=16G",
+    "hw.lcd.height=640",
+    "tag.id=google_apis_playstore",
+    "",
+  ].join("\n");
+
+  const patched = upsertAvdConfigOverrides(source, [
+    { key: "disk.dataPartition.size", value: "24G" },
+    { key: "hw.lcd.width", value: "1080" },
+    { key: "hw.lcd.height", value: "2400" },
+    { key: "hw.lcd.density", value: "420" },
+  ]);
+
+  assert.match(patched, /^disk\.dataPartition\.size=24G$/m);
+  assert.match(patched, /^hw\.lcd\.width=1080$/m);
+  assert.match(patched, /^hw\.lcd\.height=2400$/m);
+  assert.match(patched, /^hw\.lcd\.density=420$/m);
+  assert.match(patched, /^tag\.id=google_apis_playstore$/m);
+});
+
+test("upsertAvdConfigOverrides is idempotent for repeated writes", async () => {
+  const { upsertAvdConfigOverrides } = await import("../dist/environment/android-prerequisites.js");
+  const source = "hw.lcd.width=320\n";
+  const once = upsertAvdConfigOverrides(source, [{ key: "hw.lcd.width", value: "1080" }]);
+  const twice = upsertAvdConfigOverrides(once, [{ key: "hw.lcd.width", value: "1080" }]);
+  const widthLines = twice
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line === "hw.lcd.width=1080");
+  assert.equal(widthLines.length, 1);
+});
