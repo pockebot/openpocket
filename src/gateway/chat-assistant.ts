@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { AgentProgressUpdate, OpenPocketConfig } from "../types.js";
+import { CODEX_CLI_BASE_URL } from "../config/codex-cli.js";
 import { getModelProfile, resolveModelAuth } from "../config/index.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -331,9 +332,109 @@ export class ChatAssistant {
     | { mtimeMs: number; template: OnboardingTemplate }
     | null = null;
   private modeHint: "responses" | "chat" | "completions" = "responses";
+  private piAiLoadPromise: Promise<void> | null = null;
 
   constructor(config: OpenPocketConfig) {
     this.config = config;
+  }
+
+  private shouldUseCodexResponsesTransport(client: OpenAI, model: string): boolean {
+    const modelLower = model.toLowerCase();
+    if (!modelLower.includes("codex")) {
+      return false;
+    }
+    const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
+    return baseUrl.includes("/backend-api/codex");
+  }
+
+  private readClientApiKey(client: OpenAI): string {
+    return String((client as { apiKey?: string }).apiKey ?? "");
+  }
+
+  private async ensurePiAiLoaded(): Promise<void> {
+    if (!this.piAiLoadPromise) {
+      this.piAiLoadPromise = import("@mariozechner/pi-ai").then(() => undefined);
+    }
+    await this.piAiLoadPromise;
+  }
+
+  private extractPiAiAssistantText(message: unknown): string {
+    if (!isObject(message)) {
+      return "";
+    }
+    const blocks = Array.isArray(message.content) ? message.content : [];
+    const chunks: string[] = [];
+    for (const block of blocks) {
+      if (!isObject(block)) {
+        continue;
+      }
+      if (block.type !== "text") {
+        continue;
+      }
+      if (typeof block.text !== "string") {
+        continue;
+      }
+      const text = block.text.trim();
+      if (text) {
+        chunks.push(text);
+      }
+    }
+    return chunks.join("\n").trim();
+  }
+
+  private async callCodexResponsesText(params: {
+    apiKey: string;
+    model: string;
+    maxTokens: number;
+    systemPrompt: string;
+    turns: ChatTurn[];
+    inputText: string;
+  }): Promise<string> {
+    await this.ensurePiAiLoaded();
+    const { completeSimple } = await import("@mariozechner/pi-ai");
+    const now = Date.now();
+    const messages = [
+      ...params.turns.map((turn, idx) => ({
+        role: turn.role,
+        content: [{ type: "text", text: turn.content }],
+        timestamp: now - (params.turns.length - idx + 1),
+      })),
+      {
+        role: "user" as const,
+        content: [{ type: "text", text: params.inputText }],
+        timestamp: now,
+      },
+    ];
+
+    const response = await completeSimple(
+      {
+        id: params.model,
+        name: params.model,
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: CODEX_CLI_BASE_URL,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: Math.min(Math.max(32, params.maxTokens), 1200),
+      } as never,
+      {
+        systemPrompt: params.systemPrompt,
+        messages,
+        tools: [],
+      } as never,
+      {
+        apiKey: params.apiKey,
+        maxTokens: Math.min(Math.max(32, params.maxTokens), 1200),
+      } as never,
+    );
+
+    const text = this.extractPiAiAssistantText(response);
+    if (!text) {
+      throw new Error("Codex responses transport returned empty text output.");
+    }
+    return text;
   }
 
   /**
@@ -347,6 +448,30 @@ export class ChatAssistant {
     prompt: string,
     label: string,
   ): Promise<string> {
+    if (this.shouldUseCodexResponsesTransport(client, model)) {
+      const apiKey = this.readClientApiKey(client);
+      try {
+        const output = await this.callCodexResponsesText({
+          apiKey,
+          model,
+          maxTokens,
+          systemPrompt: "",
+          turns: [],
+          inputText: prompt,
+        });
+        if (this.modeHint !== "responses") {
+          this.modeHint = "responses";
+          // eslint-disable-next-line no-console
+          console.log("[OpenPocket][chat] switched endpoint mode -> responses");
+        }
+        return output;
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.warn(`[OpenPocket][chat] ${label} failed: codex-responses: ${stringifyError(error)}`);
+        return "";
+      }
+    }
+
     const tryModes: Array<"responses" | "chat" | "completions"> =
       this.modeHint === "responses"
         ? ["responses", "chat", "completions"]
@@ -1912,6 +2037,18 @@ export class ChatAssistant {
   }
 
   private async askResponses(client: OpenAI, model: string, maxTokens: number, inputText: string, chatId: number): Promise<string> {
+    if (this.shouldUseCodexResponsesTransport(client, model)) {
+      const apiKey = this.readClientApiKey(client);
+      return this.callCodexResponsesText({
+        apiKey,
+        model,
+        maxTokens: Math.min(maxTokens, 800),
+        systemPrompt: this.systemPrompt(),
+        turns: this.recentTurns(chatId),
+        inputText,
+      });
+    }
+
     const input: Array<Record<string, unknown>> = [
       {
         role: "system",
@@ -2215,6 +2352,18 @@ export class ChatAssistant {
       apiKey: auth.apiKey,
       baseURL: auth.baseUrl ?? profile.baseUrl,
     });
+
+    if (this.shouldUseCodexResponsesTransport(client, profile.model)) {
+      try {
+        const reply = await this.askResponses(client, profile.model, profile.maxTokens, inputText, chatId);
+        this.modeHint = "responses";
+        this.pushTurn(chatId, "user", inputText);
+        this.pushTurn(chatId, "assistant", reply);
+        return reply;
+      } catch (error) {
+        return `Conversation failed: codex-responses: ${stringifyError(error)}`;
+      }
+    }
 
     const modes: Array<"responses" | "chat" | "completions"> =
       this.modeHint === "responses"

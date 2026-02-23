@@ -162,6 +162,39 @@ test("ChatAssistant decide uses Codex CLI credentials fallback", async () => {
   });
 });
 
+test("ChatAssistant reply forces codex-responses transport for Codex CLI auth", async () => {
+  await withTempCodexHome("openpocket-codex-reply-", async (codexHome) => {
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: "codex-access-token",
+          refresh_token: "codex-refresh-token",
+        },
+      }),
+      "utf-8",
+    );
+
+    const { assistant } = createAssistant({ allowCodexFallback: true });
+    assistant.modeHint = "chat";
+    let codexTransportCalls = 0;
+    assistant.callCodexResponsesText = async () => {
+      codexTransportCalls += 1;
+      return "codex transport reply";
+    };
+    assistant.askChat = async () => {
+      throw new Error("chat endpoint should not be used for codex fallback");
+    };
+    assistant.askCompletions = async () => {
+      throw new Error("completions endpoint should not be used for codex fallback");
+    };
+
+    const out = await assistant.reply(6, "hello from codex reply");
+    assert.equal(out, "codex transport reply");
+    assert.equal(codexTransportCalls, 1);
+  });
+});
+
 test("ChatAssistant runs profile onboarding when identity and user are empty", async () => {
   const { assistant, cfg } = createAssistant({ keepProfileEmpty: true });
 
