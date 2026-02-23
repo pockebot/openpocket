@@ -633,13 +633,31 @@ function installOneSystemImage(
   logger: (line: string) => void,
   toolEnv: NodeJS.ProcessEnv,
 ): string | null {
-  // First check if a system image already exists locally (skip slow download).
-  const existing = findExistingSystemImage(sdkRoot, logger);
-  if (existing) {
-    return existing;
+  const candidates = getSystemImageCandidates();
+  const primaryApiLevel = PREFERRED_SYSTEM_IMAGE_API_LEVELS[0];
+  const primaryCandidates = candidates.filter((pkg) => pkg.includes(`;${primaryApiLevel};`));
+
+  // If the preferred API level image already exists locally, use it directly.
+  if (primaryCandidates.length > 0) {
+    const androidStudioSdk = path.join(os.homedir(), "Library", "Android", "sdk");
+    const sdkRootsToCheck = Array.from(new Set([sdkRoot, androidStudioSdk].filter((p) => fs.existsSync(p))));
+    for (const pkg of primaryCandidates) {
+      const parts = pkg.split(";");
+      if (parts.length !== 4) {
+        continue;
+      }
+      const relPath = path.join(parts[0], parts[1], parts[2], parts[3]);
+      for (const root of sdkRootsToCheck) {
+        const fullPath = path.join(root, relPath);
+        if (fs.existsSync(fullPath) && fs.existsSync(path.join(fullPath, "system.img"))) {
+          logger(`Found preferred system image locally: ${pkg} (at ${root})`);
+          return pkg;
+        }
+      }
+    }
   }
 
-  const candidates = getSystemImageCandidates();
+  // Preferred image is not installed yet; attempt install in priority order.
   for (const pkg of candidates) {
     logger(`Trying system image: ${pkg}`);
     const res = run(sdkmanager, [`--sdk_root=${sdkRoot}`, pkg], { inherit: true, env: toolEnv });
@@ -654,6 +672,13 @@ function installOneSystemImage(
   if (fallbackInstalled.length > 0) {
     logger(`Using installed fallback Google Play system image: ${fallbackInstalled[0]}`);
     return fallbackInstalled[0];
+  }
+
+  // Final fallback: reuse any already-installed candidate image if install failed.
+  const existing = findExistingSystemImage(sdkRoot, logger);
+  if (existing) {
+    logger(`Falling back to existing system image: ${existing}`);
+    return existing;
   }
 
   logger(
