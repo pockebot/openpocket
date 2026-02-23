@@ -911,6 +911,25 @@ export class ChatAssistant {
     return fallbacks.persona;
   }
 
+  private completeProfileWithFallbacks(snapshot: ProfileSnapshot, locale: OnboardingLocale): ProfileSnapshot {
+    const next: ProfileSnapshot = { ...snapshot };
+    if (this.isPlaceholderValue(next.userPreferredAddress, [this.pickFallback(locale, "user")])) {
+      next.userPreferredAddress = this.pickFallback(locale, "user");
+    }
+    if (
+      this.isPlaceholderValue(
+        next.assistantName,
+        ["openpocket", this.pickFallback(locale, "assistant")],
+      )
+    ) {
+      next.assistantName = this.pickFallback(locale, "assistant");
+    }
+    if (this.isPlaceholderValue(next.assistantPersona, [this.pickFallback(locale, "persona")])) {
+      next.assistantPersona = this.pickFallback(locale, "persona");
+    }
+    return next;
+  }
+
   private extractByPatterns(input: string, patterns: RegExp[]): string {
     for (const pattern of patterns) {
       const match = input.match(pattern);
@@ -965,8 +984,8 @@ export class ChatAssistant {
     if (!t) {
       return false;
     }
-    return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start)\b/.test(t)
-      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用)/.test(t);
+    return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start|check|query|look up|find)\b/.test(t)
+      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用|查询|查下|看看|帮我)/.test(t);
   }
 
   private personaPresetFromAnswer(answer: string, locale: OnboardingLocale): string {
@@ -1729,6 +1748,17 @@ export class ChatAssistant {
       || parsedFromInput.assistantName
       || parsedFromInput.assistantPersona,
     );
+    if (userLine && !parsedStructured && this.looksLikeTaskInstruction(userLine)) {
+      state.profile = this.completeProfileWithFallbacks(state.profile, locale);
+      this.completeWorkspaceBootstrap(state.profile);
+      this.bootstrapOnboarding.delete(chatId);
+      this.profileOnboarding.delete(chatId);
+      this.pendingProfileUpdates.set(chatId, {
+        assistantName: state.profile.assistantName,
+        locale,
+      });
+      return null;
+    }
     if (continuingFlow && userLine && !parsedStructured) {
       const step = this.firstMissingSnapshotStep(state.profile, locale);
       if (step === 1) {

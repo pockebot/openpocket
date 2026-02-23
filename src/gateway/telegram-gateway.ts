@@ -53,6 +53,13 @@ type BotDisplayNameSyncState = {
   retryAfterUntilMs?: number;
 };
 
+type OnboardingStateSnapshot = {
+  updatedAt?: string;
+  gmailLoginConfirmedAt?: string | null;
+  playStoreDetected?: boolean | null;
+  [key: string]: unknown;
+};
+
 type PendingUserDecision = {
   request: UserDecisionRequest;
   resolve: (value: UserDecisionResponse) => void;
@@ -309,6 +316,188 @@ export class TelegramGateway {
       this.botDisplayNameRateLimitedUntilMs = nextUntil;
       this.persistBotDisplayNameSyncState();
     }
+  }
+
+  private onboardingStatePath(): string {
+    return path.join(this.config.stateDir, "onboarding.json");
+  }
+
+  private readOnboardingState(): OnboardingStateSnapshot {
+    const filePath = this.onboardingStatePath();
+    if (!fs.existsSync(filePath)) {
+      return {};
+    }
+    try {
+      const raw = fs.readFileSync(filePath, "utf-8").trim();
+      if (!raw) {
+        return {};
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as OnboardingStateSnapshot;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+
+  private persistOnboardingStatePatch(patch: Partial<OnboardingStateSnapshot>): void {
+    const filePath = this.onboardingStatePath();
+    const current = this.readOnboardingState();
+    const next: OnboardingStateSnapshot = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+    } catch {
+      // Ignore onboarding state persistence errors.
+    }
+  }
+
+  private resolveBootedDeviceForPlayStoreCheck(): string | null {
+    const status = this.emulator.status();
+    const preferred = this.config.agent.deviceId?.trim() ?? "";
+    if (preferred && status.bootedDevices.includes(preferred)) {
+      return preferred;
+    }
+    return status.bootedDevices[0] ?? null;
+  }
+
+  private detectPlayStoreInstalled(deviceId: string): boolean | null {
+    try {
+      const output = this.emulator.runAdb(["-s", deviceId, "shell", "pm", "path", "com.android.vending"], 15_000);
+      return output.includes("package:");
+    } catch {
+      return null;
+    }
+  }
+
+  private detectGoogleAccountSignedIn(deviceId: string): boolean | null {
+    try {
+      const output = this.emulator.runAdb(["-s", deviceId, "shell", "dumpsys", "account"], 20_000);
+      return /type=com\.google/i.test(output);
+    } catch {
+      return null;
+    }
+  }
+
+  private async askPlayStoreSignInChoice(chatId: number, locale: "zh" | "en"): Promise<"manual" | "remote"> {
+    const options = locale === "zh"
+      ? ["我自己在模拟器里登录", "通过 Telegram 远程登录"]
+      : ["I will sign in manually in emulator", "Use Telegram remote sign-in"];
+    const response = await this.requestUserDecisionFromChat(chatId, {
+      sessionId: "playstore-preflight",
+      sessionPath: "onboarding://playstore",
+      task: locale === "zh" ? "Google Play 登录检查" : "Google Play sign-in preflight",
+      step: 1,
+      question:
+        locale === "zh"
+          ? "检测到 Play Store 尚未登录 Google 账号。请选择登录方式："
+          : "Google account is not signed in to Play Store yet. Choose a sign-in method:",
+      options,
+      timeoutSec: 300,
+      currentApp: "com.android.vending",
+      screenshotPath: null,
+    });
+    const selected = String(response.selectedOption || "").trim().toLowerCase();
+    if (selected === options[1].toLowerCase()) {
+      return "remote";
+    }
+    return "manual";
+  }
+
+  private playStoreRemoteLoginTask(locale: "zh" | "en"): string {
+    if (locale === "zh") {
+      return [
+        "打开 Google Play 商店并登录 Google 账号。",
+        "如果出现账号密码或授权页面，发起 request_human_auth(oauth)。",
+        "登录完成后，停留在可搜索安装应用的页面并结束任务。",
+      ].join(" ");
+    }
+    return [
+      "Open Google Play Store and sign in with a Google account.",
+      "If account credentials or authorization is needed, trigger request_human_auth(oauth).",
+      "After sign-in succeeds, stay on a page where app search/install is available and finish.",
+    ].join(" ");
+  }
+
+  private async ensurePlayStoreReady(chatId: number, locale: "zh" | "en"): Promise<boolean> {
+    const onboarding = this.readOnboardingState();
+    if (typeof onboarding.gmailLoginConfirmedAt === "string" && onboarding.gmailLoginConfirmedAt.trim().length > 0) {
+      return false;
+    }
+
+    const deviceId = this.resolveBootedDeviceForPlayStoreCheck();
+    if (!deviceId) {
+      return false;
+    }
+
+    const playStoreInstalled = this.detectPlayStoreInstalled(deviceId);
+    if (playStoreInstalled === false) {
+      this.persistOnboardingStatePatch({ playStoreDetected: false });
+      await this.bot.sendMessage(
+        chatId,
+        locale === "zh"
+          ? "当前模拟器未检测到 Play Store（com.android.vending）。请使用带 Google Play 的系统镜像。"
+          : "Play Store (com.android.vending) is not detected on this emulator. Use a Google Play system image.",
+      );
+      return false;
+    }
+    if (playStoreInstalled === true) {
+      this.persistOnboardingStatePatch({ playStoreDetected: true });
+    }
+
+    const signedIn = this.detectGoogleAccountSignedIn(deviceId);
+    if (signedIn === true) {
+      this.persistOnboardingStatePatch({
+        gmailLoginConfirmedAt: new Date().toISOString(),
+        playStoreDetected: true,
+      });
+      return false;
+    }
+    if (signedIn === null) {
+      return false;
+    }
+
+    const choice = await this.askPlayStoreSignInChoice(chatId, locale);
+    if (choice === "manual") {
+      await this.bot.sendMessage(
+        chatId,
+        locale === "zh"
+          ? [
+              "好的，请先在模拟器中完成 Play Store 登录：",
+              "1) 打开 Play Store",
+              "2) 登录 Google 账号并完成验证",
+              "3) 确认可以搜索和安装应用",
+              "完成后直接继续发消息，我会自动重检。",
+            ].join("\n")
+          : [
+              "Okay. Please complete Play Store sign-in in the emulator first:",
+              "1) Open Play Store",
+              "2) Sign in with your Google account and complete verification",
+              "3) Confirm app search/install works",
+              "After that, send any message and I will re-check automatically.",
+            ].join("\n"),
+      );
+      return true;
+    }
+
+    if (!this.config.humanAuth.enabled) {
+      await this.bot.sendMessage(
+        chatId,
+        locale === "zh"
+          ? "远程登录需要启用 humanAuth。当前未开启，请先在模拟器手动登录，或开启 humanAuth 后重试。"
+          : "Remote sign-in requires humanAuth to be enabled. Please sign in manually first, or enable humanAuth and retry.",
+      );
+      return true;
+    }
+
+    await this.runTaskAsync(chatId, this.playStoreRemoteLoginTask(locale));
+    return true;
   }
 
   private readAssistantNameFromIdentity(): string {
@@ -1038,6 +1227,13 @@ export class TelegramGateway {
       const welcome = await this.chat.startReadyReply(locale);
       await this.bot.sendMessage(chatId, this.sanitizeForChat(welcome, 1800));
       return;
+    }
+
+    if (!text.startsWith("/")) {
+      const locale = this.inferLocale(message);
+      if (await this.ensurePlayStoreReady(chatId, locale)) {
+        return;
+      }
     }
 
     if (text.startsWith("/help")) {

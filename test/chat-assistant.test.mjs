@@ -329,6 +329,72 @@ test("ChatAssistant onboarding accepts persona preset index", async () => {
   assert.match(identityBody, /Persona: fast and direct/);
 });
 
+test("ChatAssistant auto-completes onboarding defaults when a task request arrives", async () => {
+  const { assistant, cfg } = createAssistant({ withApiKey: true, keepProfileEmpty: true });
+  let bootstrapCalls = 0;
+  assistant.requestBootstrapOnboardingDecision = async () => {
+    bootstrapCalls += 1;
+    return {
+      reply: "onboarding should be skipped for task-style request",
+      onboardingComplete: false,
+    };
+  };
+  assistant.classifyWithModel = async () => ({
+    mode: "task",
+    task: "查询旧金山天气",
+    reply: "",
+    confidence: 0.9,
+    reason: "model_task",
+  });
+
+  const out = await assistant.decide(25, "你可以帮我查询一下旧金山的天气吗");
+  assert.equal(out.mode, "task");
+  assert.equal(out.reason, "model_task");
+  assert.equal(bootstrapCalls, 0);
+
+  const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
+  const userBody = fs.readFileSync(path.join(cfg.workspaceDir, "USER.md"), "utf-8");
+  assert.match(identityBody, /Name: OpenPocket/);
+  assert.match(identityBody, /Persona: 务实、冷静、可靠/);
+  assert.match(userBody, /Preferred form of address: 用户/);
+  assert.equal(isWorkspaceOnboardingCompleted(cfg.workspaceDir), true);
+
+  const payload = assistant.consumePendingProfileUpdate(25);
+  assert.equal(payload?.assistantName, "OpenPocket");
+  assert.equal(payload?.locale, "zh");
+});
+
+test("ChatAssistant completes remaining onboarding fields when user switches to task mid-flow", async () => {
+  const { assistant, cfg } = createAssistant({ withApiKey: true, keepProfileEmpty: true });
+  let bootstrapCalls = 0;
+  assistant.requestBootstrapOnboardingDecision = async () => {
+    bootstrapCalls += 1;
+    return {
+      reply: "最后一步：请告诉我希望的语气风格。",
+      onboardingComplete: false,
+    };
+  };
+  assistant.classifyWithModel = async () => ({
+    mode: "task",
+    task: "下载 X",
+    reply: "",
+    confidence: 0.88,
+    reason: "model_task",
+  });
+
+  const first = await assistant.decide(26, "我叫 Yuheng，你叫 Jarvis");
+  assert.equal(first.reason, "profile_onboarding");
+
+  const second = await assistant.decide(26, "你能下载一下 X 然后帮我刷推吗");
+  assert.equal(second.mode, "task");
+  assert.equal(second.reason, "model_task");
+  assert.equal(bootstrapCalls, 1);
+
+  const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
+  assert.match(identityBody, /Name: Jarvis/);
+  assert.match(identityBody, /Persona: 务实、冷静、可靠/);
+});
+
 test("ChatAssistant onboarding reads question copy and presets from PROFILE_ONBOARDING.json", async () => {
   const { assistant, cfg } = createAssistant({ keepProfileEmpty: true });
 

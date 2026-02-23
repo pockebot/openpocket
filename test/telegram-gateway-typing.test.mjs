@@ -274,6 +274,121 @@ test("TelegramGateway consumes profile-update payload after chat reply", async (
   });
 });
 
+test("TelegramGateway play-store preflight marks onboarding state when Google account is already signed in", async () => {
+  await withTempHome("openpocket-telegram-playstore-signed-in-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.emulator.status = () => ({
+      avdName: "OpenPocket_AVD",
+      devices: ["emulator-5554"],
+      bootedDevices: ["emulator-5554"],
+    });
+    gateway.emulator.runAdb = (args) => {
+      if (args.includes("pm") && args.includes("com.android.vending")) {
+        return "package:/system/app/Phonesky/Phonesky.apk";
+      }
+      if (args.includes("dumpsys") && args.includes("account")) {
+        return "Account {name=test@gmail.com, type=com.google}";
+      }
+      return "";
+    };
+
+    const handled = await gateway.ensurePlayStoreReady(7301, "zh");
+    assert.equal(handled, false);
+
+    const statePath = path.join(cfg.stateDir, "onboarding.json");
+    const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    assert.equal(state.playStoreDetected, true);
+    assert.equal(typeof state.gmailLoginConfirmedAt, "string");
+  });
+});
+
+test("TelegramGateway play-store preflight offers manual login path when account is missing", async () => {
+  await withTempHome("openpocket-telegram-playstore-manual-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.emulator.status = () => ({
+      avdName: "OpenPocket_AVD",
+      devices: ["emulator-5554"],
+      bootedDevices: ["emulator-5554"],
+    });
+    gateway.emulator.runAdb = (args) => {
+      if (args.includes("pm") && args.includes("com.android.vending")) {
+        return "package:/system/app/Phonesky/Phonesky.apk";
+      }
+      if (args.includes("dumpsys") && args.includes("account")) {
+        return "Accounts: (none)";
+      }
+      return "";
+    };
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.askPlayStoreSignInChoice = async () => "manual";
+
+    const handled = await gateway.ensurePlayStoreReady(7302, "zh");
+    assert.equal(handled, true);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /请先在模拟器中完成 Play Store 登录/);
+
+    const statePath = path.join(cfg.stateDir, "onboarding.json");
+    const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    assert.equal(state.playStoreDetected, true);
+    assert.equal(state.gmailLoginConfirmedAt ?? null, null);
+  });
+});
+
+test("TelegramGateway play-store preflight can trigger remote login task", async () => {
+  await withTempHome("openpocket-telegram-playstore-remote-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+    cfg.humanAuth.enabled = true;
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.emulator.status = () => ({
+      avdName: "OpenPocket_AVD",
+      devices: ["emulator-5554"],
+      bootedDevices: ["emulator-5554"],
+    });
+    gateway.emulator.runAdb = (args) => {
+      if (args.includes("pm") && args.includes("com.android.vending")) {
+        return "package:/system/app/Phonesky/Phonesky.apk";
+      }
+      if (args.includes("dumpsys") && args.includes("account")) {
+        return "Accounts: (none)";
+      }
+      return "";
+    };
+
+    const tasks = [];
+    gateway.askPlayStoreSignInChoice = async () => "remote";
+    gateway.runTaskAsync = async (_chatId, task) => {
+      tasks.push(task);
+    };
+
+    const handled = await gateway.ensurePlayStoreReady(7303, "zh");
+    assert.equal(handled, true);
+    assert.equal(tasks.length, 1);
+    assert.match(tasks[0], /request_human_auth\(oauth\)/);
+  });
+});
+
 test("TelegramGateway resolves pending 2FA request from plain numeric text", async () => {
   await withTempHome("openpocket-telegram-otp-inline-", async () => {
     const cfg = loadConfig();
