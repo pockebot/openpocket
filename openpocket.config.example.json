@@ -12,6 +12,7 @@
     "androidSdkRoot": "",
     "headless": false,
     "bootTimeoutSec": 180,
+    "dataPartitionSizeGb": 24,
     "extraArgs": []
   },
   "telegram": {

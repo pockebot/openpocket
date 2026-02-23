@@ -42,8 +42,8 @@ async function withTempCodexHome(prefix, fn) {
   }
 }
 
-test("loadConfig creates defaults including returnHomeOnTaskEnd", () => {
-  withTempHome("openpocket-config-default-", (home) => {
+test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
+  await withTempHome("openpocket-config-default-", async (home) => {
     const cfg = loadConfig();
     assert.equal(cfg.sessionStorage.backend, "markdown");
     assert.equal(cfg.sessionStorage.dualWriteJsonl, false);
@@ -65,6 +65,7 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", () => {
     assert.equal(cfg.dashboard.autoOpenBrowser, false);
     assert.equal(cfg.heartbeat.enabled, true);
     assert.equal(cfg.cron.enabled, true);
+    assert.equal(cfg.emulator.dataPartitionSizeGb, 24);
     assert.deepEqual(cfg.emulator.extraArgs, []);
     assert.equal(fs.existsSync(path.join(home, "config.json")), true);
     assert.equal(fs.existsSync(cfg.workspaceDir), true);
@@ -74,8 +75,8 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", () => {
   });
 });
 
-test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
-  withTempHome("openpocket-config-migrate-", (home) => {
+test("loadConfig migrates legacy snake_case return_home_on_task_end", async () => {
+  await withTempHome("openpocket-config-migrate-", async (home) => {
     const cfgPath = path.join(home, "config.json");
     fs.writeFileSync(
       cfgPath,
@@ -91,6 +92,7 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
           default_model: "gpt-5.2-codex",
           emulator: {
             avd_name: "TestAVD",
+            data_partition_size_gb: 48,
             extra_args: ["-accel", "off"],
           },
           telegram: {},
@@ -153,6 +155,7 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
     assert.equal(cfg.agent.returnHomeOnTaskEnd, false);
     assert.equal(cfg.agent.systemPromptMode, "minimal");
     assert.equal(cfg.agent.contextBudgetChars, 30000);
+    assert.equal(cfg.emulator.dataPartitionSizeGb, 48);
     assert.deepEqual(cfg.emulator.extraArgs, ["-accel", "off"]);
     assert.equal(cfg.humanAuth.enabled, true);
     assert.equal(cfg.humanAuth.relayBaseUrl, "https://relay.example.com");
@@ -180,6 +183,7 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
     assert.equal(saved.agent.systemPromptMode, "minimal");
     assert.equal(saved.agent.contextBudgetChars, 30000);
     assert.equal(saved.agent.return_home_on_task_end, undefined);
+    assert.equal(saved.emulator.dataPartitionSizeGb, 48);
     assert.deepEqual(saved.emulator.extraArgs, ["-accel", "off"]);
     assert.equal(saved.emulator.extra_args, undefined);
     assert.equal(saved.humanAuth.relayBaseUrl, "https://relay.example.com");
@@ -191,8 +195,8 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", () => {
   });
 });
 
-test("loadConfig normalizes agent.lang to en", () => {
-  withTempHome("openpocket-config-lang-", (home) => {
+test("loadConfig normalizes agent.lang to en", async () => {
+  await withTempHome("openpocket-config-lang-", async (home) => {
     const cfgPath = path.join(home, "config.json");
     fs.writeFileSync(
       cfgPath,
@@ -233,9 +237,9 @@ test("loadConfig normalizes agent.lang to en", () => {
   });
 });
 
-test("getModelProfile and resolveApiKey follow precedence rules", () => {
-  withTempHome("openpocket-config-key-", (home) => {
-    withTempCodexHome("openpocket-codex-empty-", () => {
+test("getModelProfile and resolveApiKey follow precedence rules", async () => {
+  await withTempHome("openpocket-config-key-", async (home) => {
+    await withTempCodexHome("openpocket-codex-empty-", async () => {
       const cfg = loadConfig(path.join(home, "config.json"));
       const profile = getModelProfile(cfg, cfg.defaultModel);
       assert.equal(profile.model.length > 0, true);
@@ -260,9 +264,9 @@ test("getModelProfile and resolveApiKey follow precedence rules", () => {
   });
 });
 
-test("resolveModelAuth falls back to Codex CLI auth.json for codex models", () => {
-  withTempHome("openpocket-config-codex-fallback-", (home) => {
-    withTempCodexHome("openpocket-codex-auth-", (codexHome) => {
+test("resolveModelAuth falls back to Codex CLI auth.json for codex models", async () => {
+  await withTempHome("openpocket-config-codex-fallback-", async (home) => {
+    await withTempCodexHome("openpocket-codex-auth-", async (codexHome) => {
       const cfg = loadConfig(path.join(home, "config.json"));
       const profile = getModelProfile(cfg, "gpt-5.2-codex");
       const authPath = path.join(codexHome, "auth.json");
@@ -301,8 +305,8 @@ test("resolveModelAuth falls back to Codex CLI auth.json for codex models", () =
   });
 });
 
-test("resolveModelAuth does not use Codex CLI fallback for non-codex models", () => {
-  withTempCodexHome("openpocket-codex-auth-noncodex-", (codexHome) => {
+test("resolveModelAuth does not use Codex CLI fallback for non-codex models", async () => {
+  await withTempCodexHome("openpocket-codex-auth-noncodex-", async (codexHome) => {
     fs.writeFileSync(
       path.join(codexHome, "auth.json"),
       JSON.stringify({
@@ -328,8 +332,8 @@ test("resolveModelAuth does not use Codex CLI fallback for non-codex models", ()
   });
 });
 
-test("getModelProfile throws on unknown profile", () => {
-  withTempHome("openpocket-config-unknown-", () => {
+test("getModelProfile throws on unknown profile", async () => {
+  await withTempHome("openpocket-config-unknown-", async () => {
     const cfg = loadConfig();
     assert.throws(() => getModelProfile(cfg, "unknown-model"), /Unknown model profile/);
   });

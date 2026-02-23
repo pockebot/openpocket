@@ -27,6 +27,7 @@ function defaultConfigObject() {
       androidSdkRoot: process.env.ANDROID_SDK_ROOT ?? "",
       headless: false,
       bootTimeoutSec: 180,
+      dataPartitionSizeGb: 24,
       extraArgs: [] as string[],
     },
     telegram: {
@@ -241,6 +242,14 @@ function defaultConfigObject() {
   };
 }
 
+function normalizeDataPartitionSizeGb(value: unknown, fallback = 24): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(8, Math.min(512, Math.round(parsed)));
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -290,6 +299,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     avd_name: "avdName",
     android_sdk_root: "androidSdkRoot",
     boot_timeout_sec: "bootTimeoutSec",
+    data_partition_size_gb: "dataPartitionSizeGb",
     extra_args: "extraArgs",
   };
   for (const [oldKey, newKey] of Object.entries(emulatorMap)) {
@@ -607,6 +617,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       androidSdkRoot: String(emulator.androidSdkRoot ?? ""),
       headless: Boolean(emulator.headless),
       bootTimeoutSec: Number(emulator.bootTimeoutSec ?? 180),
+      dataPartitionSizeGb: normalizeDataPartitionSizeGb(emulator.dataPartitionSizeGb, 24),
       extraArgs: Array.isArray(emulator.extraArgs)
         ? emulator.extraArgs
           .map((item) => String(item).trim())

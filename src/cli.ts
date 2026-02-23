@@ -28,6 +28,7 @@ import { createCliTheme, createOpenPocketBanner, type CliStepStatus, type CliTon
 import type { OpenPocketConfig } from "./types.js";
 
 const cliTheme = createCliTheme(output);
+const DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB = 24;
 
 function printRaw(message = ""): void {
   // eslint-disable-next-line no-console
@@ -494,8 +495,58 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
   return 0;
 }
 
-async function runBootstrapCommand(configPath: string | undefined): Promise<ReturnType<typeof loadConfig>> {
+async function runBootstrapCommand(
+  configPath: string | undefined,
+  options: { promptDataPartitionSize?: boolean } = {},
+): Promise<ReturnType<typeof loadConfig>> {
   const cfg = loadConfig(configPath);
+  if (options.promptDataPartitionSize) {
+    const targetSizeGb = DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB;
+    cfg.emulator.dataPartitionSizeGb = targetSizeGb;
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      const rl = createInterface({ input, output });
+      try {
+        printRaw(cliTheme.section("AVD Storage"));
+        printInfo("Configure AVD data partition size for app installs.");
+        printInfo(`Press Enter to accept default ${targetSizeGb}G, or input a custom size in GB (8-512).`);
+        while (true) {
+          const raw = (
+            await rl.question(
+              `${cliTheme.paint("[INPUT]", "warn")} AVD data partition size in GB [${targetSizeGb}]: `,
+            )
+          ).trim();
+          if (!raw || raw.toLowerCase() === "skip") {
+            cfg.emulator.dataPartitionSizeGb = targetSizeGb;
+            break;
+          }
+          const normalized = raw.toLowerCase().endsWith("g") ? raw.slice(0, -1).trim() : raw;
+          const parsed = Number(normalized);
+          if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+            printWarn("Please input an integer size in GB, for example: 24 or 32.");
+            continue;
+          }
+          if (parsed < 8 || parsed > 512) {
+            printWarn("Please choose a size between 8 and 512 GB.");
+            continue;
+          }
+          cfg.emulator.dataPartitionSizeGb = parsed;
+          break;
+        }
+      } finally {
+        if (input.setRawMode) {
+          try {
+            input.setRawMode(false);
+          } catch {
+            // Ignore raw mode reset errors.
+          }
+        }
+        input.pause();
+        rl.close();
+      }
+    }
+    saveConfig(cfg);
+    printInfo(`[OpenPocket][onboard] AVD data partition target: ${cfg.emulator.dataPartitionSizeGb}G`);
+  }
   printRaw(cliTheme.section("Environment Bootstrap"));
   await ensureAndroidPrerequisites(cfg, {
     autoInstall: true,
@@ -548,7 +599,7 @@ function installCliShortcutOnFirstOnboard(cfg: ReturnType<typeof loadConfig>): v
 }
 
 async function runOnboardCommand(configPath: string | undefined): Promise<number> {
-  const cfg = await runBootstrapCommand(configPath);
+  const cfg = await runBootstrapCommand(configPath, { promptDataPartitionSize: true });
   installCliShortcutOnFirstOnboard(cfg);
   await runSetupWizard(cfg);
   return 0;

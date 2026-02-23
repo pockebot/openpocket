@@ -39,6 +39,16 @@ interface JavaRuntimeInfo {
   rawVersion: string;
 }
 
+const DEFAULT_AVD_DATA_PARTITION_SIZE_GB = 24;
+
+function normalizeDataPartitionSizeGb(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_AVD_DATA_PARTITION_SIZE_GB;
+  }
+  return Math.max(8, Math.min(512, Math.round(parsed)));
+}
+
 function run(
   cmd: string,
   args: string[],
@@ -602,9 +612,12 @@ function createAvd(
   avdmanager: string,
   avdName: string,
   imagePackage: string,
+  dataPartitionSizeGb: number,
   logger: (line: string) => void,
   toolEnv: NodeJS.ProcessEnv,
 ): boolean {
+  const normalizedSizeGb = normalizeDataPartitionSizeGb(dataPartitionSizeGb);
+  const desiredPartitionSize = `${normalizedSizeGb}G`;
   logger(`Creating AVD '${avdName}' with image '${imagePackage}'...`);
   const result = run(
     avdmanager,
@@ -615,6 +628,29 @@ function createAvd(
     const detail = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n").trim();
     logger(`Failed to create AVD automatically.${detail ? `\n${detail}` : ""}`);
     return false;
+  }
+  try {
+    const iniPath = path.join(os.homedir(), ".android", "avd", `${avdName}.ini`);
+    const iniContent = fs.readFileSync(iniPath, "utf-8");
+    const avdPath = iniContent.match(/^path\s*=\s*(.+)$/m)?.[1]?.trim();
+    if (!avdPath) {
+      logger(`AVD created but path was not resolved from ${iniPath}; skip data partition sizing.`);
+      return true;
+    }
+    const configIniPath = path.join(avdPath, "config.ini");
+    if (!fs.existsSync(configIniPath)) {
+      logger(`AVD created but ${configIniPath} is missing; skip data partition sizing.`);
+      return true;
+    }
+    const configIni = fs.readFileSync(configIniPath, "utf-8");
+    const line = `disk.dataPartition.size=${desiredPartitionSize}`;
+    const patched = /^disk\.dataPartition\.size=.*/m.test(configIni)
+      ? configIni.replace(/^disk\.dataPartition\.size=.*/m, line)
+      : `${configIni.trimEnd()}\n${line}\n`;
+    fs.writeFileSync(configIniPath, patched, "utf-8");
+    logger(`AVD data partition target set to ${desiredPartitionSize}.`);
+  } catch (error) {
+    logger(`Failed to set AVD data partition size (${desiredPartitionSize}): ${(error as Error).message}`);
   }
   return true;
 }
@@ -789,7 +825,14 @@ export async function ensureAndroidPrerequisites(
     const image = installOneSystemImage(sdkmanager, sdkRoot, logger, toolEnv);
     if (image) {
       installedSteps.push(`sdk:${image}`);
-      avdCreated = createAvd(avdmanager, config.emulator.avdName, image, logger, toolEnv);
+      avdCreated = createAvd(
+        avdmanager,
+        config.emulator.avdName,
+        image,
+        config.emulator.dataPartitionSizeGb,
+        logger,
+        toolEnv,
+      );
       if (!avdCreated) {
         throw new Error(`Failed to create AVD '${config.emulator.avdName}'.`);
       }

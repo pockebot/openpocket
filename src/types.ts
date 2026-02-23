@@ -3,6 +3,8 @@ export interface EmulatorConfig {
   androidSdkRoot: string;
   headless: boolean;
   bootTimeoutSec: number;
+  /** AVD userdata partition target size in GB (for onboarding-created AVDs). */
+  dataPartitionSizeGb: number;
   extraArgs: string[];
 }
 

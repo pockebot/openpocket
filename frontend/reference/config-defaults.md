@@ -15,6 +15,7 @@ This page is the source-of-truth for current default config values and normaliza
     "androidSdkRoot": "<ANDROID_SDK_ROOT env or empty string>",
     "headless": false,
     "bootTimeoutSec": 180,
+    "dataPartitionSizeGb": 24,
     "extraArgs": []
   },
   "telegram": {
@@ -241,6 +242,7 @@ Notes:
 - `agent.systemPromptMode` accepts only `full|minimal|none`; invalid values fall back to `full`.
 - `agent.contextBudgetChars` is clamped to at least `10000`.
 - `agent.progressReportInterval` is clamped to at least `1`.
+- `emulator.dataPartitionSizeGb` is clamped to `8..512` (GB).
 - `screenshots.maxCount` is clamped to at least `20`.
 - `scriptExecutor.timeoutSec` is clamped to at least `1`.
 - `scriptExecutor.maxOutputChars` is clamped to at least `1000`.
