@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import type { OpenPocketConfig } from "../types.js";
 import { ensureDir } from "../utils/paths.js";
@@ -30,6 +30,13 @@ interface RunResult {
   stdout: string;
   stderr: string;
   error: string | null;
+}
+
+interface StreamingRunOptions {
+  env?: NodeJS.ProcessEnv;
+  input?: string;
+  logger?: (line: string) => void;
+  stageLabel?: string;
 }
 
 interface JavaRuntimeInfo {
@@ -102,6 +109,104 @@ function run(
     stderr,
     error: result.error ? String(result.error.message || result.error) : null,
   };
+}
+
+function stripAnsi(inputText: string): string {
+  return inputText.replace(/\u001B\[[0-9;]*[A-Za-z]/g, "");
+}
+
+function compactLine(inputText: string): string {
+  return stripAnsi(inputText).replace(/\s+/g, " ").trim();
+}
+
+async function runStreaming(
+  cmd: string,
+  args: string[],
+  options: StreamingRunOptions = {},
+): Promise<RunResult> {
+  return await new Promise<RunResult>((resolve) => {
+    const child = spawn(cmd, args, {
+      env: options.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const spinnerFrames = ["-", "\\", "|", "/"];
+    let spinnerIndex = 0;
+    let lastPercent = -1;
+    let stdout = "";
+    let stderr = "";
+    let errorMessage: string | null = null;
+    const stageLabel = options.stageLabel ?? "sdkmanager";
+
+    const spinnerTimer = setInterval(() => {
+      if (!options.logger) {
+        return;
+      }
+      options.logger(`[download] ${spinnerFrames[spinnerIndex]} ${stageLabel} ...`);
+      spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
+    }, 1400);
+
+    const emitChunk = (chunkText: string): void => {
+      const segments = chunkText.split(/\r|\n/g);
+      for (const segment of segments) {
+        const normalized = compactLine(segment);
+        if (!normalized) {
+          continue;
+        }
+        const percentRaw = normalized.match(/(\d{1,3})%/)?.[1];
+        if (percentRaw !== undefined) {
+          const percent = Math.max(0, Math.min(100, Number(percentRaw)));
+          if (Number.isFinite(percent) && percent !== lastPercent) {
+            lastPercent = percent;
+            if (options.logger) {
+              const bars = 20;
+              const filled = Math.max(0, Math.min(bars, Math.round((percent / 100) * bars)));
+              const bar = `${"#".repeat(filled)}${".".repeat(bars - filled)}`;
+              options.logger(`[download] [${bar}] ${String(percent).padStart(3, " ")}% ${stageLabel}`);
+            }
+          }
+          continue;
+        }
+        if (options.logger) {
+          options.logger(`[download] ${normalized}`);
+        }
+      }
+    };
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      const text = String(chunk);
+      stdout += text;
+      emitChunk(text);
+    });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      const text = String(chunk);
+      stderr += text;
+      emitChunk(text);
+    });
+
+    child.on("error", (error) => {
+      errorMessage = String(error.message || error);
+    });
+
+    child.on("close", (code) => {
+      clearInterval(spinnerTimer);
+      if (options.logger && lastPercent >= 0 && lastPercent < 100) {
+        options.logger(`[download] [####################] 100% ${stageLabel}`);
+      }
+      resolve({
+        ok: (code ?? 1) === 0 && !errorMessage,
+        status: code ?? 1,
+        stdout,
+        stderr,
+        error: errorMessage,
+      });
+    });
+
+    if (options.input) {
+      child.stdin.write(options.input);
+    }
+    child.stdin.end();
+  });
 }
 
 function canExecute(filePath: string): boolean {
@@ -474,17 +579,21 @@ function acceptSdkLicenses(
   }
 }
 
-function installSdkPackages(
+async function installSdkPackages(
   sdkmanager: string,
   sdkRoot: string,
   logger: (line: string) => void,
   toolEnv: NodeJS.ProcessEnv,
-): string {
+): Promise<string> {
   logger("Installing Android SDK packages: platform-tools, emulator ...");
-  const baseResult = run(
+  const baseResult = await runStreaming(
     sdkmanager,
     [`--sdk_root=${sdkRoot}`, "platform-tools", "emulator"],
-    { inherit: true, env: toolEnv },
+    {
+      env: toolEnv,
+      logger,
+      stageLabel: "platform-tools + emulator",
+    },
   );
   if (!baseResult.ok) {
     throw new Error(
@@ -497,7 +606,15 @@ function installSdkPackages(
 
   for (const platformPkg of PREFERRED_ANDROID_PLATFORM_PACKAGES) {
     logger(`Trying Android platform package: ${platformPkg}`);
-    const platformResult = run(sdkmanager, [`--sdk_root=${sdkRoot}`, platformPkg], { inherit: true, env: toolEnv });
+    const platformResult = await runStreaming(
+      sdkmanager,
+      [`--sdk_root=${sdkRoot}`, platformPkg],
+      {
+        env: toolEnv,
+        logger,
+        stageLabel: platformPkg,
+      },
+    );
     if (platformResult.ok) {
       logger(`Android platform ready: ${platformPkg}`);
       return platformPkg;
@@ -627,12 +744,12 @@ function findExistingSystemImage(sdkRoot: string, logger: (line: string) => void
   return null;
 }
 
-function installOneSystemImage(
+async function installOneSystemImage(
   sdkmanager: string,
   sdkRoot: string,
   logger: (line: string) => void,
   toolEnv: NodeJS.ProcessEnv,
-): string | null {
+): Promise<string | null> {
   const candidates = getSystemImageCandidates();
   const primaryApiLevel = PREFERRED_SYSTEM_IMAGE_API_LEVELS[0];
   const primaryCandidates = candidates.filter((pkg) => pkg.includes(`;${primaryApiLevel};`));
@@ -660,7 +777,15 @@ function installOneSystemImage(
   // Preferred image is not installed yet; attempt install in priority order.
   for (const pkg of candidates) {
     logger(`Trying system image: ${pkg}`);
-    const res = run(sdkmanager, [`--sdk_root=${sdkRoot}`, pkg], { inherit: true, env: toolEnv });
+    const res = await runStreaming(
+      sdkmanager,
+      [`--sdk_root=${sdkRoot}`, pkg],
+      {
+        env: toolEnv,
+        logger,
+        stageLabel: pkg,
+      },
+    );
     if (res.ok) {
       logger(`System image ready: ${pkg}`);
       return pkg;
@@ -940,7 +1065,7 @@ export async function ensureAndroidPrerequisites(
 
   // --- Phase 4: Install SDK packages and create AVD ---
   acceptSdkLicenses(sdkmanager, sdkRoot, logger, toolEnv);
-  const installedPlatformPackage = installSdkPackages(sdkmanager, sdkRoot, logger, toolEnv);
+  const installedPlatformPackage = await installSdkPackages(sdkmanager, sdkRoot, logger, toolEnv);
   installedSteps.push(`sdk:platform-tools,emulator,${installedPlatformPackage}`);
 
   tools = detectTools(sdkRoot);
@@ -958,7 +1083,7 @@ export async function ensureAndroidPrerequisites(
   }
 
   if (currentAvds.length === 0) {
-    const image = installOneSystemImage(sdkmanager, sdkRoot, logger, toolEnv);
+    const image = await installOneSystemImage(sdkmanager, sdkRoot, logger, toolEnv);
     if (image) {
       installedSteps.push(`sdk:${image}`);
       avdCreated = createAvd(

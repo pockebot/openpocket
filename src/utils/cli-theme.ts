@@ -127,6 +127,12 @@ export function createCliTheme(stream: NodeJS.WriteStream = output): CliTheme {
 
   const runtimeTone = (line: string): CliTone => {
     const lowered = line.toLowerCase();
+    if (lowered.includes("[download]") && lowered.includes("100%")) {
+      return "success";
+    }
+    if (lowered.includes("[download]")) {
+      return "info";
+    }
     if (lowered.includes("[warn]") || lowered.includes(" warning") || lowered.includes("warn=")) {
       return "warn";
     }
@@ -147,6 +153,9 @@ export function createCliTheme(stream: NodeJS.WriteStream = output): CliTheme {
     }
     if (lowered.includes("[gateway]")) {
       return "accent";
+    }
+    if (lowered.includes("[env]")) {
+      return "info";
     }
     return "plain";
   };
