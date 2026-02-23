@@ -130,21 +130,14 @@ async function runStreaming(
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    const spinnerFrames = ["-", "\\", "|", "/"];
-    let spinnerIndex = 0;
-    let lastPercent = -1;
+    let sawPercent = false;
+    let lastPercentLogged = -1;
+    let lastEventText = "";
+    let lastEventAt = 0;
     let stdout = "";
     let stderr = "";
     let errorMessage: string | null = null;
     const stageLabel = options.stageLabel ?? "sdkmanager";
-
-    const spinnerTimer = setInterval(() => {
-      if (!options.logger) {
-        return;
-      }
-      options.logger(`[download] ${spinnerFrames[spinnerIndex]} ${stageLabel} ...`);
-      spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
-    }, 1400);
 
     const emitChunk = (chunkText: string): void => {
       const segments = chunkText.split(/\r|\n/g);
@@ -156,8 +149,15 @@ async function runStreaming(
         const percentRaw = normalized.match(/(\d{1,3})%/)?.[1];
         if (percentRaw !== undefined) {
           const percent = Math.max(0, Math.min(100, Number(percentRaw)));
-          if (Number.isFinite(percent) && percent !== lastPercent) {
-            lastPercent = percent;
+          if (Number.isFinite(percent)) {
+            sawPercent = true;
+          }
+          if (
+            Number.isFinite(percent)
+            && options.logger
+            && (percent === 100 || lastPercentLogged < 0 || percent - lastPercentLogged >= 5)
+          ) {
+            lastPercentLogged = percent;
             if (options.logger) {
               const bars = 20;
               const filled = Math.max(0, Math.min(bars, Math.round((percent / 100) * bars)));
@@ -167,7 +167,25 @@ async function runStreaming(
           }
           continue;
         }
+
+        const lowered = normalized.toLowerCase();
+        const interesting =
+          lowered.includes("downloading")
+          || lowered.includes("unzipping")
+          || lowered.includes("installing")
+          || lowered.includes("preparing")
+          || lowered.includes("computing updates")
+          || lowered.includes("fetch");
+        if (!interesting) {
+          continue;
+        }
         if (options.logger) {
+          const now = Date.now();
+          if (normalized === lastEventText && now - lastEventAt < 3000) {
+            continue;
+          }
+          lastEventText = normalized;
+          lastEventAt = now;
           options.logger(`[download] ${normalized}`);
         }
       }
@@ -189,8 +207,7 @@ async function runStreaming(
     });
 
     child.on("close", (code) => {
-      clearInterval(spinnerTimer);
-      if (options.logger && lastPercent >= 0 && lastPercent < 100) {
+      if (options.logger && (code ?? 1) === 0 && sawPercent && lastPercentLogged < 100) {
         options.logger(`[download] [####################] 100% ${stageLabel}`);
       }
       resolve({
