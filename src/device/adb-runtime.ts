@@ -332,7 +332,13 @@ export class AdbRuntime {
     const deviceId = this.resolveDeviceId(preferred);
 
     const { data } = this.emulator.captureScreenshotBuffer(deviceId);
-    const screenSizeOutput = this.emulator.runAdb(["-s", deviceId, "shell", "wm", "size"]);
+    let screenSizeOutput = "";
+    try {
+      screenSizeOutput = this.emulator.runAdb(["-s", deviceId, "shell", "wm", "size"]);
+    } catch {
+      // Device may be transiently offline immediately after boot; parseScreenSize
+      // will fall back to defaults (1080x1920) when given an empty string.
+    }
     const { width, height } = parseScreenSize(screenSizeOutput);
 
     let currentApp = "unknown";

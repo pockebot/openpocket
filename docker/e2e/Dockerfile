@@ -59,6 +59,7 @@ COPY openpocket ./openpocket
 COPY openpocket.config.example.json ./openpocket.config.example.json
 COPY README.md ./README.md
 COPY LICENSE ./LICENSE
+COPY docs ./docs
 COPY docker/e2e/entrypoint.sh /usr/local/bin/openpocket-e2e
 
 RUN chmod +x /workspace/openpocket \
