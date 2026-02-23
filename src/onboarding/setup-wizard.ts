@@ -3,7 +3,8 @@ import path from "node:path";
 import * as readline from "node:readline";
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 
 import type { EmulatorStatus, ModelProfile, OpenPocketConfig } from "../types";
 import { saveConfig } from "../config";
@@ -255,45 +256,167 @@ function resolveCodexHomeForDisplay(): string {
   return raw ? raw : "~/.codex";
 }
 
-async function runCodexCliLoginCommand(): Promise<{ ok: boolean; detail: string }> {
-  try {
-    const result = spawnSync("codex", ["login"], {
-      stdio: "inherit",
-      timeout: 15 * 60 * 1000,
-    });
-    if (result.error) {
-      const error = result.error as NodeJS.ErrnoException;
-      if (error.code === "ENOENT") {
-        return {
+export type CodexCliLoginCommandOptions = {
+  spawnProcess?: typeof spawn;
+  signalSource?: Pick<NodeJS.Process, "on" | "removeListener">;
+  timeoutMs?: number;
+};
+
+export async function runCodexCliLoginCommand(
+  options: CodexCliLoginCommandOptions = {},
+): Promise<{ ok: boolean; detail: string }> {
+  const spawnProcess = options.spawnProcess ?? spawn;
+  const signalSource = options.signalSource ?? process;
+  const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
+    ? Number(options.timeoutMs)
+    : 15 * 60 * 1000;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let cancelledByUser = false;
+    let timedOut = false;
+
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    let terminateTimer: NodeJS.Timeout | null = null;
+    let forceKillTimer: NodeJS.Timeout | null = null;
+
+    const clearTimers = () => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      if (terminateTimer) {
+        clearTimeout(terminateTimer);
+        terminateTimer = null;
+      }
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+        forceKillTimer = null;
+      }
+    };
+
+    const settle = (result: { ok: boolean; detail: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      signalSource.removeListener("SIGINT", onInterrupt);
+      signalSource.removeListener("SIGTERM", onInterrupt);
+      resolve(result);
+    };
+
+    let child: ChildProcess;
+    try {
+      child = spawnProcess("codex", ["login"], { stdio: "inherit" });
+    } catch (error) {
+      const castError = error as NodeJS.ErrnoException;
+      if (castError.code === "ENOENT") {
+        settle({
           ok: false,
           detail: "`codex` command not found in PATH",
-        };
+        });
+      } else {
+        settle({
+          ok: false,
+          detail: castError.message || "codex login failed to start",
+        });
       }
-      return {
+      return;
+    }
+
+    const terminateChildWithEscalation = () => {
+      if (child.exitCode !== null) {
+        return;
+      }
+      try {
+        child.kill("SIGINT");
+      } catch {
+        // Ignore terminate errors while cleaning up.
+      }
+      if (!terminateTimer) {
+        terminateTimer = setTimeout(() => {
+          if (child.exitCode === null) {
+            try {
+              child.kill("SIGTERM");
+            } catch {
+              // Ignore terminate errors while cleaning up.
+            }
+          }
+        }, 1_000);
+      }
+      if (!forceKillTimer) {
+        forceKillTimer = setTimeout(() => {
+          if (child.exitCode === null) {
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              // Ignore terminate errors while cleaning up.
+            }
+          }
+        }, 3_000);
+      }
+    };
+
+    const onInterrupt = () => {
+      cancelledByUser = true;
+      terminateChildWithEscalation();
+    };
+
+    signalSource.on("SIGINT", onInterrupt);
+    signalSource.on("SIGTERM", onInterrupt);
+
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      terminateChildWithEscalation();
+    }, timeoutMs);
+
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") {
+        settle({
+          ok: false,
+          detail: "`codex` command not found in PATH",
+        });
+        return;
+      }
+      settle({
         ok: false,
         detail: error.message || "codex login failed to start",
-      };
-    }
-    if ((result.status ?? 1) === 0) {
-      return { ok: true, detail: "codex login completed" };
-    }
-    if (result.signal) {
-      return {
+      });
+    });
+
+    child.once("exit", (code, signal) => {
+      if (cancelledByUser) {
+        settle({
+          ok: false,
+          detail: "codex login cancelled by user",
+        });
+        return;
+      }
+      if (timedOut) {
+        settle({
+          ok: false,
+          detail: `codex login timed out after ${Math.ceil(timeoutMs / 1000)}s`,
+        });
+        return;
+      }
+      if ((code ?? 1) === 0) {
+        settle({ ok: true, detail: "codex login completed" });
+        return;
+      }
+      if (signal) {
+        settle({
+          ok: false,
+          detail: `codex login terminated by signal ${signal}`,
+        });
+        return;
+      }
+      settle({
         ok: false,
-        detail: `codex login terminated by signal ${result.signal}`,
-      };
-    }
-    const stderr = (result.stderr ?? "").toString().trim();
-    return {
-      ok: false,
-      detail: stderr || `codex login exited with status ${result.status ?? "unknown"}`,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      detail: (error as Error).message,
-    };
-  }
+        detail: `codex login exited with status ${code ?? "unknown"}`,
+      });
+    });
+  });
 }
 
 function detectPlayStore(emulator: SetupEmulator, preferredDeviceId: string | null): boolean | null {

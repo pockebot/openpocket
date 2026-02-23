@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const { loadConfig } = require("../dist/config/index.js");
-const { runSetupWizard } = require("../dist/onboarding/setup-wizard.js");
+const { runSetupWizard, runCodexCliLoginCommand } = require("../dist/onboarding/setup-wizard.js");
 
 class FakePrompter {
   constructor(script) {
@@ -357,4 +358,84 @@ test("setup wizard uses existing codex credential when codex login command fails
       assert.equal(typeof state.apiKeyConfiguredAt, "string");
     });
   });
+});
+
+test("codex login runner cancels cleanly on interrupt signal", async () => {
+  class FakeChildProcess extends EventEmitter {
+    constructor() {
+      super();
+      this.exitCode = null;
+      this.killSignals = [];
+    }
+
+    kill(signal = "SIGTERM") {
+      this.killSignals.push(signal);
+      if (this.exitCode !== null) {
+        return true;
+      }
+      this.exitCode = signal === "SIGINT" ? 130 : 1;
+      setImmediate(() => {
+        this.emit("exit", this.exitCode, null);
+      });
+      return true;
+    }
+  }
+
+  const signalSource = new EventEmitter();
+  const child = new FakeChildProcess();
+  const spawnCalls = [];
+
+  const resultPromise = runCodexCliLoginCommand({
+    spawnProcess: (command, args, options) => {
+      spawnCalls.push({ command, args, options });
+      return child;
+    },
+    signalSource,
+    timeoutMs: 10_000,
+  });
+
+  setTimeout(() => {
+    signalSource.emit("SIGINT");
+  }, 5);
+
+  const result = await resultPromise;
+  assert.equal(result.ok, false);
+  assert.equal(result.detail, "codex login cancelled by user");
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0].command, "codex");
+  assert.deepEqual(spawnCalls[0].args, ["login"]);
+  assert.equal(child.killSignals.includes("SIGINT"), true);
+});
+
+test("codex login runner returns timeout when oauth flow does not complete", async () => {
+  class FakeChildProcess extends EventEmitter {
+    constructor() {
+      super();
+      this.exitCode = null;
+      this.killSignals = [];
+    }
+
+    kill(signal = "SIGTERM") {
+      this.killSignals.push(signal);
+      if (this.exitCode !== null) {
+        return true;
+      }
+      this.exitCode = 1;
+      setImmediate(() => {
+        this.emit("exit", this.exitCode, signal);
+      });
+      return true;
+    }
+  }
+
+  const child = new FakeChildProcess();
+  const result = await runCodexCliLoginCommand({
+    spawnProcess: () => child,
+    signalSource: new EventEmitter(),
+    timeoutMs: 25,
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.detail, /timed out/i);
+  assert.equal(child.killSignals.includes("SIGINT"), true);
 });
