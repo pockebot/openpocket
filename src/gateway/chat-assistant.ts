@@ -261,6 +261,15 @@ export interface ChatDecision {
   reply: string;
   confidence: number;
   reason: string;
+  requiresExternalObservation?: boolean;
+  canAnswerDirectly?: boolean;
+}
+
+interface GroundingAuditDecision {
+  requiresExternalObservation: boolean;
+  canAnswerDirectly: boolean;
+  confidence: number;
+  reason: string;
 }
 
 function readResponseOutputText(response: unknown): string {
@@ -1983,16 +1992,17 @@ export class ChatAssistant {
     const prompt = [
       "Classify the user message for phone assistant routing.",
       "Output strict JSON only:",
-      '{"mode":"task|chat","task":"<task or empty>","reply":"<chat reply or empty>","confidence":0-1,"reason":"..."}',
+      '{"mode":"task|chat","task":"<task or empty>","reply":"<chat reply or empty>","confidence":0-1,"reason":"...","requiresExternalObservation":true|false,"canAnswerDirectly":true|false}',
       "Rules:",
       "1) mode=task when user wants the assistant to operate phone/apps.",
       "1.1) Treat operation as happening on phone by default.",
       "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
-      "1.3) mode=task for objective fact queries that require checking phone/runtime/tools (device status, app state, OS version, network, battery, installed packages, current screen/app, etc.), even if phrased as a question.",
-      "1.4) If uncertain between chat and task, choose mode=task when the request can be verified by executing tools/phone actions.",
-      "2) mode=chat only for pure conversation, opinions, or explanations that do not require external verification.",
-      "3) task should be executable imperative sentence.",
-      "4) for chat mode, reply should be concise.",
+      "2) requiresExternalObservation=true when answering requires checking real-world/device/runtime/tool state.",
+      "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and general reasoning alone.",
+      "4) mode=chat only when canAnswerDirectly=true and no phone/tool execution is needed.",
+      "5) If uncertain between chat and task, set confidence lower and prefer task semantics.",
+      "6) task should be executable imperative sentence.",
+      "7) for chat mode, reply should be concise.",
       `User message: ${inputText}`,
     ].join("\n");
 
@@ -2001,18 +2011,7 @@ export class ChatAssistant {
       throw new Error("classify failed: all endpoint modes returned empty output");
     }
 
-    const jsonText = (() => {
-      const fenced = output.match(/```json\s*([\s\S]*?)```/i) ?? output.match(/```\s*([\s\S]*?)```/i);
-      if (fenced?.[1]) {
-        return fenced[1].trim();
-      }
-      const start = output.indexOf("{");
-      const end = output.lastIndexOf("}");
-      if (start >= 0 && end > start) {
-        return output.slice(start, end + 1);
-      }
-      return output.trim();
-    })();
+    const jsonText = extractJsonObjectText(output);
 
     try {
       const parsed = JSON.parse(jsonText) as Partial<ChatDecision>;
@@ -2026,6 +2025,8 @@ export class ChatAssistant {
             ? parsed.confidence
             : 0.5,
         reason: typeof parsed.reason === "string" ? parsed.reason : "model_classify",
+        requiresExternalObservation: parsed.requiresExternalObservation === true,
+        canAnswerDirectly: parsed.canAnswerDirectly !== false,
       };
     } catch {
       return {
@@ -2034,167 +2035,124 @@ export class ChatAssistant {
         reply: "",
         confidence: 0.3,
         reason: "model_output_not_json",
+        requiresExternalObservation: false,
+        canAnswerDirectly: true,
       };
     }
   }
 
-  private normalizeRoutingInput(input: string): string {
-    return String(input || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim();
+  private async auditGroundingNeed(
+    client: OpenAI,
+    model: string,
+    maxTokens: number,
+    inputText: string,
+    firstPass: ChatDecision,
+  ): Promise<GroundingAuditDecision> {
+    const prompt = [
+      "You are a routing auditor for a phone-use agent.",
+      "Determine whether the user request can be answered directly or needs external observation/execution.",
+      "Output strict JSON only:",
+      '{"requiresExternalObservation":true|false,"canAnswerDirectly":true|false,"confidence":0-1,"reason":"..."}',
+      "Rules:",
+      "1) requiresExternalObservation=true when correctness depends on current real-world/device/runtime/tool state.",
+      "2) requiresExternalObservation=true for requests that need phone actions, app inspection, script execution, log checking, or any state verification.",
+      "3) canAnswerDirectly=true only when answer is reliable from conversation context and stable general knowledge alone.",
+      "4) If uncertain, choose requiresExternalObservation=true and lower confidence.",
+      "",
+      "First-pass decision JSON:",
+      JSON.stringify({
+        mode: firstPass.mode,
+        confidence: firstPass.confidence,
+        reason: firstPass.reason,
+        requiresExternalObservation: firstPass.requiresExternalObservation ?? false,
+        canAnswerDirectly: firstPass.canAnswerDirectly ?? true,
+      }),
+      `User message: ${inputText}`,
+    ].join("\n");
+
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 240), prompt, "grounding audit");
+    if (!output) {
+      throw new Error("grounding audit failed: all endpoint modes returned empty output");
+    }
+
+    const jsonText = extractJsonObjectText(output);
+    const parsed = JSON.parse(jsonText) as Partial<GroundingAuditDecision>;
+    return {
+      requiresExternalObservation: parsed.requiresExternalObservation === true,
+      canAnswerDirectly: parsed.canAnswerDirectly !== false,
+      confidence:
+        typeof parsed.confidence === "number" && parsed.confidence >= 0 && parsed.confidence <= 1
+          ? parsed.confidence
+          : 0.5,
+      reason: typeof parsed.reason === "string" ? parsed.reason : "grounding_audit",
+    };
   }
 
-  private isExplicitChatOnlyRequest(inputText: string): boolean {
-    const normalized = this.normalizeRoutingInput(inputText);
-    const markers = [
-      "just chat",
-      "chat only",
-      "no need to run",
-      "do not run",
-      "don't run",
-      "dont run",
-      "不用执行",
-      "不要执行",
-      "别执行",
-      "只回答",
-      "只聊",
-      "不需要操作手机",
-      "不要操作手机",
-      "别操作手机",
-      "不必操作手机",
-      "无需操作手机",
-    ];
-    return markers.some((marker) => normalized.includes(marker));
-  }
-
-  private isLikelyPureChatMessage(inputText: string): boolean {
-    const normalized = this.normalizeRoutingInput(inputText);
-    if (!normalized) {
-      return true;
-    }
-    const shortPhaticPatterns = [
-      /^(hi|hello|hey|yo|sup|thanks|thank you|thx|bye|good morning|good night)[!.,\s]*$/i,
-      /^(你好|嗨|哈喽|在吗|谢谢|多谢|再见|早上好|晚上好)[！。,\s]*$/i,
-    ];
-    return shortPhaticPatterns.some((pattern) => pattern.test(normalized));
-  }
-
-  private isObjectiveLookupIntent(inputText: string): boolean {
-    const normalized = this.normalizeRoutingInput(inputText);
-    if (!normalized) {
-      return false;
-    }
-
-    const contextHints = [
-      "android",
-      "ios",
-      "device",
-      "phone",
-      "emulator",
-      "runtime",
-      "running on",
-      "system version",
-      "os version",
-      "package",
-      "installed",
-      "battery",
-      "network",
-      "wifi",
-      "ip",
-      "current app",
-      "current screen",
-      "resolution",
-      "storage",
-      "memory usage",
-      "安卓",
-      "手机",
-      "设备",
-      "模拟器",
-      "系统",
-      "版本",
-      "包名",
-      "已安装",
-      "电量",
-      "网络",
-      "当前应用",
-      "当前 app",
-      "当前页面",
-      "当前屏幕",
-      "分辨率",
-      "存储",
-      "内存",
-      "运行环境",
-      "你运行的",
-      "运行的安卓",
-    ];
-    const hasContextHint = contextHints.some((hint) => normalized.includes(hint));
-    if (!hasContextHint) {
-      return false;
-    }
-
-    const questionSignals = [
-      "what",
-      "which",
-      "how many",
-      "is there",
-      "are there",
-      "tell me",
-      "can you check",
-      "check",
-      "verify",
-      "show me",
-      "status",
-      "version",
-      "是多少",
-      "是不是",
-      "有没有",
-      "是否",
-      "什么版本",
-      "是什么",
-      "状态",
-      "查一下",
-      "查看",
-      "确认",
-      "告诉我",
-      "看看",
-      "列出",
-      "读取",
-      "获取",
-    ];
-    const hasQuestionSignal =
-      /[?？]/.test(inputText) || questionSignals.some((signal) => normalized.includes(signal));
-
-    return hasQuestionSignal;
-  }
-
-  private arbitrateRoutingDecision(inputText: string, decided: ChatDecision): ChatDecision {
-    if (decided.mode === "task") {
-      if (!decided.task) {
-        return { ...decided, task: inputText.trim() };
-      }
-      return decided;
-    }
-
-    if (this.isExplicitChatOnlyRequest(inputText)) {
-      return decided;
-    }
-
-    if (this.isLikelyPureChatMessage(inputText)) {
-      return decided;
-    }
-
-    if (!this.isObjectiveLookupIntent(inputText)) {
+  private async refineChatDecisionWithGroundingAudit(
+    client: OpenAI,
+    model: string,
+    maxTokens: number,
+    inputText: string,
+    decided: ChatDecision,
+  ): Promise<ChatDecision> {
+    if (decided.mode !== "chat") {
       return decided;
     }
 
     const reasonPrefix = decided.reason ? `${decided.reason};` : "";
+    try {
+      const audit = await this.auditGroundingNeed(client, model, maxTokens, inputText, decided);
+      return {
+        ...decided,
+        confidence: Math.min(decided.confidence, audit.confidence),
+        reason: `${reasonPrefix}grounding_audit:${audit.reason}`,
+        requiresExternalObservation: decided.requiresExternalObservation === true || audit.requiresExternalObservation,
+        canAnswerDirectly: decided.canAnswerDirectly !== false && audit.canAnswerDirectly,
+      };
+    } catch {
+      return {
+        ...decided,
+        confidence: Math.min(decided.confidence, 0.65),
+        reason: `${reasonPrefix}grounding_audit_failed`,
+      };
+    }
+  }
+
+  private arbitrateRoutingDecision(inputText: string, decided: ChatDecision): ChatDecision {
+    const normalizedInput = inputText.trim();
+    if (decided.mode === "task") {
+      if (!decided.task) {
+        return { ...decided, task: normalizedInput };
+      }
+      return decided;
+    }
+
+    const reasonPrefix = decided.reason ? `${decided.reason};` : "";
+    const requiresExternalObservation =
+      decided.requiresExternalObservation === true || decided.canAnswerDirectly === false;
+    if (requiresExternalObservation) {
+      return {
+        mode: "task",
+        task: normalizedInput,
+        reply: "",
+        confidence: Math.max(0.8, decided.confidence),
+        reason: `${reasonPrefix}requires_external_observation`,
+      };
+    }
+
+    if (decided.confidence < 0.6) {
+      return {
+        mode: "task",
+        task: normalizedInput,
+        reply: "",
+        confidence: 0.6,
+        reason: `${reasonPrefix}low_confidence_task_fallback`,
+      };
+    }
+
     return {
-      mode: "task",
-      task: inputText.trim(),
-      reply: "",
-      confidence: Math.max(0.75, decided.confidence),
-      reason: `${reasonPrefix}objective_lookup_prefers_task`,
+      ...decided,
+      reply: decided.reply || "",
     };
   }
 
@@ -2662,13 +2620,20 @@ export class ChatAssistant {
       baseURL: auth.baseUrl ?? profile.baseUrl,
     });
     try {
-      const decided = await this.classifyWithModel(
+      const classified = await this.classifyWithModel(
         client,
         profile.model,
         profile.maxTokens,
         normalizedInput,
       );
-      return this.arbitrateRoutingDecision(normalizedInput, decided);
+      const audited = await this.refineChatDecisionWithGroundingAudit(
+        client,
+        profile.model,
+        profile.maxTokens,
+        normalizedInput,
+        classified,
+      );
+      return this.arbitrateRoutingDecision(normalizedInput, audited);
     } catch {
       return {
         mode: "task",
