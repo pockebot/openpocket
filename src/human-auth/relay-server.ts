@@ -3,12 +3,12 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 
-import { ensureDir, nowIso } from "../utils/paths";
+import { ensureDir, nowIso } from "../utils/paths.js";
 import type {
   HumanAuthTakeoverAction,
   HumanAuthTakeoverFrame,
   HumanAuthTakeoverRuntime,
-} from "./takeover-runtime";
+} from "./takeover-runtime.js";
 
 type RelayStatus = "pending" | "approved" | "rejected" | "timeout";
 

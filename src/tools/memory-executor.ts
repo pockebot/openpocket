@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AgentAction, OpenPocketConfig } from "../types";
+import type { AgentAction, OpenPocketConfig } from "../types.js";
 
 type MemorySearchAction = Extract<AgentAction, { type: "memory_search" }>;
 type MemoryGetAction = Extract<AgentAction, { type: "memory_get" }>;

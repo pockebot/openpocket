@@ -3,11 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { loadConfig } = require("../dist/config/index.js");
-const { TelegramGateway } = require("../dist/gateway/telegram-gateway.js");
+const { loadConfig } = await import("../dist/config/index.js");
+const { TelegramGateway } = await import("../dist/gateway/telegram-gateway.js");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

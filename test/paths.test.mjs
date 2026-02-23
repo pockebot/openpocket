@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
 const {
   openpocketHome,
   defaultConfigPath,
@@ -12,7 +10,7 @@ const {
   defaultStateDir,
   resolvePath,
   nowForFilename,
-} = require("../dist/utils/paths.js");
+} = await import("../dist/utils/paths.js");
 
 test("path helpers respect OPENPOCKET_HOME", () => {
   const prev = process.env.OPENPOCKET_HOME;

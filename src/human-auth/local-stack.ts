@@ -1,7 +1,7 @@
-import type { OpenPocketConfig } from "../types";
-import { HumanAuthRelayServer } from "./relay-server";
-import { NgrokTunnel } from "./ngrok-tunnel";
-import { LocalHumanAuthTakeoverRuntime } from "./takeover-runtime";
+import type { OpenPocketConfig } from "../types.js";
+import { HumanAuthRelayServer } from "./relay-server.js";
+import { NgrokTunnel } from "./ngrok-tunnel.js";
+import { LocalHumanAuthTakeoverRuntime } from "./takeover-runtime.js";
 
 export interface LocalHumanAuthStackStartResult {
   relayBaseUrl: string;

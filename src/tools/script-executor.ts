@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
-import type { OpenPocketConfig } from "../types";
-import { ensureDir, nowForFilename } from "../utils/paths";
+import type { OpenPocketConfig } from "../types.js";
+import { ensureDir, nowForFilename } from "../utils/paths.js";
 
 export interface ScriptExecutionResult {
   ok: boolean;

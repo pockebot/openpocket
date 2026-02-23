@@ -2,16 +2,16 @@ import TelegramBot, { type Message } from "node-telegram-bot-api";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AgentProgressUpdate, CronJob, OpenPocketConfig, UserDecisionRequest, UserDecisionResponse } from "../types";
-import { saveConfig } from "../config";
-import { AgentRuntime } from "../agent/agent-runtime";
-import { EmulatorManager } from "../device/emulator-manager";
-import { extractPackageName } from "../device/adb-runtime";
-import { HumanAuthBridge } from "../human-auth/bridge";
-import { LocalHumanAuthStack } from "../human-auth/local-stack";
-import { ChatAssistant } from "./chat-assistant";
-import { CronService, type CronRunResult } from "./cron-service";
-import { HeartbeatRunner } from "./heartbeat-runner";
+import type { AgentProgressUpdate, CronJob, OpenPocketConfig, UserDecisionRequest, UserDecisionResponse } from "../types.js";
+import { saveConfig } from "../config/index.js";
+import { AgentRuntime } from "../agent/agent-runtime.js";
+import { EmulatorManager } from "../device/emulator-manager.js";
+import { extractPackageName } from "../device/adb-runtime.js";
+import { HumanAuthBridge } from "../human-auth/bridge.js";
+import { LocalHumanAuthStack } from "../human-auth/local-stack.js";
+import { ChatAssistant } from "./chat-assistant.js";
+import { CronService, type CronRunResult } from "./cron-service.js";
+import { HeartbeatRunner } from "./heartbeat-runner.js";
 
 export const TELEGRAM_MENU_COMMANDS: TelegramBot.BotCommand[] = [
   { command: "start", description: "Start or resume chat onboarding" },

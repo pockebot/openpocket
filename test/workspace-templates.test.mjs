@@ -3,14 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
 const {
   loadWorkspaceTemplate,
   resetWorkspaceTemplateCache,
   resolveWorkspaceTemplateDir,
-} = require("../dist/memory/workspace-templates.js");
+} = await import("../dist/memory/workspace-templates.js");
 
 test("workspace templates resolve from OPENPOCKET_TEMPLATE_DIR and strip markdown frontmatter", () => {
   const templateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-template-dir-"));

@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { loadConfig } = require("../dist/config/index.js");
+const { loadConfig } = await import("../dist/config/index.js");
 const {
   dashboardPaths,
   defaultControlSettings,
@@ -16,7 +14,7 @@ const {
   saveControlSettings,
   saveOnboardingState,
   defaultPromptEntries,
-} = require("../dist/dashboard/control-store.js");
+} = await import("../dist/dashboard/control-store.js");
 
 async function withTempHome(prefix, fn) {
   const prevHome = process.env.OPENPOCKET_HOME;

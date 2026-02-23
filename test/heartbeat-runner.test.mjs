@@ -3,11 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { loadConfig } = require("../dist/config/index.js");
-const { HeartbeatRunner } = require("../dist/gateway/heartbeat-runner.js");
+const { loadConfig } = await import("../dist/config/index.js");
+const { HeartbeatRunner } = await import("../dist/gateway/heartbeat-runner.js");
 
 async function withTempHome(prefix, fn) {
   const prev = process.env.OPENPOCKET_HOME;

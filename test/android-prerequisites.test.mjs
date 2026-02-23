@@ -3,11 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { loadConfig } = require("../dist/config/index.js");
-const { ensureAndroidPrerequisites } = require("../dist/environment/android-prerequisites.js");
+const { loadConfig } = await import("../dist/config/index.js");
+const { ensureAndroidPrerequisites } = await import("../dist/environment/android-prerequisites.js");
 
 async function withTempHome(prefix, fn) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -45,8 +43,8 @@ test("ensureAndroidPrerequisites supports skip mode for CI/tests", async () => {
   });
 });
 
-test("strict mode uses only Google Play system image candidates", () => {
-  const { getSystemImageCandidates } = require("../dist/environment/android-prerequisites.js");
+test("strict mode uses only Google Play system image candidates", async () => {
+  const { getSystemImageCandidates } = await import("../dist/environment/android-prerequisites.js");
   assert.equal(typeof getSystemImageCandidates, "function");
 
   const candidates = getSystemImageCandidates();
@@ -57,8 +55,8 @@ test("strict mode uses only Google Play system image candidates", () => {
   );
 });
 
-test("buildAvdManagerOpts pins avdmanager toolsdir to selected SDK root", () => {
-  const { buildAvdManagerOpts } = require("../dist/environment/android-prerequisites.js");
+test("buildAvdManagerOpts pins avdmanager toolsdir to selected SDK root", async () => {
+  const { buildAvdManagerOpts } = await import("../dist/environment/android-prerequisites.js");
   assert.equal(typeof buildAvdManagerOpts, "function");
 
   const sdkRoot = "/tmp/android-sdk";
@@ -66,16 +64,16 @@ test("buildAvdManagerOpts pins avdmanager toolsdir to selected SDK root", () => 
   assert.match(opts, /-Dcom\.android\.sdkmanager\.toolsdir=\/tmp\/android-sdk\/cmdline-tools\/latest/);
 });
 
-test("buildAvdManagerOpts preserves existing flags and avoids duplicate toolsdir", () => {
-  const { buildAvdManagerOpts } = require("../dist/environment/android-prerequisites.js");
+test("buildAvdManagerOpts preserves existing flags and avoids duplicate toolsdir", async () => {
+  const { buildAvdManagerOpts } = await import("../dist/environment/android-prerequisites.js");
   const sdkRoot = "/tmp/android-sdk";
   const existing = "-Xmx2048m -Dcom.android.sdkmanager.toolsdir=/already-set";
   const opts = buildAvdManagerOpts(sdkRoot, existing);
   assert.equal(opts, existing);
 });
 
-test("shouldRunSdkBootstrap only skips bootstrap when AVD exists and essentials are present", () => {
-  const { shouldRunSdkBootstrap } = require("../dist/environment/android-prerequisites.js");
+test("shouldRunSdkBootstrap only skips bootstrap when AVD exists and essentials are present", async () => {
+  const { shouldRunSdkBootstrap } = await import("../dist/environment/android-prerequisites.js");
   assert.equal(typeof shouldRunSdkBootstrap, "function");
 
   assert.equal(shouldRunSdkBootstrap(true, 0), false);

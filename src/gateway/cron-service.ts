@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { CronJob, OpenPocketConfig } from "../types";
-import { ensureDir, nowIso } from "../utils/paths";
+import type { CronJob, OpenPocketConfig } from "../types.js";
+import { ensureDir, nowIso } from "../utils/paths.js";
 
 type IntervalLike = ReturnType<typeof setInterval>;
 

@@ -3,12 +3,12 @@ import http from "node:http";
 import path from "node:path";
 import crypto from "node:crypto";
 
-import { loadConfig, saveConfig } from "../config";
-import { AdbRuntime } from "../device/adb-runtime";
-import { EmulatorManager } from "../device/emulator-manager";
-import { isWorkspaceOnboardingCompleted, markWorkspaceOnboardingCompleted } from "../memory/workspace";
-import type { OpenPocketConfig } from "../types";
-import { nowIso, resolvePath } from "../utils/paths";
+import { loadConfig, saveConfig } from "../config/index.js";
+import { AdbRuntime } from "../device/adb-runtime.js";
+import { EmulatorManager } from "../device/emulator-manager.js";
+import { isWorkspaceOnboardingCompleted, markWorkspaceOnboardingCompleted } from "../memory/workspace.js";
+import type { OpenPocketConfig } from "../types.js";
+import { nowIso, resolvePath } from "../utils/paths.js";
 import {
   defaultControlSettings,
   loadControlSettings,
@@ -18,7 +18,7 @@ import {
   saveOnboardingState,
   type MenuBarControlSettings,
   type OnboardingStateFile,
-} from "./control-store";
+} from "./control-store.js";
 
 export interface DashboardGatewayStatus {
   running: boolean;

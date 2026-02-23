@@ -1,6 +1,7 @@
 import { stdout as output } from "node:process";
+import { createRequire } from "node:module";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+const require = createRequire(import.meta.url);
 const pkgJson = require("../../package.json") as { version: string; license: string };
 
 export type CliTone = "plain" | "accent" | "muted" | "info" | "success" | "warn" | "error";

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { ensureDir, nowForFilename } from "../utils/paths";
+import { ensureDir, nowForFilename } from "../utils/paths.js";
 
 function safeName(input: string): string {
   return input.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 48);

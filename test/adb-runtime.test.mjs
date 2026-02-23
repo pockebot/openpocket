@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { AdbRuntime } = require("../dist/device/adb-runtime.js");
+const { AdbRuntime } = await import("../dist/device/adb-runtime.js");
 
 function makeConfig() {
   return {

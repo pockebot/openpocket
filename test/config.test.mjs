@@ -3,16 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
 const {
   loadConfig,
   saveConfig,
   getModelProfile,
   resolveApiKey,
   resolveModelAuth,
-} = require("../dist/config/index.js");
+} = await import("../dist/config/index.js");
 
 async function withTempHome(prefix, fn) {
   const prevHome = process.env.OPENPOCKET_HOME;

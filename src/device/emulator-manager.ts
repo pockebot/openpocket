@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 
-import type { EmulatorStatus, OpenPocketConfig } from "../types";
-import { ensureDir, nowForFilename } from "../utils/paths";
-import { sleep } from "../utils/time";
+import type { EmulatorStatus, OpenPocketConfig } from "../types.js";
+import { ensureDir, nowForFilename } from "../utils/paths.js";
+import { sleep } from "../utils/time.js";
 
 export class EmulatorManager {
   private readonly config: OpenPocketConfig;

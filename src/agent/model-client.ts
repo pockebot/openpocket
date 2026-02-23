@@ -1,28 +1,143 @@
-import OpenAI from "openai";
+/**
+ * Model client backed by @mariozechner/pi-ai.
+ *
+ * Uses `completeSimple` (non-streaming) from pi-ai to call any registered
+ * LLM provider. The rest of OpenPocket's agent loop stays synchronous-step
+ * oriented — one LLM call per observe-think-act cycle.
+ */
 
-import type { AgentAction, ModelProfile, ModelStepOutput, ScreenSnapshot } from "../types";
-import { normalizeAction } from "./actions";
-import { buildUserPrompt } from "./prompts";
-import { CHAT_TOOLS, RESPONSES_TOOLS, toolNameToActionType } from "./tools";
+import type {
+  Model,
+  Api,
+  AssistantMessage,
+  Context,
+  SimpleStreamOptions,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+  Tool,
+} from "@mariozechner/pi-ai";
+
+import type { AgentAction, ModelProfile, ModelStepOutput, ScreenSnapshot } from "../types.js";
+import { normalizeAction } from "./actions.js";
+import { buildUserPrompt } from "./prompts.js";
+import { TOOL_METAS, toolNameToActionType } from "./tools.js";
+
+// ---------------------------------------------------------------------------
+// pi-ai bootstrap (dynamic import to handle ESM-from-CJS edge case)
+// ---------------------------------------------------------------------------
+
+let _piAiLoaded = false;
+
+async function ensurePiAiLoaded(): Promise<void> {
+  if (_piAiLoaded) return;
+  // Importing the module registers all built-in providers (side-effect).
+  await import("@mariozechner/pi-ai");
+  _piAiLoaded = true;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function stringifyError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
+  if (error instanceof Error) return error.message;
   return String(error);
 }
 
-/** Parsed tool call result before conversion to AgentAction. */
-interface ToolCallResult {
-  toolName: string;
-  args: Record<string, unknown>;
+function isChatGptBackendUrl(baseUrlLower: string): boolean {
+  return baseUrlLower.includes("chatgpt.com/backend-api");
 }
 
+function isCodexModelId(modelId: string): boolean {
+  return modelId.trim().toLowerCase().includes("codex");
+}
+
+/** Build a pi-ai Tool[] from our TOOL_METAS (schema-only, no execute). */
+function buildPiAiTools(): Tool[] {
+  return TOOL_METAS.map((meta) => ({
+    name: meta.name,
+    description: meta.description,
+    parameters: meta.parameters,
+  }));
+}
+
+/** Extract the first tool call from an AssistantMessage. */
+function extractToolCall(msg: AssistantMessage): { toolName: string; args: Record<string, unknown> } | null {
+  for (const block of msg.content) {
+    if (block.type === "toolCall") {
+      return { toolName: block.name, args: block.arguments };
+    }
+  }
+  return null;
+}
+
+/** Extract thinking text from an AssistantMessage (if any). */
+function extractThinking(msg: AssistantMessage): string {
+  for (const block of msg.content) {
+    if (block.type === "thinking") {
+      return (block as ThinkingContent).thinking;
+    }
+  }
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// Model resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a pi-ai Model object from an OpenPocket ModelProfile.
+ *
+ * This creates a custom Model that routes through the OpenAI-compatible
+ * completions API (which covers OpenRouter, Blockrun, and any other
+ * OpenAI-compatible endpoint).
+ */
+export function buildPiAiModel(profile: ModelProfile): Model<Api> {
+  // Detect provider / api from baseUrl.
+  const baseUrlLower = profile.baseUrl.toLowerCase();
+
+  let api: Api = "openai-completions";
+  let provider = "openai";
+
+  if (isChatGptBackendUrl(baseUrlLower) && isCodexModelId(profile.model)) {
+    api = "openai-codex-responses";
+    provider = "openai-codex";
+  } else if (baseUrlLower.includes("openrouter.ai")) {
+    provider = "openrouter";
+  } else if (baseUrlLower.includes("blockrun.ai")) {
+    provider = "openai"; // blockrun is OpenAI-compatible
+  } else if (baseUrlLower.includes("anthropic.com")) {
+    api = "anthropic-messages";
+    provider = "anthropic";
+  } else if (baseUrlLower.includes("googleapis.com") || baseUrlLower.includes("generativelanguage.googleapis.com")) {
+    api = "google-generative-ai";
+    provider = "google";
+  }
+
+  return {
+    id: profile.model,
+    name: profile.model,
+    api,
+    provider,
+    baseUrl: profile.baseUrl,
+    reasoning: profile.reasoningEffort !== null,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: profile.maxTokens,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// ModelClient
+// ---------------------------------------------------------------------------
+
 export class ModelClient {
-  private readonly client: OpenAI;
   private readonly profile: ModelProfile;
-  private readonly baseUrl: string;
-  private modeHint: "chat" | "responses" = "chat";
+  private readonly apiKey: string;
+  private readonly piModel: Model<Api>;
+  private readonly piTools: Tool[];
 
   constructor(
     profile: ModelProfile,
@@ -33,233 +148,39 @@ export class ModelClient {
     },
   ) {
     this.profile = profile;
-    this.baseUrl = options?.baseUrl ?? profile.baseUrl;
-    this.client = new OpenAI({ apiKey, baseURL: this.baseUrl });
-    if (options?.preferredMode) {
-      this.modeHint = options.preferredMode === "completions" ? "chat" : options.preferredMode;
-    }
-  }
+    this.apiKey = apiKey;
 
-  // -----------------------------------------------------------------------
-  // Request builders
-  // -----------------------------------------------------------------------
+    // Build pi-ai model, optionally overriding baseUrl
+    const effectiveProfile = options?.baseUrl
+      ? { ...profile, baseUrl: options.baseUrl }
+      : profile;
 
-  private buildChatRequest(params: {
-    systemPrompt: string;
-    userText: string;
-    snapshot: ScreenSnapshot;
-    recentSnapshots?: ScreenSnapshot[];
-  }): Record<string, unknown> {
-    const recentImages = (params.recentSnapshots ?? []).flatMap((item) => (
-      item.somScreenshotBase64
-        ? [{
-          type: "image_url" as const,
-          image_url: { url: `data:image/png;base64,${item.somScreenshotBase64}` },
-        }]
-        : [{
-          type: "image_url" as const,
-          image_url: { url: `data:image/png;base64,${item.screenshotBase64}` },
-        }]
-    ));
-    const request: Record<string, unknown> = {
-      model: this.profile.model,
-      max_tokens: this.profile.maxTokens,
-      messages: [
-        {
-          role: "system",
-          content: params.systemPrompt,
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: params.userText,
-            },
-            ...recentImages,
-            ...(params.snapshot.somScreenshotBase64
-              ? [{
-                type: "image_url" as const,
-                image_url: {
-                  url: `data:image/png;base64,${params.snapshot.somScreenshotBase64}`,
-                },
-              }]
-              : []),
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/png;base64,${params.snapshot.screenshotBase64}`,
-              },
-            },
-          ],
-        },
-      ],
-      tools: CHAT_TOOLS,
-      tool_choice: "required",
-    };
+    const baseModel = buildPiAiModel(effectiveProfile);
+    const isCodexResponsesModel =
+      baseModel.api === "openai-codex-responses" || baseModel.provider === "openai-codex";
 
-    if (this.profile.reasoningEffort) {
-      request.reasoning_effort = this.profile.reasoningEffort;
-    }
-    if (this.profile.temperature !== null) {
-      request.temperature = this.profile.temperature;
-    }
-    return request;
-  }
-
-  private buildResponsesRequest(params: {
-    systemPrompt: string;
-    userText: string;
-    snapshot: ScreenSnapshot;
-    recentSnapshots?: ScreenSnapshot[];
-  }): Record<string, unknown> {
-    const recentImages = (params.recentSnapshots ?? []).flatMap((item) => (
-      item.somScreenshotBase64
-        ? [{
-          type: "input_image" as const,
-          image_url: `data:image/png;base64,${item.somScreenshotBase64}`,
-        }]
-        : [{
-          type: "input_image" as const,
-          image_url: `data:image/png;base64,${item.screenshotBase64}`,
-        }]
-    ));
-    const userContent = [
-      { type: "input_text", text: params.userText },
-      ...recentImages,
-      ...(params.snapshot.somScreenshotBase64
-        ? [{
-          type: "input_image" as const,
-          image_url: `data:image/png;base64,${params.snapshot.somScreenshotBase64}`,
-        }]
-        : []),
-      {
-        type: "input_image",
-        image_url: `data:image/png;base64,${params.snapshot.screenshotBase64}`,
-      },
-    ];
-    const isCodex = this.isCodexBackend();
-    const request: Record<string, unknown> = isCodex
-      ? {
-          model: this.profile.model,
-          instructions: params.systemPrompt,
-          input: [
-            {
-              role: "user",
-              content: userContent,
-            },
-          ],
-          tools: RESPONSES_TOOLS,
-          tool_choice: "required",
-          // chatgpt.com/backend-api/codex/responses requires these flags.
-          stream: true,
-          store: false,
-        }
-      : {
-          model: this.profile.model,
-          max_output_tokens: this.profile.maxTokens,
-          input: [
-            {
-              role: "system",
-              content: [{ type: "input_text", text: params.systemPrompt }],
-            },
-            {
-              role: "user",
-              content: userContent,
-            },
-          ],
-          tools: RESPONSES_TOOLS,
-          tool_choice: "required",
-        };
-
-    if (this.profile.reasoningEffort) {
-      request.reasoning = { effort: this.profile.reasoningEffort };
-    }
-    if (this.profile.temperature !== null) {
-      request.temperature = this.profile.temperature;
-    }
-    return request;
-  }
-
-  // -----------------------------------------------------------------------
-  // Response parsers
-  // -----------------------------------------------------------------------
-
-  private parseChatToolCall(response: unknown): ToolCallResult {
-    const resp = response as {
-      choices?: Array<{
-        message?: {
-          tool_calls?: Array<{
-            function?: { name?: string; arguments?: string };
-          }>;
-        };
-      }>;
-    };
-
-    const toolCall = resp.choices?.[0]?.message?.tool_calls?.[0];
-    if (!toolCall?.function?.name) {
-      throw new Error("Chat response did not contain a tool call.");
+    // Handle preferred mode override
+    if (isCodexResponsesModel) {
+      this.piModel = {
+        ...baseModel,
+        provider: "openai-codex",
+        api: "openai-codex-responses" as Api,
+      };
+    } else if (options?.preferredMode === "responses") {
+      this.piModel = {
+        ...baseModel,
+        api: "openai-responses" as Api,
+      };
+    } else if (options?.preferredMode === "completions" || options?.preferredMode === "chat") {
+      this.piModel = {
+        ...baseModel,
+        api: "openai-completions" as Api,
+      };
+    } else {
+      this.piModel = baseModel;
     }
 
-    const args = JSON.parse(toolCall.function.arguments ?? "{}") as Record<string, unknown>;
-    return { toolName: toolCall.function.name, args };
-  }
-
-  private parseResponsesToolCall(response: unknown): ToolCallResult {
-    const resp = response as {
-      output?: Array<{
-        type?: string;
-        name?: string;
-        arguments?: string;
-      }>;
-    };
-
-    const output = resp.output;
-    if (!Array.isArray(output)) {
-      throw new Error("Responses API returned no output array.");
-    }
-
-    const toolCallItem = output.find(
-      (item) => item.type === "function_call",
-    );
-    if (!toolCallItem?.name) {
-      throw new Error("Responses API output did not contain a function_call item.");
-    }
-
-    const args = JSON.parse(toolCallItem.arguments ?? "{}") as Record<string, unknown>;
-    return { toolName: toolCallItem.name, args };
-  }
-
-  // -----------------------------------------------------------------------
-  // Mode dispatch
-  // -----------------------------------------------------------------------
-
-  private isCodexBackend(): boolean {
-    return this.baseUrl.toLowerCase().includes("chatgpt.com/backend-api/codex");
-  }
-
-  private async requestByMode(
-    mode: "chat" | "responses",
-    params: {
-      systemPrompt: string;
-      userText: string;
-      snapshot: ScreenSnapshot;
-      recentSnapshots?: ScreenSnapshot[];
-    },
-  ): Promise<ToolCallResult> {
-    if (mode === "chat") {
-      const response = await this.client.chat.completions.create(
-        this.buildChatRequest(params) as never,
-      );
-      return this.parseChatToolCall(response);
-    }
-
-    // responses mode
-    const request = this.buildResponsesRequest(params);
-    const response = this.isCodexBackend()
-      ? await this.client.responses.stream(request as never).finalResponse()
-      : await this.client.responses.create(request as never);
-    return this.parseResponsesToolCall(response);
+    this.piTools = buildPiAiTools();
   }
 
   // -----------------------------------------------------------------------
@@ -274,6 +195,10 @@ export class ModelClient {
     recentSnapshots?: ScreenSnapshot[];
     history: string[];
   }): Promise<ModelStepOutput> {
+    await ensurePiAiLoaded();
+
+    const { completeSimple } = await import("@mariozechner/pi-ai");
+
     const userText = buildUserPrompt(
       params.task,
       params.step,
@@ -281,43 +206,92 @@ export class ModelClient {
       params.history,
       params.recentSnapshots ?? [],
     );
-    const modes: Array<"chat" | "responses"> = this.isCodexBackend()
-      ? ["responses"]
-      : this.modeHint === "chat"
-        ? ["chat", "responses"]
-        : ["responses", "chat"];
 
-    let toolCall: ToolCallResult | null = null;
-    const errors: string[] = [];
+    // Build multimodal user content with images
+    const userContent: Array<TextContent | { type: "image"; data: string; mimeType: string }> = [
+      { type: "text", text: userText },
+    ];
 
-    for (const mode of modes) {
-      try {
-        toolCall = await this.requestByMode(mode, {
-          systemPrompt: params.systemPrompt,
-          userText,
-          snapshot: params.snapshot,
-          recentSnapshots: params.recentSnapshots,
-        });
-        if (this.modeHint !== mode) {
-          this.modeHint = mode;
-          // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][model] switched endpoint mode -> ${mode}`);
-        }
-        break;
-      } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
+    // Add recent snapshot images
+    for (const recent of params.recentSnapshots ?? []) {
+      if (recent.somScreenshotBase64) {
+        userContent.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });
+      } else {
+        userContent.push({ type: "image", data: recent.screenshotBase64, mimeType: "image/png" });
       }
     }
 
-    if (!toolCall) {
-      throw new Error(`All model endpoints failed. ${errors.join(" | ")}`);
+    // Add current snapshot SoM overlay (if available)
+    if (params.snapshot.somScreenshotBase64) {
+      userContent.push({ type: "image", data: params.snapshot.somScreenshotBase64, mimeType: "image/png" });
     }
 
-    // Extract thought from args, map tool name to action type.
-    const thought = typeof toolCall.args.thought === "string" ? toolCall.args.thought : "";
+    // Add current raw screenshot
+    userContent.push({ type: "image", data: params.snapshot.screenshotBase64, mimeType: "image/png" });
+
+    const context: Context = {
+      systemPrompt: params.systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: userContent,
+          timestamp: Date.now(),
+        },
+      ],
+      tools: this.piTools,
+    };
+
+    // Map reasoning effort
+    const reasoningMap: Record<string, "low" | "medium" | "high" | "xhigh"> = {
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+    };
+    const reasoning = this.profile.reasoningEffort
+      ? reasoningMap[this.profile.reasoningEffort]
+      : undefined;
+
+    // toolChoice: "required" forces the model to always return a tool call.
+    // pi-ai providers read this from the options bag even though it's not
+    // part of the base SimpleStreamOptions type.
+    const streamOptions: SimpleStreamOptions & { toolChoice?: string } = {
+      apiKey: this.apiKey,
+      maxTokens: this.profile.maxTokens,
+      reasoning,
+      toolChoice: "required",
+    };
+
+    if (this.profile.temperature !== null) {
+      streamOptions.temperature = this.profile.temperature;
+    }
+
+    let response: AssistantMessage;
+
+    try {
+      response = await completeSimple(this.piModel, context, streamOptions);
+    } catch (error) {
+      throw new Error(`Model call failed: ${stringifyError(error)}`);
+    }
+
+    if (response.stopReason === "error") {
+      throw new Error(`Model returned error: ${response.errorMessage || "unknown"}`);
+    }
+
+    // Extract tool call
+    const toolCall = extractToolCall(response);
+    if (!toolCall) {
+      throw new Error("Model response did not contain a tool call.");
+    }
+
+    // Extract thought from args (our tools include thought as a parameter)
+    const thought = typeof toolCall.args.thought === "string"
+      ? toolCall.args.thought
+      : extractThinking(response) || "";
+
     const actionType = toolNameToActionType(toolCall.toolName);
 
-    // Build raw action object for normalizeAction.
+    // Build raw action object for normalizeAction
     const { thought: _t, ...actionArgs } = toolCall.args;
     const actionRaw = { type: actionType, ...actionArgs };
 

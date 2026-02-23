@@ -3,12 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { loadConfig } = require("../dist/config/index.js");
-const { ChatAssistant } = require("../dist/gateway/chat-assistant.js");
-const { markWorkspaceOnboardingCompleted, isWorkspaceOnboardingCompleted } = require("../dist/memory/workspace.js");
+const { loadConfig } = await import("../dist/config/index.js");
+const { ChatAssistant } = await import("../dist/gateway/chat-assistant.js");
+const { markWorkspaceOnboardingCompleted, isWorkspaceOnboardingCompleted } = await import("../dist/memory/workspace.js");
 
 async function withTempCodexHome(prefix, fn) {
   const prev = process.env.CODEX_HOME;

@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
-import type { OpenPocketConfig } from "../types";
-import { ensureDir, nowIso } from "../utils/paths";
+import type { OpenPocketConfig } from "../types.js";
+import { ensureDir, nowIso } from "../utils/paths.js";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

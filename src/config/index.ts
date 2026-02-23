@@ -1,16 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { ModelProfile, OpenPocketConfig } from "../types";
+import type { ModelProfile, OpenPocketConfig } from "../types.js";
 import {
   defaultConfigPath,
   defaultStateDir,
   defaultWorkspaceDir,
   ensureDir,
   resolvePath,
-} from "../utils/paths";
-import { ensureWorkspaceBootstrap } from "../memory/workspace";
-import { CODEX_CLI_BASE_URL, readCodexCliCredential } from "./codex-cli";
+} from "../utils/paths.js";
+import { ensureWorkspaceBootstrap } from "../memory/workspace.js";
+import { CODEX_CLI_BASE_URL, readCodexCliCredential } from "./codex-cli.js";
 
 function defaultConfigObject() {
   return {

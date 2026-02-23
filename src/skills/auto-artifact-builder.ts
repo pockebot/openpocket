@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AgentAction, OpenPocketConfig } from "../types";
-import { ensureDir, nowForFilename } from "../utils/paths";
+import type { AgentAction, OpenPocketConfig } from "../types.js";
+import { ensureDir, nowForFilename } from "../utils/paths.js";
 
 export interface StepTrace {
   step: number;

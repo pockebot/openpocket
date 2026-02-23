@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
-const { runGatewayLoop } = require("../dist/gateway/run-loop.js");
+const { runGatewayLoop } = await import("../dist/gateway/run-loop.js");
 
 function waitTick() {
   return new Promise((resolve) => setTimeout(resolve, 0));

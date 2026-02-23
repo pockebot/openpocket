@@ -1,4 +1,4 @@
-import type { ScreenSnapshot } from "../types";
+import type { ScreenSnapshot } from "../types.js";
 
 const HUMAN_AUTH_CAPABILITIES =
   "camera, qr, microphone, voice, nfc, sms, 2fa, location, biometric, notification, contacts, calendar, files, oauth, payment, permission, unknown";
