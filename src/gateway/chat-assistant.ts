@@ -1825,6 +1825,7 @@ export class ChatAssistant {
       "You are OpenPocket conversational assistant.",
       "Keep answers concise and practical.",
       "Users can talk naturally without command syntax.",
+      "Assume operation requests are phone actions by default unless the user clearly asks for advice-only chat.",
       "Do not expose internal file paths, session files, skills, or scripts in user-facing replies.",
       "For requests that are not device automation tasks, answer directly in chat.",
     ].join("\n");
@@ -1860,6 +1861,8 @@ export class ChatAssistant {
       '{"mode":"task|chat","task":"<task or empty>","reply":"<chat reply or empty>","confidence":0-1,"reason":"..."}',
       "Rules:",
       "1) mode=task when user wants the assistant to operate phone/apps.",
+      "1.1) Treat operation as happening on phone by default.",
+      "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
       "2) mode=chat for small talk, explanation, status discussion, and generic questions.",
       "3) task should be executable imperative sentence.",
       "4) for chat mode, reply should be concise.",
