@@ -1,9 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { OpenPocketConfig } from "../types.js";
+import type { OpenPocketConfig, SessionStorageConfig } from "../types.js";
 import { ensureDir, nowForFilename, nowIso, timeString, todayString } from "../utils/paths.js";
 import { loadWorkspaceTemplate } from "./workspace-templates.js";
+import type {
+  SessionBackend,
+  SessionCreatePayload,
+  SessionFinalizePayload,
+  SessionStepPayload,
+} from "../agent/session-backend.js";
+import { SessionMarkdownBackend } from "../agent/session-markdown-backend.js";
+import { SessionJsonlBackend } from "../agent/session-jsonl-backend.js";
 
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";
@@ -273,76 +281,72 @@ export interface SessionHandle {
   path: string;
 }
 
+type WorkspaceStoreConfig = Pick<OpenPocketConfig, "workspaceDir"> & {
+  sessionStorage?: Partial<SessionStorageConfig>;
+};
+
+function resolveSessionBackends(sessionStorage?: Partial<SessionStorageConfig>): SessionBackend[] {
+  const backends: SessionBackend[] = [new SessionMarkdownBackend()];
+  if (sessionStorage?.dualWriteJsonl === true) {
+    backends.push(new SessionJsonlBackend());
+  }
+  return backends;
+}
+
 export class WorkspaceStore {
   private readonly workspaceDir: string;
+  private readonly sessionBackends: SessionBackend[];
 
-  constructor(config: OpenPocketConfig) {
+  constructor(config: WorkspaceStoreConfig) {
     this.workspaceDir = config.workspaceDir;
     ensureWorkspaceBootstrap(this.workspaceDir);
+    this.sessionBackends = resolveSessionBackends(config.sessionStorage);
   }
 
   createSession(task: string, modelProfile: string, modelName: string): SessionHandle {
     const id = nowForFilename();
     const sessionPath = path.join(this.workspaceDir, "sessions", `session-${id}.md`);
-
-    const body = [
-      "# OpenPocket Session",
-      "",
-      `- id: ${id}`,
-      `- started_at: ${nowIso()}`,
-      `- model_profile: ${modelProfile}`,
-      `- model_name: ${modelName}`,
-      "",
-      "## Task",
-      "",
+    const startedAt = nowIso();
+    const payload: SessionCreatePayload = {
+      sessionId: id,
+      sessionPath,
       task,
-      "",
-      "## Steps",
-      "",
-    ].join("\n");
-
-    fs.writeFileSync(sessionPath, `${body}\n`, "utf-8");
+      modelProfile,
+      modelName,
+      startedAt,
+    };
+    for (const backend of this.sessionBackends) {
+      backend.create(payload);
+    }
     return { id, path: sessionPath };
   }
 
   appendStep(session: SessionHandle, stepNo: number, thought: string, actionJson: string, result: string): void {
-    const block = [
-      `### Step ${stepNo}`,
-      "",
-      `- at: ${nowIso()}`,
-      "- thought:",
-      "```text",
-      thought || "(empty)",
-      "```",
-      "- action:",
-      "```json",
+    const payload: SessionStepPayload = {
+      sessionId: session.id,
+      sessionPath: session.path,
+      stepNo,
+      at: nowIso(),
+      thought,
       actionJson,
-      "```",
-      "- execution_result:",
-      "```text",
       result,
-      "```",
-      "",
-    ].join("\n");
-
-    fs.appendFileSync(session.path, block, "utf-8");
+    };
+    for (const backend of this.sessionBackends) {
+      backend.appendStep(payload);
+    }
   }
 
   finalizeSession(session: SessionHandle, ok: boolean, message: string): void {
-    const status = ok ? "SUCCESS" : "FAILED";
-    const block = [
-      "## Final",
-      "",
-      `- status: ${status}`,
-      `- ended_at: ${nowIso()}`,
-      "",
-      "### Message",
-      "",
+    const payload: SessionFinalizePayload = {
+      sessionId: session.id,
+      sessionPath: session.path,
+      status: ok ? "SUCCESS" : "FAILED",
+      endedAt: nowIso(),
       message,
-      "",
-    ].join("\n");
-
-    fs.appendFileSync(session.path, block, "utf-8");
+    };
+    for (const backend of this.sessionBackends) {
+      backend.finalize(payload);
+    }
   }
 
   appendDailyMemory(modelProfile: string, task: string, ok: boolean, message: string): string {

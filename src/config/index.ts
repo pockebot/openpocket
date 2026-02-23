@@ -17,6 +17,10 @@ function defaultConfigObject() {
     projectName: "OpenPocket",
     workspaceDir: defaultWorkspaceDir(),
     stateDir: defaultStateDir(),
+    sessionStorage: {
+      backend: "markdown" as const,
+      dualWriteJsonl: false,
+    },
     defaultModel: "gpt-5.2-codex",
     emulator: {
       avdName: "OpenPocket_AVD",
@@ -264,6 +268,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     project_name: "projectName",
     workspace_dir: "workspaceDir",
     state_dir: "stateDir",
+    session_storage: "sessionStorage",
     default_model: "defaultModel",
     script_executor: "scriptExecutor",
     coding_tools: "codingTools",
@@ -435,6 +440,20 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     raw.dashboard = dashboard;
   }
 
+  const sessionStorage = isObject(raw.sessionStorage) ? { ...raw.sessionStorage } : {};
+  const sessionStorageMap: Record<string, string> = {
+    storage_backend: "backend",
+    dual_write_jsonl: "dualWriteJsonl",
+  };
+  for (const [oldKey, newKey] of Object.entries(sessionStorageMap)) {
+    if (oldKey in sessionStorage && !(newKey in sessionStorage)) {
+      sessionStorage[newKey] = sessionStorage[oldKey];
+    }
+  }
+  if (Object.keys(sessionStorage).length > 0) {
+    raw.sessionStorage = sessionStorage;
+  }
+
   const humanAuth = isObject(raw.humanAuth) ? { ...raw.humanAuth } : {};
   const humanAuthMap: Record<string, string> = {
     use_local_relay: "useLocalRelay",
@@ -563,6 +582,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
   const cron = (merged.cron ?? {}) as Record<string, unknown>;
   const dashboard = (merged.dashboard ?? {}) as Record<string, unknown>;
   const humanAuth = (merged.humanAuth ?? {}) as Record<string, unknown>;
+  const sessionStorage = (merged.sessionStorage ?? {}) as Record<string, unknown>;
   const humanAuthTunnel = isObject(humanAuth.tunnel) ? humanAuth.tunnel : {};
   const humanAuthNgrok = isObject(humanAuthTunnel.ngrok) ? humanAuthTunnel.ngrok : {};
   const resolvedWorkspaceDir = resolvePath(String(merged.workspaceDir));
@@ -577,6 +597,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     projectName: String(merged.projectName),
     workspaceDir: resolvedWorkspaceDir,
     stateDir: resolvedStateDir,
+    sessionStorage: {
+      backend: sessionStorage.backend === "markdown" ? "markdown" : "markdown",
+      dualWriteJsonl: Boolean(sessionStorage.dualWriteJsonl ?? false),
+    },
     defaultModel,
     emulator: {
       avdName: String(emulator.avdName ?? "OpenPocket_AVD"),
@@ -750,6 +774,7 @@ export function saveConfig(config: OpenPocketConfig): void {
     projectName: config.projectName,
     workspaceDir: config.workspaceDir,
     stateDir: config.stateDir,
+    sessionStorage: config.sessionStorage,
     defaultModel: config.defaultModel,
     emulator: config.emulator,
     telegram: config.telegram,
