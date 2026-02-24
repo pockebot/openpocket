@@ -44,6 +44,32 @@ interface PreviewSnapshot {
   capturedAt: string;
 }
 
+interface DashboardTraceAction {
+  stepNo: number;
+  actionType: string;
+  currentApp: string;
+  status: "ok" | "error";
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  reasoning: string;
+  result: string;
+}
+
+interface DashboardTraceRun {
+  sessionId: string;
+  sessionPath: string;
+  task: string;
+  modelProfile: string;
+  modelName: string;
+  status: "running" | "success" | "failed";
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+  finalMessage: string;
+  actions: DashboardTraceAction[];
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -250,6 +276,367 @@ export class DashboardServer {
 
   clearLogs(): void {
     this.logs.splice(0, this.logs.length);
+  }
+
+  private extractTextBlocks(content: unknown): string {
+    if (!Array.isArray(content)) {
+      return "";
+    }
+    const chunks: string[] = [];
+    for (const part of content) {
+      if (!isObject(part)) {
+        continue;
+      }
+      if (part.type !== "text") {
+        continue;
+      }
+      if (typeof part.text !== "string") {
+        continue;
+      }
+      const text = part.text.trim();
+      if (text) {
+        chunks.push(text);
+      }
+    }
+    return chunks.join("\n").trim();
+  }
+
+  private parseIsoOrEmpty(value: unknown): string {
+    if (typeof value !== "string") {
+      return "";
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+    return Number.isFinite(Date.parse(trimmed)) ? trimmed : "";
+  }
+
+  private parseTraceStatus(value: unknown, fallbackText: string): "ok" | "error" {
+    if (value === "ok" || value === "error") {
+      return value;
+    }
+    if (/(error|failed|rejected|denied|timeout|interrupted)/i.test(fallbackText)) {
+      return "error";
+    }
+    return "ok";
+  }
+
+  private parseFallbackStepContent(raw: string): DashboardTraceAction | null {
+    const text = String(raw || "");
+    if (!text.trim()) {
+      return null;
+    }
+    const stepNoRaw = Number((text.match(/^step:\s*(\d+)/m)?.[1] ?? "0"));
+    if (!Number.isFinite(stepNoRaw) || stepNoRaw <= 0) {
+      return null;
+    }
+    const stepNo = Math.round(stepNoRaw);
+    const at = this.parseIsoOrEmpty(text.match(/^at:\s*(.+)$/m)?.[1] ?? "");
+
+    const thoughtStart = text.indexOf("thought:\n");
+    const actionStart = text.indexOf("\naction_json:\n");
+    const resultStart = text.indexOf("\nexecution_result:\n");
+
+    let reasoning = "";
+    if (thoughtStart >= 0 && actionStart > thoughtStart) {
+      reasoning = text.slice(thoughtStart + "thought:\n".length, actionStart).trim();
+    }
+
+    let actionType = "unknown";
+    if (actionStart >= 0 && resultStart > actionStart) {
+      const actionJson = text.slice(actionStart + "\naction_json:\n".length, resultStart).trim();
+      try {
+        const parsed = JSON.parse(actionJson) as { type?: unknown };
+        if (typeof parsed.type === "string" && parsed.type.trim()) {
+          actionType = parsed.type.trim();
+        }
+      } catch {
+        actionType = "unknown";
+      }
+    }
+
+    const result = resultStart >= 0
+      ? text.slice(resultStart + "\nexecution_result:\n".length).trim()
+      : "";
+
+    return {
+      stepNo,
+      actionType,
+      currentApp: "unknown",
+      status: this.parseTraceStatus(undefined, result),
+      startedAt: at || nowIso(),
+      endedAt: at || nowIso(),
+      durationMs: 0,
+      reasoning,
+      result,
+    };
+  }
+
+  private parseSessionTraceFile(filePath: string): DashboardTraceRun[] {
+    if (!fs.existsSync(filePath)) {
+      return [];
+    }
+    const raw = fs.readFileSync(filePath, "utf-8");
+    if (!raw.trim()) {
+      return [];
+    }
+
+    type RunAccumulator = {
+      task: string;
+      modelProfile: string;
+      modelName: string;
+      startedAt: string;
+      endedAt: string | null;
+      finalMessage: string;
+      finalStopReason: string;
+      actionTraceByStep: Map<number, DashboardTraceAction>;
+      fallbackStepByStep: Map<number, DashboardTraceAction>;
+    };
+
+    let sessionId = path.basename(filePath, ".jsonl");
+    const accumulators: RunAccumulator[] = [];
+    let current: RunAccumulator | null = null;
+
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      let entry: unknown;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isObject(entry)) {
+        continue;
+      }
+
+      if (entry.type === "session") {
+        if (typeof entry.id === "string" && entry.id.trim()) {
+          sessionId = entry.id.trim();
+        }
+        continue;
+      }
+
+      if (entry.type !== "message" || !isObject(entry.message)) {
+        continue;
+      }
+      const message = entry.message as Record<string, unknown>;
+      const role = String(message.role ?? "").trim();
+      const entryTimestamp = this.parseIsoOrEmpty(entry.timestamp);
+
+      if (role === "user") {
+        const taskText = this.extractTextBlocks(message.content);
+        if (taskText) {
+          current = {
+            task: taskText,
+            modelProfile: "",
+            modelName: "",
+            startedAt: entryTimestamp || "",
+            endedAt: null,
+            finalMessage: "",
+            finalStopReason: "",
+            actionTraceByStep: new Map(),
+            fallbackStepByStep: new Map(),
+          };
+          accumulators.push(current);
+        }
+        continue;
+      }
+
+      if (!current) {
+        continue;
+      }
+
+      if (role === "assistant" && String(message.model ?? "") === "session-task-outcome") {
+        current.endedAt = entryTimestamp || current.endedAt;
+        current.finalMessage = this.extractTextBlocks(message.content);
+        current.finalStopReason = String(message.stopReason ?? "").trim().toLowerCase();
+        current = null;
+        continue;
+      }
+
+      if (role !== "custom") {
+        continue;
+      }
+
+      const customType = String(message.customType ?? "").trim();
+      const details = isObject(message.details) ? message.details : {};
+
+      if (customType === "openpocket_session_meta") {
+        if (typeof details.modelProfile === "string" && details.modelProfile.trim()) {
+          current.modelProfile = details.modelProfile.trim();
+        }
+        if (typeof details.modelName === "string" && details.modelName.trim()) {
+          current.modelName = details.modelName.trim();
+        }
+        continue;
+      }
+
+      if (customType === "openpocket_action_trace") {
+        const stepNoRaw = Number(details.stepNo ?? 0);
+        if (!Number.isFinite(stepNoRaw) || stepNoRaw <= 0) {
+          continue;
+        }
+        const stepNo = Math.round(stepNoRaw);
+        const actionType = typeof details.actionType === "string" && details.actionType.trim()
+          ? details.actionType.trim()
+          : "unknown";
+        const currentApp = typeof details.currentApp === "string" && details.currentApp.trim()
+          ? details.currentApp.trim()
+          : "unknown";
+        const startedAtTrace = this.parseIsoOrEmpty(details.startedAt) || entryTimestamp || nowIso();
+        const endedAtTrace = this.parseIsoOrEmpty(details.endedAt) || entryTimestamp || startedAtTrace;
+        const durationMsRaw = Number(details.durationMs ?? 0);
+        const durationMs = Number.isFinite(durationMsRaw)
+          ? Math.max(0, Math.round(durationMsRaw))
+          : Math.max(0, Date.parse(endedAtTrace) - Date.parse(startedAtTrace));
+        const reasoning = typeof details.reasoning === "string"
+          ? details.reasoning
+          : this.extractTextBlocks(message.content);
+        const result = typeof details.result === "string"
+          ? details.result
+          : "";
+        current.actionTraceByStep.set(stepNo, {
+          stepNo,
+          actionType,
+          currentApp,
+          status: this.parseTraceStatus(details.status, result),
+          startedAt: startedAtTrace,
+          endedAt: endedAtTrace,
+          durationMs,
+          reasoning,
+          result,
+        });
+        continue;
+      }
+
+      if (customType === "openpocket_step") {
+        const fallback = this.parseFallbackStepContent(this.extractTextBlocks(message.content));
+        if (fallback && isObject(details.trace)) {
+          const trace = details.trace;
+          if (typeof trace.actionType === "string" && trace.actionType.trim()) {
+            fallback.actionType = trace.actionType.trim();
+          }
+          if (typeof trace.currentApp === "string" && trace.currentApp.trim()) {
+            fallback.currentApp = trace.currentApp.trim();
+          }
+          const startedAtTrace = this.parseIsoOrEmpty(trace.startedAt);
+          const endedAtTrace = this.parseIsoOrEmpty(trace.endedAt);
+          if (startedAtTrace) {
+            fallback.startedAt = startedAtTrace;
+          }
+          if (endedAtTrace) {
+            fallback.endedAt = endedAtTrace;
+          }
+          const durationMsRaw = Number(trace.durationMs ?? 0);
+          if (Number.isFinite(durationMsRaw)) {
+            fallback.durationMs = Math.max(0, Math.round(durationMsRaw));
+          }
+          fallback.status = this.parseTraceStatus(trace.status, fallback.result);
+        }
+        if (fallback && !current.fallbackStepByStep.has(fallback.stepNo)) {
+          current.fallbackStepByStep.set(fallback.stepNo, fallback);
+        }
+      }
+    }
+
+    const results: DashboardTraceRun[] = [];
+    for (let i = 0; i < accumulators.length; i++) {
+      const run = accumulators[i];
+      if (!run.startedAt) {
+        run.startedAt = nowIso();
+      }
+      if (!run.modelProfile) {
+        run.modelProfile = "unknown";
+      }
+      if (!run.modelName) {
+        run.modelName = "unknown";
+      }
+
+      const mergedActions = new Map<number, DashboardTraceAction>(run.fallbackStepByStep);
+      for (const [stepNo, action] of run.actionTraceByStep.entries()) {
+        mergedActions.set(stepNo, action);
+      }
+      const actions = Array.from(mergedActions.values()).sort((a, b) => a.stepNo - b.stepNo);
+
+      let durationMs: number | null = null;
+      const startedMs = Date.parse(run.startedAt);
+      const endedMs = run.endedAt ? Date.parse(run.endedAt) : Number.NaN;
+      if (Number.isFinite(startedMs) && Number.isFinite(endedMs)) {
+        durationMs = Math.max(0, endedMs - startedMs);
+      } else if (Number.isFinite(startedMs) && actions.length > 0) {
+        const latestEnded = Date.parse(actions[actions.length - 1].endedAt);
+        if (Number.isFinite(latestEnded)) {
+          durationMs = Math.max(0, latestEnded - startedMs);
+        }
+      }
+
+      const status: DashboardTraceRun["status"] = run.endedAt
+        ? (run.finalStopReason === "error" ? "failed" : "success")
+        : "running";
+
+      const runSessionId = accumulators.length > 1
+        ? `${sessionId}#${i + 1}`
+        : sessionId;
+
+      results.push({
+        sessionId: runSessionId,
+        sessionPath: filePath,
+        task: run.task,
+        modelProfile: run.modelProfile,
+        modelName: run.modelName,
+        status,
+        startedAt: run.startedAt,
+        endedAt: run.endedAt,
+        durationMs,
+        finalMessage: run.finalMessage,
+        actions,
+      });
+    }
+    return results;
+  }
+
+  private readTraceRuns(limitRuns = 12): DashboardTraceRun[] {
+    const limit = Math.max(1, Math.min(100, Math.round(limitRuns)));
+    const sessionsDir = path.join(this.config.workspaceDir, "sessions");
+    if (!fs.existsSync(sessionsDir)) {
+      return [];
+    }
+    const candidates = fs.readdirSync(sessionsDir)
+      .filter((name) => name.endsWith(".jsonl"))
+      .map((name) => path.join(sessionsDir, name))
+      .map((filePath) => {
+        try {
+          const stat = fs.statSync(filePath);
+          return { filePath, mtimeMs: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter((item): item is { filePath: string; mtimeMs: number } => Boolean(item))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    const allRuns: DashboardTraceRun[] = [];
+    for (const candidate of candidates) {
+      const fileRuns = this.parseSessionTraceFile(candidate.filePath);
+      allRuns.push(...fileRuns);
+      if (allRuns.length >= limit) {
+        break;
+      }
+    }
+    allRuns.sort((a, b) => {
+      const aMs = Date.parse(a.startedAt);
+      const bMs = Date.parse(b.startedAt);
+      if (Number.isFinite(aMs) && Number.isFinite(bMs)) {
+        return bMs - aMs;
+      }
+      return 0;
+    });
+    return allRuns.slice(0, limit);
   }
 
   private async runEmulatorLifecycleExclusive<T>(action: string, fn: () => Promise<T>): Promise<T> {
@@ -988,6 +1375,292 @@ export class DashboardServer {
       white-space: pre-wrap;
       line-height: 1.45;
     }
+    .timeline-wrap {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .trace-run-card {
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      background: #fff;
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .trace-run-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .trace-run-head-left {
+      flex: 1;
+      min-width: 0;
+    }
+    .trace-task {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.4;
+      color: #1a2332;
+    }
+    .trace-kv-line {
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.6;
+      margin-top: 2px;
+    }
+    .trace-pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      letter-spacing: 0.01em;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      color: #475569;
+    }
+    .trace-pill.ok,
+    .trace-pill.success {
+      border-color: #86efac;
+      background: #f0fdf4;
+      color: #166534;
+    }
+    .trace-pill.error,
+    .trace-pill.failed {
+      border-color: #fca5a5;
+      background: #fef2f2;
+      color: #991b1b;
+    }
+    .trace-pill.running {
+      border-color: #c4b5fd;
+      background: #f5f3ff;
+      color: #5b21b6;
+    }
+    .trace-final {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #334155;
+    }
+    .trace-final-label {
+      font-weight: 700;
+      color: #1e293b;
+      margin-right: 4px;
+    }
+    .trace-action-list {
+      display: grid;
+      gap: 0;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .trace-action-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: background 0.1s;
+      border-bottom: 1px solid #f1f5f9;
+      user-select: none;
+    }
+    .trace-action-row:last-child {
+      border-bottom: none;
+    }
+    .trace-action-row:hover {
+      background: #f8fafc;
+    }
+    .trace-action-row:active {
+      background: #f1f5f9;
+    }
+    .trace-action-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1e293b;
+      min-width: 110px;
+    }
+    .trace-action-dots {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      flex: 1;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+    .trace-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .trace-dot.ok {
+      background: #22c55e;
+      box-shadow: 0 0 0 1px rgba(34,197,94,0.25);
+    }
+    .trace-dot.error {
+      background: #ef4444;
+      box-shadow: 0 0 0 1px rgba(239,68,68,0.25);
+    }
+    .trace-action-stats {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .trace-action-arrow {
+      color: #94a3b8;
+      font-size: 14px;
+      margin-left: 4px;
+    }
+    .trace-panel-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      display: none;
+    }
+    .trace-panel-overlay.open {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .trace-panel-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(15,23,42,0.35);
+      animation: panelFadeIn 0.15s ease-out;
+    }
+    .trace-panel-sheet {
+      position: relative;
+      width: 520px;
+      max-width: 90vw;
+      height: 100%;
+      background: #fff;
+      box-shadow: -4px 0 24px rgba(0,0,0,0.12);
+      display: flex;
+      flex-direction: column;
+      animation: panelSlideIn 0.2s ease-out;
+    }
+    @keyframes panelSlideIn {
+      from { transform: translateX(100%); }
+      to { transform: translateX(0); }
+    }
+    @keyframes panelFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .trace-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 20px;
+      border-bottom: 1px solid #e2e8f0;
+      flex-shrink: 0;
+    }
+    .trace-panel-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      color: #1e293b;
+    }
+    .trace-panel-close {
+      background: none;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      width: 32px;
+      height: 32px;
+      font-size: 18px;
+      cursor: pointer;
+      color: #64748b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.1s;
+      flex-shrink: 0;
+    }
+    .trace-panel-close:hover {
+      background: #f1f5f9;
+      color: #1e293b;
+    }
+    .trace-panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+    .trace-step-card {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px 14px;
+      display: grid;
+      gap: 8px;
+    }
+    .trace-step-card.ok {
+      border-left: 3px solid #22c55e;
+    }
+    .trace-step-card.error {
+      border-left: 3px solid #ef4444;
+    }
+    .trace-step-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .trace-step-head-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .trace-step-title {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 700;
+      color: #1e293b;
+    }
+    .trace-step-meta {
+      font-size: 11px;
+      color: #94a3b8;
+    }
+    .trace-step-chips {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .trace-block {
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      background: #f8fafc;
+      padding: 8px 10px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      color: #334155;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .trace-block-label {
+      display: block;
+      font-family: var(--sans);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      margin-bottom: 3px;
+    }
     @media (max-width: 980px) {
       .grid.cols-2 {
         grid-template-columns: 1fr;
@@ -1034,6 +1707,7 @@ export class DashboardServer {
       <button class="tab-btn" data-tab="onboarding">Onboarding</button>
       <button class="tab-btn" data-tab="permissions">Permissions</button>
       <button class="tab-btn" data-tab="prompts">Agent Prompts</button>
+      <button class="tab-btn" data-tab="timeline">Action Timeline</button>
       <button class="tab-btn" data-tab="logs">Logs</button>
     </div>
 
@@ -1103,6 +1777,26 @@ export class DashboardServer {
             </div>
             <div class="hint">Click on preview image to send tap. Coordinates are mapped to device pixels.</div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="timeline">
+      <div class="card">
+        <div class="row spread">
+          <h3 style="margin:0;">Action Timeline</h3>
+          <div class="row">
+            <button class="btn" id="timeline-refresh-btn">Refresh</button>
+            <label class="row">
+              <input type="checkbox" id="timeline-auto" checked />
+              <span>Auto refresh (3s)</span>
+            </label>
+            <span class="hint" id="timeline-meta"></span>
+          </div>
+        </div>
+        <p class="hint">Grouped by run and action. Click an action to view step details.</p>
+        <div class="timeline-wrap" id="timeline-runs">
+          <div class="placeholder">No trace runs yet.</div>
         </div>
       </div>
     </section>
@@ -1273,6 +1967,16 @@ export class DashboardServer {
       </div>
     </section>
   </div>
+  <div class="trace-panel-overlay" id="trace-panel-overlay">
+    <div class="trace-panel-backdrop" id="trace-panel-backdrop"></div>
+    <div class="trace-panel-sheet" id="trace-panel-sheet">
+      <div class="trace-panel-head">
+        <h4 class="trace-panel-title" id="trace-panel-title"></h4>
+        <button class="trace-panel-close" id="trace-panel-close">&times;</button>
+      </div>
+      <div class="trace-panel-body" id="trace-panel-body"></div>
+    </div>
+  </div>
   <script>
     const state = {
       runtime: null,
@@ -1285,8 +1989,10 @@ export class DashboardServer {
       previewTimer: null,
       runtimeTimer: null,
       logsTimer: null,
+      timelineTimer: null,
       emulatorActionPending: false,
       credentialStatus: {},
+      traceRuns: [],
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -1650,6 +2356,293 @@ export class DashboardServer {
       $("#logs-meta").textContent = lines.length + " lines";
     }
 
+    function formatDuration(durationMs) {
+      const ms = Number(durationMs);
+      if (!Number.isFinite(ms) || ms < 0) {
+        return "n/a";
+      }
+      if (ms === 0) {
+        return "<1ms";
+      }
+      if (ms < 1000) {
+        return Math.round(ms) + "ms";
+      }
+      const totalSeconds = ms / 1000;
+      if (totalSeconds < 60) {
+        return totalSeconds.toFixed(totalSeconds < 10 ? 1 : 0) + "s";
+      }
+      const mins = Math.floor(totalSeconds / 60);
+      const secs = Math.round(totalSeconds - (mins * 60));
+      return mins + "m " + secs + "s";
+    }
+
+    function formatTime(value) {
+      const parsed = Date.parse(String(value || ""));
+      if (!Number.isFinite(parsed)) {
+        return "n/a";
+      }
+      return new Date(parsed).toLocaleString();
+    }
+
+    function makeStatusPill(status) {
+      const pill = document.createElement("span");
+      const normalized = String(status || "unknown").toLowerCase();
+      pill.className = "trace-pill " + normalized;
+      pill.textContent = normalized;
+      return pill;
+    }
+
+    function openTracePanel(title, steps) {
+      const overlay = $("#trace-panel-overlay");
+      $("#trace-panel-title").textContent = title;
+      const body = $("#trace-panel-body");
+      body.textContent = "";
+
+      for (const step of steps) {
+        const card = document.createElement("section");
+        card.className = "trace-step-card " + String(step.status || "ok");
+
+        const head = document.createElement("div");
+        head.className = "trace-step-head";
+        const headLeft = document.createElement("div");
+        headLeft.className = "trace-step-head-left";
+        const title = document.createElement("span");
+        title.className = "trace-step-title";
+        title.textContent = "Step " + String(step.stepNo || "?");
+        headLeft.appendChild(title);
+        const app = document.createElement("span");
+        app.className = "trace-step-meta";
+        app.textContent = String(step.currentApp || "");
+        headLeft.appendChild(app);
+        head.appendChild(headLeft);
+
+        const chips = document.createElement("div");
+        chips.className = "trace-step-chips";
+        chips.appendChild(makeStatusPill(step.status || "ok"));
+        const dur = document.createElement("span");
+        dur.className = "trace-pill";
+        dur.textContent = formatDuration(step.durationMs);
+        chips.appendChild(dur);
+        head.appendChild(chips);
+        card.appendChild(head);
+
+        const meta = document.createElement("div");
+        meta.className = "trace-step-meta";
+        meta.textContent =
+          formatTime(step.startedAt) +
+          (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : "");
+        card.appendChild(meta);
+
+        if (step.reasoning && step.reasoning !== "(empty)") {
+          const block = document.createElement("div");
+          block.className = "trace-block";
+          const label = document.createElement("span");
+          label.className = "trace-block-label";
+          label.textContent = "Reasoning";
+          block.appendChild(label);
+          block.appendChild(document.createTextNode(String(step.reasoning)));
+          card.appendChild(block);
+        }
+
+        if (step.result && step.result !== "(empty)") {
+          const block = document.createElement("div");
+          block.className = "trace-block";
+          const label = document.createElement("span");
+          label.className = "trace-block-label";
+          label.textContent = "Outcome";
+          block.appendChild(label);
+          block.appendChild(document.createTextNode(String(step.result)));
+          card.appendChild(block);
+        }
+
+        body.appendChild(card);
+      }
+
+      overlay.classList.add("open");
+    }
+
+    function closeTracePanel() {
+      $("#trace-panel-overlay").classList.remove("open");
+    }
+
+    function bindTracePanelEvents() {
+      const backdrop = $("#trace-panel-backdrop");
+      const closeBtn = $("#trace-panel-close");
+      if (backdrop) backdrop.addEventListener("click", closeTracePanel);
+      if (closeBtn) closeBtn.addEventListener("click", closeTracePanel);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeTracePanel();
+      });
+    }
+
+    function renderTraces(runs) {
+      const host = $("#timeline-runs");
+      host.textContent = "";
+      if (!Array.isArray(runs) || runs.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "placeholder";
+        empty.textContent = "No trace runs yet.";
+        host.appendChild(empty);
+        $("#timeline-meta").textContent = "0 runs";
+        return;
+      }
+
+      for (const run of runs) {
+        const card = document.createElement("article");
+        card.className = "trace-run-card";
+
+        const head = document.createElement("div");
+        head.className = "trace-run-head";
+
+        const left = document.createElement("div");
+        left.className = "trace-run-head-left";
+        const task = document.createElement("h4");
+        task.className = "trace-task";
+        task.textContent = run.task || "(no task text)";
+        left.appendChild(task);
+
+        const runMeta = document.createElement("div");
+        runMeta.className = "trace-kv-line";
+        runMeta.textContent =
+          "Session: " + (run.sessionId || "unknown") +
+          " | Model: " + (run.modelProfile || "unknown") +
+          " (" + (run.modelName || "unknown") + ")" +
+          " | Duration: " + formatDuration(run.durationMs);
+        left.appendChild(runMeta);
+
+        const runTimes = document.createElement("div");
+        runTimes.className = "trace-kv-line";
+        runTimes.textContent =
+          "Started: " + formatTime(run.startedAt) +
+          (run.endedAt ? " | Ended: " + formatTime(run.endedAt) : " | Ended: running");
+        left.appendChild(runTimes);
+
+        const right = document.createElement("div");
+        right.appendChild(makeStatusPill(run.status));
+
+        head.appendChild(left);
+        head.appendChild(right);
+        card.appendChild(head);
+
+        if (run.finalMessage) {
+          const finalBlock = document.createElement("div");
+          finalBlock.className = "trace-final";
+          const finalLabel = document.createElement("span");
+          finalLabel.className = "trace-final-label";
+          finalLabel.textContent = "Result:";
+          finalBlock.appendChild(finalLabel);
+          finalBlock.appendChild(document.createTextNode(" " + run.finalMessage));
+          card.appendChild(finalBlock);
+        }
+
+        const actions = Array.isArray(run.actions) ? run.actions : [];
+        if (actions.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "placeholder";
+          empty.textContent = "No completed actions recorded.";
+          card.appendChild(empty);
+        } else {
+          const groupsByAction = new Map();
+          for (const action of actions) {
+            const actionType = String(action.actionType || "unknown");
+            if (!groupsByAction.has(actionType)) {
+              groupsByAction.set(actionType, {
+                actionType,
+                steps: [],
+                totalDurationMs: 0,
+                errorCount: 0,
+                firstStepNo: Number(action.stepNo || 0),
+              });
+            }
+            const group = groupsByAction.get(actionType);
+            group.steps.push(action);
+            group.totalDurationMs += Number(action.durationMs || 0);
+            if (String(action.status || "ok") === "error") {
+              group.errorCount += 1;
+            }
+            group.firstStepNo = Math.min(group.firstStepNo, Number(action.stepNo || 0));
+          }
+
+          const actionGroups = Array.from(groupsByAction.values())
+            .map((g) => ({
+              ...g,
+              steps: g.steps.sort((a, b) => Number(a.stepNo || 0) - Number(b.stepNo || 0)),
+            }))
+            .sort((a, b) => a.firstStepNo - b.firstStepNo);
+
+          const list = document.createElement("div");
+          list.className = "trace-action-list";
+
+          for (const group of actionGroups) {
+            const row = document.createElement("div");
+            row.className = "trace-action-row";
+
+            const name = document.createElement("div");
+            name.className = "trace-action-name";
+            name.textContent = group.actionType;
+            row.appendChild(name);
+
+            const dots = document.createElement("div");
+            dots.className = "trace-action-dots";
+            for (const step of group.steps) {
+              const dot = document.createElement("span");
+              dot.className = "trace-dot " + String(step.status || "ok");
+              dot.title = "Step " + step.stepNo + " (" + String(step.status || "ok") + ")";
+              dots.appendChild(dot);
+            }
+            row.appendChild(dots);
+
+            const stats = document.createElement("div");
+            stats.className = "trace-action-stats";
+            const countPill = document.createElement("span");
+            countPill.className = "trace-pill";
+            countPill.textContent = String(group.steps.length) + " step" + (group.steps.length === 1 ? "" : "s");
+            stats.appendChild(countPill);
+            const durPill = document.createElement("span");
+            durPill.className = "trace-pill";
+            durPill.textContent = formatDuration(group.totalDurationMs);
+            stats.appendChild(durPill);
+            if (group.errorCount > 0) {
+              stats.appendChild(makeStatusPill("error"));
+            }
+            const arrow = document.createElement("span");
+            arrow.className = "trace-action-arrow";
+            arrow.textContent = "\\u203A";
+            stats.appendChild(arrow);
+            row.appendChild(stats);
+
+            row.addEventListener("click", () => {
+              const panelTitle =
+                group.actionType +
+                " \\u2014 " +
+                group.steps.length + " step" + (group.steps.length === 1 ? "" : "s") +
+                " \\u2014 " +
+                formatDuration(group.totalDurationMs);
+              openTracePanel(panelTitle, group.steps);
+            });
+
+            list.appendChild(row);
+          }
+          card.appendChild(list);
+        }
+
+        host.appendChild(card);
+      }
+
+      $("#timeline-meta").textContent = runs.length + " run" + (runs.length === 1 ? "" : "s");
+    }
+
+    async function loadTraces(options = {}) {
+      const silent = options.silent !== false;
+      const payload = await api("/api/traces?limit=12");
+      const runs = Array.isArray(payload.runs) ? payload.runs : [];
+      state.traceRuns = runs;
+      renderTraces(runs);
+      if (!silent) {
+        setStatus("Action timeline refreshed.", "ok");
+      }
+    }
+
     async function refreshPreview(options = {}) {
       const silent = Boolean(options.silent);
       if (!silent) {
@@ -1776,12 +2769,16 @@ export class DashboardServer {
     }
 
     function bindEvents() {
+      bindTracePanelEvents();
       document.querySelectorAll(".tab-btn").forEach((button) => {
         button.addEventListener("click", () => {
           const tab = button.dataset.tab;
           activateTab(tab);
           if (tab === "logs") {
             loadLogs().catch(() => {});
+          }
+          if (tab === "timeline") {
+            loadTraces({ silent: true }).catch(() => {});
           }
           if (tab === "permissions") {
             loadScopedFiles().catch(() => {});
@@ -1924,6 +2921,10 @@ export class DashboardServer {
         loadLogs().catch((error) => setStatus(error.message, "error"));
       });
 
+      $("#timeline-refresh-btn").addEventListener("click", () => {
+        loadTraces({ silent: false }).catch((error) => setStatus(error.message, "error"));
+      });
+
       $("#logs-clear-btn").addEventListener("click", () => {
         api("/api/logs/clear", { method: "POST", body: "{}" })
           .then(() => loadLogs())
@@ -1945,16 +2946,35 @@ export class DashboardServer {
           }, 2000);
         }
       });
+
+      $("#timeline-auto").addEventListener("change", (event) => {
+        const enabled = event.target.checked;
+        if (state.timelineTimer) {
+          clearInterval(state.timelineTimer);
+          state.timelineTimer = null;
+        }
+        if (enabled) {
+          state.timelineTimer = setInterval(() => {
+            if (document.querySelector('[data-panel="timeline"]').classList.contains("active")) {
+              loadTraces({ silent: true }).catch(() => {});
+            }
+          }, 3000);
+        }
+      });
     }
 
     async function init() {
       bindEvents();
+      if ($("#timeline-auto").checked) {
+        $("#timeline-auto").dispatchEvent(new Event("change"));
+      }
       try {
         await loadRuntime();
         await loadConfigAndOnboarding();
         await loadControlSettings();
         await loadScopedFiles();
         await loadLogs();
+        await loadTraces();
         setStatus("Dashboard ready.", "ok");
       } catch (error) {
         setStatus(error.message || "Initialization failed", "error");
@@ -1992,6 +3012,18 @@ export class DashboardServer {
 
       if (method === "GET" && url.pathname === "/api/runtime") {
         sendJson(res, 200, this.runtimePayload());
+        return;
+      }
+
+      if (method === "GET" && url.pathname === "/api/traces") {
+        const limitRaw = Number(url.searchParams.get("limit") ?? "12");
+        const limit = Number.isFinite(limitRaw)
+          ? Math.max(1, Math.min(100, Math.round(limitRaw)))
+          : 12;
+        sendJson(res, 200, {
+          runs: this.readTraceRuns(limit),
+          fetchedAt: nowIso(),
+        });
         return;
       }
 

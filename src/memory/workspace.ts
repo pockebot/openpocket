@@ -10,6 +10,7 @@ import type {
   SessionCreatePayload,
   SessionFinalizePayload,
   SessionStepPayload,
+  SessionStepTraceDetails,
 } from "../agent/session-backend.js";
 import { SessionMarkdownBackend } from "../agent/session-markdown-backend.js";
 import { SessionOpenclawStoreBackend } from "../agent/session-openclaw-store-backend.js";
@@ -380,7 +381,14 @@ export class WorkspaceStore {
     });
   }
 
-  appendStep(session: SessionHandle, stepNo: number, thought: string, actionJson: string, result: string): void {
+  appendStep(
+    session: SessionHandle,
+    stepNo: number,
+    thought: string,
+    actionJson: string,
+    result: string,
+    trace?: SessionStepTraceDetails,
+  ): void {
     const payload: SessionStepPayload = {
       sessionId: session.id,
       sessionPath: session.path,
@@ -390,6 +398,7 @@ export class WorkspaceStore {
       thought,
       actionJson,
       result,
+      trace,
     };
     for (const backend of this.sessionBackends) {
       backend.appendStep(payload);
