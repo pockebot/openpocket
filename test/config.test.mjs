@@ -45,8 +45,9 @@ async function withTempCodexHome(prefix, fn) {
 test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
   await withTempHome("openpocket-config-default-", async (home) => {
     const cfg = loadConfig();
-    assert.equal(cfg.sessionStorage.backend, "markdown");
-    assert.equal(cfg.sessionStorage.dualWriteJsonl, false);
+    assert.equal(cfg.sessionStorage.mode, "openclaw");
+    assert.equal(cfg.sessionStorage.markdownLog, true);
+    assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(cfg.agent.returnHomeOnTaskEnd, true);
     assert.equal(cfg.agent.systemPromptMode, "full");
     assert.equal(cfg.agent.contextBudgetChars, 150_000);
@@ -150,8 +151,9 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     );
 
     const cfg = loadConfig();
-    assert.equal(cfg.sessionStorage.backend, "markdown");
-    assert.equal(cfg.sessionStorage.dualWriteJsonl, true);
+    assert.equal(cfg.sessionStorage.mode, "openclaw");
+    assert.equal(cfg.sessionStorage.markdownLog, true);
+    assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(cfg.agent.returnHomeOnTaskEnd, false);
     assert.equal(cfg.agent.systemPromptMode, "minimal");
     assert.equal(cfg.agent.contextBudgetChars, 30000);
@@ -176,8 +178,9 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
 
     saveConfig(cfg);
     const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-    assert.equal(saved.sessionStorage.backend, "markdown");
-    assert.equal(saved.sessionStorage.dualWriteJsonl, true);
+    assert.equal(saved.sessionStorage.mode, "openclaw");
+    assert.equal(saved.sessionStorage.markdownLog, true);
+    assert.match(String(saved.sessionStorage.storePath ?? ""), /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(saved.session_storage, undefined);
     assert.equal(saved.agent.returnHomeOnTaskEnd, false);
     assert.equal(saved.agent.systemPromptMode, "minimal");

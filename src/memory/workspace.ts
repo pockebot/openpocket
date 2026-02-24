@@ -11,7 +11,8 @@ import type {
   SessionStepPayload,
 } from "../agent/session-backend.js";
 import { SessionMarkdownBackend } from "../agent/session-markdown-backend.js";
-import { SessionJsonlBackend } from "../agent/session-jsonl-backend.js";
+import { SessionOpenclawStoreBackend } from "../agent/session-openclaw-store-backend.js";
+import { SessionPiTreeJsonlBackend } from "../agent/session-pi-tree-jsonl-backend.js";
 
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";
@@ -279,37 +280,68 @@ export function ensureWorkspaceBootstrap(workspaceDir: string): void {
 export interface SessionHandle {
   id: string;
   path: string;
+  sessionKey?: string;
+  reused?: boolean;
 }
 
 type WorkspaceStoreConfig = Pick<OpenPocketConfig, "workspaceDir"> & {
   sessionStorage?: Partial<SessionStorageConfig>;
 };
 
-function resolveSessionBackends(sessionStorage?: Partial<SessionStorageConfig>): SessionBackend[] {
-  const backends: SessionBackend[] = [new SessionMarkdownBackend()];
-  if (sessionStorage?.dualWriteJsonl === true) {
-    backends.push(new SessionJsonlBackend());
+function resolveSessionStorePath(
+  workspaceDir: string,
+  sessionStorage?: Partial<SessionStorageConfig>,
+): string {
+  const candidate = typeof sessionStorage?.storePath === "string" ? sessionStorage.storePath.trim() : "";
+  return candidate.length > 0
+    ? candidate
+    : path.join(workspaceDir, "sessions", "sessions.json");
+}
+
+function resolveSessionBackends(
+  storePath: string,
+  sessionStorage?: Partial<SessionStorageConfig>,
+): SessionBackend[] {
+  const backends: SessionBackend[] = [
+    new SessionPiTreeJsonlBackend(),
+    new SessionOpenclawStoreBackend(storePath),
+  ];
+  if (sessionStorage?.markdownLog !== false) {
+    backends.push(new SessionMarkdownBackend());
   }
   return backends;
 }
 
 export class WorkspaceStore {
   private readonly workspaceDir: string;
+  private readonly sessionStorePath: string;
   private readonly sessionBackends: SessionBackend[];
 
   constructor(config: WorkspaceStoreConfig) {
     this.workspaceDir = config.workspaceDir;
     ensureWorkspaceBootstrap(this.workspaceDir);
-    this.sessionBackends = resolveSessionBackends(config.sessionStorage);
+    this.sessionStorePath = resolveSessionStorePath(this.workspaceDir, config.sessionStorage);
+    this.sessionBackends = resolveSessionBackends(this.sessionStorePath, config.sessionStorage);
   }
 
-  createSession(task: string, modelProfile: string, modelName: string): SessionHandle {
-    const id = nowForFilename();
-    const sessionPath = path.join(this.workspaceDir, "sessions", `session-${id}.md`);
+  createSession(
+    task: string,
+    modelProfile: string,
+    modelName: string,
+    options?: { sessionKey?: string },
+  ): SessionHandle {
+    const normalizedSessionKey = options?.sessionKey?.trim() || undefined;
+    const existing = normalizedSessionKey
+      ? SessionOpenclawStoreBackend.resolveExistingSession(this.sessionStorePath, normalizedSessionKey)
+      : null;
+
+    const id = existing?.sessionId ?? nowForFilename();
+    const sessionPath = existing?.sessionPath ?? path.join(this.workspaceDir, "sessions", `session-${id}.jsonl`);
     const startedAt = nowIso();
     const payload: SessionCreatePayload = {
       sessionId: id,
       sessionPath,
+      sessionKey: normalizedSessionKey,
       task,
       modelProfile,
       modelName,
@@ -318,13 +350,19 @@ export class WorkspaceStore {
     for (const backend of this.sessionBackends) {
       backend.create(payload);
     }
-    return { id, path: sessionPath };
+    return {
+      id,
+      path: sessionPath,
+      sessionKey: normalizedSessionKey,
+      reused: Boolean(existing),
+    };
   }
 
   appendStep(session: SessionHandle, stepNo: number, thought: string, actionJson: string, result: string): void {
     const payload: SessionStepPayload = {
       sessionId: session.id,
       sessionPath: session.path,
+      sessionKey: session.sessionKey,
       stepNo,
       at: nowIso(),
       thought,
@@ -340,6 +378,7 @@ export class WorkspaceStore {
     const payload: SessionFinalizePayload = {
       sessionId: session.id,
       sessionPath: session.path,
+      sessionKey: session.sessionKey,
       status: ok ? "SUCCESS" : "FAILED",
       endedAt: nowIso(),
       message,

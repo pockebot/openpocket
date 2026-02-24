@@ -80,8 +80,9 @@ export interface DashboardConfig {
 }
 
 export interface SessionStorageConfig {
-  backend: "markdown";
-  dualWriteJsonl: boolean;
+  mode: "openclaw";
+  storePath: string;
+  markdownLog: boolean;
 }
 
 export interface HumanAuthTunnelNgrokConfig {

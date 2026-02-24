@@ -416,6 +416,55 @@ test("AgentRuntime supports none system prompt mode for constrained runs", async
   assert.doesNotMatch(capturedSystemPrompt, /Planning Loop/);
 });
 
+test("AgentRuntime seeds prior transcript context when sessionKey is reused", async () => {
+  const initMessages = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        initMessages.push(options.initialState?.messages ?? []);
+      },
+    },
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const first = await runtime.runTask(
+    "first continuity task",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "telegram:chat:seed-test",
+  );
+  const second = await runtime.runTask(
+    "second continuity task",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "telegram:chat:seed-test",
+  );
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(first.sessionPath, second.sessionPath);
+  assert.equal(initMessages.length >= 2, true);
+
+  const secondRunMessages = initMessages[1];
+  assert.equal(
+    secondRunMessages.some((message) => JSON.stringify(message).includes("first continuity task")),
+    true,
+  );
+});
+
 test("AgentRuntime context report marks hook usage and head-tail truncation", () => {
   const runtime = setupRuntime({ returnHomeOnTaskEnd: false, scriptedSteps: [] });
   const hookDir = path.join(runtime.config.workspaceDir, ".openpocket");
@@ -1067,7 +1116,7 @@ test("AgentRuntime redacts custom user decision input from logs/history", async 
 
   assert.equal(result.ok, true);
   const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
-  assert.match(sessionText, /selected="\[custom-input\]"/);
+  assert.match(sessionText, /selected=(?:"|\\")\[custom-input\](?:"|\\")/);
   assert.match(sessionText, /source=custom_input/);
   assert.doesNotMatch(sessionText, /my-sensitive-free-text/);
   assert.doesNotMatch(sessionText, /user decision raw input:/i);

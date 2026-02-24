@@ -3,8 +3,9 @@
   "workspaceDir": "~/.openpocket/workspace",
   "stateDir": "~/.openpocket/state",
   "sessionStorage": {
-    "backend": "markdown",
-    "dualWriteJsonl": false
+    "mode": "openclaw",
+    "storePath": "~/.openpocket/workspace/sessions/sessions.json",
+    "markdownLog": true
   },
   "defaultModel": "gpt-5.2-codex",
   "emulator": {

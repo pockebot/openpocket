@@ -53,6 +53,24 @@ function createAttemptDeps(runtime) {
   };
 }
 
+function normalizeVolatileRuntimeMessage(message) {
+  return String(message)
+    .split(/\r?\n/g)
+    .filter((line) => {
+      if (/^Server had pid:\s+\d+/i.test(line)) {
+        return false;
+      }
+      if (/^--- adb starting \(pid\s+\d+\)\s+---$/i.test(line)) {
+        return false;
+      }
+      if (/^\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}\s+\d+\s+\d+\s+[A-Z]\s+adb\s+:/i.test(line)) {
+        return false;
+      }
+      return true;
+    })
+    .join("\n");
+}
+
 test("runRuntimeTask keeps busy rejection contract", async () => {
   const result = await runRuntimeTask(
     {
@@ -124,7 +142,10 @@ test("runTask entry and attempt layer keep result shape aligned", async () => {
     [...Object.keys(attemptResult.result)].sort(),
   );
   assert.equal(entryResult.ok, attemptResult.result.ok);
-  assert.equal(entryResult.message, attemptResult.result.message);
+  assert.equal(
+    normalizeVolatileRuntimeMessage(entryResult.message),
+    normalizeVolatileRuntimeMessage(attemptResult.result.message),
+  );
   assert.equal(typeof entryResult.sessionPath, "string");
   assert.equal(typeof attemptResult.result.sessionPath, "string");
   assert.equal(entryResult.skillPath, attemptResult.result.skillPath);

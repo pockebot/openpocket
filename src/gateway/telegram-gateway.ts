@@ -1311,7 +1311,13 @@ export class TelegramGateway {
       acceptedMessage,
     );
     this.chat.appendExternalTurn(chatId, "assistant", acceptedMessage);
-    void this.runTaskAndReport({ chatId, task, source: "chat", modelName: null });
+    void this.runTaskAndReport({
+      chatId,
+      task,
+      source: "chat",
+      modelName: null,
+      sessionKey: `telegram:chat:${chatId}`,
+    });
   }
 
   private async runScheduledJob(job: CronJob): Promise<CronRunResult> {
@@ -1332,6 +1338,7 @@ export class TelegramGateway {
       task: job.task,
       source: "cron",
       modelName: job.model,
+      sessionKey: job.chatId !== null ? `telegram:chat:${job.chatId}` : `telegram:cron:${job.id}`,
     });
   }
 
@@ -1340,8 +1347,9 @@ export class TelegramGateway {
     task: string;
     source: "chat" | "cron";
     modelName: string | null;
+    sessionKey: string;
   }): Promise<CronRunResult> {
-    const { chatId, task, source, modelName } = params;
+    const { chatId, task, source, modelName, sessionKey } = params;
     const progressLocale = this.inferTaskLocale(task);
     const progressNarrationState: ProgressNarrationState = {
       lastNotifiedProgress: null,
@@ -1539,6 +1547,7 @@ export class TelegramGateway {
           chatId === null
             ? undefined
             : async (request) => this.requestUserDecisionFromChat(chatId, request),
+          sessionKey,
         );
         await progressWork;
 
