@@ -457,12 +457,20 @@ export class HumanAuthRelayServer {
     }
     .lockBadgeText {
       min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.25;
+      white-space: normal;
+      gap: 1px;
+    }
+    .lockBadgeLine {
+      display: block;
     }
     .hostName {
+      display: block;
       font-weight: 700;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .requestId {
       color: var(--op-ink-soft);
@@ -623,6 +631,12 @@ export class HumanAuthRelayServer {
       width: 100%;
       min-width: 0;
     }
+    .securityTrust {
+      margin-top: 2px;
+      margin-bottom: 10px;
+      color: #5a4a38;
+      line-height: 1.5;
+    }
     .hidden { display: none !important; }
     .grid2 { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .takeover-head {
@@ -770,7 +784,10 @@ export class HumanAuthRelayServer {
       <div class="brandRow">
         <div class="lockBadge">
           <span class="lockIcon">🔒</span>
-          <span class="lockBadgeText">Encrypted Local Relay running on <span class="hostName">${localHostName}</span></span>
+          <span class="lockBadgeText">
+            <span class="lockBadgeLine">Encrypted Local Relay running on</span>
+            <span class="hostName">${localHostName}</span>
+          </span>
         </div>
         <div class="requestId">Request: ${requestId}</div>
       </div>
@@ -813,6 +830,9 @@ export class HumanAuthRelayServer {
             <div class="actions decisionActions">
               <button id="approve" type="button">Approve</button>
               <button id="reject" type="button">Reject</button>
+            </div>
+            <div class="muted securityTrust">
+              Security: this is a one-time authorization link. All transmissions are encrypted. Relay and credential handling run only on your own computer.
             </div>
             <label for="note">Decision Note (Optional)</label>
             <textarea id="note" placeholder="Optional message to agent"></textarea>
