@@ -196,6 +196,21 @@ test("AdbRuntime fails clearly when non-ASCII input methods are unavailable", as
 
   await assert.rejects(
     runtime.executeAction({ type: "type", text: "旧金山 天气" }),
-    /Non-ASCII text input failed/,
+    /Text input failed/,
   );
+});
+
+test("AdbRuntime uses clipboard paste for passwords with special characters", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({ type: "type", text: "P@ssw0rd!#$" });
+  assert.match(result, /clipboard paste/i);
+  assert.equal(
+    emulator.calls.some(
+      (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "text",
+    ),
+    false,
+  );
+  assert.equal(emulator.calls.some((args) => args.includes("KEYCODE_PASTE")), true);
 });

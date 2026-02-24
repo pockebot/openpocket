@@ -133,6 +133,12 @@ function hasNonAscii(text: string): boolean {
   return /[^\x00-\x7F]/.test(text);
 }
 
+function hasShellSpecialChars(text: string): boolean {
+  // Characters that are special to the Android shell and cannot be reliably
+  // passed through `adb shell input text` without escaping issues.
+  return /[(){}[\]<>|;&$`!\\~"'?#*^@]/.test(text);
+}
+
 function looksLikeClipboardCommandError(text: string): boolean {
   const normalized = String(text || "").toLowerCase();
   if (!normalized) {
@@ -491,8 +497,10 @@ export class AdbRuntime {
       case "type": {
         const encoded = encodeInputText(action.text);
         // On some emulator images, `input text` throws NPE for unicode text.
-        // Use clipboard/ADB keyboard for non-ASCII and never call `input text`.
-        if (hasNonAscii(action.text)) {
+        // Shell-special characters (e.g. !@#$%^&) are also mangled by the
+        // device shell when passed via `adb shell input text`.
+        // Use clipboard/ADB keyboard for both cases.
+        if (hasNonAscii(action.text) || hasShellSpecialChars(action.text)) {
           try {
             return this.inputByClipboardPaste(deviceId, action.text);
           } catch (clipboardError) {
@@ -500,7 +508,7 @@ export class AdbRuntime {
               return this.inputByAdbKeyboard(deviceId, action.text);
             } catch (imeError) {
               throw new Error(
-                `Non-ASCII text input failed (clipboard + adb keyboard): clipboard=${errorMessage(clipboardError)}; adbKeyboard=${errorMessage(imeError)}`,
+                `Text input failed (clipboard + adb keyboard): clipboard=${errorMessage(clipboardError)}; adbKeyboard=${errorMessage(imeError)}`,
               );
             }
           }
