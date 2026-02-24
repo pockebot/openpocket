@@ -1077,6 +1077,120 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
   }
 });
 
+test("AgentRuntime supports split oauth screens with cached credentials reuse", async () => {
+  const actions = [];
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-split-${Date.now()}.json`);
+  fs.writeFileSync(
+    artifactFile,
+    JSON.stringify({
+      kind: "credentials",
+      username: "alice@example.com",
+      password: "S3cret-987",
+      capability: "oauth",
+    }),
+    "utf-8",
+  );
+
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need Google account username",
+        action: {
+          type: "request_human_auth",
+          capability: "oauth",
+          instruction: "Provide account credentials.",
+          timeoutSec: 120,
+        },
+      },
+      {
+        thought: "Need Google password on next screen",
+        action: {
+          type: "request_human_auth",
+          capability: "oauth",
+          instruction: "Continue oauth login",
+          timeoutSec: 120,
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed split oauth login" } },
+    ],
+  });
+
+  runtime.adb = {
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
+  };
+  let dumpReads = 0;
+  runtime.emulator = {
+    runAdb: (args) => {
+      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
+        dumpReads += 1;
+        if (dumpReads === 1) {
+          return [
+            "<hierarchy>",
+            '<node index="0" text="" resource-id="com.demo:id/identifierId" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[60,320][1020,430]" />',
+            "</hierarchy>",
+          ].join("");
+        }
+        return [
+          "<hierarchy>",
+          '<node index="0" text="" resource-id="com.demo:id/password" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="true" selected="false" bounds="[60,460][1020,570]" />',
+          "</hierarchy>",
+        ].join("");
+      }
+      return "ok";
+    },
+  };
+
+  let authCalls = 0;
+  try {
+    const result = await runtime.runTask(
+      "split oauth login test",
+      undefined,
+      undefined,
+      async () => {
+        authCalls += 1;
+        if (authCalls === 1) {
+          return {
+            requestId: "req-oauth-1",
+            approved: true,
+            status: "approved",
+            message: "Credentials shared",
+            decidedAt: new Date().toISOString(),
+            artifactPath: artifactFile,
+          };
+        }
+        return {
+          requestId: "req-oauth-2",
+          approved: true,
+          status: "approved",
+          message: "Approved without re-upload",
+          decidedAt: new Date().toISOString(),
+          artifactPath: null,
+        };
+      },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(authCalls, 2);
+    const usernameTyped = actions.filter((action) => action.type === "type" && action.text === "alice@example.com");
+    const passwordTyped = actions.filter((action) => action.type === "type" && action.text === "S3cret-987");
+    assert.equal(usernameTyped.length >= 1, true);
+    assert.equal(passwordTyped.length >= 1, true);
+    // Username should be typed before password across split screens.
+    const firstUsernameIndex = actions.findIndex((action) => action.type === "type" && action.text === "alice@example.com");
+    const firstPasswordIndex = actions.findIndex((action) => action.type === "type" && action.text === "S3cret-987");
+    assert.equal(firstUsernameIndex >= 0, true);
+    assert.equal(firstPasswordIndex > firstUsernameIndex, true);
+  } finally {
+    fs.rmSync(artifactFile, { force: true });
+  }
+});
+
 test("AgentRuntime redacts custom user decision input from logs/history", async () => {
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,

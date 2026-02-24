@@ -531,6 +531,26 @@ test("ChatAssistant model-driven onboarding completes and removes bootstrap file
   assert.equal(payload?.assistantName, "Jarvis-Phone");
 });
 
+test("ChatAssistant does not accept model completion wording when required onboarding fields are still missing", async () => {
+  const { assistant } = createAssistant({ withApiKey: true, keepProfileEmpty: true });
+  assistant.requestBootstrapOnboardingDecision = async () => ({
+    reply: "Perfect, Sergio — all set. You can call me OpenPocket.",
+    profile: {
+      userPreferredAddress: "sergio",
+      assistantName: "OpenPocket",
+      assistantPersona: "pragmatic, calm, reliable",
+    },
+    writeProfile: true,
+    onboardingComplete: true,
+  });
+
+  const out = await assistant.decide(42, "叫我 sergio");
+  assert.equal(out.mode, "chat");
+  assert.equal(out.reason, "profile_onboarding");
+  assert.match(out.reply, /希望我叫什么名字|what name would you like to call me/i);
+  assert.doesNotMatch(out.reply, /all set/i);
+});
+
 test("ChatAssistant exposes pending profile update after onboarding completion", async () => {
   const { assistant } = createAssistant({ keepProfileEmpty: true });
 

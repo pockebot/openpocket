@@ -165,6 +165,10 @@ type DelegationApplyResult = {
   message: string;
   templateHint: string | null;
   action?: AgentAction | null;
+  oauthTyped?: {
+    username: boolean;
+    password: boolean;
+  };
 };
 
 type PermissionDialogNode = {
@@ -189,6 +193,12 @@ type CredentialInputNode = {
   top: number;
   right: number;
   bottom: number;
+};
+
+type OauthCredentialCache = {
+  username: string;
+  password: string;
+  updatedAtMs: number;
 };
 
 type ResolvedTapElementContext = {
@@ -281,6 +291,7 @@ export class AgentRuntime {
   private currentTaskStartedAtMs: number | null = null;
   private lastSystemPromptReport: WorkspacePromptContextReport | null = null;
   private lastResolvedTapElementContext: ResolvedTapElementContext | null = null;
+  private delegatedOauthCredentials: OauthCredentialCache | null = null;
   private readonly agentFactory: AgentFactory;
 
   constructor(config: OpenPocketConfig, options?: AgentRuntimeOptions) {
@@ -705,6 +716,40 @@ export class AgentRuntime {
     return { username, password };
   }
 
+  private getCachedOauthCredentials(maxAgeMs = 15 * 60 * 1000): { username: string; password: string } | null {
+    const cache = this.delegatedOauthCredentials;
+    if (!cache) {
+      return null;
+    }
+    if (Date.now() - cache.updatedAtMs > maxAgeMs) {
+      this.delegatedOauthCredentials = null;
+      return null;
+    }
+    return {
+      username: cache.username,
+      password: cache.password,
+    };
+  }
+
+  private putCachedOauthCredentials(username: string, password: string): void {
+    const current = this.delegatedOauthCredentials;
+    const mergedUsername = username || current?.username || "";
+    const mergedPassword = password || current?.password || "";
+    if (!mergedUsername && !mergedPassword) {
+      this.delegatedOauthCredentials = null;
+      return;
+    }
+    this.delegatedOauthCredentials = {
+      username: mergedUsername,
+      password: mergedPassword,
+      updatedAtMs: Date.now(),
+    };
+  }
+
+  private clearCachedOauthCredentials(): void {
+    this.delegatedOauthCredentials = null;
+  }
+
   private async applyLocationDelegation(lat: number, lon: number): Promise<DelegationApplyResult> {
     const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
     this.emulator.runAdb(
@@ -810,7 +855,7 @@ export class AgentRuntime {
     if (textNode) {
       return textNode;
     }
-    return filtered[0] ?? null;
+    return null;
   }
 
   private async tapCredentialNode(
@@ -840,57 +885,83 @@ export class AgentRuntime {
     const nodes = this.parseCredentialInputNodes(uiDumpXml);
     let focusedUsernameNode: CredentialInputNode | null = null;
 
+    let typedUsername = false;
+    let typedPassword = false;
+
     if (username) {
       focusedUsernameNode = this.pickCredentialInputNode(nodes, "username", null);
       if (focusedUsernameNode) {
         await this.tapCredentialNode(focusedUsernameNode, "human_auth_focus_username");
+        await this.adb.executeAction(
+          {
+            type: "type",
+            text: username,
+            reason: "human_auth_delegate_username",
+          },
+          this.config.agent.deviceId,
+        );
+        typedUsername = true;
       }
-      await this.adb.executeAction(
-        {
-          type: "type",
-          text: username,
-          reason: "human_auth_delegate_username",
-        },
-        this.config.agent.deviceId,
-      );
     }
 
     if (password) {
       const passwordNode = this.pickCredentialInputNode(nodes, "password", focusedUsernameNode);
       if (passwordNode) {
         await this.tapCredentialNode(passwordNode, "human_auth_focus_password");
-      } else if (username) {
         await this.adb.executeAction(
           {
-            type: "keyevent",
-            keycode: "KEYCODE_TAB",
-            reason: "human_auth_focus_password_tab",
+            type: "type",
+            text: password,
+            reason: "human_auth_delegate_password",
           },
           this.config.agent.deviceId,
         );
-        await sleep(80);
+        typedPassword = true;
       }
-      await this.adb.executeAction(
-        {
-          type: "type",
-          text: password,
-          reason: "human_auth_delegate_password",
-        },
-        this.config.agent.deviceId,
-      );
     }
 
-    // Redact credential details from logs — only report which fields were filled.
-    const filled: string[] = [];
+    // Keep oauth credentials cached for split-screen sign-in (username -> next -> password).
+    this.putCachedOauthCredentials(username, password);
+    if (typedPassword) {
+      // Once password has been typed on-device, clear cache to reduce credential lifetime.
+      this.clearCachedOauthCredentials();
+    }
+
+    // Redact credential details from logs — only report typed/deferred fields.
+    const typed: string[] = [];
+    const deferred: string[] = [];
     if (username) {
-      filled.push("username");
+      if (typedUsername) {
+        typed.push("username");
+      } else {
+        deferred.push("username");
+      }
     }
     if (password) {
-      filled.push("password");
+      if (typedPassword) {
+        typed.push("password");
+      } else {
+        deferred.push("password");
+      }
     }
+    const messageParts: string[] = [];
+    if (typed.length > 0) {
+      messageParts.push(`delegated credentials typed: ${typed.join(" + ")}`);
+    }
+    if (deferred.length > 0) {
+      messageParts.push(`deferred for next oauth step: ${deferred.join(" + ")}`);
+    }
+    if (messageParts.length === 0) {
+      messageParts.push("no credential input fields detected for delegation");
+    }
+
     return {
-      message: `delegated credentials typed: ${filled.join(" + ")}`,
+      message: messageParts.join(" ; "),
       templateHint: "oauth_credentials_typed_continue_flow",
+      oauthTyped: {
+        username: typedUsername,
+        password: typedPassword,
+      },
     };
   }
 
@@ -1469,6 +1540,23 @@ export class AgentRuntime {
     }
 
     if (!decision.approved || !decision.artifactPath) {
+      if (
+        decision.approved &&
+        !decision.artifactPath &&
+        capability === "oauth"
+      ) {
+        const cachedCredentials = this.getCachedOauthCredentials();
+        if (cachedCredentials) {
+          const reused = await this.applyCredentialDelegation(
+            cachedCredentials.username,
+            cachedCredentials.password,
+          );
+          messages.push(reused.message);
+          if (reused.templateHint) {
+            templateHint = reused.templateHint;
+          }
+        }
+      }
       if (
         decision.approved &&
         !decision.artifactPath &&
@@ -2227,6 +2315,7 @@ export class AgentRuntime {
           if (shouldReturnHome) {
             await this.safeReturnToHome();
           }
+          this.clearCachedOauthCredentials();
           this.busy = false;
           this.currentTask = null;
           this.currentTaskStartedAtMs = null;

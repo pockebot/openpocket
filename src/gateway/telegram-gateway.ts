@@ -85,6 +85,7 @@ export class TelegramGateway {
   private lastSyncedBotDisplayName: string | null = null;
   private readonly botDisplayNameSyncStatePath: string;
   private botDisplayNameRateLimitedUntilMs = 0;
+  private playStorePreflightPassed = false;
   private running = false;
   private stoppedPromise: Promise<void> | null = null;
   private stopResolver: (() => void) | null = null;
@@ -385,49 +386,27 @@ export class TelegramGateway {
     }
   }
 
-  private async askPlayStoreSignInChoice(chatId: number, locale: "zh" | "en"): Promise<"manual" | "remote"> {
-    const options = locale === "zh"
-      ? ["我自己在模拟器里登录", "通过 Telegram 远程登录"]
-      : ["I will sign in manually in emulator", "Use Telegram remote sign-in"];
-    const response = await this.requestUserDecisionFromChat(chatId, {
-      sessionId: "playstore-preflight",
-      sessionPath: "onboarding://playstore",
-      task: locale === "zh" ? "Google Play 登录检查" : "Google Play sign-in preflight",
-      step: 1,
-      question:
-        locale === "zh"
-          ? "检测到 Play Store 尚未登录 Google 账号。请选择登录方式："
-          : "Google account is not signed in to Play Store yet. Choose a sign-in method:",
-      options,
-      timeoutSec: 300,
-      currentApp: "com.android.vending",
-      screenshotPath: null,
-    });
-    const selected = String(response.selectedOption || "").trim().toLowerCase();
-    if (selected === options[1].toLowerCase()) {
-      return "remote";
-    }
-    return "manual";
-  }
-
   private playStoreRemoteLoginTask(locale: "zh" | "en"): string {
     if (locale === "zh") {
       return [
-        "打开 Google Play 商店并登录 Google 账号。",
-        "如果出现账号密码或授权页面，发起 request_human_auth(oauth)。",
-        "登录完成后，停留在可搜索安装应用的页面并结束任务。",
+        "打开 Google Play 商店并检查是否已登录 Google 账号。",
+        "如果未登录，完成登录流程。",
+        "遇到账号/密码/授权页面时，发起 request_human_auth(oauth)，并一次性让用户提供用户名和密码。",
+        "Google 登录可能是分步页面（先用户名 Next，再密码），按页面继续推进并完成登录。",
+        "登录完成后，确认 Play Store 可搜索并安装应用，然后结束任务。",
       ].join(" ");
     }
     return [
-      "Open Google Play Store and sign in with a Google account.",
-      "If account credentials or authorization is needed, trigger request_human_auth(oauth).",
-      "After sign-in succeeds, stay on a page where app search/install is available and finish.",
+      "Open Google Play Store and verify whether a Google account is already signed in.",
+      "If not signed in, complete the Google sign-in flow.",
+      "Whenever account/password/authorization is required, trigger request_human_auth(oauth) and ask for username+password together in one submission.",
+      "Google login may be split across pages (username then Next, then password); continue step by step until sign-in completes.",
+      "After sign-in succeeds, verify Play Store can search/install apps, then finish.",
     ].join(" ");
   }
 
   private async ensurePlayStoreReady(chatId: number, locale: "zh" | "en"): Promise<boolean> {
-    const onboarding = this.readOnboardingState();
-    if (typeof onboarding.gmailLoginConfirmedAt === "string" && onboarding.gmailLoginConfirmedAt.trim().length > 0) {
+    if (this.playStorePreflightPassed) {
       return false;
     }
 
@@ -457,45 +436,29 @@ export class TelegramGateway {
         gmailLoginConfirmedAt: new Date().toISOString(),
         playStoreDetected: true,
       });
+      this.playStorePreflightPassed = true;
       return false;
     }
     if (signedIn === null) {
       return false;
     }
 
-    const choice = await this.askPlayStoreSignInChoice(chatId, locale);
-    if (choice === "manual") {
-      await this.bot.sendMessage(
-        chatId,
-        locale === "zh"
-          ? [
-              "好的，请先在模拟器中完成 Play Store 登录：",
-              "1) 打开 Play Store",
-              "2) 登录 Google 账号并完成验证",
-              "3) 确认可以搜索和安装应用",
-              "完成后直接继续发消息，我会自动重检。",
-            ].join("\n")
-          : [
-              "Okay. Please complete Play Store sign-in in the emulator first:",
-              "1) Open Play Store",
-              "2) Sign in with your Google account and complete verification",
-              "3) Confirm app search/install works",
-              "After that, send any message and I will re-check automatically.",
-            ].join("\n"),
-      );
-      return true;
-    }
-
     if (!this.config.humanAuth.enabled) {
       await this.bot.sendMessage(
         chatId,
         locale === "zh"
-          ? "远程登录需要启用 humanAuth。当前未开启，请先在模拟器手动登录，或开启 humanAuth 后重试。"
-          : "Remote sign-in requires humanAuth to be enabled. Please sign in manually first, or enable humanAuth and retry.",
+          ? "检测到 Play Store 未登录，但 humanAuth 未启用。请先在模拟器手动登录 Google 账号，随后我会自动重检。"
+          : "Play Store is not signed in, but humanAuth is disabled. Please sign in manually in emulator and I will re-check automatically.",
       );
       return true;
     }
 
+    await this.bot.sendMessage(
+      chatId,
+      locale === "zh"
+        ? "检测到 Play Store 尚未登录，我现在发起自动登录任务。若出现授权页，我会通过 Telegram 请求你提供凭据。"
+        : "Play Store is not signed in. I will start an automatic sign-in task now and request credentials via Telegram when needed.",
+    );
     await this.runTaskAsync(chatId, this.playStoreRemoteLoginTask(locale));
     return true;
   }
@@ -1223,17 +1186,13 @@ export class TelegramGateway {
       if (await this.trySendOnboardingReply(chatId, locale)) {
         return;
       }
+      if (await this.ensurePlayStoreReady(chatId, locale)) {
+        return;
+      }
 
       const welcome = await this.chat.startReadyReply(locale);
       await this.bot.sendMessage(chatId, this.sanitizeForChat(welcome, 1800));
       return;
-    }
-
-    if (!text.startsWith("/")) {
-      const locale = this.inferLocale(message);
-      if (await this.ensurePlayStoreReady(chatId, locale)) {
-        return;
-      }
     }
 
     if (text.startsWith("/help")) {
@@ -1459,6 +1418,10 @@ export class TelegramGateway {
         await this.bot.sendMessage(chatId, "Usage: /run <task>");
         return;
       }
+      const runLocale = this.inferLocale(message);
+      if (await this.ensurePlayStoreReady(chatId, runLocale)) {
+        return;
+      }
       this.chat.appendExternalTurn(chatId, "user", task);
       await this.runTaskAsync(chatId, task);
       return;
@@ -1473,13 +1436,21 @@ export class TelegramGateway {
       return;
     }
 
+    const onboardingPendingBefore = this.chat.isOnboardingPending();
     const decision = await this.chat.decide(chatId, text);
+    const onboardingCompletedThisTurn = onboardingPendingBefore && !this.chat.isOnboardingPending();
     this.log(
       `decision chat=${chatId} mode=${decision.mode} confidence=${decision.confidence.toFixed(2)} reason=${decision.reason}`,
     );
     if (decision.mode === "task") {
       const task = decision.task || text;
       this.chat.appendExternalTurn(chatId, "user", task);
+      const locale = this.inferLocale(message);
+      if (onboardingCompletedThisTurn || !this.playStorePreflightPassed) {
+        if (await this.ensurePlayStoreReady(chatId, locale)) {
+          return;
+        }
+      }
       await this.runTaskAsync(chatId, task);
       return;
     }
@@ -1489,6 +1460,10 @@ export class TelegramGateway {
     const profileUpdate = this.chat.consumePendingProfileUpdate(chatId);
     if (profileUpdate) {
       await this.syncBotDisplayName(chatId, profileUpdate.assistantName, profileUpdate.locale);
+    }
+    if (onboardingCompletedThisTurn) {
+      const locale = this.inferLocale(message);
+      await this.ensurePlayStoreReady(chatId, locale);
     }
   }
 

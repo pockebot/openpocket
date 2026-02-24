@@ -308,10 +308,64 @@ test("TelegramGateway play-store preflight marks onboarding state when Google ac
   });
 });
 
-test("TelegramGateway play-store preflight offers manual login path when account is missing", async () => {
+test("TelegramGateway play-store preflight re-checks device login even if onboarding state says gmail already confirmed", async () => {
+  await withTempHome("openpocket-telegram-playstore-stale-gmail-state-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+    cfg.humanAuth.enabled = true;
+    fs.mkdirSync(cfg.stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cfg.stateDir, "onboarding.json"),
+      `${JSON.stringify({
+        updatedAt: new Date().toISOString(),
+        gmailLoginConfirmedAt: "2026-02-01T00:00:00.000Z",
+        playStoreDetected: true,
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.emulator.status = () => ({
+      avdName: "OpenPocket_AVD",
+      devices: ["emulator-5554"],
+      bootedDevices: ["emulator-5554"],
+    });
+    gateway.emulator.runAdb = (args) => {
+      if (args.includes("pm") && args.includes("com.android.vending")) {
+        return "package:/system/app/Phonesky/Phonesky.apk";
+      }
+      if (args.includes("dumpsys") && args.includes("account")) {
+        return "Accounts: (none)";
+      }
+      return "";
+    };
+
+    const sent = [];
+    const tasks = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.runTaskAsync = async (_chatId, task) => {
+      tasks.push(task);
+    };
+
+    const handled = await gateway.ensurePlayStoreReady(7304, "zh");
+    assert.equal(handled, true);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /发起自动登录任务/);
+    assert.equal(tasks.length, 1);
+  });
+});
+
+test("TelegramGateway play-store preflight falls back to manual hint when humanAuth is disabled", async () => {
   await withTempHome("openpocket-telegram-playstore-manual-", async () => {
     const cfg = loadConfig();
     cfg.telegram.botToken = "test-bot-token";
+    cfg.humanAuth.enabled = false;
 
     const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
     gateway.bot.on("polling_error", () => {});
@@ -337,17 +391,56 @@ test("TelegramGateway play-store preflight offers manual login path when account
       sent.push({ chatId, text });
       return {};
     };
-    gateway.askPlayStoreSignInChoice = async () => "manual";
 
     const handled = await gateway.ensurePlayStoreReady(7302, "zh");
     assert.equal(handled, true);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /请先在模拟器中完成 Play Store 登录/);
+    assert.match(sent[0].text, /humanAuth 未启用/);
 
     const statePath = path.join(cfg.stateDir, "onboarding.json");
     const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
     assert.equal(state.playStoreDetected, true);
     assert.equal(state.gmailLoginConfirmedAt ?? null, null);
+  });
+});
+
+test("TelegramGateway /start keeps onboarding prompt path when onboarding is still pending", async () => {
+  await withTempHome("openpocket-telegram-start-onboarding-first-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+
+    let onboardingDecideCalled = false;
+    gateway.chat.isOnboardingPending = () => true;
+    gateway.chat.decide = async () => {
+      onboardingDecideCalled = true;
+      return {
+        mode: "chat",
+        task: "",
+        reply: "onboarding prompt first",
+        confidence: 1,
+        reason: "profile_onboarding",
+      };
+    };
+
+    await gateway.consumeMessage({
+      chat: { id: 7305 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "/start",
+    });
+
+    assert.equal(onboardingDecideCalled, true);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /onboarding prompt first/);
   });
 });
 
@@ -376,16 +469,184 @@ test("TelegramGateway play-store preflight can trigger remote login task", async
       return "";
     };
 
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
     const tasks = [];
-    gateway.askPlayStoreSignInChoice = async () => "remote";
     gateway.runTaskAsync = async (_chatId, task) => {
       tasks.push(task);
     };
 
     const handled = await gateway.ensurePlayStoreReady(7303, "zh");
     assert.equal(handled, true);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /自动登录任务/);
     assert.equal(tasks.length, 1);
     assert.match(tasks[0], /request_human_auth\(oauth\)/);
+  });
+});
+
+test("TelegramGateway triggers play-store preflight after onboarding is completed in chat", async () => {
+  await withTempHome("openpocket-telegram-onboarding-complete-preflight-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+
+    let pending = true;
+    gateway.chat.isOnboardingPending = () => pending;
+    gateway.chat.decide = async () => {
+      pending = false;
+      return {
+        mode: "chat",
+        task: "",
+        reply: "onboarding done",
+        confidence: 1,
+        reason: "profile_onboarding",
+      };
+    };
+    gateway.chat.consumePendingProfileUpdate = () => null;
+
+    let preflightCalls = 0;
+    gateway.ensurePlayStoreReady = async () => {
+      preflightCalls += 1;
+      return false;
+    };
+
+    await gateway.consumeMessage({
+      chat: { id: 7306 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "Warm & supportive",
+    });
+
+    assert.equal(preflightCalls, 1);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /onboarding done/);
+  });
+});
+
+test("TelegramGateway triggers play-store preflight before task when onboarding completes on a task-like message", async () => {
+  await withTempHome("openpocket-telegram-onboarding-task-preflight-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    let pending = true;
+    gateway.chat.isOnboardingPending = () => pending;
+    gateway.chat.decide = async () => {
+      pending = false;
+      return {
+        mode: "task",
+        task: "Download X and pin it",
+        reply: "",
+        confidence: 0.95,
+        reason: "task_after_onboarding",
+      };
+    };
+
+    let preflightCalls = 0;
+    gateway.ensurePlayStoreReady = async () => {
+      preflightCalls += 1;
+      return true;
+    };
+
+    let taskCalls = 0;
+    gateway.runTaskAsync = async () => {
+      taskCalls += 1;
+    };
+
+    await gateway.consumeMessage({
+      chat: { id: 7307 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "Can you download X and pin it?",
+    });
+
+    assert.equal(preflightCalls, 1);
+    assert.equal(taskCalls, 0);
+  });
+});
+
+test("TelegramGateway continues task when task-mode preflight returns false", async () => {
+  await withTempHome("openpocket-telegram-task-preflight-pass-through-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.chat.isOnboardingPending = () => false;
+    gateway.chat.decide = async () => ({
+      mode: "task",
+      task: "Check weather in San Francisco",
+      reply: "",
+      confidence: 0.92,
+      reason: "task",
+    });
+
+    let preflightCalls = 0;
+    gateway.ensurePlayStoreReady = async () => {
+      preflightCalls += 1;
+      return false;
+    };
+
+    let runTaskPayload = "";
+    gateway.runTaskAsync = async (_chatId, task) => {
+      runTaskPayload = task;
+    };
+
+    await gateway.consumeMessage({
+      chat: { id: 7308 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "weather sf",
+    });
+
+    assert.equal(preflightCalls, 1);
+    assert.equal(runTaskPayload, "Check weather in San Francisco");
+  });
+});
+
+test("TelegramGateway /run checks play-store preflight before executing forced task", async () => {
+  await withTempHome("openpocket-telegram-run-command-preflight-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    let preflightCalls = 0;
+    gateway.ensurePlayStoreReady = async () => {
+      preflightCalls += 1;
+      return true;
+    };
+
+    let taskCalls = 0;
+    gateway.runTaskAsync = async () => {
+      taskCalls += 1;
+    };
+
+    await gateway.consumeMessage({
+      chat: { id: 7309 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "/run install spotify",
+    });
+
+    assert.equal(preflightCalls, 1);
+    assert.equal(taskCalls, 0);
   });
 });
 

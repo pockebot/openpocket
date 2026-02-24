@@ -1816,7 +1816,9 @@ export class ChatAssistant {
     const shouldComplete =
       (completeByModel && this.isProfileSnapshotComplete(state.profile, locale)) || completeByData;
     if (!shouldComplete) {
-      return decision.reply;
+      // Guardrail: do not let model wording claim completion when required fields
+      // are still incomplete; continue with deterministic next required question.
+      return this.bootstrapFallbackQuestion(locale, state.profile);
     }
 
     this.completeWorkspaceBootstrap(state.profile);
