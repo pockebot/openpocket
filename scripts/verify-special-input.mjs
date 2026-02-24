@@ -29,7 +29,7 @@ function sleep(ms) {
 }
 
 function run(command, args, options = {}) {
-  const timeout = options.timeout ?? 15000;
+  const timeout = options.timeout ?? 30000;
   return execFileSync(command, args, {
     cwd: repoRoot,
     encoding: "utf-8",
@@ -87,10 +87,10 @@ function decodeXmlText(value) {
 
 function parseAttrs(nodeTag) {
   const attrs = {};
-  const attrRe = /([A-Za-z0-9_:\-]+)="([^"]*)"/g;
+  const attrRe = /([A-Za-z0-9_:\-]+)=(['"])(.*?)\2/g;
   let m = attrRe.exec(nodeTag);
   while (m) {
-    attrs[m[1]] = m[2];
+    attrs[m[1]] = m[3];
     m = attrRe.exec(nodeTag);
   }
   return attrs;
@@ -121,8 +121,8 @@ function findInputNode(xml) {
 }
 
 function dumpUiXml(deviceId) {
-  run("adb", ["-s", deviceId, "shell", "uiautomator", "dump", "/sdcard/openpocket-ui.xml"], { timeout: 8000 });
-  const raw = run("adb", ["-s", deviceId, "shell", "cat", "/sdcard/openpocket-ui.xml"], { timeout: 8000 });
+  run("adb", ["-s", deviceId, "shell", "uiautomator", "dump", "/sdcard/openpocket-ui.xml"], { timeout: 20000 });
+  const raw = run("adb", ["-s", deviceId, "shell", "cat", "/sdcard/openpocket-ui.xml"], { timeout: 20000 });
   const idx = raw.indexOf("<hierarchy");
   if (idx < 0) {
     throw new Error(`UI XML not found. raw=${raw}`);
