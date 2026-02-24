@@ -34,6 +34,9 @@ const ANSI_BOLD_GREEN = "\u001b[1;32m";
 const ANSI_BOLD_YELLOW = "\u001b[1;33m";
 const ANSI_DIM = "\u001b[2m";
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const SECRET_PASTE_INTERVAL_MS = 20;
+const SECRET_PASTE_STREAK_THRESHOLD = 4;
+const SECRET_PASTE_BURST_BLOCK_MS = 120;
 
 interface SetupState {
   updatedAt: string;
@@ -522,6 +525,12 @@ function setTerminalEcho(enabled: boolean): boolean {
 }
 
 function isLikelyPastedSecretChunk(char: string, key: Keypress): boolean {
+  if (key.name?.includes("paste")) {
+    return true;
+  }
+  if (key.sequence?.includes("[200~") || key.sequence?.includes("[201~")) {
+    return true;
+  }
   if (!char || char.length <= 1) {
     return false;
   }
@@ -532,6 +541,18 @@ function isLikelyPastedSecretChunk(char: string, key: Keypress): boolean {
     return false;
   }
   return true;
+}
+
+function suspendKeypressListeners(stream: NodeJS.ReadStream): () => void {
+  const listeners = stream.listeners("keypress") as Array<(...args: unknown[]) => void>;
+  for (const listener of listeners) {
+    stream.removeListener("keypress", listener);
+  }
+  return () => {
+    for (const listener of listeners) {
+      stream.on("keypress", listener);
+    }
+  };
 }
 
 async function promptSecretWithRetryOrSkip(
@@ -562,7 +583,7 @@ async function promptSecretWithRetryOrSkip(
 function makeConsolePrompter(): SetupPrompter {
   const rl = createInterface({ input, output });
   const useColor = shouldUseColor(output);
-  let activeKeypressHandler: ((char: string, key: { name?: string; ctrl?: boolean }) => void) | null = null;
+  let activeKeypressHandler: ((char: string, key: Keypress) => void) | null = null;
   let rawModeEnabledBySelect = false;
 
   async function ask(message: string): Promise<string> {
@@ -578,6 +599,7 @@ function makeConsolePrompter(): SetupPrompter {
     const previousWriteToOutput = mutableRl._writeToOutput;
     rl.pause();
     readline.emitKeypressEvents(input);
+    const restoreKeypressListeners = suspendKeypressListeners(input);
 
     const previousRaw = Boolean((input as NodeJS.ReadStream).isRaw);
     if (input.setRawMode) {
@@ -592,8 +614,13 @@ function makeConsolePrompter(): SetupPrompter {
 
     return new Promise<string>((resolve, reject) => {
       let raw = "";
+      let cleanupDone = false;
 
       const cleanup = () => {
+        if (cleanupDone) {
+          return;
+        }
+        cleanupDone = true;
         if (activeKeypressHandler) {
           input.removeListener("keypress", activeKeypressHandler);
           activeKeypressHandler = null;
@@ -613,11 +640,15 @@ function makeConsolePrompter(): SetupPrompter {
         if (previousWriteToOutput) {
           mutableRl._writeToOutput = previousWriteToOutput;
         }
+        restoreKeypressListeners();
         rawModeEnabledBySelect = false;
         rl.resume();
       };
 
       let pasteHintShown = false;
+      let rapidCharStreak = 0;
+      let lastPrintableAt = 0;
+      let blockPrintableUntil = 0;
 
       const onKeypress = (char: string, key: Keypress) => {
         if (key.ctrl && key.name === "c") {
@@ -642,7 +673,24 @@ function makeConsolePrompter(): SetupPrompter {
         if (key.ctrl || key.name === "tab") {
           return;
         }
-        if (isLikelyPastedSecretChunk(char, key)) {
+        if (!char || char.length === 0) {
+          return;
+        }
+        const now = Date.now();
+        if (now < blockPrintableUntil) {
+          return;
+        }
+        if (lastPrintableAt > 0 && now - lastPrintableAt <= SECRET_PASTE_INTERVAL_MS) {
+          rapidCharStreak += 1;
+        } else {
+          rapidCharStreak = 0;
+        }
+        lastPrintableAt = now;
+        const looksLikePaste =
+          isLikelyPastedSecretChunk(char, key) || rapidCharStreak >= SECRET_PASTE_STREAK_THRESHOLD;
+        if (looksLikePaste) {
+          blockPrintableUntil = now + SECRET_PASTE_BURST_BLOCK_MS;
+          rapidCharStreak = 0;
           if (!pasteHintShown) {
             output.write(
               `\n${colorize("[INPUT]", ANSI_BOLD_YELLOW, useColor)} Pasting is disabled for secret input. Please type it manually.\n${message}`,
@@ -652,10 +700,8 @@ function makeConsolePrompter(): SetupPrompter {
           }
           return;
         }
-        if (char && char.length > 0) {
-          raw += char;
-          output.write("*");
-        }
+        raw += char;
+        output.write("*");
       };
 
       activeKeypressHandler = onKeypress;
