@@ -350,6 +350,10 @@ export class AgentRuntime {
     return true;
   }
 
+  resetSession(sessionKey: string): { sessionId: string; sessionPath: string } | null {
+    return this.workspace.resetSession(sessionKey);
+  }
+
   private async safeReturnToHome(): Promise<void> {
     if (!this.config.agent.returnHomeOnTaskEnd) {
       return;

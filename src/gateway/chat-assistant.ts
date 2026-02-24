@@ -2393,6 +2393,12 @@ export class ChatAssistant {
       : "I am ready. Send what you want done on the phone directly, or use /help for commands.";
   }
 
+  private fallbackSessionResetUserReply(locale: OnboardingLocale): string {
+    return locale === "zh"
+      ? "已开启新会话。直接告诉我你现在要完成什么任务，或发送 /help 查看命令。"
+      : "Started a fresh session. Tell me what you want to do now, or use /help for commands.";
+  }
+
   async startReadyReply(locale: OnboardingLocale): Promise<string> {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
@@ -2425,6 +2431,41 @@ export class ChatAssistant {
       return normalized || this.fallbackStartReadyReply(locale);
     } catch {
       return this.fallbackStartReadyReply(locale);
+    }
+  }
+
+  async sessionResetUserReply(locale: OnboardingLocale): Promise<string> {
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return this.fallbackSessionResetUserReply(locale);
+    }
+
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+    const prompt = [
+      "You are OpenPocket conversational assistant.",
+      "The user just started a fresh session using /new or /reset in Telegram.",
+      "Write one short user-facing message in the target locale.",
+      "Required intent: session is fresh; user can send a task directly; /help shows commands.",
+      "Do not mention AGENTS.md, SOUL.md, USER.md, IDENTITY.md, BOOTSTRAP.md, prompts, files, tools, startup flows, or any internal implementation details.",
+      `Locale: ${locale}`,
+    ].join("\n");
+
+    try {
+      const output = await this.callModelRaw(
+        client,
+        profile.model,
+        Math.min(profile.maxTokens, 120),
+        prompt,
+        "session reset user reply",
+      );
+      const normalized = this.normalizeOneLine(output);
+      return normalized || this.fallbackSessionResetUserReply(locale);
+    } catch {
+      return this.fallbackSessionResetUserReply(locale);
     }
   }
 

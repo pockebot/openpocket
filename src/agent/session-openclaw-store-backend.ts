@@ -82,6 +82,46 @@ export class SessionOpenclawStoreBackend implements SessionBackend {
     return { sessionId, sessionPath };
   }
 
+  static resetSession(
+    storePath: string,
+    sessionKey: string,
+    next: { sessionId: string; sessionPath: string },
+  ): {
+    sessionId: string;
+    sessionPath: string;
+    previousSessionId?: string;
+    previousSessionPath?: string;
+  } | null {
+    const key = sessionKey.trim();
+    if (!key) {
+      return null;
+    }
+
+    const store = readSessionStore(storePath);
+    const existing = store[key];
+    const previousSessionId = typeof existing?.sessionId === "string" ? existing.sessionId.trim() : "";
+    const previousSessionPath = typeof existing?.sessionFile === "string" ? existing.sessionFile.trim() : "";
+
+    store[key] = {
+      ...(existing ?? {
+        updatedAt: Date.now(),
+      }),
+      sessionId: next.sessionId,
+      sessionKey: key,
+      sessionFile: next.sessionPath,
+      updatedAt: Date.now(),
+      abortedLastRun: false,
+    };
+    writeSessionStore(storePath, store);
+
+    return {
+      sessionId: next.sessionId,
+      sessionPath: next.sessionPath,
+      ...(previousSessionId ? { previousSessionId } : {}),
+      ...(previousSessionPath ? { previousSessionPath } : {}),
+    };
+  }
+
   private resolveStoreKey(sessionId: string, sessionKey?: string): string {
     const normalized = typeof sessionKey === "string" ? sessionKey.trim() : "";
     return normalized || sessionId;

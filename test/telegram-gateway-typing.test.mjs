@@ -947,7 +947,11 @@ test("TelegramGateway /start replies with stable welcome when onboarding is comp
 
     let decideCalled = false;
     gateway.chat.isOnboardingPending = () => false;
-    gateway.ensurePlayStoreReady = async () => false;
+    let preflightCalls = 0;
+    gateway.ensurePlayStoreReady = async () => {
+      preflightCalls += 1;
+      return false;
+    };
     let startReplyCalled = false;
     gateway.chat.startReadyReply = async (locale) => {
       startReplyCalled = true;
@@ -972,13 +976,14 @@ test("TelegramGateway /start replies with stable welcome when onboarding is comp
     });
 
     assert.equal(decideCalled, false);
+    assert.equal(preflightCalls, 1);
     assert.equal(startReplyCalled, true);
     assert.equal(sent.length, 1);
     assert.match(sent[0].text, /Welcome back/);
   });
 });
 
-test("TelegramGateway /reset sends session reset startup prompt when onboarding is completed", async () => {
+test("TelegramGateway /reset sends user-facing fresh-session reply when onboarding is completed", async () => {
   await withTempHome("openpocket-telegram-reset-startup-", async () => {
     const cfg = loadConfig();
     cfg.telegram.botToken = "test-bot-token";
@@ -993,7 +998,7 @@ test("TelegramGateway /reset sends session reset startup prompt when onboarding 
       return {};
     };
     gateway.chat.isOnboardingPending = () => false;
-    gateway.chat.sessionResetPrompt = () => "Session reset complete. Run Session Startup first.";
+    gateway.chat.sessionResetUserReply = async () => "Session reset complete. Send your next task.";
     gateway.agent.stopCurrentTask = () => false;
 
     await gateway.consumeMessage({
@@ -1042,6 +1047,283 @@ test("TelegramGateway /reset routes into onboarding when onboarding is pending",
     assert.equal(sent.length, 2);
     assert.match(sent[0].text, /Conversation memory cleared/);
     assert.match(sent[1].text, /简短初始化/);
+  });
+});
+
+test("TelegramGateway /new clears chat memory and keeps using the same chat session key", async () => {
+  await withTempHome("openpocket-telegram-new-session-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+
+    const clearCalls = [];
+    gateway.chat.clear = (chatId) => {
+      clearCalls.push(chatId);
+    };
+    gateway.chat.isOnboardingPending = () => false;
+    gateway.chat.sessionResetUserReply = async () => "Session reset complete. Send your next task.";
+
+    const runCalls = [];
+    gateway.runTaskAndReport = async (params) => {
+      runCalls.push(params);
+      return {
+        accepted: true,
+        ok: true,
+        message: "ok",
+      };
+    };
+    const resetCalls = [];
+    gateway.agent.resetSession = (sessionKey) => {
+      resetCalls.push(sessionKey);
+      return {
+        sessionId: "new-session-9208",
+        sessionPath: "/tmp/new-session-9208.jsonl",
+      };
+    };
+    gateway.agent.isBusy = () => false;
+
+    await gateway.consumeMessage({
+      chat: { id: 9208 },
+      text: "/run first task",
+    });
+    await sleep(0);
+
+    await gateway.consumeMessage({
+      chat: { id: 9208 },
+      text: "/new",
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 9208 },
+      text: "/run second task",
+    });
+    await sleep(0);
+
+    assert.equal(clearCalls.length, 1);
+    assert.equal(clearCalls[0], 9208);
+    assert.equal(runCalls.length, 2);
+    assert.equal(runCalls[0].sessionKey, "telegram:chat:9208");
+    assert.equal(runCalls[1].sessionKey, "telegram:chat:9208");
+    assert.equal(resetCalls.length, 1);
+    assert.equal(resetCalls[0], "telegram:chat:9208");
+    assert.equal(sent.some((item) => /New session started/i.test(item.text)), true);
+    assert.equal(sent.some((item) => /Session reset complete/i.test(item.text)), true);
+  });
+});
+
+test("TelegramGateway /new <task> starts a new session and runs the provided task immediately", async () => {
+  await withTempHome("openpocket-telegram-new-session-inline-task-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+
+    const clearCalls = [];
+    gateway.chat.clear = (chatId) => {
+      clearCalls.push(chatId);
+    };
+    gateway.chat.isOnboardingPending = () => false;
+
+    const runCalls = [];
+    gateway.runTaskAndReport = async (params) => {
+      runCalls.push(params);
+      return {
+        accepted: true,
+        ok: true,
+        message: "ok",
+      };
+    };
+    const resetCalls = [];
+    gateway.agent.resetSession = (sessionKey) => {
+      resetCalls.push(sessionKey);
+      return {
+        sessionId: "new-session-9209",
+        sessionPath: "/tmp/new-session-9209.jsonl",
+      };
+    };
+    gateway.agent.isBusy = () => false;
+
+    await gateway.consumeMessage({
+      chat: { id: 9209 },
+      text: "/new second task",
+    });
+    await sleep(0);
+
+    await gateway.consumeMessage({
+      chat: { id: 9209 },
+      text: "/run third task",
+    });
+    await sleep(0);
+
+    assert.equal(clearCalls.length, 1);
+    assert.equal(clearCalls[0], 9209);
+    assert.equal(runCalls.length, 2);
+    assert.equal(runCalls[0].task, "second task");
+    assert.equal(runCalls[0].sessionKey, "telegram:chat:9209");
+    assert.equal(runCalls[1].task, "third task");
+    assert.equal(runCalls[1].sessionKey, "telegram:chat:9209");
+    assert.equal(resetCalls.length, 1);
+    assert.equal(resetCalls[0], "telegram:chat:9209");
+    assert.equal(sent.some((item) => /New session started/i.test(item.text)), true);
+  });
+});
+
+test("TelegramGateway /new sends user-facing fresh-session reply when onboarding is completed", async () => {
+  await withTempHome("openpocket-telegram-new-startup-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.chat.isOnboardingPending = () => false;
+    gateway.chat.sessionResetUserReply = async () => "Session reset complete. Send your next task.";
+    gateway.agent.stopCurrentTask = () => false;
+    gateway.agent.resetSession = () => ({
+      sessionId: "new-session-9210",
+      sessionPath: "/tmp/new-session-9210.jsonl",
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 9210 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "/new",
+    });
+
+    assert.equal(sent.length, 2);
+    assert.match(sent[0].text, /New session started/);
+    assert.match(sent[1].text, /Session reset complete/);
+  });
+});
+
+test("TelegramGateway /new resets session without forcing stopCurrentTask", async () => {
+  await withTempHome("openpocket-telegram-new-no-force-stop-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.chat.isOnboardingPending = () => false;
+    gateway.chat.sessionResetUserReply = async () => "Session reset complete. Send your next task.";
+
+    let stopCalls = 0;
+    gateway.agent.stopCurrentTask = () => {
+      stopCalls += 1;
+      return false;
+    };
+    gateway.agent.resetSession = () => ({
+      sessionId: "new-session-9212",
+      sessionPath: "/tmp/new-session-9212.jsonl",
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 9212 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "/new",
+    });
+
+    assert.equal(stopCalls, 0, "/new should not force-stop the running task");
+    assert.equal(sent.some((item) => /New session started/.test(item.text)), true);
+    assert.equal(sent.some((item) => /still shutting down/i.test(item.text)), false);
+  });
+});
+
+test("TelegramGateway queues follow-up /run task while busy and drains after current task completes", async () => {
+  await withTempHome("openpocket-telegram-run-queue-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.bot.sendChatAction = async () => true;
+
+    let busy = false;
+    let resolveFirst = () => {};
+    const firstTaskDone = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+
+    const runCalls = [];
+    gateway.agent.isBusy = () => busy;
+    gateway.runTaskAndReport = async (params) => {
+      runCalls.push(params);
+      if (params.task === "first task") {
+        busy = true;
+        await firstTaskDone;
+        busy = false;
+      }
+      return {
+        accepted: true,
+        ok: true,
+        message: "ok",
+      };
+    };
+
+    await gateway.consumeMessage({
+      chat: { id: 9211 },
+      text: "/run first task",
+    });
+    await sleep(0);
+
+    await gateway.consumeMessage({
+      chat: { id: 9211 },
+      text: "/run second task",
+    });
+    await sleep(0);
+
+    assert.equal(runCalls.length, 1);
+    assert.equal(runCalls[0].task, "first task");
+    assert.equal(sent.some((item) => /On it:/i.test(item.text)), true);
+    assert.equal(
+      sent.some((item) => /queued/i.test(item.text)),
+      true,
+      "second task should be acknowledged as queued instead of rejected",
+    );
+
+    resolveFirst();
+    await sleep(0);
+    await sleep(0);
+
+    assert.equal(runCalls.length, 2);
+    assert.equal(runCalls[1].task, "second task");
+    assert.equal(runCalls[1].sessionKey, "telegram:chat:9211");
   });
 });
 
