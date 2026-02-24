@@ -1070,6 +1070,7 @@ test("TelegramGateway /new clears chat memory and keeps using the same chat sess
       clearCalls.push(chatId);
     };
     gateway.chat.isOnboardingPending = () => false;
+    gateway.ensurePlayStoreReady = async () => false;
     gateway.chat.sessionResetUserReply = async () => "Session reset complete. Send your next task.";
 
     const runCalls = [];
@@ -1140,6 +1141,7 @@ test("TelegramGateway /new <task> starts a new session and runs the provided tas
       clearCalls.push(chatId);
     };
     gateway.chat.isOnboardingPending = () => false;
+    gateway.ensurePlayStoreReady = async () => false;
 
     const runCalls = [];
     gateway.runTaskAndReport = async (params) => {
@@ -1282,6 +1284,7 @@ test("TelegramGateway queues follow-up /run task while busy and drains after cur
 
     const runCalls = [];
     gateway.agent.isBusy = () => busy;
+    gateway.ensurePlayStoreReady = async () => false;
     gateway.runTaskAndReport = async (params) => {
       runCalls.push(params);
       if (params.task === "first task") {
