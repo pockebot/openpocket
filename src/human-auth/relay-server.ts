@@ -1366,8 +1366,57 @@ export class HumanAuthRelayServer {
       }
     }
 
+    function setDecisionButtonsDisabled(disabled) {
+      const approveBtn = document.getElementById("approve");
+      const rejectBtn = document.getElementById("reject");
+      if (approveBtn && "disabled" in approveBtn) {
+        approveBtn.disabled = disabled;
+      }
+      if (rejectBtn && "disabled" in rejectBtn) {
+        rejectBtn.disabled = disabled;
+      }
+    }
+
+    function autoCloseResolvedPage() {
+      const tgWebApp =
+        window.Telegram &&
+        window.Telegram.WebApp &&
+        typeof window.Telegram.WebApp.close === "function"
+          ? window.Telegram.WebApp
+          : null;
+      if (tgWebApp) {
+        try {
+          tgWebApp.close();
+          return;
+        } catch {}
+      }
+
+      try {
+        window.open("", "_self");
+        window.close();
+      } catch {}
+
+      setTimeout(() => {
+        const ua = String(navigator.userAgent || "");
+        if (/Telegram/i.test(ua)) {
+          try {
+            window.location.href = "tg://resolve";
+            return;
+          } catch {}
+        }
+        try {
+          if (window.history.length > 1) {
+            window.history.back();
+          } else {
+            window.location.replace("about:blank");
+          }
+        } catch {}
+      }, 220);
+    }
+
     async function submitDecision(approved) {
       statusEl.textContent = "Submitting...";
+      setDecisionButtonsDisabled(true);
       try {
         if (capability === "oauth") {
           if (approved) {
@@ -1394,9 +1443,10 @@ export class HumanAuthRelayServer {
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
           statusEl.textContent = "Failed: " + (body.error || response.statusText);
+          setDecisionButtonsDisabled(false);
           return;
         }
-        statusEl.textContent = approved ? "Approved. You can close this page." : "Rejected. You can close this page.";
+        statusEl.textContent = approved ? "Approved. Closing..." : "Rejected. Closing...";
         if (stream) {
           for (const track of stream.getTracks()) {
             track.stop();
@@ -1406,8 +1456,10 @@ export class HumanAuthRelayServer {
         takeoverRunning = false;
         takeoverStreamEl.removeAttribute("src");
         setTakeoverControlsEnabled(false);
+        setTimeout(autoCloseResolvedPage, 120);
       } catch (err) {
         statusEl.textContent = "Request failed: " + (err && err.message ? err.message : String(err));
+        setDecisionButtonsDisabled(false);
       }
     }
 
