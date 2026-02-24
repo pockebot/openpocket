@@ -104,18 +104,29 @@ export async function runRuntimeAttempt(
       }
     }
 
-    const skillsSummary = deps.skillLoader.summaryText();
+    const skillPromptContext = deps.skillLoader.buildPromptContextForTask(request.task);
     const workspacePromptContext = deps.buildWorkspacePromptContext();
     const effectivePromptMode = request.promptMode ?? deps.config.agent.systemPromptMode;
-    const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
+    const systemPrompt = buildSystemPrompt(skillPromptContext.summaryText, workspacePromptContext.text, {
       mode: effectivePromptMode,
       availableToolNames: request.availableToolNames,
+      activeSkillsText: skillPromptContext.activePromptText,
     });
     const report = deps.buildSystemPromptReport({
       source: "run",
       promptMode: effectivePromptMode,
       systemPrompt,
-      skillsSummary,
+      skillsSummary: skillPromptContext.summaryText,
+      activeSkillsPrompt: skillPromptContext.activePromptText,
+      activeSkillsEntries: skillPromptContext.activeEntries.map((entry) => ({
+        name: entry.skill.name,
+        source: entry.skill.source,
+        path: entry.skill.path,
+        reason: entry.reason,
+        score: entry.score,
+        blockChars: entry.contentChars,
+        truncated: entry.truncated,
+      })),
       workspaceReport: workspacePromptContext.report,
     });
     deps.setLastSystemPromptReport(report);

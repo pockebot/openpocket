@@ -655,6 +655,7 @@ export class TelegramGateway {
       `- limits: per-file=${report.maxCharsPerFile}, total=${report.maxCharsTotal}`,
       `- hook applied: ${Boolean(report.hookApplied)}`,
       `- skills: ${this.formatChars(report.skills?.promptChars ?? 0)} (${report.skills?.entries?.length ?? 0})`,
+      `- active skills: ${this.formatChars(report.skills?.activePromptChars ?? 0)} (${report.skills?.activeEntries?.length ?? 0})`,
       `- tools list: ${this.formatChars(report.tools?.listChars ?? 0)}`,
       `- tools schema: ${this.formatChars(report.tools?.schemaChars ?? 0)}`,
       "",
@@ -674,6 +675,9 @@ export class TelegramGateway {
   private buildContextDeepDetailMessage(): string {
     const report = this.agent.getWorkspacePromptContextReport();
     const topSkills = [...(report.skills?.entries ?? [])]
+      .sort((a, b) => b.blockChars - a.blockChars)
+      .slice(0, 20);
+    const topActiveSkills = [...(report.skills?.activeEntries ?? [])]
       .sort((a, b) => b.blockChars - a.blockChars)
       .slice(0, 20);
     const topToolsBySchema = [...(report.tools?.entries ?? [])]
@@ -707,6 +711,14 @@ export class TelegramGateway {
       lines.push("Top skills by entry size:");
       for (const skill of topSkills) {
         lines.push(`- ${skill.name}: ${this.formatChars(skill.blockChars)} (${skill.source})`);
+      }
+    }
+
+    lines.push(`Active skills prompt: ${this.formatChars(report.skills?.activePromptChars ?? 0)} (${report.skills?.activeEntries?.length ?? 0} skills)`);
+    if (topActiveSkills.length > 0) {
+      lines.push("Active skills selected for latest task:");
+      for (const skill of topActiveSkills) {
+        lines.push(`- ${skill.name}: ${this.formatChars(skill.blockChars)} (${skill.source}, score=${skill.score})`);
       }
     }
 

@@ -392,6 +392,38 @@ test("AgentRuntime keeps workspace tools for workspace-oriented tasks", async ()
   assert.equal(capturedToolNames.includes("memory_search"), true);
 });
 
+test("AgentRuntime exposes read tool for phone tasks when a matching skill exists", async () => {
+  let capturedToolNames = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedToolNames = (options.initialState?.tools ?? []).map((tool) => tool.name);
+      },
+    },
+  });
+
+  const skillsDir = path.join(runtime.config.workspaceDir, "skills");
+  fs.mkdirSync(skillsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(skillsDir, "paybyphone-nearest.md"),
+    "# PayByPhone Nearest\n\nUse nearest parking flow and request_human_auth(location) when empty.",
+    "utf-8",
+  );
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("Open PayByPhone and continue nearest location flow");
+  assert.equal(result.ok, true);
+  assert.equal(capturedToolNames.includes("read"), true);
+  assert.equal(capturedToolNames.includes("exec"), false);
+});
+
 test("AgentRuntime supports none system prompt mode for constrained runs", async () => {
   let capturedSystemPrompt = "";
   const runtime = setupRuntime({

@@ -148,6 +148,16 @@ export type WorkspacePromptContextReport = {
       path: string;
       blockChars: number;
     }>;
+    activePromptChars: number;
+    activeEntries: Array<{
+      name: string;
+      source: "workspace" | "local" | "bundled";
+      path: string;
+      reason: string;
+      score: number;
+      blockChars: number;
+      truncated: boolean;
+    }>;
   };
   tools: {
     listChars: number;
@@ -556,6 +566,8 @@ export class AgentRuntime {
         skills: {
           promptChars: 0,
           entries: [],
+          activePromptChars: 0,
+          activeEntries: [],
         },
         tools: {
           listChars: 0,
@@ -596,6 +608,16 @@ export class AgentRuntime {
     promptMode: SystemPromptMode;
     systemPrompt: string;
     skillsSummary: string;
+    activeSkillsPrompt?: string;
+    activeSkillsEntries?: Array<{
+      name: string;
+      source: "workspace" | "local" | "bundled";
+      path: string;
+      reason: string;
+      score: number;
+      blockChars: number;
+      truncated: boolean;
+    }>;
     workspaceReport: WorkspacePromptContextReport;
   }): WorkspacePromptContextReport {
     const skillsEntries = this.skillLoader.summaryEntries().map((entry) => ({
@@ -620,6 +642,8 @@ export class AgentRuntime {
       skills: {
         promptChars: params.skillsSummary.length,
         entries: skillsEntries,
+        activePromptChars: (params.activeSkillsPrompt ?? "").length,
+        activeEntries: params.activeSkillsEntries ?? [],
       },
       tools,
     };
@@ -629,17 +653,28 @@ export class AgentRuntime {
     if (this.lastSystemPromptReport) {
       return this.lastSystemPromptReport;
     }
-    const skillsSummary = this.skillLoader.summaryText();
+    const skillContext = this.skillLoader.buildPromptContextForTask("");
     const workspacePromptContext = this.buildWorkspacePromptContext();
     const promptMode = this.config.agent.systemPromptMode;
-    const systemPrompt = buildSystemPrompt(skillsSummary, workspacePromptContext.text, {
+    const systemPrompt = buildSystemPrompt(skillContext.summaryText, workspacePromptContext.text, {
       mode: promptMode,
+      activeSkillsText: skillContext.activePromptText,
     });
     return this.buildSystemPromptReport({
       source: "estimate",
       promptMode,
       systemPrompt,
-      skillsSummary,
+      skillsSummary: skillContext.summaryText,
+      activeSkillsPrompt: skillContext.activePromptText,
+      activeSkillsEntries: skillContext.activeEntries.map((entry) => ({
+        name: entry.skill.name,
+        source: entry.skill.source,
+        path: entry.skill.path,
+        reason: entry.reason,
+        score: entry.score,
+        blockChars: entry.contentChars,
+        truncated: entry.truncated,
+      })),
       workspaceReport: workspacePromptContext.report,
     });
   }
@@ -2049,12 +2084,15 @@ export class AgentRuntime {
     return keywordHints.some((hint) => normalized.includes(hint));
   }
 
-  private resolveToolMetasForTask(task: string): ToolMeta[] {
+  private resolveToolMetasForTask(task: string, allowSkillRead = false): ToolMeta[] {
     const workspaceToolsAllowed = this.shouldEnableWorkspaceToolsForTask(task);
     return TOOL_METAS.filter((meta) => {
       if (CODING_TOOL_NAMES.has(meta.name)) {
         if (!this.config.codingTools.enabled) {
           return false;
+        }
+        if (meta.name === "read") {
+          return workspaceToolsAllowed || allowSkillRead;
         }
         return workspaceToolsAllowed;
       }
@@ -2291,7 +2329,13 @@ export class AgentRuntime {
     onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
     sessionKey?: string,
   ): Promise<AgentRunResult> {
-    const activeToolNames = this.resolveToolMetasForTask(task).map((item) => item.name);
+    const hasSkillMatch = this.skillLoader.buildPromptContextForTask(task, {
+      maxSummaryItems: 1,
+      maxActiveSkills: 1,
+      maxActiveSkillChars: 600,
+      maxActiveTotalChars: 800,
+    }).activeEntries.length > 0;
+    const activeToolNames = this.resolveToolMetasForTask(task, hasSkillMatch).map((item) => item.name);
     const request: RunTaskRequest = {
       task,
       modelName,
@@ -2328,6 +2372,16 @@ export class AgentRuntime {
               promptMode: SystemPromptMode;
               systemPrompt: string;
               skillsSummary: string;
+              activeSkillsPrompt?: string;
+              activeSkillsEntries?: Array<{
+                name: string;
+                source: "workspace" | "local" | "bundled";
+                path: string;
+                reason: string;
+                score: number;
+                blockChars: number;
+                truncated: boolean;
+              }>;
               workspaceReport: WorkspacePromptContextReport;
             }),
             setLastSystemPromptReport: (report) => {

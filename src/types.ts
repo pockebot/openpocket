@@ -20,6 +20,8 @@ export interface AgentConfig {
   loopDelayMs: number;
   progressReportInterval: number;
   returnHomeOnTaskEnd: boolean;
+  /** Enable automatic post-task artifact generation (skills/auto + scripts/auto). */
+  autoArtifactsEnabled: boolean;
   systemPromptMode: "full" | "minimal" | "none";
   /** Maximum total chars for workspace prompt context injection.
    *  Defaults to 150 000. Lower this for models with small context windows. */

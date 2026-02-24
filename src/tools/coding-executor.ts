@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import type { AgentAction, OpenPocketConfig } from "../types.js";
 import { applyPatch } from "./apply-patch.js";
+import { openpocketHome } from "../utils/paths.js";
 
 type ReadAction = Extract<AgentAction, { type: "read" }>;
 type WriteAction = Extract<AgentAction, { type: "write" }>;
@@ -48,6 +50,10 @@ const DENY_PATTERNS: RegExp[] = [
   /`[^`]+`/,
   /\$\([^)]+\)/,
 ];
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const BUNDLED_SKILLS_DIR = path.resolve(path.join(__dirname, "..", "..", "skills"));
 
 /** Split a pipe chain into individual command segments. */
 function splitPipelineSegments(line: string): string[] {
@@ -120,7 +126,16 @@ export class CodingExecutor {
     return env;
   }
 
-  private resolveWorkspacePath(inputPath: string, purpose: string): string {
+  private pathWithin(root: string, target: string): boolean {
+    const rel = path.relative(root, target);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  }
+
+  private resolveWorkspacePath(
+    inputPath: string,
+    purpose: string,
+    options?: { allowSkillRootsForRead?: boolean },
+  ): string {
     const raw = String(inputPath || "").trim();
     if (!raw) {
       throw new Error(`${purpose}: path is required.`);
@@ -129,8 +144,20 @@ export class CodingExecutor {
     if (!this.config.codingTools.workspaceOnly) {
       return resolved;
     }
-    const relative = path.relative(this.config.workspaceDir, resolved);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    if (this.pathWithin(this.config.workspaceDir, resolved)) {
+      return resolved;
+    }
+    if (options?.allowSkillRootsForRead) {
+      const skillRoots = [
+        path.join(this.config.workspaceDir, "skills"),
+        path.join(openpocketHome(), "skills"),
+        BUNDLED_SKILLS_DIR,
+      ];
+      if (skillRoots.some((root) => this.pathWithin(root, resolved))) {
+        return resolved;
+      }
+    }
+    if (!this.pathWithin(this.config.workspaceDir, resolved)) {
       throw new Error(`${purpose}: path escapes workspace (${raw}).`);
     }
     return resolved;
@@ -249,7 +276,7 @@ export class CodingExecutor {
   }
 
   private async readFile(action: ReadAction): Promise<string> {
-    const filePath = this.resolveWorkspacePath(action.path, "read");
+    const filePath = this.resolveWorkspacePath(action.path, "read", { allowSkillRootsForRead: true });
     const raw = fs.readFileSync(filePath, "utf8");
     const lines = raw.split("\n");
     const from = Math.max(1, Math.round(action.from ?? 1));
@@ -257,7 +284,9 @@ export class CodingExecutor {
     const start = Math.max(0, from - 1);
     const end = Math.min(lines.length, start + maxLines);
     const snippet = lines.slice(start, end).join("\n");
-    const rel = path.relative(this.config.workspaceDir, filePath) || path.basename(filePath);
+    const rel = this.pathWithin(this.config.workspaceDir, filePath)
+      ? (path.relative(this.config.workspaceDir, filePath) || path.basename(filePath))
+      : filePath;
     return [
       `read path=${rel}`,
       `range=${from}-${end} totalLines=${lines.length}`,

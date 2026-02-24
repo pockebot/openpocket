@@ -10,6 +10,7 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /deterministic action/);
   assert.match(prompt, /Human Authorization Policy/);
   assert.match(prompt, /Available Skills/);
+  assert.match(prompt, /<available_skills>/);
   assert.match(prompt, /Skill Selection Protocol/);
   assert.match(prompt, /Memory Recall Protocol/);
   assert.match(prompt, /memory_search/);
@@ -32,6 +33,16 @@ test("buildSystemPrompt includes workspace context when provided", () => {
   const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A");
   assert.match(prompt, /Workspace Prompt Context/);
   assert.match(prompt, /AGENTS\.md/);
+});
+
+test("buildSystemPrompt keeps available-skills index when activeSkillsText is provided", () => {
+  const prompt = buildSystemPrompt("- skill-a", "", {
+    mode: "full",
+    activeSkillsText: "### [workspace] Skill A\nReason: explicit id match\nPath: /tmp/skill-a.md\n# SKILL BODY",
+  });
+  assert.match(prompt, /<available_skills>/);
+  assert.match(prompt, /Use read\(location\) to load full SKILL.md/i);
+  assert.doesNotMatch(prompt, /SKILL BODY/);
 });
 
 test("buildSystemPrompt supports minimal mode", () => {

@@ -34,6 +34,57 @@ function shellSingleQuote(text: string): string {
   return `'${text.replace(/'/g, `'\"'\"'`)}'`;
 }
 
+function compactText(text: string, maxChars = 220): string {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function actionSummary(action: AgentAction): string {
+  if (action.type === "tap") {
+    return `tap(${Math.round(action.x)}, ${Math.round(action.y)})`;
+  }
+  if (action.type === "tap_element") {
+    return `tap_element(elementId=${action.elementId})`;
+  }
+  if (action.type === "swipe") {
+    return `swipe(${Math.round(action.x1)}, ${Math.round(action.y1)} -> ${Math.round(action.x2)}, ${Math.round(action.y2)})`;
+  }
+  if (action.type === "type") {
+    return `type(${JSON.stringify(compactText(action.text, 72))})`;
+  }
+  if (action.type === "keyevent") {
+    return `keyevent(${action.keycode})`;
+  }
+  if (action.type === "launch_app") {
+    return `launch_app(${action.packageName})`;
+  }
+  if (action.type === "wait") {
+    return `wait(${Math.round(action.durationMs ?? 1000)}ms)`;
+  }
+  if (action.type === "shell") {
+    return `shell(${compactText(action.command, 96)})`;
+  }
+  if (action.type === "run_script") {
+    return "run_script(<embedded>)";
+  }
+  if (action.type === "request_human_auth") {
+    return `request_human_auth(${action.capability})`;
+  }
+  if (action.type === "request_user_decision") {
+    return `request_user_decision(${compactText(action.question, 72)})`;
+  }
+  if (action.type === "finish") {
+    return "finish(...)";
+  }
+  return action.type;
+}
+
 export class AutoArtifactBuilder {
   private readonly config: OpenPocketConfig;
 
@@ -48,7 +99,9 @@ export class AutoArtifactBuilder {
     finalMessage: string;
     traces: StepTrace[];
   }): { skillPath: string | null; scriptPath: string | null } {
-    if (!params.ok || params.traces.length === 0) {
+    const artifactsEnabled = (this.config as { agent?: { autoArtifactsEnabled?: boolean } })
+      .agent?.autoArtifactsEnabled ?? true;
+    if (!artifactsEnabled || !params.ok || params.traces.length === 0) {
       return { skillPath: null, scriptPath: null };
     }
 
@@ -72,32 +125,60 @@ export class AutoArtifactBuilder {
     const dir = ensureDir(path.join(this.config.workspaceDir, "skills", "auto"));
     const filePath = path.join(dir, `${stamp}-${slug}.md`);
 
-    const steps = params.traces
-      .slice(0, 20)
-      .map((t) => `- Step ${t.step}: ${t.action.type} on ${t.currentApp}`)
+    const shortTask = compactText(params.task, 180);
+    const traceSlice = params.traces.slice(0, 25);
+    const actionKinds = new Set(traceSlice.map((trace) => trace.action.type));
+    const confidence = traceSlice.length >= 4 && actionKinds.size >= 2 ? "medium" : "low";
+    const procedure = traceSlice
+      .map((trace, index) => {
+        const stepLine = `${index + 1}. ${actionSummary(trace.action)} (app=${trace.currentApp || "unknown"})`;
+        const thought = compactText(trace.thought, 160);
+        const result = compactText(trace.result, 180);
+        const details = [
+          thought ? `   - intent: ${thought}` : "",
+          result ? `   - observed: ${result}` : "",
+        ].filter(Boolean);
+        return [stepLine, ...details].join("\n");
+      })
       .join("\n");
 
     const content = [
-      `# Auto Skill: ${params.task}`,
+      `# Skill Draft: ${shortTask}`,
       "",
+      `- Status: draft (auto-generated, needs review)`,
+      `- Confidence: ${confidence}`,
       `- Generated: ${new Date().toISOString()}`,
       `- Source session: ${params.sessionPath}`,
       "",
-      "## Trigger",
+      "## When To Use",
       "",
-      `- Use when user asks: ${params.task}`,
+      `- User asks something equivalent to: ${shortTask}`,
+      `- Same app surface/workflow and similar UI layout is available.`,
       "",
-      "## Execution Outline",
+      "## Preconditions",
       "",
-      steps || "- No steps captured.",
+      "- Emulator/device is online and controllable.",
+      "- Required account/login state from source session is still valid.",
+      "- If sensitive data/auth is needed, call `request_human_auth` instead of guessing.",
       "",
-      "## Final Result",
+      "## Procedure (Draft)",
       "",
-      params.finalMessage,
+      procedure || "1. No deterministic steps captured.",
       "",
-      "## Notes",
+      "## Completion Criteria",
       "",
-      "- Review and refine before using as stable production skill.",
+      "- Task-specific expected end state is reached on screen.",
+      "- Final user-visible result is explicitly confirmed before finish.",
+      "",
+      "## Last Known Outcome",
+      "",
+      compactText(params.finalMessage, 500) || "(empty)",
+      "",
+      "## Refinement Checklist",
+      "",
+      "- Replace fragile coordinates with semantic element intent where possible.",
+      "- Add explicit failure branches (empty state, auth wall, loading timeout).",
+      "- Validate on at least one fresh run before promoting out of `skills/auto`.",
       "",
     ].join("\n");
 
