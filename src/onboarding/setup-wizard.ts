@@ -62,6 +62,9 @@ type ModelSelectionResult = {
   authMode: ModelAuthMode;
 };
 
+type ApiKeyChoice = "env" | "config" | "skip" | "config-existing";
+type TokenChoice = "env" | "config" | "skip" | "config-existing";
+
 type SelectOption<T extends string> = {
   value: T;
   label: string;
@@ -982,25 +985,34 @@ async function runApiKeyStep(
     ].join("\n"),
   );
 
-  const choice = await prompter.select(
+  const apiKeyOptions: SelectOption<ApiKeyChoice>[] = [
+    {
+      value: "env",
+      label: `Use environment variable ${envName}`,
+      hint: envKey ? `Detected (length ${envKey.length})` : "Not detected",
+    },
+    {
+      value: "config",
+      label: "Paste API key and save to local config.json",
+      hint: hasConfigKey ? `Current config key detected (length ${configKey.length})` : "Stored in plain text on this machine",
+    },
+    {
+      value: "skip",
+      label: "Skip for now",
+    },
+  ];
+  if (hasConfigKey) {
+    apiKeyOptions.splice(1, 0, {
+      value: "config-existing",
+      label: "Use existing key from local config.json",
+      hint: `Detected (length ${configKey.length})`,
+    });
+  }
+
+  const choice = await prompter.select<ApiKeyChoice>(
     "Choose API key setup method",
-    [
-      {
-        value: "env",
-        label: `Use environment variable ${envName}`,
-        hint: envKey ? `Detected (length ${envKey.length})` : "Not detected",
-      },
-      {
-        value: "config",
-        label: "Paste API key and save to local config.json",
-        hint: hasConfigKey ? `Current config key detected (length ${configKey.length})` : "Stored in plain text on this machine",
-      },
-      {
-        value: "skip",
-        label: "Skip for now",
-      },
-    ],
-    hasConfigKey ? "skip" : envKey ? "env" : "config",
+    apiKeyOptions,
+    hasConfigKey ? "config-existing" : envKey ? "env" : "config",
   );
 
   if (choice === "env") {
@@ -1014,6 +1026,13 @@ async function runApiKeyStep(
     }
     state.apiKeyEnv = envName;
     state.apiKeySource = "env";
+    state.apiKeyConfiguredAt = nowIso();
+    return;
+  }
+
+  if (choice === "config-existing") {
+    state.apiKeyEnv = envName;
+    state.apiKeySource = "config";
     state.apiKeyConfiguredAt = nowIso();
     return;
   }
@@ -1132,24 +1151,33 @@ async function runTelegramStep(
     ].join("\n"),
   );
 
-  const tokenChoice = await prompter.select(
+  const tokenOptions: SelectOption<TokenChoice>[] = [
+    {
+      value: "env",
+      label: `Use environment variable ${currentTokenEnv}`,
+      hint: envToken ? `Detected (length ${envToken.length})` : "Not detected",
+    },
+    {
+      value: "config",
+      label: "Paste token and save to local config.json",
+    },
+    {
+      value: "skip",
+      label: "Skip token setup for now",
+    },
+  ];
+  if (hasConfigToken) {
+    tokenOptions.splice(1, 0, {
+      value: "config-existing",
+      label: "Use existing token from local config.json",
+      hint: `Detected (length ${config.telegram.botToken.trim().length})`,
+    });
+  }
+
+  const tokenChoice = await prompter.select<TokenChoice>(
     "Telegram bot token source",
-    [
-      {
-        value: "env",
-        label: `Use environment variable ${currentTokenEnv}`,
-        hint: envToken ? `Detected (length ${envToken.length})` : "Not detected",
-      },
-      {
-        value: "config",
-        label: "Paste token and save to local config.json",
-      },
-      {
-        value: "skip",
-        label: "Skip token setup for now",
-      },
-    ],
-    hasConfigToken ? "skip" : envToken ? "env" : "config",
+    tokenOptions,
+    hasConfigToken ? "config-existing" : envToken ? "env" : "config",
   );
 
   if (tokenChoice === "env") {
@@ -1167,6 +1195,8 @@ async function runTelegramStep(
         `${config.telegram.botTokenEnv} is not set in this shell. Gateway start will fail until it is exported.`,
       );
     }
+  } else if (tokenChoice === "config-existing") {
+    state.telegramTokenSource = "config";
   } else if (tokenChoice === "config") {
     const token = await promptSecretWithRetryOrSkip(prompter, "Enter Telegram bot token", "Telegram bot token");
     if (!token) {
@@ -1358,25 +1388,34 @@ async function runHumanAuthStep(
   const envToken = process.env[envName]?.trim() ?? "";
   const configToken = config.humanAuth.tunnel.ngrok.authtoken.trim();
   const hasConfigToken = Boolean(configToken);
-  const tokenMethod = await prompter.select(
+  const ngrokTokenOptions: SelectOption<TokenChoice>[] = [
+    {
+      value: "env",
+      label: `Use environment variable ${envName}`,
+      hint: envToken ? `Detected (length ${envToken.length})` : "Not detected",
+    },
+    {
+      value: "config",
+      label: "Paste token and save to local config.json",
+      hint: hasConfigToken ? `Current config token detected (length ${configToken.length})` : undefined,
+    },
+    {
+      value: "skip",
+      label: "Skip for now",
+    },
+  ];
+  if (hasConfigToken) {
+    ngrokTokenOptions.splice(1, 0, {
+      value: "config-existing",
+      label: "Use existing token from local config.json",
+      hint: `Detected (length ${configToken.length})`,
+    });
+  }
+
+  const tokenMethod = await prompter.select<TokenChoice>(
     "How should OpenPocket read ngrok authtoken?",
-    [
-      {
-        value: "env",
-        label: `Use environment variable ${envName}`,
-        hint: envToken ? `Detected (length ${envToken.length})` : "Not detected",
-      },
-      {
-        value: "config",
-        label: "Paste token and save to local config.json",
-        hint: hasConfigToken ? `Current config token detected (length ${configToken.length})` : undefined,
-      },
-      {
-        value: "skip",
-        label: "Skip for now",
-      },
-    ],
-    hasConfigToken ? "skip" : envToken ? "env" : "config",
+    ngrokTokenOptions,
+    hasConfigToken ? "config-existing" : envToken ? "env" : "config",
   );
 
   if (tokenMethod === "env") {

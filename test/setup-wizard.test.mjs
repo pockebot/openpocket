@@ -296,6 +296,72 @@ test("setup wizard can configure ngrok authtoken in config using secret input", 
   });
 });
 
+test("setup wizard can keep existing API key from config.json", async () => {
+  await withTempHome("openpocket-setup-api-key-existing-config-", async () => {
+    const cfg = loadConfig();
+    cfg.models["gpt-5.2-codex"].apiKey = "sk-existing-openpocket";
+    const prompter = new FakePrompter({
+      confirms: [true],
+      selects: ["gpt-5.2-codex", "config-existing", "skip", "keep", "skip", "disabled"],
+      texts: [],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
+    assert.equal(savedCfg.models["gpt-5.2-codex"].apiKey, "sk-existing-openpocket");
+
+    const statePath = path.join(cfg.stateDir, "onboarding.json");
+    const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    assert.equal(state.apiKeySource, "config");
+  });
+});
+
+test("setup wizard can keep existing Telegram token from config.json", async () => {
+  await withTempHome("openpocket-setup-telegram-existing-config-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "telegram-existing-token";
+    const prompter = new FakePrompter({
+      confirms: [true],
+      selects: ["gpt-5.2-codex", "skip", "config-existing", "keep", "skip", "disabled"],
+      texts: [],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
+    assert.equal(savedCfg.telegram.botToken, "telegram-existing-token");
+
+    const statePath = path.join(cfg.stateDir, "onboarding.json");
+    const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    assert.equal(state.telegramTokenSource, "config");
+  });
+});
+
+test("setup wizard can keep existing ngrok token from config.json", async () => {
+  await withTempHome("openpocket-setup-ngrok-existing-config-", async () => {
+    const cfg = loadConfig();
+    cfg.humanAuth.tunnel.ngrok.authtoken = "ngrok-existing-token";
+    const prompter = new FakePrompter({
+      confirms: [true],
+      selects: ["gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config-existing"],
+      texts: [],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
+    assert.equal(savedCfg.humanAuth.tunnel.ngrok.authtoken, "ngrok-existing-token");
+    assert.equal(savedCfg.humanAuth.tunnel.provider, "ngrok");
+  });
+});
+
 test("setup wizard allows skipping API key config after empty secret input", async () => {
   await withTempHome("openpocket-setup-api-key-empty-skip-", async () => {
     const cfg = loadConfig();
