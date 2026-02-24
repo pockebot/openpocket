@@ -79,7 +79,7 @@ test("WorkspaceStore defaults to OpenClaw store + pi tree transcript + markdown 
 
     const messageTexts = messageEntries.map((entry) => collectText(entry.message));
     assert.equal(messageTexts.some((text) => text.includes("default output test")), true);
-    assert.equal(messageTexts.some((text) => text.includes("SUCCESS")), true);
+    assert.equal(messageTexts.some((text) => text === "done"), true);
 
     const markdownPath = markdownPathFromTranscriptPath(session.path);
     assert.equal(fs.existsSync(markdownPath), true);

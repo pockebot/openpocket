@@ -76,12 +76,19 @@ function appendCustomLogMessage(params: {
   });
 }
 
+function hasAssistantMessage(manager: SessionManager): boolean {
+  return manager.getEntries().some((entry) => (
+    entry.type === "message" && entry.message.role === "assistant"
+  ));
+}
+
 export class SessionPiTreeJsonlBackend implements SessionBackend {
   create(payload: SessionCreatePayload): void {
     ensureDir(path.dirname(payload.sessionPath));
     const startedAtMs = toUnixMs(payload.startedAt);
     const manager = SessionManager.open(payload.sessionPath);
     ensureSessionManagerHeader(manager, payload.sessionId);
+    const hadAssistantBeforeAppend = hasAssistantMessage(manager);
 
     manager.appendMessage({
       role: "user",
@@ -106,17 +113,21 @@ export class SessionPiTreeJsonlBackend implements SessionBackend {
       },
     });
 
-    // SessionManager persists early entries once an assistant message appears.
-    manager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "session_started" }],
-      api: "openai-responses",
-      provider: "openpocket",
-      model: "session-bootstrap",
-      usage: ZERO_USAGE,
-      stopReason: "stop",
-      timestamp: startedAtMs,
-    });
+    // SessionManager only flushes once an assistant message exists in the file.
+    // Keep a single bootstrap marker for brand-new sessions, but avoid writing
+    // one for every task in a reused session.
+    if (!hadAssistantBeforeAppend) {
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "session_started" }],
+        api: "openai-responses",
+        provider: "openpocket",
+        model: "session-bootstrap",
+        usage: ZERO_USAGE,
+        stopReason: "stop",
+        timestamp: startedAtMs,
+      });
+    }
   }
 
   appendStep(payload: SessionStepPayload): void {
@@ -151,19 +162,14 @@ export class SessionPiTreeJsonlBackend implements SessionBackend {
       content: [
         {
           type: "text",
-          text: [
-            `status: ${payload.status}`,
-            `ended_at: ${payload.endedAt}`,
-            "",
-            payload.message,
-          ].join("\n"),
+          text: payload.message,
         },
       ],
       api: "openai-responses",
       provider: "openpocket",
-      model: "session-finalizer",
+      model: "session-task-outcome",
       usage: ZERO_USAGE,
-      stopReason: "stop",
+      stopReason: payload.status === "SUCCESS" ? "stop" : "error",
       timestamp: toUnixMs(payload.endedAt),
     });
   }

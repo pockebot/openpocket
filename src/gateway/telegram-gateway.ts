@@ -26,6 +26,7 @@ export const TELEGRAM_MENU_COMMANDS: TelegramBot.BotCommand[] = [
   { command: "screen", description: "Capture manual screenshot" },
   { command: "skills", description: "List loaded skills" },
   { command: "clear", description: "Clear chat memory only" },
+  { command: "new", description: "Start a new task session" },
   { command: "reset", description: "Clear chat memory and stop task" },
   { command: "stop", description: "Stop current running task" },
   { command: "restart", description: "Restart gateway process loop" },
@@ -67,6 +68,12 @@ type PendingUserDecision = {
   timeout: NodeJS.Timeout;
 };
 
+type QueuedChatTask = {
+  chatId: number;
+  task: string;
+  sessionKey: string;
+};
+
 export class TelegramGateway {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
@@ -82,6 +89,8 @@ export class TelegramGateway {
   private readonly typingIntervalMs: number;
   private readonly typingSessions = new Map<number, { refs: number; timer: NodeJS.Timeout }>();
   private readonly pendingUserDecisions = new Map<number, PendingUserDecision>();
+  private readonly pendingChatTasks: QueuedChatTask[] = [];
+  private drainingChatTaskQueue = false;
   private lastSyncedBotDisplayName: string | null = null;
   private readonly botDisplayNameSyncStatePath: string;
   private botDisplayNameRateLimitedUntilMs = 0;
@@ -772,6 +781,66 @@ export class TelegramGateway {
     return `On it: ${task}\nI'll update you when there's meaningful progress.`;
   }
 
+  private renderTaskQueuedMessage(position: number, locale: "zh" | "en"): string {
+    if (locale === "zh") {
+      if (position <= 1) {
+        return "当前有任务在执行。你的新任务已加入队列，将在下一条执行。";
+      }
+      return `当前有任务在执行。你的新任务已加入队列（当前排队第 ${position} 位）。`;
+    }
+    if (position <= 1) {
+      return "A previous task is still running. Your new task is queued and will run next.";
+    }
+    return `A previous task is still running. Your new task is queued (position ${position}).`;
+  }
+
+  private clearQueuedTasksForChat(chatId: number): number {
+    if (this.pendingChatTasks.length === 0) {
+      return 0;
+    }
+    const before = this.pendingChatTasks.length;
+    const remain = this.pendingChatTasks.filter((item) => item.chatId !== chatId);
+    this.pendingChatTasks.splice(0, this.pendingChatTasks.length, ...remain);
+    return before - remain.length;
+  }
+
+  private async drainQueuedChatTasks(): Promise<void> {
+    if (this.drainingChatTaskQueue) {
+      return;
+    }
+    if (this.pendingChatTasks.length === 0) {
+      return;
+    }
+    if (this.agent.isBusy()) {
+      return;
+    }
+
+    this.drainingChatTaskQueue = true;
+    try {
+      while (this.pendingChatTasks.length > 0) {
+        if (this.agent.isBusy()) {
+          break;
+        }
+        const next = this.pendingChatTasks.shift();
+        if (!next) {
+          break;
+        }
+        await this.runTaskAndReport({
+          chatId: next.chatId,
+          task: next.task,
+          source: "chat",
+          modelName: null,
+          sessionKey: next.sessionKey,
+        });
+      }
+    } finally {
+      this.drainingChatTaskQueue = false;
+      if (this.pendingChatTasks.length > 0 && !this.agent.isBusy()) {
+        void this.drainQueuedChatTasks();
+      }
+    }
+  }
+
   private stripStepCounterTelemetry(text: string): string {
     const stripped = String(text || "")
       .replace(/(?:^|\n)\s*(?:step|progress|进度)\s*\d+\s*\/\s*\d+\s*[:：-]?\s*/gim, "\n")
@@ -1025,6 +1094,10 @@ export class TelegramGateway {
     return allow.includes(chatId);
   }
 
+  private resolveChatSessionKey(chatId: number): string {
+    return `telegram:chat:${chatId}`;
+  }
+
   private isCodeBasedHumanAuthCapability(capability: string): boolean {
     return capability === "sms" || capability === "2fa";
   }
@@ -1223,6 +1296,7 @@ export class TelegramGateway {
           "/screen",
           "/skills",
           "/clear",
+          "/new [task]",
           "/reset",
           "/stop",
           "/restart",
@@ -1370,8 +1444,45 @@ export class TelegramGateway {
       return;
     }
 
+    const newSessionMatch = text.match(/^\/new(?:\s+(.+))?$/i);
+    if (newSessionMatch) {
+      this.chat.clear(chatId);
+      const droppedQueued = this.clearQueuedTasksForChat(chatId);
+      if (droppedQueued > 0) {
+        this.log(`cleared queued tasks chat=${chatId} count=${droppedQueued} reason=/new`);
+      }
+      const sessionKey = this.resolveChatSessionKey(chatId);
+
+      const reset = this.agent.resetSession(sessionKey);
+      if (!reset) {
+        await this.bot.sendMessage(chatId, "Failed to start a new session.");
+        return;
+      }
+
+      const summary = `New session started (${sessionKey} -> ${reset.sessionId}).`;
+      await this.bot.sendMessage(chatId, summary);
+
+      const followupTask = (newSessionMatch[1] ?? "").trim();
+      if (followupTask) {
+        this.chat.appendExternalTurn(chatId, "user", followupTask);
+        await this.runTaskAsync(chatId, followupTask);
+        return;
+      }
+
+      const locale = this.inferLocale(message);
+      if (await this.trySendOnboardingReply(chatId, locale)) {
+        return;
+      }
+      await this.bot.sendMessage(chatId, this.sanitizeForChat(await this.chat.sessionResetUserReply(locale), 1800));
+      return;
+    }
+
     if (text === "/reset") {
       this.chat.clear(chatId);
+      const droppedQueued = this.clearQueuedTasksForChat(chatId);
+      if (droppedQueued > 0) {
+        this.log(`cleared queued tasks chat=${chatId} count=${droppedQueued} reason=/reset`);
+      }
       const accepted = this.agent.stopCurrentTask();
       const locale = this.inferLocale(message);
       const resetSummary = accepted
@@ -1383,7 +1494,7 @@ export class TelegramGateway {
         return;
       }
 
-      await this.bot.sendMessage(chatId, this.sanitizeForChat(this.chat.sessionResetPrompt(locale), 1800));
+      await this.bot.sendMessage(chatId, this.sanitizeForChat(await this.chat.sessionResetUserReply(locale), 1800));
       return;
     }
 
@@ -1488,27 +1599,24 @@ export class TelegramGateway {
   }
 
   private async runTaskAsync(chatId: number, task: string): Promise<void> {
-    if (this.agent.isBusy()) {
-      this.log(`task rejected busy chat=${chatId} task=${JSON.stringify(task)}`);
-      const busyText = "A previous task is still running. Please wait.";
-      await this.bot.sendMessage(chatId, busyText);
-      this.chat.appendExternalTurn(chatId, "assistant", busyText);
-      return;
-    }
     const locale = this.inferTaskLocale(task);
-    const acceptedMessage = this.renderTaskAcceptedMessage(task, locale);
-    await this.bot.sendMessage(
-      chatId,
-      acceptedMessage,
-    );
-    this.chat.appendExternalTurn(chatId, "assistant", acceptedMessage);
-    void this.runTaskAndReport({
+    const isIdle = !this.drainingChatTaskQueue && !this.agent.isBusy() && this.pendingChatTasks.length === 0;
+    const queuePosition = this.pendingChatTasks.length + 1;
+    const ackMessage = isIdle
+      ? this.renderTaskAcceptedMessage(task, locale)
+      : this.renderTaskQueuedMessage(queuePosition, locale);
+    await this.bot.sendMessage(chatId, ackMessage);
+    this.chat.appendExternalTurn(chatId, "assistant", ackMessage);
+    if (!isIdle) {
+      this.log(`task queued busy chat=${chatId} position=${queuePosition} task=${JSON.stringify(task)}`);
+    }
+
+    this.pendingChatTasks.push({
       chatId,
       task,
-      source: "chat",
-      modelName: null,
-      sessionKey: `telegram:chat:${chatId}`,
+      sessionKey: this.resolveChatSessionKey(chatId),
     });
+    void this.drainQueuedChatTasks();
   }
 
   private async runScheduledJob(job: CronJob): Promise<CronRunResult> {
@@ -1529,7 +1637,7 @@ export class TelegramGateway {
       task: job.task,
       source: "cron",
       modelName: job.model,
-      sessionKey: job.chatId !== null ? `telegram:chat:${job.chatId}` : `telegram:cron:${job.id}`,
+      sessionKey: job.chatId !== null ? this.resolveChatSessionKey(job.chatId) : `telegram:cron:${job.id}`,
     });
   }
 
@@ -1558,81 +1666,82 @@ export class TelegramGateway {
     // High-signal actions (first step, errors, human auth, finish) always go through.
     const NARRATION_LLM_INTERVAL = 8;
 
-    return this.withTypingStatus(source === "chat" ? chatId : null, async () => {
-      const enqueueProgressNarration = (progress: AgentProgressUpdate): void => {
-        progressWork = progressWork
-          .then(async () => {
-            if (chatId === null) {
-              return;
-            }
-            this.log(
-              `progress source=${source} chat=${chatId} step=${progress.step}/${progress.maxSteps} action=${progress.actionType} app=${progress.currentApp}`,
-            );
-            const recentProgress = [...progressNarrationState.recentProgress, progress].slice(-8);
-            progressNarrationState.allProgress = [...progressNarrationState.allProgress, progress].slice(-16);
-
-            // Determine if this step qualifies for LLM narration or should use
-            // the cheaper rule-based fallback instead.
-            const action = String(progress.actionType || "").toLowerCase();
-            const isHighSignal =
-              progress.step === 1
-              || action === "finish"
-              || action === "request_human_auth"
-              || /(error|failed|timeout|interrupted|rejected)/i.test(
-                `${progress.message} ${progress.thought}`,
+    try {
+      return await this.withTypingStatus(source === "chat" ? chatId : null, async () => {
+        const enqueueProgressNarration = (progress: AgentProgressUpdate): void => {
+          progressWork = progressWork
+            .then(async () => {
+              if (chatId === null) {
+                return;
+              }
+              this.log(
+                `progress source=${source} chat=${chatId} step=${progress.step}/${progress.maxSteps} action=${progress.actionType} app=${progress.currentApp}`,
               );
-            const isIntervalStep = progressNarrationState.skippedSteps >= NARRATION_LLM_INTERVAL;
-            const useLlm = isHighSignal || isIntervalStep;
+              const recentProgress = [...progressNarrationState.recentProgress, progress].slice(-8);
+              progressNarrationState.allProgress = [...progressNarrationState.allProgress, progress].slice(-16);
 
-            const decision = useLlm
-              ? await this.chat.narrateTaskProgress({
-                  task,
-                  locale: progressLocale,
-                  progress,
-                  recentProgress,
-                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                  skippedSteps: progressNarrationState.skippedSteps,
-                })
-              : this.chat.fallbackTaskProgressNarration({
-                  task,
-                  locale: progressLocale,
-                  progress,
-                  recentProgress,
-                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                  skippedSteps: progressNarrationState.skippedSteps,
-                });
+              // Determine if this step qualifies for LLM narration or should use
+              // the cheaper rule-based fallback instead.
+              const action = String(progress.actionType || "").toLowerCase();
+              const isHighSignal =
+                progress.step === 1
+                || action === "finish"
+                || action === "request_human_auth"
+                || /(error|failed|timeout|interrupted|rejected)/i.test(
+                  `${progress.message} ${progress.thought}`,
+                );
+              const isIntervalStep = progressNarrationState.skippedSteps >= NARRATION_LLM_INTERVAL;
+              const useLlm = isHighSignal || isIntervalStep;
 
-            if (!decision.notify) {
-              progressNarrationState.skippedSteps += 1;
-              progressNarrationState.recentProgress = recentProgress;
-              return;
-            }
-            const message = this.sanitizeForChat(
-              this.stripStepCounterTelemetry(decision.message),
-              1800,
-            );
-            if (!message.trim()) {
-              progressNarrationState.skippedSteps += 1;
-              progressNarrationState.recentProgress = recentProgress;
-              return;
-            }
-            if (this.shouldSuppressLowSignalNarration(progress, progressNarrationState, message)) {
-              progressNarrationState.skippedSteps += 1;
-              progressNarrationState.recentProgress = recentProgress;
-              return;
-            }
-            progressNarrationState.lastNotifiedProgress = progress;
-            progressNarrationState.lastNotifiedMessage = message;
-            progressNarrationState.skippedSteps = 0;
-            progressNarrationState.recentProgress = [];
-            await this.bot.sendMessage(chatId, message);
-          })
-          .catch((error) => {
-            this.log(
-              `progress narration error source=${source} chat=${chatId ?? "(none)"} error=${(error as Error).message}`,
-            );
-          });
-      };
+              const decision = useLlm
+                ? await this.chat.narrateTaskProgress({
+                    task,
+                    locale: progressLocale,
+                    progress,
+                    recentProgress,
+                    lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                    skippedSteps: progressNarrationState.skippedSteps,
+                  })
+                : this.chat.fallbackTaskProgressNarration({
+                    task,
+                    locale: progressLocale,
+                    progress,
+                    recentProgress,
+                    lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                    skippedSteps: progressNarrationState.skippedSteps,
+                  });
+
+              if (!decision.notify) {
+                progressNarrationState.skippedSteps += 1;
+                progressNarrationState.recentProgress = recentProgress;
+                return;
+              }
+              const message = this.sanitizeForChat(
+                this.stripStepCounterTelemetry(decision.message),
+                1800,
+              );
+              if (!message.trim()) {
+                progressNarrationState.skippedSteps += 1;
+                progressNarrationState.recentProgress = recentProgress;
+                return;
+              }
+              if (this.shouldSuppressLowSignalNarration(progress, progressNarrationState, message)) {
+                progressNarrationState.skippedSteps += 1;
+                progressNarrationState.recentProgress = recentProgress;
+                return;
+              }
+              progressNarrationState.lastNotifiedProgress = progress;
+              progressNarrationState.lastNotifiedMessage = message;
+              progressNarrationState.skippedSteps = 0;
+              progressNarrationState.recentProgress = [];
+              await this.bot.sendMessage(chatId, message);
+            })
+            .catch((error) => {
+              this.log(
+                `progress narration error source=${source} chat=${chatId ?? "(none)"} error=${(error as Error).message}`,
+              );
+            });
+        };
 
       try {
         const result = await this.agent.runTask(
@@ -1784,7 +1893,10 @@ export class TelegramGateway {
           message,
         };
       }
-    });
+      });
+    } finally {
+      void this.drainQueuedChatTasks();
+    }
   }
 
   private async handleAuthCommand(chatId: number, text: string): Promise<void> {

@@ -18,6 +18,7 @@ test("telegram command menu includes control commands for bot menu", () => {
     "screen",
     "skills",
     "clear",
+    "new",
     "reset",
     "stop",
     "restart",

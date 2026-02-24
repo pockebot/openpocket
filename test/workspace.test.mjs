@@ -79,7 +79,7 @@ test("WorkspaceStore writes session steps final and daily memory", () => {
   const transcriptBody = fs.readFileSync(session.path, "utf-8");
   assert.match(transcriptBody, /"type":"session"/);
   assert.match(transcriptBody, /search weather/);
-  assert.match(transcriptBody, /SUCCESS/);
+  assert.match(transcriptBody, /Done/);
 
   const markdownPath = session.path.replace(/\.jsonl$/i, ".md");
   assert.equal(fs.existsSync(markdownPath), true);
@@ -127,4 +127,58 @@ test("WorkspaceStore reuses session transcript when sessionKey is stable", () =>
   assert.equal(Boolean(sessionsStore["telegram:1001"]), true);
   assert.equal(sessionsStore["telegram:1001"].sessionId, first.id);
   assert.equal(sessionsStore["telegram:1001"].sessionFile, first.path);
+
+  const transcriptLines = fs.readFileSync(first.path, "utf-8")
+    .split(/\r?\n/g)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line));
+  const assistantTexts = transcriptLines
+    .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
+    .map((entry) => {
+      const content = entry.message?.content;
+      if (!Array.isArray(content) || content.length === 0) {
+        return "";
+      }
+      const firstPart = content[0];
+      return typeof firstPart?.text === "string" ? firstPart.text : "";
+    });
+  assert.equal(assistantTexts.filter((text) => text === "session_started").length, 1);
+  assert.equal(assistantTexts.includes("first done"), true);
+  assert.equal(assistantTexts.includes("second done"), true);
+  assert.equal(assistantTexts.some((text) => text.startsWith("status: ")), false);
+});
+
+test("WorkspaceStore resetSession rolls session id while keeping session key", () => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-workspace-reset-"));
+  const store = new WorkspaceStore({ workspaceDir });
+
+  const first = store.createSession(
+    "first task",
+    "gpt-5.2-codex",
+    "gpt-5.2-codex",
+    { sessionKey: "telegram:2001" },
+  );
+  store.finalizeSession(first, true, "first done");
+
+  const reset = store.resetSession("telegram:2001");
+  assert.equal(Boolean(reset), true);
+  assert.notEqual(reset.sessionId, first.id);
+  assert.notEqual(reset.sessionPath, first.path);
+
+  const second = store.createSession(
+    "second task",
+    "gpt-5.2-codex",
+    "gpt-5.2-codex",
+    { sessionKey: "telegram:2001" },
+  );
+  store.finalizeSession(second, true, "second done");
+
+  assert.equal(second.id, reset.sessionId);
+  assert.equal(second.path, reset.sessionPath);
+
+  const sessionsStorePath = path.join(workspaceDir, "sessions", "sessions.json");
+  const sessionsStore = JSON.parse(fs.readFileSync(sessionsStorePath, "utf-8"));
+  assert.equal(sessionsStore["telegram:2001"].sessionId, reset.sessionId);
+  assert.equal(sessionsStore["telegram:2001"].sessionFile, reset.sessionPath);
+  assert.equal(fs.existsSync(first.path), true);
 });
