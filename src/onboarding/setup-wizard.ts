@@ -510,6 +510,31 @@ function setTerminalEcho(enabled: boolean): boolean {
   }
 }
 
+async function promptSecretWithRetryOrSkip(
+  prompter: SetupPrompter,
+  message: string,
+  valueLabel: string,
+): Promise<string | null> {
+  while (true) {
+    const raw = await prompter.secret(message);
+    const trimmed = raw.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+    const choice = await prompter.select(
+      `${valueLabel} cannot be empty. What do you want to do?`,
+      [
+        { value: "retry", label: "Retry input" },
+        { value: "skip", label: "Skip for now" },
+      ],
+      "retry",
+    );
+    if (choice === "skip") {
+      return null;
+    }
+  }
+}
+
 function makeConsolePrompter(): SetupPrompter {
   const rl = createInterface({ input, output });
   const useColor = shouldUseColor(output);
@@ -996,10 +1021,11 @@ async function runApiKeyStep(
     return;
   }
 
-  const inputKey = await prompter.secret(
-    `Enter API key for ${provider}`,
-    (value) => (value.trim() ? null : "API key cannot be empty"),
-  );
+  const inputKey = await promptSecretWithRetryOrSkip(prompter, `Enter API key for ${provider}`, "API key");
+  if (!inputKey) {
+    state.apiKeySource = "skipped";
+    return;
+  }
   const confirmed = await prompter.confirm(
     "Confirm writing this key to local config.json (stored only on this machine)?",
     true,
@@ -1009,7 +1035,7 @@ async function runApiKeyStep(
     return;
   }
 
-  const updatedProfiles = applyProviderApiKey(config, modelProfileKey, inputKey.trim());
+  const updatedProfiles = applyProviderApiKey(config, modelProfileKey, inputKey);
   saveConfig(config);
   state.apiKeyEnv = envName;
   state.apiKeySource = "config";
@@ -1140,19 +1166,20 @@ async function runTelegramStep(
       );
     }
   } else if (tokenChoice === "config") {
-    const token = await prompter.secret(
-      "Enter Telegram bot token",
-      (value) => (value.trim() ? null : "Telegram bot token cannot be empty."),
-    );
-    const confirmed = await prompter.confirm(
-      "Confirm writing Telegram bot token to local config.json?",
-      true,
-    );
-    if (confirmed) {
-      config.telegram.botToken = token.trim();
-      state.telegramTokenSource = "config";
-    } else {
+    const token = await promptSecretWithRetryOrSkip(prompter, "Enter Telegram bot token", "Telegram bot token");
+    if (!token) {
       state.telegramTokenSource = "skip";
+    } else {
+      const confirmed = await prompter.confirm(
+        "Confirm writing Telegram bot token to local config.json?",
+        true,
+      );
+      if (confirmed) {
+        config.telegram.botToken = token;
+        state.telegramTokenSource = "config";
+      } else {
+        state.telegramTokenSource = "skip";
+      }
     }
   } else {
     state.telegramTokenSource = "skip";
@@ -1356,16 +1383,15 @@ async function runHumanAuthStep(
       );
     }
   } else if (tokenMethod === "config") {
-    const token = await prompter.secret(
-      "Enter ngrok authtoken",
-      (value) => (value.trim() ? null : "Token cannot be empty."),
-    );
-    const confirmed = await prompter.confirm(
-      "Confirm writing ngrok authtoken to local config.json?",
-      true,
-    );
-    if (confirmed) {
-      config.humanAuth.tunnel.ngrok.authtoken = token.trim();
+    const token = await promptSecretWithRetryOrSkip(prompter, "Enter ngrok authtoken", "ngrok authtoken");
+    if (token) {
+      const confirmed = await prompter.confirm(
+        "Confirm writing ngrok authtoken to local config.json?",
+        true,
+      );
+      if (confirmed) {
+        config.humanAuth.tunnel.ngrok.authtoken = token;
+      }
     }
   }
 
