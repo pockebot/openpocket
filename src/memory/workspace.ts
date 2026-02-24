@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import type { OpenPocketConfig, SessionStorageConfig } from "../types.js";
 import { ensureDir, nowForFilename, nowIso, timeString, todayString } from "../utils/paths.js";
@@ -284,6 +285,13 @@ export interface SessionHandle {
   reused?: boolean;
 }
 
+export interface SessionResetHandle {
+  sessionId: string;
+  sessionPath: string;
+  previousSessionId?: string;
+  previousSessionPath?: string;
+}
+
 type WorkspaceStoreConfig = Pick<OpenPocketConfig, "workspaceDir"> & {
   sessionStorage?: Partial<SessionStorageConfig>;
 };
@@ -356,6 +364,20 @@ export class WorkspaceStore {
       sessionKey: normalizedSessionKey,
       reused: Boolean(existing),
     };
+  }
+
+  resetSession(sessionKey: string): SessionResetHandle | null {
+    const normalizedSessionKey = String(sessionKey || "").trim();
+    if (!normalizedSessionKey) {
+      return null;
+    }
+
+    const sessionId = `${nowForFilename()}-${randomUUID().slice(0, 8)}`;
+    const sessionPath = path.join(this.workspaceDir, "sessions", `session-${sessionId}.jsonl`);
+    return SessionOpenclawStoreBackend.resetSession(this.sessionStorePath, normalizedSessionKey, {
+      sessionId,
+      sessionPath,
+    });
   }
 
   appendStep(session: SessionHandle, stepNo: number, thought: string, actionJson: string, result: string): void {
