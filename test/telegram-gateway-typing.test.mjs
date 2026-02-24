@@ -848,6 +848,11 @@ test("TelegramGateway /start replies with stable welcome when onboarding is comp
 
     let decideCalled = false;
     gateway.chat.isOnboardingPending = () => false;
+    let preflightCalls = 0;
+    gateway.ensurePlayStoreReady = async () => {
+      preflightCalls += 1;
+      return false;
+    };
     let startReplyCalled = false;
     gateway.chat.startReadyReply = async (locale) => {
       startReplyCalled = true;
@@ -872,6 +877,7 @@ test("TelegramGateway /start replies with stable welcome when onboarding is comp
     });
 
     assert.equal(decideCalled, false);
+    assert.equal(preflightCalls, 1);
     assert.equal(startReplyCalled, true);
     assert.equal(sent.length, 1);
     assert.match(sent[0].text, /Welcome back/);
