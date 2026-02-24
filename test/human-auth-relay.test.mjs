@@ -152,7 +152,8 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
     );
     assert.equal(portalRes.status, 200);
     const portalHtml = await portalRes.text();
-    assert.match(portalHtml, /Login Credentials \(Recommended\)/);
+    assert.match(portalHtml, /Authorization Required/);
+    assert.match(portalHtml, /Username \/ Email/);
     assert.match(portalHtml, /Optional Remote Takeover \(Live\)/);
     assert.match(portalHtml, /Open Live Stream/);
 
