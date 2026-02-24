@@ -491,6 +491,25 @@ function truncateForTerminal(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars - 3)}...`;
 }
 
+function setTerminalEcho(enabled: boolean): boolean {
+  if (process.platform === "win32") {
+    return false;
+  }
+  const fd = (input as NodeJS.ReadStream & { fd?: number }).fd;
+  if (typeof fd !== "number" || fd < 0) {
+    return false;
+  }
+  try {
+    const result = spawnSync("stty", [enabled ? "echo" : "-echo"], {
+      stdio: [fd, "ignore", "ignore"],
+      timeout: 1000,
+    });
+    return (result.status ?? 1) === 0;
+  } catch {
+    return false;
+  }
+}
+
 function makeConsolePrompter(): SetupPrompter {
   const rl = createInterface({ input, output });
   const useColor = shouldUseColor(output);
@@ -513,6 +532,7 @@ function makeConsolePrompter(): SetupPrompter {
     if (input.setRawMode) {
       input.setRawMode(true);
     }
+    const echoDisabled = setTerminalEcho(false);
     input.resume();
     output.write(message);
 
@@ -532,6 +552,9 @@ function makeConsolePrompter(): SetupPrompter {
           } catch {
             // Ignore raw mode restore errors on shutdown paths.
           }
+        }
+        if (echoDisabled) {
+          setTerminalEcho(true);
         }
         rawModeEnabledBySelect = false;
         rl.resume();
