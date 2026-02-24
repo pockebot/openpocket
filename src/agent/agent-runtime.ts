@@ -1807,6 +1807,7 @@ export class AgentRuntime {
           if (action.type === "request_human_auth") {
             const permOnly = action.capability === "permission";
             const onVmDialog = snapshot ? runtime.isPermissionDialogApp(snapshot.currentApp) : false;
+            const currentApp = snapshot?.currentApp ?? "unknown";
 
             // Auto-approve VM permission dialogs
             if (onVmDialog || permOnly) {
@@ -1823,11 +1824,41 @@ export class AgentRuntime {
               }
             }
 
+            // Reuse cached oauth credentials on split Google sign-in pages.
+            // If password is already cached from previous step, skip a second human-auth prompt.
+            if (action.capability === "oauth") {
+              const cachedOauth = runtime.getCachedOauthCredentials();
+              if (cachedOauth?.password) {
+                const syntheticDecision: HumanAuthDecision = {
+                  requestId: "oauth-cached",
+                  approved: true,
+                  status: "approved",
+                  message: "Approved using cached oauth credentials from prior step.",
+                  decidedAt: nowIso(),
+                  artifactPath: null,
+                };
+                const delegation = await runtime.applyHumanDelegation("oauth", syntheticDecision, currentApp);
+                const delegationTemplate = delegation?.templateHint ?? null;
+                const resultText = [
+                  `Human auth ${syntheticDecision.status}: ${syntheticDecision.message}`,
+                  delegation?.message ? `delegation=${delegation.message}` : "",
+                  delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
+                ].filter(Boolean).join("\n");
+                runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+                ctx.traces.push({ step, action, result: resultText, thought, currentApp });
+                ctx.history.push("step " + step + ": action=request_human_auth decision=approved(cached_oauth)");
+                if (delegationTemplate) {
+                  ctx.history.push(`delegation_template ${delegationTemplate}`);
+                }
+                return { content: [{ type: "text" as const, text: resultText }], details: {} };
+              }
+            }
+
             if (!ctx.onHumanAuth) {
               const msg = `Human authorization required (${action.capability}), but no handler configured.`;
               ctx.failMessage = msg;
               runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
-              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              ctx.traces.push({ step, action, result: msg, thought, currentApp });
               return { content: [{ type: "text" as const, text: msg }], details: {} };
             }
 
@@ -1838,13 +1869,13 @@ export class AgentRuntime {
                 capability: action.capability, instruction: action.instruction,
                 reason: action.reason ?? thought,
                 timeoutSec: Math.max(30, action.timeoutSec ?? runtime.config.humanAuth.requestTimeoutSec),
-                currentApp: snapshot?.currentApp ?? "unknown", screenshotPath: ctx.lastScreenshotPath,
+                currentApp, screenshotPath: ctx.lastScreenshotPath,
               });
             } catch (error) {
               decision = { requestId: "local-error", approved: false, status: "rejected", message: `Human auth error: ${(error as Error).message}`, decidedAt: nowIso(), artifactPath: null };
             }
 
-            const delegation = await runtime.applyHumanDelegation(action.capability, decision, snapshot?.currentApp ?? "unknown");
+            const delegation = await runtime.applyHumanDelegation(action.capability, decision, currentApp);
             const delegationTemplate = delegation?.templateHint ?? null;
             const resultText = [
               `Human auth ${decision.status}: ${decision.message}`,
@@ -1853,7 +1884,7 @@ export class AgentRuntime {
               delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
             ].filter(Boolean).join("\n");
             runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
-            ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.traces.push({ step, action, result: resultText, thought, currentApp });
             ctx.history.push(`step ${step}: action=request_human_auth decision=${decision.status}`);
             if (delegationTemplate) {
               ctx.history.push(`delegation_template ${delegationTemplate}`);
