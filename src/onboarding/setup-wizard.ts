@@ -71,6 +71,14 @@ type SelectOption<T extends string> = {
   hint?: string;
 };
 
+type Keypress = {
+  name?: string;
+  ctrl?: boolean;
+  meta?: boolean;
+  shift?: boolean;
+  sequence?: string;
+};
+
 type SetupPrompter = {
   intro: (title: string) => Promise<void>;
   note: (title: string, body: string) => Promise<void>;
@@ -513,6 +521,19 @@ function setTerminalEcho(enabled: boolean): boolean {
   }
 }
 
+function isLikelyPastedSecretChunk(char: string, key: Keypress): boolean {
+  if (!char || char.length <= 1) {
+    return false;
+  }
+  if (key.ctrl || key.meta) {
+    return false;
+  }
+  if (key.name === "return" || key.name === "enter" || key.name === "backspace" || key.name === "tab") {
+    return false;
+  }
+  return true;
+}
+
 async function promptSecretWithRetryOrSkip(
   prompter: SetupPrompter,
   message: string,
@@ -553,6 +574,8 @@ function makeConsolePrompter(): SetupPrompter {
       return ask(message);
     }
 
+    const mutableRl = rl as Interface & { _writeToOutput?: (text: string) => void };
+    const previousWriteToOutput = mutableRl._writeToOutput;
     rl.pause();
     readline.emitKeypressEvents(input);
 
@@ -561,6 +584,9 @@ function makeConsolePrompter(): SetupPrompter {
       input.setRawMode(true);
     }
     const echoDisabled = setTerminalEcho(false);
+    if (previousWriteToOutput) {
+      mutableRl._writeToOutput = () => {};
+    }
     input.resume();
     output.write(message);
 
@@ -584,11 +610,16 @@ function makeConsolePrompter(): SetupPrompter {
         if (echoDisabled) {
           setTerminalEcho(true);
         }
+        if (previousWriteToOutput) {
+          mutableRl._writeToOutput = previousWriteToOutput;
+        }
         rawModeEnabledBySelect = false;
         rl.resume();
       };
 
-      const onKeypress = (char: string, key: { name?: string; ctrl?: boolean }) => {
+      let pasteHintShown = false;
+
+      const onKeypress = (char: string, key: Keypress) => {
         if (key.ctrl && key.name === "c") {
           cleanup();
           output.write("^C\n");
@@ -609,6 +640,16 @@ function makeConsolePrompter(): SetupPrompter {
           return;
         }
         if (key.ctrl || key.name === "tab") {
+          return;
+        }
+        if (isLikelyPastedSecretChunk(char, key)) {
+          if (!pasteHintShown) {
+            output.write(
+              `\n${colorize("[INPUT]", ANSI_BOLD_YELLOW, useColor)} Pasting is disabled for secret input. Please type it manually.\n${message}`,
+            );
+            output.write("*".repeat(raw.length));
+            pasteHintShown = true;
+          }
           return;
         }
         if (char && char.length > 0) {
