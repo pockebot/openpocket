@@ -967,6 +967,8 @@ async function runApiKeyStep(
 
   const envName = selectedProfile.apiKeyEnv || "MODEL_API_KEY";
   const envKey = process.env[envName]?.trim() ?? "";
+  const configKey = selectedProfile.apiKey.trim();
+  const hasConfigKey = Boolean(configKey);
   const provider = providerFromBaseUrl(selectedProfile.baseUrl);
 
   await prompter.note(
@@ -991,14 +993,14 @@ async function runApiKeyStep(
       {
         value: "config",
         label: "Paste API key and save to local config.json",
-        hint: "Stored in plain text on this machine",
+        hint: hasConfigKey ? `Current config key detected (length ${configKey.length})` : "Stored in plain text on this machine",
       },
       {
         value: "skip",
         label: "Skip for now",
       },
     ],
-    envKey ? "env" : "config",
+    hasConfigKey ? "skip" : envKey ? "env" : "config",
   );
 
   if (choice === "env") {
@@ -1147,7 +1149,7 @@ async function runTelegramStep(
         label: "Skip token setup for now",
       },
     ],
-    envToken ? "env" : hasConfigToken ? "skip" : "config",
+    hasConfigToken ? "skip" : envToken ? "env" : "config",
   );
 
   if (tokenChoice === "env") {
@@ -1354,6 +1356,8 @@ async function runHumanAuthStep(
   );
 
   const envToken = process.env[envName]?.trim() ?? "";
+  const configToken = config.humanAuth.tunnel.ngrok.authtoken.trim();
+  const hasConfigToken = Boolean(configToken);
   const tokenMethod = await prompter.select(
     "How should OpenPocket read ngrok authtoken?",
     [
@@ -1365,13 +1369,14 @@ async function runHumanAuthStep(
       {
         value: "config",
         label: "Paste token and save to local config.json",
+        hint: hasConfigToken ? `Current config token detected (length ${configToken.length})` : undefined,
       },
       {
         value: "skip",
         label: "Skip for now",
       },
     ],
-    envToken ? "env" : "config",
+    hasConfigToken ? "skip" : envToken ? "env" : "config",
   );
 
   if (tokenMethod === "env") {

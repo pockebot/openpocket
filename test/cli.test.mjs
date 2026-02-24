@@ -115,6 +115,79 @@ test("onboard installs CLI launcher once on first run", () => {
   );
 });
 
+test("onboard reuses existing config values when --force is not provided", () => {
+  const runtimeHome = makeHome("openpocket-ts-onboard-reuse-runtime-");
+  const shellHome = makeHome("openpocket-ts-onboard-reuse-shell-");
+  const cfgPath = path.join(runtimeHome, "config.json");
+  const onboardingPath = path.join(runtimeHome, "state", "onboarding.json");
+
+  const init = runCli(["init"], {
+    OPENPOCKET_HOME: runtimeHome,
+    HOME: shellHome,
+  });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  cfg.models["gpt-5.2-codex"].apiKey = "sk-existing-openpocket";
+  cfg.telegram.botToken = "telegram-existing-token";
+  cfg.humanAuth.tunnel.ngrok.authtoken = "ngrok-existing-token";
+  cfg.emulator.dataPartitionSizeGb = 64;
+  fs.writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf-8");
+  fs.mkdirSync(path.dirname(onboardingPath), { recursive: true });
+  fs.writeFileSync(onboardingPath, JSON.stringify({ marker: "keep-me" }), "utf-8");
+
+  const onboard = runCli(["onboard"], {
+    OPENPOCKET_HOME: runtimeHome,
+    HOME: shellHome,
+  });
+  assert.equal(onboard.status, 1);
+  assert.match(onboard.stderr, /interactive terminal/i);
+
+  const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(saved.models["gpt-5.2-codex"].apiKey, "sk-existing-openpocket");
+  assert.equal(saved.telegram.botToken, "telegram-existing-token");
+  assert.equal(saved.humanAuth.tunnel.ngrok.authtoken, "ngrok-existing-token");
+  assert.equal(saved.emulator.dataPartitionSizeGb, 64);
+  assert.equal(fs.existsSync(onboardingPath), true);
+});
+
+test("onboard --force clears previous config and onboarding state", () => {
+  const runtimeHome = makeHome("openpocket-ts-onboard-force-runtime-");
+  const shellHome = makeHome("openpocket-ts-onboard-force-shell-");
+  const cfgPath = path.join(runtimeHome, "config.json");
+  const onboardingPath = path.join(runtimeHome, "state", "onboarding.json");
+
+  const init = runCli(["init"], {
+    OPENPOCKET_HOME: runtimeHome,
+    HOME: shellHome,
+  });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  cfg.models["gpt-5.2-codex"].apiKey = "sk-existing-openpocket";
+  cfg.telegram.botToken = "telegram-existing-token";
+  cfg.humanAuth.tunnel.ngrok.authtoken = "ngrok-existing-token";
+  cfg.emulator.dataPartitionSizeGb = 64;
+  fs.writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf-8");
+  fs.mkdirSync(path.dirname(onboardingPath), { recursive: true });
+  fs.writeFileSync(onboardingPath, JSON.stringify({ marker: "clear-me" }), "utf-8");
+
+  const onboard = runCli(["onboard", "--force"], {
+    OPENPOCKET_HOME: runtimeHome,
+    HOME: shellHome,
+  });
+  assert.equal(onboard.status, 1);
+  assert.match(onboard.stderr, /interactive terminal/i);
+  assert.match(onboard.stdout, /--force enabled: cleared previous config/i);
+
+  const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(saved.models["gpt-5.2-codex"].apiKey, "");
+  assert.equal(saved.telegram.botToken, "");
+  assert.equal(saved.humanAuth.tunnel.ngrok.authtoken, "");
+  assert.equal(saved.emulator.dataPartitionSizeGb, 24);
+  assert.equal(fs.existsSync(onboardingPath), false);
+});
+
 test("legacy snake_case config is migrated to camelCase by init", () => {
   const home = makeHome("openpocket-ts-migrate-");
   const cfgPath = path.join(home, "config.json");

@@ -73,7 +73,7 @@ function printHelp(): void {
   printRaw(`${cliTheme.emphasize("OpenPocket CLI (Node.js + TypeScript)", "accent")}\n
 Usage:
   openpocket [--config <path>] install-cli
-  openpocket [--config <path>] onboard
+  openpocket [--config <path>] onboard [--force]
   openpocket [--config <path>] config-show
   openpocket [--config <path>] emulator status
   openpocket [--config <path>] emulator start
@@ -99,6 +99,7 @@ Legacy aliases (deprecated):
 
 Examples:
   openpocket onboard
+  openpocket onboard --force
   openpocket emulator start
   openpocket emulator tap --x 120 --y 300
   openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
@@ -501,15 +502,22 @@ async function runBootstrapCommand(
 ): Promise<ReturnType<typeof loadConfig>> {
   const cfg = loadConfig(configPath);
   if (options.promptDataPartitionSize) {
-    const targetSizeGb = DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB;
+    const currentSizeGb = Number(cfg.emulator.dataPartitionSizeGb);
+    const targetSizeGb =
+      Number.isFinite(currentSizeGb) &&
+      Number.isInteger(currentSizeGb) &&
+      currentSizeGb >= 8 &&
+      currentSizeGb <= 512
+        ? currentSizeGb
+        : DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB;
     cfg.emulator.dataPartitionSizeGb = targetSizeGb;
     if (process.stdin.isTTY && process.stdout.isTTY) {
       const rl = createInterface({ input, output });
       try {
         printRaw(cliTheme.section("Agent Phone Storage"));
         printInfo("How much disk space do you want to allocate to your Agent Phone?");
-        printInfo(`Press Enter to use default ${targetSizeGb}G, or enter a custom size in GB (8-512).`);
-        printInfo("Tip: type `skip` to use the default value.");
+        printInfo(`Press Enter to keep ${targetSizeGb}G, or enter a custom size in GB (8-512).`);
+        printInfo("Tip: type `skip` to keep the current value.");
         while (true) {
           const raw = (
             await rl.question(
@@ -599,7 +607,18 @@ function installCliShortcutOnFirstOnboard(cfg: ReturnType<typeof loadConfig>): v
   }
 }
 
-async function runOnboardCommand(configPath: string | undefined): Promise<number> {
+async function runOnboardCommand(configPath: string | undefined, args: string[] = []): Promise<number> {
+  const hasForce = args.includes("--force");
+  const unknownArgs = args.filter((item) => item !== "--force");
+  if (unknownArgs.length > 0) {
+    throw new Error(`Unknown onboard option(s): ${unknownArgs.join(" ")}`);
+  }
+  if (hasForce) {
+    const existing = loadConfig(configPath);
+    fs.rmSync(existing.configPath, { force: true });
+    fs.rmSync(path.join(existing.stateDir, "onboarding.json"), { force: true });
+    printWarn(`[OpenPocket][onboard] --force enabled: cleared previous config at ${existing.configPath}`);
+  }
   const cfg = await runBootstrapCommand(configPath, { promptDataPartitionSize: true });
   installCliShortcutOnFirstOnboard(cfg);
   await runSetupWizard(cfg);
@@ -1740,11 +1759,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (command === "setup") {
     printWarn("[OpenPocket] `setup` is deprecated. Use `openpocket onboard`.");
-    return runOnboardCommand(configPath ?? undefined);
+    return runOnboardCommand(configPath ?? undefined, rest.slice(1));
   }
 
   if (command === "onboard") {
-    return runOnboardCommand(configPath ?? undefined);
+    return runOnboardCommand(configPath ?? undefined, rest.slice(1));
   }
 
   throw new Error(`Unknown command: ${command}`);
