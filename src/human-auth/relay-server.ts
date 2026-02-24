@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 
 import { ensureDir, nowIso } from "../utils/paths.js";
@@ -380,6 +381,8 @@ export class HumanAuthRelayServer {
     const requestId = escapeHtml(record.requestId);
     const capability = escapeHtml(record.capability);
     const instruction = escapeHtml(record.instruction || "(no instruction)");
+    const localHostNameRaw = (os.hostname() || "this-device").trim();
+    const localHostName = escapeHtml(localHostNameRaw.replace(/\.local$/i, "") || "this-device");
     const reason = escapeHtml(record.reason || "(no reason)");
     const task = escapeHtml(record.task || "(no task)");
     const currentApp = escapeHtml(record.currentApp || "unknown");
@@ -445,10 +448,21 @@ export class HumanAuthRelayServer {
       font-size: 12px;
       font-weight: 600;
       letter-spacing: 0.01em;
+      max-width: 100%;
+      min-width: 0;
     }
     .lockIcon {
       font-size: 14px;
       line-height: 1;
+    }
+    .lockBadgeText {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .hostName {
+      font-weight: 700;
     }
     .requestId {
       color: var(--op-ink-soft);
@@ -754,7 +768,10 @@ export class HumanAuthRelayServer {
   <div class="wrap">
     <div class="card">
       <div class="brandRow">
-        <div class="lockBadge"><span class="lockIcon">🔒</span><span>Encrypted Local Relay</span></div>
+        <div class="lockBadge">
+          <span class="lockIcon">🔒</span>
+          <span class="lockBadgeText">Encrypted Local Relay running on <span class="hostName">${localHostName}</span></span>
+        </div>
         <div class="requestId">Request: ${requestId}</div>
       </div>
       <h1>Authorization Required</h1>
