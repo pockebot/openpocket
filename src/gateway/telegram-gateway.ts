@@ -505,6 +505,16 @@ export class TelegramGateway {
       this.persistOnboardingStatePatch({ playStoreDetected: true });
     }
 
+    const signedIn = this.detectGoogleAccountSignedIn(deviceId);
+    if (signedIn === true) {
+      this.playStorePreflightPassed = true;
+      this.persistOnboardingStatePatch({
+        gmailLoginConfirmedAt: new Date().toISOString(),
+        playStoreDetected: true,
+      });
+      return false;
+    }
+
     if (!this.config.humanAuth.enabled) {
       await this.bot.sendMessage(
         chatId,
@@ -1788,21 +1798,21 @@ export class TelegramGateway {
 
               const decision = useLlm
                 ? await this.chat.narrateTaskProgress({
-                    task,
-                    locale: progressLocale,
-                    progress,
-                    recentProgress,
-                    lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                    skippedSteps: progressNarrationState.skippedSteps,
-                  })
+                  task,
+                  locale: progressLocale,
+                  progress,
+                  recentProgress,
+                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                  skippedSteps: progressNarrationState.skippedSteps,
+                })
                 : this.chat.fallbackTaskProgressNarration({
-                    task,
-                    locale: progressLocale,
-                    progress,
-                    recentProgress,
-                    lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                    skippedSteps: progressNarrationState.skippedSteps,
-                  });
+                  task,
+                  locale: progressLocale,
+                  progress,
+                  recentProgress,
+                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                  skippedSteps: progressNarrationState.skippedSteps,
+                });
 
               if (!decision.notify) {
                 progressNarrationState.skippedSteps += 1;
@@ -1836,18 +1846,18 @@ export class TelegramGateway {
             });
         };
 
-      try {
-        const result = await this.agent.runTask(
-          task,
-          modelName ?? undefined,
-          chatId === null
-            ? undefined
-            : async (progress) => {
+        try {
+          const result = await this.agent.runTask(
+            task,
+            modelName ?? undefined,
+            chatId === null
+              ? undefined
+              : async (progress) => {
                 enqueueProgressNarration(progress);
               },
-          chatId === null
-            ? undefined
-            : async (request) => {
+            chatId === null
+              ? undefined
+              : async (request) => {
                 const timeoutSec = Math.max(30, Math.round(request.timeoutSec));
                 return this.humanAuth.requestAndWait(
                   { chatId, task, request: { ...request, timeoutSec } },
@@ -1873,15 +1883,15 @@ export class TelegramGateway {
                     if (isCodeFlow) {
                       const codeLines = progressLocale === "zh"
                         ? [
-                            "你也可以直接在 Telegram 回复验证码（4-10位数字，例如 123456）。",
-                            `多个验证码请求时可发送：${opened.manualApproveCommand} 123456`,
-                            `拒绝可发送：${opened.manualRejectCommand}`,
-                          ]
+                          "你也可以直接在 Telegram 回复验证码（4-10位数字，例如 123456）。",
+                          `多个验证码请求时可发送：${opened.manualApproveCommand} 123456`,
+                          `拒绝可发送：${opened.manualRejectCommand}`,
+                        ]
                         : [
-                            "You can also reply directly in Telegram with the 4-10 digit code (for example: 123456).",
-                            `If multiple code requests are pending, use: ${opened.manualApproveCommand} 123456`,
-                            `Reject with: ${opened.manualRejectCommand}`,
-                          ];
+                          "You can also reply directly in Telegram with the 4-10 digit code (for example: 123456).",
+                          `If multiple code requests are pending, use: ${opened.manualApproveCommand} 123456`,
+                          `Reject with: ${opened.manualRejectCommand}`,
+                        ];
                       const codeBody = this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale, codeLines);
                       await this.bot.sendMessage(
                         chatId,
@@ -1890,15 +1900,15 @@ export class TelegramGateway {
                           parse_mode: "HTML",
                           reply_markup: opened.openUrl
                             ? {
-                                inline_keyboard: [
-                                  [
-                                    {
-                                      text: "Open Human Auth",
-                                      url: opened.openUrl,
-                                    },
-                                  ],
+                              inline_keyboard: [
+                                [
+                                  {
+                                    text: "Open Human Auth",
+                                    url: opened.openUrl,
+                                  },
                                 ],
-                              }
+                              ],
+                            }
                             : undefined,
                         },
                       );
@@ -1939,56 +1949,56 @@ export class TelegramGateway {
                   },
                 );
               },
-          source === "cron" ? "minimal" : undefined,
-          chatId === null
-            ? undefined
-            : async (request) => this.requestUserDecisionFromChat(chatId, request),
-          sessionKey,
-        );
-        await progressWork;
-
-        this.log(`task done source=${source} chat=${chatId ?? "(none)"} ok=${result.ok} session=${result.sessionPath}`);
-
-        if (chatId !== null) {
-          const finalMessage = await this.chat.narrateTaskOutcome({
-            task,
-            locale: progressLocale,
-            ok: result.ok,
-            rawResult: result.message,
-            recentProgress: progressNarrationState.allProgress,
-            skillPath: result.skillPath ?? null,
-            scriptPath: result.scriptPath ?? null,
-          });
-          await this.bot.sendMessage(
-            chatId,
-            this.sanitizeForChat(
-              this.stripStepCounterTelemetry(finalMessage),
-              1800,
-            ),
+            source === "cron" ? "minimal" : undefined,
+            chatId === null
+              ? undefined
+              : async (request) => this.requestUserDecisionFromChat(chatId, request),
+            sessionKey,
           );
-          this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
-        }
+          await progressWork;
 
-        return {
-          accepted: true,
-          ok: result.ok,
-          message: result.message,
-        };
-      } catch (error) {
-        await progressWork.catch(() => {});
-        const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
-        this.log(`task crash source=${source} chat=${chatId ?? "(none)"} error=${(error as Error).message}`);
-        if (chatId !== null) {
-          const sanitized = this.sanitizeForChat(message, 600);
-          await this.bot.sendMessage(chatId, sanitized);
-          this.chat.appendExternalTurn(chatId, "assistant", sanitized);
+          this.log(`task done source=${source} chat=${chatId ?? "(none)"} ok=${result.ok} session=${result.sessionPath}`);
+
+          if (chatId !== null) {
+            const finalMessage = await this.chat.narrateTaskOutcome({
+              task,
+              locale: progressLocale,
+              ok: result.ok,
+              rawResult: result.message,
+              recentProgress: progressNarrationState.allProgress,
+              skillPath: result.skillPath ?? null,
+              scriptPath: result.scriptPath ?? null,
+            });
+            await this.bot.sendMessage(
+              chatId,
+              this.sanitizeForChat(
+                this.stripStepCounterTelemetry(finalMessage),
+                1800,
+              ),
+            );
+            this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
+          }
+
+          return {
+            accepted: true,
+            ok: result.ok,
+            message: result.message,
+          };
+        } catch (error) {
+          await progressWork.catch(() => { });
+          const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
+          this.log(`task crash source=${source} chat=${chatId ?? "(none)"} error=${(error as Error).message}`);
+          if (chatId !== null) {
+            const sanitized = this.sanitizeForChat(message, 600);
+            await this.bot.sendMessage(chatId, sanitized);
+            this.chat.appendExternalTurn(chatId, "assistant", sanitized);
+          }
+          return {
+            accepted: true,
+            ok: false,
+            message,
+          };
         }
-        return {
-          accepted: true,
-          ok: false,
-          message,
-        };
-      }
       });
     } finally {
       void this.drainQueuedChatTasks();
