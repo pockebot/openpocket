@@ -34,9 +34,6 @@ const ANSI_BOLD_GREEN = "\u001b[1;32m";
 const ANSI_BOLD_YELLOW = "\u001b[1;33m";
 const ANSI_DIM = "\u001b[2m";
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const SECRET_PASTE_INTERVAL_MS = 20;
-const SECRET_PASTE_STREAK_THRESHOLD = 4;
-const SECRET_PASTE_BURST_BLOCK_MS = 120;
 
 interface SetupState {
   updatedAt: string;
@@ -524,25 +521,6 @@ function setTerminalEcho(enabled: boolean): boolean {
   }
 }
 
-function isLikelyPastedSecretChunk(char: string, key: Keypress): boolean {
-  if (key.name?.includes("paste")) {
-    return true;
-  }
-  if (key.sequence?.includes("[200~") || key.sequence?.includes("[201~")) {
-    return true;
-  }
-  if (!char || char.length <= 1) {
-    return false;
-  }
-  if (key.ctrl || key.meta) {
-    return false;
-  }
-  if (key.name === "return" || key.name === "enter" || key.name === "backspace" || key.name === "tab") {
-    return false;
-  }
-  return true;
-}
-
 function suspendKeypressListeners(stream: NodeJS.ReadStream): () => void {
   const listeners = stream.listeners("keypress") as Array<(...args: unknown[]) => void>;
   for (const listener of listeners) {
@@ -645,11 +623,6 @@ function makeConsolePrompter(): SetupPrompter {
         rl.resume();
       };
 
-      let pasteHintShown = false;
-      let rapidCharStreak = 0;
-      let lastPrintableAt = 0;
-      let blockPrintableUntil = 0;
-
       const onKeypress = (char: string, key: Keypress) => {
         if (key.ctrl && key.name === "c") {
           cleanup();
@@ -676,32 +649,8 @@ function makeConsolePrompter(): SetupPrompter {
         if (!char || char.length === 0) {
           return;
         }
-        const now = Date.now();
-        if (now < blockPrintableUntil) {
-          return;
-        }
-        if (lastPrintableAt > 0 && now - lastPrintableAt <= SECRET_PASTE_INTERVAL_MS) {
-          rapidCharStreak += 1;
-        } else {
-          rapidCharStreak = 0;
-        }
-        lastPrintableAt = now;
-        const looksLikePaste =
-          isLikelyPastedSecretChunk(char, key) || rapidCharStreak >= SECRET_PASTE_STREAK_THRESHOLD;
-        if (looksLikePaste) {
-          blockPrintableUntil = now + SECRET_PASTE_BURST_BLOCK_MS;
-          rapidCharStreak = 0;
-          if (!pasteHintShown) {
-            output.write(
-              `\n${colorize("[INPUT]", ANSI_BOLD_YELLOW, useColor)} Pasting is disabled for secret input. Please type it manually.\n${message}`,
-            );
-            output.write("*".repeat(raw.length));
-            pasteHintShown = true;
-          }
-          return;
-        }
         raw += char;
-        output.write("*");
+        output.write("*".repeat(char.length));
       };
 
       activeKeypressHandler = onKeypress;
