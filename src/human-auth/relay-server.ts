@@ -404,41 +404,57 @@ export class HumanAuthRelayServer {
       --op-brand: #ff8a00;
       --op-brand-dark: #d85700;
       --op-bg: #fff9f2;
-      --op-card: #ffffff;
       --op-ink: #131313;
       --op-ink-soft: #5f6368;
-      --op-line: #ece7de;
+      --op-line: #e5ddd1;
       --op-chip: rgba(255, 138, 0, 0.12);
-      --op-shadow: 0 20px 44px rgba(20, 20, 20, 0.08);
     }
     body {
       margin: 0;
       font-family: "Poppins", "Avenir Next", "Segoe UI", Arial, sans-serif;
       color: var(--op-ink);
       background:
-        radial-gradient(circle at 85% -10%, rgba(255, 138, 0, 0.22), transparent 36%),
+        radial-gradient(circle at 85% -12%, rgba(255, 138, 0, 0.2), transparent 34%),
         linear-gradient(155deg, #fffefb 0%, var(--op-bg) 56%, #f4f8ff 100%);
       min-height: 100vh;
     }
     .wrap {
       max-width: 760px;
       margin: 0 auto;
-      padding: 20px 16px 32px;
+      padding: 16px 14px 24px;
       box-sizing: border-box;
     }
     .card {
-      background: var(--op-card);
-      border: 1px solid var(--op-line);
-      border-radius: 22px;
-      padding: 16px;
-      box-shadow: var(--op-shadow);
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+      box-shadow: none;
     }
     .brandRow {
       display: flex;
       align-items: center;
-      justify-content: flex-end;
+      justify-content: space-between;
       gap: 10px;
-      margin-bottom: 4px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+    .lockBadge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid rgba(255, 138, 0, 0.35);
+      border-radius: 999px;
+      background: rgba(255, 138, 0, 0.12);
+      color: #78470f;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .lockIcon {
+      font-size: 14px;
+      line-height: 1;
     }
     .requestId {
       color: var(--op-ink-soft);
@@ -463,17 +479,16 @@ export class HumanAuthRelayServer {
       margin: 12px 0 0;
       font-size: 13px;
       color: #8b4a07;
-      background: rgba(255, 138, 0, 0.1);
-      border: 1px solid rgba(255, 138, 0, 0.24);
-      border-radius: 10px;
+      background: rgba(255, 138, 0, 0.08);
+      border-left: 3px solid rgba(255, 138, 0, 0.45);
+      border-radius: 8px;
       padding: 7px 10px;
     }
     .section {
-      margin-top: 14px;
-      border: 1px solid var(--op-line);
-      border-radius: 16px;
-      padding: 12px;
-      background: #fff;
+      margin-top: 12px;
+      border-top: 1px solid var(--op-line);
+      padding-top: 12px;
+      background: transparent;
     }
     .section h2 {
       margin: 0 0 8px;
@@ -489,7 +504,7 @@ export class HumanAuthRelayServer {
     }
     input, textarea {
       width: 100%;
-      border-radius: 10px;
+      border-radius: 9px;
       border: 1px solid #d7dce3;
       padding: 10px;
       box-sizing: border-box;
@@ -499,7 +514,7 @@ export class HumanAuthRelayServer {
       color: #202124;
     }
     textarea {
-      min-height: 68px;
+      min-height: 64px;
       resize: vertical;
     }
     .actions {
@@ -611,7 +626,7 @@ export class HumanAuthRelayServer {
     .stream-wrap {
       position: relative;
       margin-top: 8px;
-      border-radius: 14px;
+      border-radius: 12px;
       border: 1px solid #d9dfe8;
       background: #050912;
       min-height: 280px;
@@ -679,15 +694,15 @@ export class HumanAuthRelayServer {
     }
     details.context {
       margin-top: 14px;
-      border: 1px solid var(--op-line);
-      border-radius: 14px;
-      background: #fbfbfd;
+      border-top: 1px solid var(--op-line);
+      border-bottom: 1px solid var(--op-line);
+      background: transparent;
       overflow: hidden;
     }
     details.context summary {
       cursor: pointer;
       list-style: none;
-      padding: 12px 12px;
+      padding: 12px 2px;
       font-size: 14px;
       font-weight: 600;
       color: #272e35;
@@ -695,12 +710,11 @@ export class HumanAuthRelayServer {
     }
     details.context[open] summary {
       border-bottom-color: var(--op-line);
-      background: #f8f9fc;
     }
     .meta {
       display: grid;
       gap: 8px;
-      padding: 10px 12px 12px;
+      padding: 10px 0 12px;
     }
     .metaItem {
       background: #fff;
@@ -721,10 +735,9 @@ export class HumanAuthRelayServer {
       font-weight: 600;
     }
     @media (max-width: 480px) {
-      .card { padding: 12px; border-radius: 16px; }
       h1 { font-size: 21px; }
       .grid2 { grid-template-columns: 1fr; }
-      .brandRow { flex-direction: column; align-items: flex-start; }
+      .brandRow { align-items: flex-start; }
       .requestId { text-align: left; }
       .quick-keys {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -740,6 +753,7 @@ export class HumanAuthRelayServer {
   <div class="wrap">
     <div class="card">
       <div class="brandRow">
+        <div class="lockBadge"><span class="lockIcon">🔒</span><span>Encrypted Local Relay</span></div>
         <div class="requestId">Request: ${requestId}</div>
       </div>
       <h1>Authorization Required</h1>
@@ -775,16 +789,21 @@ export class HumanAuthRelayServer {
           </div>
           <button id="togglePassword" type="button">Show</button>
         </div>
+        <div id="decisionMountOauth"></div>
       </div>
 
-      <div class="section">
-        <div class="actions decisionActions">
-          <button id="approve" type="button">Approve</button>
-          <button id="reject" type="button">Reject</button>
+      <div class="section" id="decisionSection">
+        <div id="decisionMountDefault">
+          <div id="decisionBlock">
+            <div class="actions decisionActions">
+              <button id="approve" type="button">Approve</button>
+              <button id="reject" type="button">Reject</button>
+            </div>
+            <label for="note">Decision Note (Optional)</label>
+            <textarea id="note" placeholder="Optional message to agent"></textarea>
+            <div class="status" id="status"></div>
+          </div>
         </div>
-        <label for="note">Decision Note (Optional)</label>
-        <textarea id="note" placeholder="Optional message to agent"></textarea>
-        <div class="status" id="status"></div>
       </div>
 
       <div class="capabilityLine" id="capabilityHint"></div>
@@ -869,6 +888,10 @@ export class HumanAuthRelayServer {
     const requestId = ${JSON.stringify(record.requestId)};
     const token = ${JSON.stringify(tokenEscaped)};
     const capability = ${JSON.stringify(record.capability)};
+    const decisionBlockEl = document.getElementById("decisionBlock");
+    const decisionMountOauthEl = document.getElementById("decisionMountOauth");
+    const decisionMountDefaultEl = document.getElementById("decisionMountDefault");
+    const decisionSectionEl = document.getElementById("decisionSection");
     const statusEl = document.getElementById("status");
     const noteEl = document.getElementById("note");
     const capabilityHintEl = document.getElementById("capabilityHint");
@@ -917,8 +940,26 @@ export class HumanAuthRelayServer {
       return "Recommended: attach needed data, then approve.";
     }
 
+    function placeDecisionBlock(cap) {
+      if (!decisionBlockEl || !decisionMountOauthEl || !decisionMountDefaultEl || !decisionSectionEl) {
+        return;
+      }
+      if (cap === "oauth") {
+        if (decisionBlockEl.parentElement !== decisionMountOauthEl) {
+          decisionMountOauthEl.appendChild(decisionBlockEl);
+        }
+        decisionSectionEl.classList.add("hidden");
+        return;
+      }
+      if (decisionBlockEl.parentElement !== decisionMountDefaultEl) {
+        decisionMountDefaultEl.appendChild(decisionBlockEl);
+      }
+      decisionSectionEl.classList.remove("hidden");
+    }
+
     function configureByCapability() {
       capabilityHintEl.textContent = capabilityHintText(capability);
+      placeDecisionBlock(capability);
       show("credentialDelegation", capability === "oauth");
       show("delegatedDataSection", capability !== "oauth");
       show("geoDelegation", capability === "location");

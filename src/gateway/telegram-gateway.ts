@@ -86,6 +86,7 @@ export class TelegramGateway {
   private readonly botDisplayNameSyncStatePath: string;
   private botDisplayNameRateLimitedUntilMs = 0;
   private playStorePreflightPassed = false;
+  private playStorePreflightTriggered = false;
   private playStorePreflightDeferredNotified = false;
   private running = false;
   private stoppedPromise: Promise<void> | null = null;
@@ -189,6 +190,56 @@ export class TelegramGateway {
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
 
     return this.compact(redacted, maxChars);
+  }
+
+  private escapeTelegramHtml(text: string): string {
+    return String(text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  private stripHumanAuthNarrationNoise(text: string): string {
+    return String(text || "")
+      .replace(/Once you['’]?ve done that,?\s*send (?:a )?(?:quick )?confirmation(?: here| in Telegram)?\.?/gi, "")
+      .replace(/Then send (?:a )?confirmation(?: here| in Telegram)?\.?/gi, "")
+      .replace(/then return to Telegram\.?/gi, "")
+      .replace(/然后回到\s*Telegram[^。！？.!?]*[。！？.!?]?/gi, "")
+      .replace(/完成后(?:再)?(?:在|回到)?\s*Telegram[^。！？.!?]*[。！？.!?]?/gi, "")
+      .replace(/Security note:[^.。!?！？]*(?:[.。!?！？]|$)/gi, "")
+      .replace(/安全提示：[^。！？]*(?:[。！？]|$)/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
+  private humanAuthSecurityNote(locale: "zh" | "en"): string {
+    return locale === "zh"
+      ? "该授权页连接你本机上的 OpenPocket Relay；凭据仅通过当前私有加密通道传输，不会存入中心化 OpenPocket Relay。"
+      : "This auth page connects to your local OpenPocket relay. Credentials are transmitted only through a private encrypted channel and are never stored in a centralized OpenPocket relay.";
+  }
+
+  private buildHumanAuthHtmlMessage(narration: string, locale: "zh" | "en", extraLines?: string[]): string {
+    const cleanedNarration = this.stripHumanAuthNarrationNoise(this.sanitizeForChat(narration, 1500));
+    const payloadLines: string[] = [];
+    if (cleanedNarration) {
+      payloadLines.push(this.escapeTelegramHtml(cleanedNarration));
+    }
+    if (Array.isArray(extraLines) && extraLines.length > 0) {
+      const formatted = extraLines
+        .map((line) => this.sanitizeForChat(String(line || ""), 500).trim())
+        .filter(Boolean)
+        .map((line) => (/^\/auth\s+/i.test(line)
+          ? `<code>${this.escapeTelegramHtml(line)}</code>`
+          : this.escapeTelegramHtml(line)));
+      if (formatted.length > 0) {
+        payloadLines.push("");
+        payloadLines.push(...formatted);
+      }
+    }
+    const securityTitle = locale === "zh" ? "安全提示" : "Security note";
+    payloadLines.push("");
+    payloadLines.push(`<b>${securityTitle}:</b> ${this.escapeTelegramHtml(this.humanAuthSecurityNote(locale))}`);
+    return payloadLines.join("\n");
   }
 
   private normalizeHumanAuthCurrentAppToken(app: string): string | null {
@@ -390,25 +441,28 @@ export class TelegramGateway {
   private playStoreRemoteLoginTask(locale: "zh" | "en"): string {
     if (locale === "zh") {
       return [
-        "打开 Google Play 商店并检查是否已登录 Google 账号。",
-        "如果未登录，完成登录流程。",
-        "遇到账号/密码/授权页面时，发起 request_human_auth(oauth)，并一次性让用户提供用户名和密码。",
-        "Google 登录可能是分步页面（先用户名 Next，再密码），按页面继续推进并完成登录。",
-        "登录完成后，确认 Play Store 可搜索并安装应用，然后结束任务。",
+        "检查 Android 系统 Google 账号是否已登录（可从 Play Store 入口进入）。",
+        "如果未登录，完成系统级 Google 账号登录流程。",
+        "首次需要凭据时，发起 request_human_auth(oauth)，一次性让用户提供邮箱和密码。",
+        "Google 登录是分步页面：先邮箱 Next，再密码。后续步骤优先复用已获得凭据；仅在缺失或失败时再请求用户补充。",
+        "登录完成后，确认系统 Google 账号已登录，并验证 Play Store 可搜索/安装应用，然后结束任务。",
       ].join(" ");
     }
     return [
-      "Open Google Play Store and verify whether a Google account is already signed in.",
-      "If not signed in, complete the Google sign-in flow.",
-      "Whenever account/password/authorization is required, trigger request_human_auth(oauth) and ask for username+password together in one submission.",
-      "Google login may be split across pages (username then Next, then password); continue step by step until sign-in completes.",
-      "After sign-in succeeds, verify Play Store can search/install apps, then finish.",
+      "Check whether Android system Google account is signed in (entry can be through Play Store).",
+      "If not signed in, complete the system-level Google account sign-in flow.",
+      "At first credential prompt, trigger request_human_auth(oauth) and ask for email+password together in one submission.",
+      "Google login is split across pages (email then Next, then password). Reuse cached credentials for follow-up steps and only ask again if missing or failed.",
+      "After sign-in succeeds, verify system Google account is signed in and Play Store can search/install apps, then finish.",
     ].join(" ");
   }
 
   private async ensurePlayStoreReady(chatId: number, locale: "zh" | "en"): Promise<boolean> {
     if (this.playStorePreflightPassed) {
       return false;
+    }
+    if (this.playStorePreflightTriggered) {
+      return true;
     }
 
     const deviceId = this.resolveBootedDeviceForPlayStoreCheck();
@@ -441,25 +495,12 @@ export class TelegramGateway {
       this.persistOnboardingStatePatch({ playStoreDetected: true });
     }
 
-    const signedIn = this.detectGoogleAccountSignedIn(deviceId);
-    if (signedIn === true) {
-      this.persistOnboardingStatePatch({
-        gmailLoginConfirmedAt: new Date().toISOString(),
-        playStoreDetected: true,
-      });
-      this.playStorePreflightPassed = true;
-      return false;
-    }
-    if (signedIn === null) {
-      return false;
-    }
-
     if (!this.config.humanAuth.enabled) {
       await this.bot.sendMessage(
         chatId,
         locale === "zh"
-          ? "检测到 Play Store 未登录，但 humanAuth 未启用。请先在模拟器手动登录 Google 账号，随后我会自动重检。"
-          : "Play Store is not signed in, but humanAuth is disabled. Please sign in manually in emulator and I will re-check automatically.",
+          ? "检测到系统 Google 账号未登录，但 humanAuth 未启用。请先在模拟器手动登录，随后我会自动重检。"
+          : "System Google account is not signed in, but humanAuth is disabled. Please sign in manually in emulator and I will re-check automatically.",
       );
       return true;
     }
@@ -467,10 +508,39 @@ export class TelegramGateway {
     await this.bot.sendMessage(
       chatId,
       locale === "zh"
-        ? "检测到 Play Store 尚未登录，我现在发起自动登录任务。若出现授权页，我会通过 Telegram 请求你提供凭据。"
-        : "Play Store is not signed in. I will start an automatic sign-in task now and request credentials via Telegram when needed.",
+        ? "正在检查系统 Google 账号登录状态，需要你授权时我会提示。"
+        : "Checking system Google account sign-in now. I will prompt you only when authorization is needed.",
     );
-    await this.runTaskAsync(chatId, this.playStoreRemoteLoginTask(locale));
+    this.playStorePreflightTriggered = true;
+    const accepted = await this.runTaskAsync(
+      chatId,
+      this.playStoreRemoteLoginTask(locale),
+      {
+        sessionKey: `telegram:playstore-preflight:${chatId}`,
+        skipAcceptedMessage: true,
+        onDone: async (result) => {
+          this.playStorePreflightTriggered = false;
+          if (!result.ok) {
+            return;
+          }
+          const doneDeviceId = this.resolveBootedDeviceForPlayStoreCheck();
+          if (!doneDeviceId) {
+            return;
+          }
+          const signedInAfterTask = this.detectGoogleAccountSignedIn(doneDeviceId);
+          if (signedInAfterTask === true) {
+            this.playStorePreflightPassed = true;
+            this.persistOnboardingStatePatch({
+              gmailLoginConfirmedAt: new Date().toISOString(),
+              playStoreDetected: true,
+            });
+          }
+        },
+      },
+    );
+    if (!accepted) {
+      this.playStorePreflightTriggered = false;
+    }
     return true;
   }
 
@@ -1372,6 +1442,9 @@ export class TelegramGateway {
 
     if (text === "/reset") {
       this.chat.clear(chatId);
+      this.playStorePreflightPassed = false;
+      this.playStorePreflightTriggered = false;
+      this.playStorePreflightDeferredNotified = false;
       const accepted = this.agent.stopCurrentTask();
       const locale = this.inferLocale(message);
       const resetSummary = accepted
@@ -1487,28 +1560,48 @@ export class TelegramGateway {
     }
   }
 
-  private async runTaskAsync(chatId: number, task: string): Promise<void> {
+  private async runTaskAsync(
+    chatId: number,
+    task: string,
+    options?: {
+      sessionKey?: string;
+      onDone?: (result: CronRunResult) => void | Promise<void>;
+      skipAcceptedMessage?: boolean;
+    },
+  ): Promise<boolean> {
     if (this.agent.isBusy()) {
       this.log(`task rejected busy chat=${chatId} task=${JSON.stringify(task)}`);
       const busyText = "A previous task is still running. Please wait.";
       await this.bot.sendMessage(chatId, busyText);
       this.chat.appendExternalTurn(chatId, "assistant", busyText);
-      return;
+      return false;
     }
-    const locale = this.inferTaskLocale(task);
-    const acceptedMessage = this.renderTaskAcceptedMessage(task, locale);
-    await this.bot.sendMessage(
-      chatId,
-      acceptedMessage,
-    );
-    this.chat.appendExternalTurn(chatId, "assistant", acceptedMessage);
+    if (!options?.skipAcceptedMessage) {
+      const locale = this.inferTaskLocale(task);
+      const acceptedMessage = this.renderTaskAcceptedMessage(task, locale);
+      await this.bot.sendMessage(
+        chatId,
+        acceptedMessage,
+      );
+      this.chat.appendExternalTurn(chatId, "assistant", acceptedMessage);
+    }
     void this.runTaskAndReport({
       chatId,
       task,
       source: "chat",
       modelName: null,
-      sessionKey: `telegram:chat:${chatId}`,
-    });
+      sessionKey: options?.sessionKey ?? `telegram:chat:${chatId}`,
+    })
+      .then(async (result) => {
+        if (!options?.onDone) {
+          return;
+        }
+        await options.onDone(result);
+      })
+      .catch((error) => {
+        this.log(`task completion callback error chat=${chatId} error=${(error as Error).message}`);
+      });
+    return true;
   }
 
   private async runScheduledJob(job: CronJob): Promise<CronRunResult> {
@@ -1663,7 +1756,7 @@ export class TelegramGateway {
                         reason: request.reason,
                         hasWebLink: Boolean(opened.openUrl),
                         isCodeFlow,
-                        includeLocalSecurityAssurance: true,
+                        includeLocalSecurityAssurance: false,
                       }),
                       1500,
                     );
@@ -1672,21 +1765,22 @@ export class TelegramGateway {
                       const codeLines = progressLocale === "zh"
                         ? [
                             "你也可以直接在 Telegram 回复验证码（4-10位数字，例如 123456）。",
-                            `多个验证码请求时可发送：${opened.manualApproveCommand} <code>`,
+                            `多个验证码请求时可发送：${opened.manualApproveCommand} 123456`,
                             `拒绝可发送：${opened.manualRejectCommand}`,
                           ]
                         : [
                             "You can also reply directly in Telegram with the 4-10 digit code (for example: 123456).",
-                            `If multiple code requests are pending, use: ${opened.manualApproveCommand} <code>`,
+                            `If multiple code requests are pending, use: ${opened.manualApproveCommand} 123456`,
                             `Reject with: ${opened.manualRejectCommand}`,
                           ];
-                      const codeBody = [escalationMessage, "", ...codeLines].join("\n");
+                      const codeBody = this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale, codeLines);
                       await this.bot.sendMessage(
                         chatId,
                         codeBody,
-                        opened.openUrl
-                          ? {
-                              reply_markup: {
+                        {
+                          parse_mode: "HTML",
+                          reply_markup: opened.openUrl
+                            ? {
                                 inline_keyboard: [
                                   [
                                     {
@@ -1695,15 +1789,16 @@ export class TelegramGateway {
                                     },
                                   ],
                                 ],
-                              },
-                            }
-                          : undefined,
+                              }
+                            : undefined,
+                        },
                       );
                       return;
                     }
 
                     if (opened.openUrl) {
-                      await this.bot.sendMessage(chatId, escalationMessage, {
+                      await this.bot.sendMessage(chatId, this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale), {
+                        parse_mode: "HTML",
                         reply_markup: {
                           inline_keyboard: [
                             [
@@ -1723,13 +1818,14 @@ export class TelegramGateway {
                       : "Web link is unavailable. Use manual commands:";
                     await this.bot.sendMessage(
                       chatId,
-                      [
-                        escalationMessage,
-                        "",
+                      this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale, [
                         noLinkHint,
                         opened.manualApproveCommand,
                         opened.manualRejectCommand,
-                      ].join("\n"),
+                      ]),
+                      {
+                        parse_mode: "HTML",
+                      },
                     );
                   },
                 );

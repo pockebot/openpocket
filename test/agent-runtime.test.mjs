@@ -1154,29 +1154,22 @@ test("AgentRuntime supports split oauth screens with cached credentials reuse", 
       undefined,
       async () => {
         authCalls += 1;
-        if (authCalls === 1) {
-          return {
-            requestId: "req-oauth-1",
-            approved: true,
-            status: "approved",
-            message: "Credentials shared",
-            decidedAt: new Date().toISOString(),
-            artifactPath: artifactFile,
-          };
+        if (authCalls > 1) {
+          throw new Error("oauth prompt should be auto-skipped when cached credentials are available");
         }
         return {
-          requestId: "req-oauth-2",
+          requestId: "req-oauth-1",
           approved: true,
           status: "approved",
-          message: "Approved without re-upload",
+          message: "Credentials shared",
           decidedAt: new Date().toISOString(),
-          artifactPath: null,
+          artifactPath: artifactFile,
         };
       },
     );
 
     assert.equal(result.ok, true);
-    assert.equal(authCalls, 2);
+    assert.equal(authCalls, 1);
     const usernameTyped = actions.filter((action) => action.type === "type" && action.text === "alice@example.com");
     const passwordTyped = actions.filter((action) => action.type === "type" && action.text === "S3cret-987");
     assert.equal(usernameTyped.length >= 1, true);

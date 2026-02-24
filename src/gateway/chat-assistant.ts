@@ -1356,9 +1356,10 @@ export class ChatAssistant {
       "5) If includeLocalSecurityAssurance=true, include one short reassurance sentence:",
       "   relay is local on user's machine, channel is private/encrypted, no centralized OpenPocket relay stores credentials.",
       "6) event=human_auth: ask user to open link and approve/reject, unless link unavailable.",
-      "7) event=user_decision: ask user to reply with an option clearly and briefly.",
-      "8) event with code flow should mention user can reply code directly in Telegram.",
-      "9) Use locale hint language and avoid unnecessary long context copy.",
+      "7) For human_auth with a web link, do NOT ask user to send an extra confirmation message in Telegram.",
+      "8) event=user_decision: ask user to reply with an option clearly and briefly.",
+      "9) event with code flow should mention user can reply code directly in Telegram.",
+      "10) Use locale hint language and avoid unnecessary long context copy.",
       "",
       "SOUL.md:",
       this.trimForPrompt(soul, 1200),
@@ -2356,10 +2357,10 @@ export class ChatAssistant {
     if (input.event === "human_auth") {
       const actionLine = locale === "zh"
         ? (input.hasWebLink
-          ? "请点开下面链接完成授权，然后回到 Telegram 告诉我已完成。"
+          ? "请点开下面链接并完成同意或拒绝。"
           : "当前没有可用授权链接，请在 Telegram 里直接回复我是否同意。")
         : (input.hasWebLink
-          ? "Open the link below, complete the authorization, then return to Telegram."
+          ? "Open the link below and approve or reject."
           : "Web link is unavailable; reply in Telegram with your decision.");
       const codeLine = input.isCodeFlow
         ? (locale === "zh"
