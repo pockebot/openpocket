@@ -9,9 +9,29 @@ import type {
 } from "./session-backend.js";
 import { ensureDir } from "../utils/paths.js";
 
+export function toMarkdownSessionPath(sessionPath: string): string {
+  return sessionPath.endsWith(".jsonl") ? `${sessionPath.slice(0, -6)}.md` : `${sessionPath}.md`;
+}
+
 export class SessionMarkdownBackend implements SessionBackend {
   create(payload: SessionCreatePayload): void {
-    ensureDir(path.dirname(payload.sessionPath));
+    const markdownPath = toMarkdownSessionPath(payload.sessionPath);
+    ensureDir(path.dirname(markdownPath));
+    if (fs.existsSync(markdownPath)) {
+      const block = [
+        "",
+        "---",
+        "",
+        `## Task (${payload.startedAt})`,
+        "",
+        payload.task,
+        "",
+        "## Steps",
+        "",
+      ].join("\n");
+      fs.appendFileSync(markdownPath, block, "utf-8");
+      return;
+    }
     const body = [
       "# OpenPocket Session",
       "",
@@ -27,10 +47,11 @@ export class SessionMarkdownBackend implements SessionBackend {
       "## Steps",
       "",
     ].join("\n");
-    fs.writeFileSync(payload.sessionPath, `${body}\n`, "utf-8");
+    fs.writeFileSync(markdownPath, `${body}\n`, "utf-8");
   }
 
   appendStep(payload: SessionStepPayload): void {
+    const markdownPath = toMarkdownSessionPath(payload.sessionPath);
     const block = [
       `### Step ${payload.stepNo}`,
       "",
@@ -49,10 +70,11 @@ export class SessionMarkdownBackend implements SessionBackend {
       "```",
       "",
     ].join("\n");
-    fs.appendFileSync(payload.sessionPath, block, "utf-8");
+    fs.appendFileSync(markdownPath, block, "utf-8");
   }
 
   finalize(payload: SessionFinalizePayload): void {
+    const markdownPath = toMarkdownSessionPath(payload.sessionPath);
     const block = [
       "## Final",
       "",
@@ -64,6 +86,6 @@ export class SessionMarkdownBackend implements SessionBackend {
       payload.message,
       "",
     ].join("\n");
-    fs.appendFileSync(payload.sessionPath, block, "utf-8");
+    fs.appendFileSync(markdownPath, block, "utf-8");
   }
 }

@@ -39,6 +39,7 @@
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.54.1",
     "@mariozechner/pi-ai": "^0.54.1",
+    "@mariozechner/pi-coding-agent": "^0.54.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@sinclair/typebox": "^0.34.48",
     "node-telegram-bot-api": "^0.66.0",

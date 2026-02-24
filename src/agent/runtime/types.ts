@@ -23,6 +23,7 @@ import type { SystemPromptMode } from "../prompts.js";
 export interface RunTaskRequest {
   task: string;
   modelName?: string;
+  sessionKey?: string;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
   promptMode?: SystemPromptMode;

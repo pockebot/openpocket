@@ -75,12 +75,56 @@ test("WorkspaceStore writes session steps final and daily memory", () => {
   store.finalizeSession(session, true, "Done");
   const memoryPath = store.appendDailyMemory("gpt-5.2-codex", "search weather", true, "Done");
 
-  const sessionBody = fs.readFileSync(session.path, "utf-8");
+  assert.equal(session.path.endsWith(".jsonl"), true);
+  const transcriptBody = fs.readFileSync(session.path, "utf-8");
+  assert.match(transcriptBody, /"type":"session"/);
+  assert.match(transcriptBody, /search weather/);
+  assert.match(transcriptBody, /SUCCESS/);
+
+  const markdownPath = session.path.replace(/\.jsonl$/i, ".md");
+  assert.equal(fs.existsSync(markdownPath), true);
+  const sessionBody = fs.readFileSync(markdownPath, "utf-8");
   assert.match(sessionBody, /### Step 1/);
   assert.match(sessionBody, /status: SUCCESS/);
   assert.match(sessionBody, /search weather/);
 
+  const sessionsStorePath = path.join(workspaceDir, "sessions", "sessions.json");
+  assert.equal(fs.existsSync(sessionsStorePath), true);
+  const sessionsStore = JSON.parse(fs.readFileSync(sessionsStorePath, "utf-8"));
+  assert.equal(sessionsStore[session.id].sessionId, session.id);
+  assert.equal(sessionsStore[session.id].sessionFile, session.path);
+
   const memoryBody = fs.readFileSync(memoryPath, "utf-8");
   assert.match(memoryBody, /\[OK\]/);
   assert.match(memoryBody, /search weather/);
+});
+
+test("WorkspaceStore reuses session transcript when sessionKey is stable", () => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-workspace-reuse-"));
+  const store = new WorkspaceStore({ workspaceDir });
+
+  const first = store.createSession(
+    "first task",
+    "gpt-5.2-codex",
+    "gpt-5.2-codex",
+    { sessionKey: "telegram:1001" },
+  );
+  store.finalizeSession(first, true, "first done");
+
+  const second = store.createSession(
+    "second task",
+    "gpt-5.2-codex",
+    "gpt-5.2-codex",
+    { sessionKey: "telegram:1001" },
+  );
+  store.finalizeSession(second, true, "second done");
+
+  assert.equal(second.id, first.id);
+  assert.equal(second.path, first.path);
+
+  const sessionsStorePath = path.join(workspaceDir, "sessions", "sessions.json");
+  const sessionsStore = JSON.parse(fs.readFileSync(sessionsStorePath, "utf-8"));
+  assert.equal(Boolean(sessionsStore["telegram:1001"]), true);
+  assert.equal(sessionsStore["telegram:1001"].sessionId, first.id);
+  assert.equal(sessionsStore["telegram:1001"].sessionFile, first.path);
 });

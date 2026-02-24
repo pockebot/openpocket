@@ -18,8 +18,9 @@ function defaultConfigObject() {
     workspaceDir: defaultWorkspaceDir(),
     stateDir: defaultStateDir(),
     sessionStorage: {
-      backend: "markdown" as const,
-      dualWriteJsonl: false,
+      mode: "unified" as const,
+      storePath: path.join(defaultWorkspaceDir(), "sessions", "sessions.json"),
+      markdownLog: true,
     },
     defaultModel: "gpt-5.2-codex",
     emulator: {
@@ -452,8 +453,10 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
 
   const sessionStorage = isObject(raw.sessionStorage) ? { ...raw.sessionStorage } : {};
   const sessionStorageMap: Record<string, string> = {
-    storage_backend: "backend",
+    storage_backend: "mode",
     dual_write_jsonl: "dualWriteJsonl",
+    openclaw_store_path: "storePath",
+    markdown_log: "markdownLog",
   };
   for (const [oldKey, newKey] of Object.entries(sessionStorageMap)) {
     if (oldKey in sessionStorage && !(newKey in sessionStorage)) {
@@ -461,6 +464,16 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     }
   }
   if (Object.keys(sessionStorage).length > 0) {
+    if (!("markdownLog" in sessionStorage) && "dualWriteJsonl" in sessionStorage) {
+      // Legacy mode always wrote markdown; keep that behavior.
+      sessionStorage.markdownLog = true;
+    }
+    if ("mode" in sessionStorage) {
+      const mode = String(sessionStorage.mode ?? "").trim().toLowerCase();
+      if (mode === "markdown" || mode === "openclaw") {
+        sessionStorage.mode = "unified";
+      }
+    }
     raw.sessionStorage = sessionStorage;
   }
 
@@ -608,8 +621,22 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     workspaceDir: resolvedWorkspaceDir,
     stateDir: resolvedStateDir,
     sessionStorage: {
-      backend: sessionStorage.backend === "markdown" ? "markdown" : "markdown",
-      dualWriteJsonl: Boolean(sessionStorage.dualWriteJsonl ?? false),
+      mode: "unified",
+      storePath: (() => {
+        const defaultGlobalStorePath = resolvePath(
+          path.join(defaultWorkspaceDir(), "sessions", "sessions.json"),
+        );
+        const explicit = String(sessionStorage.storePath ?? "").trim();
+        if (!explicit) {
+          return path.join(resolvedWorkspaceDir, "sessions", "sessions.json");
+        }
+        const resolvedExplicit = resolvePath(explicit);
+        if (resolvedExplicit === defaultGlobalStorePath) {
+          return path.join(resolvedWorkspaceDir, "sessions", "sessions.json");
+        }
+        return resolvedExplicit;
+      })(),
+      markdownLog: Boolean(sessionStorage.markdownLog ?? true),
     },
     defaultModel,
     emulator: {

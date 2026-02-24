@@ -2166,11 +2166,13 @@ export class AgentRuntime {
     onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision,
     promptMode?: "full" | "minimal" | "none",
     onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
+    sessionKey?: string,
   ): Promise<AgentRunResult> {
     const activeToolNames = this.resolveToolMetasForTask(task).map((item) => item.name);
     const request: RunTaskRequest = {
       task,
       modelName,
+      sessionKey,
       onProgress,
       onHumanAuth,
       promptMode,

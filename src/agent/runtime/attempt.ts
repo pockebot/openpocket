@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   type AssistantMessage as PiAssistantMessage,
   type Message as PiMessage,
@@ -33,6 +34,24 @@ interface ScreenObservationMessage {
   timestamp: number;
 }
 
+const MAX_REUSED_SESSION_MESSAGES = 64;
+
+function loadReusedSessionMessages(sessionPath: string): AgentMessage[] {
+  try {
+    const manager = SessionManager.open(sessionPath);
+    const context = manager.buildSessionContext();
+    return context.messages
+      .filter((message) => (
+        message.role === "user" ||
+        message.role === "assistant" ||
+        message.role === "toolResult"
+      ))
+      .slice(-MAX_REUSED_SESSION_MESSAGES);
+  } catch {
+    return [];
+  }
+}
+
 export async function runRuntimeAttempt(
   deps: RuntimeAttemptDependencies,
   request: RunTaskRequest,
@@ -41,7 +60,13 @@ export async function runRuntimeAttempt(
 
   const profileKey = request.modelName ?? deps.config.defaultModel;
   const profile = getModelProfile(deps.config, profileKey);
-  const session = deps.workspace.createSession(request.task, profileKey, profile.model);
+  const session = deps.workspace.createSession(
+    request.task,
+    profileKey,
+    profile.model,
+    { sessionKey: request.sessionKey },
+  );
+  const reusedSessionMessages = session.reused ? loadReusedSessionMessages(session.path) : [];
 
   try {
     const auth = resolveModelAuth(profile);
@@ -141,7 +166,9 @@ export async function runRuntimeAttempt(
         model: finalModel,
         tools,
         thinkingLevel: thinkingLevel as any,
+        messages: reusedSessionMessages,
       },
+      sessionId: session.id,
       streamFn: (model, context, options) => {
         const supportsToolChoice = model.api === "openai-completions";
         const opts = supportsToolChoice

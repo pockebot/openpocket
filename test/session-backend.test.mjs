@@ -22,15 +22,35 @@ async function withTempHome(prefix, fn) {
   }
 }
 
-function jsonlPathFromSessionPath(sessionPath) {
-  return sessionPath.replace(/\.md$/i, ".jsonl");
+function markdownPathFromTranscriptPath(sessionPath) {
+  return sessionPath.replace(/\.jsonl$/i, ".md");
 }
 
-test("WorkspaceStore defaults to markdown session output only", async () => {
+function readJsonl(filePath) {
+  return fs.readFileSync(filePath, "utf-8")
+    .split(/\r?\n/g)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+function collectText(message) {
+  const content = message?.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((item) => (item && typeof item === "object" && item.type === "text" ? String(item.text ?? "") : ""))
+    .join("\n");
+}
+
+test("WorkspaceStore defaults to OpenClaw store + pi tree transcript + markdown log", async () => {
   await withTempHome("openpocket-session-backend-default-", () => {
     const cfg = loadConfig();
-    assert.equal(cfg.sessionStorage.backend, "markdown");
-    assert.equal(cfg.sessionStorage.dualWriteJsonl, false);
+    assert.equal(cfg.sessionStorage.mode, "unified");
+    assert.equal(cfg.sessionStorage.markdownLog, true);
 
     const store = new WorkspaceStore(cfg);
     const session = store.createSession("default output test", "gpt-5.2-codex", "gpt-5.2-codex");
@@ -43,19 +63,42 @@ test("WorkspaceStore defaults to markdown session output only", async () => {
     );
     store.finalizeSession(session, true, "done");
 
-    const jsonlPath = jsonlPathFromSessionPath(session.path);
+    assert.equal(session.path.endsWith(".jsonl"), true);
     assert.equal(fs.existsSync(session.path), true);
-    assert.equal(fs.existsSync(jsonlPath), false);
+
+    const transcriptLines = readJsonl(session.path);
+    assert.equal(transcriptLines[0].type, "session");
+    assert.equal(Number(transcriptLines[0].version), 3);
+
+    const messageEntries = transcriptLines.filter((entry) => entry.type === "message");
+    assert.equal(messageEntries.length >= 3, true);
+    assert.equal(messageEntries[0].parentId, null);
+    for (let i = 1; i < messageEntries.length; i += 1) {
+      assert.equal(messageEntries[i].parentId, messageEntries[i - 1].id);
+    }
+
+    const messageTexts = messageEntries.map((entry) => collectText(entry.message));
+    assert.equal(messageTexts.some((text) => text.includes("default output test")), true);
+    assert.equal(messageTexts.some((text) => text.includes("SUCCESS")), true);
+
+    const markdownPath = markdownPathFromTranscriptPath(session.path);
+    assert.equal(fs.existsSync(markdownPath), true);
+
+    assert.equal(fs.existsSync(cfg.sessionStorage.storePath), true);
+    const sessionsStore = JSON.parse(fs.readFileSync(cfg.sessionStorage.storePath, "utf-8"));
+    assert.equal(sessionsStore[session.id].sessionId, session.id);
+    assert.equal(sessionsStore[session.id].sessionFile, session.path);
+    assert.equal(typeof sessionsStore[session.id].updatedAt, "number");
   });
 });
 
-test("WorkspaceStore dual-write mode emits markdown and jsonl transcripts", async () => {
-  await withTempHome("openpocket-session-backend-dual-", () => {
+test("WorkspaceStore markdownLog=false disables markdown sidecar but keeps pi tree transcript", async () => {
+  await withTempHome("openpocket-session-backend-no-md-", () => {
     const cfg = loadConfig();
-    cfg.sessionStorage.dualWriteJsonl = true;
+    cfg.sessionStorage.markdownLog = false;
 
     const store = new WorkspaceStore(cfg);
-    const session = store.createSession("dual write output test", "gpt-5.2-codex", "gpt-5.2-codex");
+    const session = store.createSession("pi-only output test", "gpt-5.2-codex", "gpt-5.2-codex");
     store.appendStep(
       session,
       1,
@@ -65,20 +108,15 @@ test("WorkspaceStore dual-write mode emits markdown and jsonl transcripts", asyn
     );
     store.finalizeSession(session, true, "done");
 
-    const jsonlPath = jsonlPathFromSessionPath(session.path);
     assert.equal(fs.existsSync(session.path), true);
-    assert.equal(fs.existsSync(jsonlPath), true);
+    assert.equal(session.path.endsWith(".jsonl"), true);
+    assert.equal(readJsonl(session.path)[0].type, "session");
 
-    const lines = fs.readFileSync(jsonlPath, "utf-8")
-      .split(/\r?\n/g)
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line));
+    const markdownPath = markdownPathFromTranscriptPath(session.path);
+    assert.equal(fs.existsSync(markdownPath), false);
 
-    assert.equal(lines.length, 3);
-    assert.equal(lines[0].event, "session_started");
-    assert.equal(lines[1].event, "step_appended");
-    assert.equal(lines[2].event, "session_finalized");
-    assert.equal(lines[0].sessionId, session.id);
-    assert.equal(lines[2].status, "SUCCESS");
+    const sessionsStore = JSON.parse(fs.readFileSync(cfg.sessionStorage.storePath, "utf-8"));
+    assert.equal(sessionsStore[session.id].sessionId, session.id);
+    assert.equal(sessionsStore[session.id].sessionFile, session.path);
   });
 });
