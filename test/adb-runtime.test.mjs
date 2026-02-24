@@ -196,6 +196,23 @@ test("AdbRuntime fails clearly when non-ASCII input methods are unavailable", as
 
   await assert.rejects(
     runtime.executeAction({ type: "type", text: "旧金山 天气" }),
-    /Non-ASCII text input failed/,
+    /Text input failed/,
+  );
+});
+
+test("AdbRuntime uses escaped adb input for passwords with special characters", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({ type: "type", text: "P@ssw0rd!#$" });
+  assert.match(result, /Typed text length=11/i);
+  const inputCall = emulator.calls.find(
+    (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "text",
+  );
+  assert.equal(Boolean(inputCall), true);
+  assert.equal(inputCall[5], "P\\@ssw0rd\\!\\#\\$");
+  assert.equal(
+    emulator.calls.some((args) => args.includes("clipboard") || args.includes("KEYCODE_PASTE") || args.includes("ADB_INPUT_B64")),
+    false,
   );
 });

@@ -122,9 +122,12 @@ function uiNodeScore(node: {
 }
 
 function encodeInputText(text: string): string {
-  // Keep unicode chars as-is; only normalize spaces for adb input parser.
-  // URL-encoding unicode (e.g. %E6%97...) will be typed literally on many devices.
+  // Escape device-shell metacharacters before passing the value to
+  // `adb shell input text ...`, then normalize spaces/newlines for input parser.
+  // Keep unicode chars as-is; URL-encoding unicode (e.g. %E6%97...) will be
+  // typed literally on many devices.
   return text
+    .replace(/([\\(){}[\]<>|;&$`!~"'?#*^@])/g, "\\$1")
     .replace(/ /g, "%s")
     .replace(/\n/g, "%s");
 }
@@ -491,7 +494,7 @@ export class AdbRuntime {
       case "type": {
         const encoded = encodeInputText(action.text);
         // On some emulator images, `input text` throws NPE for unicode text.
-        // Use clipboard/ADB keyboard for non-ASCII and never call `input text`.
+        // For unicode text, skip `input text` and use clipboard/ADB keyboard.
         if (hasNonAscii(action.text)) {
           try {
             return this.inputByClipboardPaste(deviceId, action.text);
@@ -500,7 +503,7 @@ export class AdbRuntime {
               return this.inputByAdbKeyboard(deviceId, action.text);
             } catch (imeError) {
               throw new Error(
-                `Non-ASCII text input failed (clipboard + adb keyboard): clipboard=${errorMessage(clipboardError)}; adbKeyboard=${errorMessage(imeError)}`,
+                `Text input failed (clipboard + adb keyboard): clipboard=${errorMessage(clipboardError)}; adbKeyboard=${errorMessage(imeError)}`,
               );
             }
           }
@@ -508,8 +511,18 @@ export class AdbRuntime {
         try {
           this.emulator.runAdb(["-s", deviceId, "shell", "input", "text", encoded]);
           return `Typed text length=${action.text.length}`;
-        } catch {
-          return this.inputByClipboardPaste(deviceId, action.text);
+        } catch (inputTextError) {
+          try {
+            return this.inputByClipboardPaste(deviceId, action.text);
+          } catch (clipboardError) {
+            try {
+              return this.inputByAdbKeyboard(deviceId, action.text);
+            } catch (imeError) {
+              throw new Error(
+                `Text input failed (adb input + clipboard + adb keyboard): adbInput=${errorMessage(inputTextError)}; clipboard=${errorMessage(clipboardError)}; adbKeyboard=${errorMessage(imeError)}`,
+              );
+            }
+          }
         }
       }
       case "keyevent": {
