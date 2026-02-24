@@ -49,6 +49,7 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.equal(cfg.sessionStorage.markdownLog, true);
     assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(cfg.agent.returnHomeOnTaskEnd, true);
+    assert.equal(cfg.agent.autoArtifactsEnabled, true);
     assert.equal(cfg.agent.systemPromptMode, "full");
     assert.equal(cfg.agent.contextBudgetChars, 150_000);
     assert.equal(cfg.memoryTools.enabled, true);
@@ -100,6 +101,7 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
           agent: {
             max_steps: 10,
             return_home_on_task_end: false,
+            auto_artifacts_enabled: false,
             system_prompt_mode: "minimal",
             context_budget_chars: 30000,
             verbose: true,
@@ -155,6 +157,7 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     assert.equal(cfg.sessionStorage.markdownLog, true);
     assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(cfg.agent.returnHomeOnTaskEnd, false);
+    assert.equal(cfg.agent.autoArtifactsEnabled, false);
     assert.equal(cfg.agent.systemPromptMode, "minimal");
     assert.equal(cfg.agent.contextBudgetChars, 30000);
     assert.equal(cfg.emulator.dataPartitionSizeGb, 48);
@@ -183,6 +186,7 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     assert.match(String(saved.sessionStorage.storePath ?? ""), /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(saved.session_storage, undefined);
     assert.equal(saved.agent.returnHomeOnTaskEnd, false);
+    assert.equal(saved.agent.autoArtifactsEnabled, false);
     assert.equal(saved.agent.systemPromptMode, "minimal");
     assert.equal(saved.agent.contextBudgetChars, 30000);
     assert.equal(saved.agent.return_home_on_task_end, undefined);

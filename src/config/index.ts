@@ -42,6 +42,7 @@ function defaultConfigObject() {
       loopDelayMs: 1200,
       progressReportInterval: 1,
       returnHomeOnTaskEnd: true,
+      autoArtifactsEnabled: true,
       systemPromptMode: "full" as const,
       contextBudgetChars: 150_000,
       lang: "en" as const,
@@ -334,6 +335,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     loop_delay_ms: "loopDelayMs",
     progress_report_interval: "progressReportInterval",
     return_home_on_task_end: "returnHomeOnTaskEnd",
+    auto_artifacts_enabled: "autoArtifactsEnabled",
     system_prompt_mode: "systemPromptMode",
     context_budget_chars: "contextBudgetChars",
     device_id: "deviceId",
@@ -664,6 +666,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       loopDelayMs: Number(agent.loopDelayMs ?? 1200),
       progressReportInterval: Math.max(1, Number(agent.progressReportInterval ?? 1)),
       returnHomeOnTaskEnd: Boolean(agent.returnHomeOnTaskEnd ?? true),
+      autoArtifactsEnabled: Boolean(agent.autoArtifactsEnabled ?? true),
       systemPromptMode,
       contextBudgetChars: Math.max(
         10_000,

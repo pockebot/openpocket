@@ -48,6 +48,16 @@ export interface BuildSystemPromptReportParams {
   promptMode: SystemPromptMode;
   systemPrompt: string;
   skillsSummary: string;
+  activeSkillsPrompt?: string;
+  activeSkillsEntries?: Array<{
+    name: string;
+    source: "workspace" | "local" | "bundled";
+    path: string;
+    reason: string;
+    score: number;
+    blockChars: number;
+    truncated: boolean;
+  }>;
   workspaceReport: unknown;
 }
 

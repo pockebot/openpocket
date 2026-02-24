@@ -89,7 +89,7 @@ function parseAppFromHistoryLine(line: string): string {
 export function buildSystemPrompt(
   skillsSummary = "(no skills loaded)",
   workspaceContext = "",
-  options?: { mode?: SystemPromptMode; availableToolNames?: string[] },
+  options?: { mode?: SystemPromptMode; availableToolNames?: string[]; activeSkillsText?: string },
 ): string {
   const mode = options?.mode ?? "full";
   const trimmedSkills = skillsSummary.trim() || "(no skills loaded)";
@@ -126,8 +126,11 @@ export function buildSystemPrompt(
       "- Never use request_user_decision to collect credentials/OTP/payment or personal identity data.",
       "- If done, call finish with key outputs.",
       "",
-      "## Available Skills",
+      "## Available Skills Index",
+      "Skill list contains metadata only. Use read(location) to load full SKILL.md before applying a skill.",
+      "<available_skills>",
       trimmedSkills,
+      "</available_skills>",
       trimmedWorkspaceContext
         ? [
           "",
@@ -212,9 +215,10 @@ export function buildSystemPrompt(
     "- Write thought and all text fields in English.",
     "",
     "## Skill Selection Protocol (mandatory)",
-    "- Check Available Skills before acting.",
-    "- If one skill clearly matches the task, follow that SKILL.md guidance first.",
-    "- If multiple skills match, choose the narrowest one for current sub-goal.",
+    "- Check <available_skills> before acting.",
+    "- The index only contains metadata, not full instructions.",
+    "- If one skill seems relevant, call read with its location path first, then follow SKILL.md guidance.",
+    "- If multiple skills match, read the narrowest one for current sub-goal first.",
     "",
     "## Memory Recall Protocol",
     "- Before answering prior-work/decision/date/preference/todo questions, run memory_search on MEMORY.md + memory/*.md.",
@@ -235,8 +239,11 @@ export function buildSystemPrompt(
     "- Capture stable interaction patterns and avoid one-off noisy steps.",
     "- If a reusable flow was formed, include compact reuse-friendly notes in finish.message.",
     "",
-    "## Available Skills",
+    "## Available Skills Index",
+    "Skill list contains metadata only. Use read(location) to load full SKILL.md before applying a skill.",
+    "<available_skills>",
     trimmedSkills,
+    "</available_skills>",
     trimmedWorkspaceContext
       ? [
         "",
