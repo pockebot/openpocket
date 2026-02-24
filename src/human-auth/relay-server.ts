@@ -380,12 +380,6 @@ export class HumanAuthRelayServer {
     const requestId = escapeHtml(record.requestId);
     const capability = escapeHtml(record.capability);
     const instruction = escapeHtml(record.instruction || "(no instruction)");
-    const instructionBrief = escapeHtml(
-      (record.instruction || "No instruction provided.")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 120),
-    );
     const reason = escapeHtml(record.reason || "(no reason)");
     const task = escapeHtml(record.task || "(no task)");
     const currentApp = escapeHtml(record.currentApp || "unknown");
@@ -605,8 +599,15 @@ export class HumanAuthRelayServer {
       white-space: nowrap;
     }
     .decisionActions {
-      margin-top: 0;
+      margin-top: 12px;
       margin-bottom: 10px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .decisionActions button {
+      width: 100%;
+      min-width: 0;
     }
     .hidden { display: none !important; }
     .grid2 { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -757,11 +758,8 @@ export class HumanAuthRelayServer {
         <div class="requestId">Request: ${requestId}</div>
       </div>
       <h1>Authorization Required</h1>
-      <p class="brief"><b>${capability}</b> requested. ${instructionBrief}</p>
 
       <div class="section hidden" id="credentialDelegation">
-        <h2>Login Credentials (Recommended)</h2>
-        <div class="muted securityHint">Security: credentials are submitted to your local OpenPocket relay on your own computer through this one-time auth link.</div>
         <label for="credUsername">Username / Email</label>
         <div class="inputWrap">
           <input
@@ -961,6 +959,7 @@ export class HumanAuthRelayServer {
       capabilityHintEl.textContent = capabilityHintText(capability);
       placeDecisionBlock(capability);
       show("credentialDelegation", capability === "oauth");
+      show("capabilityHint", capability !== "oauth");
       show("delegatedDataSection", capability !== "oauth");
       show("geoDelegation", capability === "location");
       show("textDelegation", capability !== "location" && capability !== "oauth");
