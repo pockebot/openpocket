@@ -308,6 +308,36 @@ test("TelegramGateway play-store preflight marks onboarding state when Google ac
   });
 });
 
+test("TelegramGateway play-store preflight notifies once when emulator is not booted yet", async () => {
+  await withTempHome("openpocket-telegram-playstore-no-booted-device-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.emulator.status = () => ({
+      avdName: "OpenPocket_AVD",
+      devices: [],
+      bootedDevices: [],
+    });
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+
+    const handled1 = await gateway.ensurePlayStoreReady(7310, "zh");
+    const handled2 = await gateway.ensurePlayStoreReady(7310, "zh");
+    assert.equal(handled1, false);
+    assert.equal(handled2, false);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /还没有检测到已启动的模拟器/);
+  });
+});
+
 test("TelegramGateway play-store preflight re-checks device login even if onboarding state says gmail already confirmed", async () => {
   await withTempHome("openpocket-telegram-playstore-stale-gmail-state-", async () => {
     const cfg = loadConfig();
@@ -647,6 +677,46 @@ test("TelegramGateway /run checks play-store preflight before executing forced t
 
     assert.equal(preflightCalls, 1);
     assert.equal(taskCalls, 0);
+  });
+});
+
+test("TelegramGateway retries play-store preflight on normal messages after onboarding is already completed", async () => {
+  await withTempHome("openpocket-telegram-post-onboarding-chat-preflight-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.chat.isOnboardingPending = () => false;
+
+    let preflightCalls = 0;
+    gateway.ensurePlayStoreReady = async () => {
+      preflightCalls += 1;
+      return true;
+    };
+
+    let decideCalled = false;
+    gateway.chat.decide = async () => {
+      decideCalled = true;
+      return {
+        mode: "chat",
+        task: "",
+        reply: "should not reach",
+        confidence: 1,
+        reason: "noop",
+      };
+    };
+
+    await gateway.consumeMessage({
+      chat: { id: 7311 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "hi there",
+    });
+
+    assert.equal(preflightCalls, 1);
+    assert.equal(decideCalled, false);
   });
 });
 

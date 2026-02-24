@@ -86,6 +86,7 @@ export class TelegramGateway {
   private readonly botDisplayNameSyncStatePath: string;
   private botDisplayNameRateLimitedUntilMs = 0;
   private playStorePreflightPassed = false;
+  private playStorePreflightDeferredNotified = false;
   private running = false;
   private stoppedPromise: Promise<void> | null = null;
   private stopResolver: (() => void) | null = null;
@@ -412,8 +413,18 @@ export class TelegramGateway {
 
     const deviceId = this.resolveBootedDeviceForPlayStoreCheck();
     if (!deviceId) {
+      if (!this.playStorePreflightDeferredNotified) {
+        this.playStorePreflightDeferredNotified = true;
+        await this.bot.sendMessage(
+          chatId,
+          locale === "zh"
+            ? "Play Store 检查已排队：当前还没有检测到已启动的模拟器。等模拟器启动后我会自动重试。"
+            : "Play Store preflight is queued: no booted emulator detected yet. I will retry automatically after the emulator boots.",
+        );
+      }
       return false;
     }
+    this.playStorePreflightDeferredNotified = false;
 
     const playStoreInstalled = this.detectPlayStoreInstalled(deviceId);
     if (playStoreInstalled === false) {
@@ -1437,6 +1448,15 @@ export class TelegramGateway {
     }
 
     const onboardingPendingBefore = this.chat.isOnboardingPending();
+    let preflightCheckedThisMessage = false;
+    if (!text.startsWith("/") && !onboardingPendingBefore && !this.playStorePreflightPassed) {
+      const locale = this.inferLocale(message);
+      preflightCheckedThisMessage = true;
+      if (await this.ensurePlayStoreReady(chatId, locale)) {
+        return;
+      }
+    }
+
     const decision = await this.chat.decide(chatId, text);
     const onboardingCompletedThisTurn = onboardingPendingBefore && !this.chat.isOnboardingPending();
     this.log(
@@ -1446,7 +1466,7 @@ export class TelegramGateway {
       const task = decision.task || text;
       this.chat.appendExternalTurn(chatId, "user", task);
       const locale = this.inferLocale(message);
-      if (onboardingCompletedThisTurn || !this.playStorePreflightPassed) {
+      if (onboardingCompletedThisTurn || (!this.playStorePreflightPassed && !preflightCheckedThisMessage)) {
         if (await this.ensurePlayStoreReady(chatId, locale)) {
           return;
         }
