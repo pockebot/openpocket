@@ -377,6 +377,14 @@ export class DashboardServer {
     if (!fs.existsSync(filePath)) {
       return [];
     }
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > 10 * 1024 * 1024) {
+        return [];
+      }
+    } catch {
+      return [];
+    }
     const raw = fs.readFileSync(filePath, "utf-8");
     if (!raw.trim()) {
       return [];
@@ -600,18 +608,23 @@ export class DashboardServer {
     return results;
   }
 
-  private readTraceRuns(limitRuns = 12): DashboardTraceRun[] {
+  private readTraceRuns(limitRuns = 12): { runs: DashboardTraceRun[]; skippedFiles: number } {
     const limit = Math.max(1, Math.min(100, Math.round(limitRuns)));
     const sessionsDir = path.join(this.config.workspaceDir, "sessions");
     if (!fs.existsSync(sessionsDir)) {
-      return [];
+      return { runs: [], skippedFiles: 0 };
     }
+    let skippedFiles = 0;
     const candidates = fs.readdirSync(sessionsDir)
       .filter((name) => name.endsWith(".jsonl"))
       .map((name) => path.join(sessionsDir, name))
       .map((filePath) => {
         try {
           const stat = fs.statSync(filePath);
+          if (stat.size > 10 * 1024 * 1024) {
+            skippedFiles += 1;
+            return null;
+          }
           return { filePath, mtimeMs: stat.mtimeMs };
         } catch {
           return null;
@@ -636,7 +649,7 @@ export class DashboardServer {
       }
       return 0;
     });
-    return allRuns.slice(0, limit);
+    return { runs: allRuns.slice(0, limit), skippedFiles };
   }
 
   private async runEmulatorLifecycleExclusive<T>(action: string, fn: () => Promise<T>): Promise<T> {
@@ -1418,7 +1431,7 @@ export class DashboardServer {
       border-radius: 6px;
       padding: 2px 8px;
       font-size: 11px;
-      font-weight: 600;
+      font-weight: 400;
       white-space: nowrap;
       letter-spacing: 0.01em;
       border: 1px solid #cbd5e1;
@@ -1450,76 +1463,197 @@ export class DashboardServer {
       font-size: 13px;
       line-height: 1.5;
       color: #334155;
+      max-height: 3.6em;
+      overflow: hidden;
+      position: relative;
+      cursor: pointer;
+    }
+    .trace-final.expanded {
+      max-height: none;
+    }
+    .trace-final:not(.expanded)::after {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 20px;
+      background: linear-gradient(transparent, #f8fafc);
+      pointer-events: none;
     }
     .trace-final-label {
-      font-weight: 700;
-      color: #1e293b;
+      font-weight: 500;
+      color: #475569;
       margin-right: 4px;
     }
-    .trace-action-list {
-      display: grid;
-      gap: 0;
+    .trace-action-list-wrap {
+      max-height: 232px;
+      overflow-y: auto;
       border: 1px solid #e2e8f0;
       border-radius: 8px;
-      overflow: hidden;
+    }
+    .trace-action-list {
+      display: table;
+      width: 100%;
+      border-collapse: collapse;
     }
     .trace-action-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 14px;
+      display: table-row;
       cursor: pointer;
       transition: background 0.1s;
-      border-bottom: 1px solid #f1f5f9;
       user-select: none;
+      background: #fff;
     }
-    .trace-action-row:last-child {
-      border-bottom: none;
-    }
-    .trace-action-row:hover {
+    .trace-action-row:nth-child(even) {
       background: #f8fafc;
     }
+    .trace-action-row:hover {
+      background: #eef4fb;
+    }
     .trace-action-row:active {
-      background: #f1f5f9;
+      background: #e2ecf5;
+    }
+    .trace-action-row > * {
+      display: table-cell;
+      vertical-align: middle;
+      height: 38px;
+      padding: 0;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .trace-action-row:last-child > * {
+      border-bottom: none;
     }
     .trace-action-name {
       font-size: 13px;
-      font-weight: 700;
+      font-weight: 400;
       color: #1e293b;
-      min-width: 110px;
+      white-space: nowrap;
+      padding-left: 14px;
+      padding-right: 14px;
     }
     .trace-action-dots {
+      width: 120px;
+      min-width: 120px;
+      max-width: 120px;
       display: flex;
       align-items: center;
       gap: 3px;
-      flex: 1;
-      min-width: 0;
-      flex-wrap: wrap;
+      overflow: hidden;
     }
     .trace-dot {
-      width: 9px;
-      height: 9px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       flex-shrink: 0;
     }
     .trace-dot.ok {
       background: #22c55e;
-      box-shadow: 0 0 0 1px rgba(34,197,94,0.25);
     }
     .trace-dot.error {
       background: #ef4444;
-      box-shadow: 0 0 0 1px rgba(239,68,68,0.25);
     }
-    .trace-action-stats {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-shrink: 0;
+    .trace-action-count {
+      white-space: nowrap;
+      text-align: right;
+      padding-right: 8px;
+    }
+    .trace-action-dur {
+      white-space: nowrap;
+      text-align: right;
+      padding-right: 8px;
+    }
+    .trace-action-err {
+      white-space: nowrap;
+      text-align: center;
+      padding-right: 8px;
     }
     .trace-action-arrow {
       color: #94a3b8;
-      font-size: 14px;
-      margin-left: 4px;
+      font-size: 16px;
+      padding-right: 14px;
+      white-space: nowrap;
+    }
+    .trace-filters {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .trace-status-group {
+      display: flex;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .trace-status-btn {
+      background: #fff;
+      border: none;
+      border-right: 1px solid #e2e8f0;
+      padding: 5px 12px;
+      font-size: 12px;
+      color: #64748b;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .trace-status-btn:last-child {
+      border-right: none;
+    }
+    .trace-status-btn:hover {
+      background: #f1f5f9;
+    }
+    .trace-status-btn.active {
+      background: #1e293b;
+      color: #fff;
+    }
+    .trace-search {
+      flex: 0 0 180px;
+      max-width: 180px;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      color: #1e293b;
+      outline: none;
+      box-sizing: border-box;
+    }
+    .trace-filter-meta {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-left: auto;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .trace-search:focus {
+      border-color: #94a3b8;
+    }
+    .trace-pager {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 8px 0 2px;
+    }
+    .trace-pager-btn {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 4px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .trace-pager-btn:hover { background: #f1f5f9; }
+    .trace-pager-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+      background: #fff;
+    }
+    .trace-pager-info {
+      font-size: 12px;
+      color: #64748b;
     }
     .trace-panel-overlay {
       position: fixed;
@@ -1530,6 +1664,9 @@ export class DashboardServer {
     .trace-panel-overlay.open {
       display: flex;
       justify-content: flex-end;
+    }
+    body.panel-open {
+      overflow: hidden;
     }
     .trace-panel-backdrop {
       position: absolute;
@@ -1788,13 +1925,21 @@ export class DashboardServer {
           <div class="row">
             <button class="btn" id="timeline-refresh-btn">Refresh</button>
             <label class="row">
-              <input type="checkbox" id="timeline-auto" checked />
+              <input type="checkbox" id="timeline-auto" />
               <span>Auto refresh (3s)</span>
             </label>
-            <span class="hint" id="timeline-meta"></span>
           </div>
         </div>
-        <p class="hint">Grouped by run and action. Click an action to view step details.</p>
+        <div class="trace-filters">
+          <div class="trace-status-group">
+            <button class="trace-status-btn active" data-status="all">All</button>
+            <button class="trace-status-btn" data-status="success">Success</button>
+            <button class="trace-status-btn" data-status="failed">Failed</button>
+            <button class="trace-status-btn" data-status="running">Running</button>
+          </div>
+          <input type="text" class="trace-search" id="trace-search" placeholder="Search tasks..." />
+          <span class="trace-filter-meta" id="timeline-meta"></span>
+        </div>
         <div class="timeline-wrap" id="timeline-runs">
           <div class="placeholder">No trace runs yet.</div>
         </div>
@@ -1993,6 +2138,12 @@ export class DashboardServer {
       emulatorActionPending: false,
       credentialStatus: {},
       traceRuns: [],
+      traceSkippedFiles: 0,
+      tracePage: 0,
+      tracePageSize: 5,
+      traceStatusFilter: "all",
+      traceSearchFilter: "",
+      expandedResults: new Set(),
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -2392,15 +2543,19 @@ export class DashboardServer {
       return pill;
     }
 
-    function openTracePanel(title, steps) {
+    function openTracePanel(title, steps, scrollToStep) {
       const overlay = $("#trace-panel-overlay");
       $("#trace-panel-title").textContent = title;
       const body = $("#trace-panel-body");
       body.textContent = "";
+      let scrollTarget = null;
 
       for (const step of steps) {
         const card = document.createElement("section");
         card.className = "trace-step-card " + String(step.status || "ok");
+        if (scrollToStep != null && Number(step.stepNo) === scrollToStep) {
+          scrollTarget = card;
+        }
 
         const head = document.createElement("div");
         head.className = "trace-step-head";
@@ -2408,7 +2563,9 @@ export class DashboardServer {
         headLeft.className = "trace-step-head-left";
         const title = document.createElement("span");
         title.className = "trace-step-title";
-        title.textContent = "Step " + String(step.stepNo || "?");
+        title.textContent =
+          "Step " + String(step.stepNo || "?") +
+          " \\u00B7 " + String(step.actionType || "unknown");
         headLeft.appendChild(title);
         const app = document.createElement("span");
         app.className = "trace-step-meta";
@@ -2459,10 +2616,15 @@ export class DashboardServer {
       }
 
       overlay.classList.add("open");
+      document.body.classList.add("panel-open");
+      if (scrollTarget) {
+        requestAnimationFrame(() => scrollTarget.scrollIntoView({ behavior: "smooth", block: "center" }));
+      }
     }
 
     function closeTracePanel() {
       $("#trace-panel-overlay").classList.remove("open");
+      document.body.classList.remove("panel-open");
     }
 
     function bindTracePanelEvents() {
@@ -2487,7 +2649,35 @@ export class DashboardServer {
         return;
       }
 
-      for (const run of runs) {
+      const statusFilter = state.traceStatusFilter;
+      const searchFilter = state.traceSearchFilter.toLowerCase();
+      const filtered = runs.filter((r) => {
+        if (statusFilter !== "all" && r.status !== statusFilter) return false;
+        if (searchFilter && !(r.task || "").toLowerCase().includes(searchFilter)) return false;
+        return true;
+      });
+
+      const total = filtered.length;
+      const pageSize = state.tracePageSize;
+      const totalPages = Math.ceil(total / pageSize);
+      if (state.tracePage >= totalPages) state.tracePage = Math.max(0, totalPages - 1);
+      const page = state.tracePage;
+      const start = page * pageSize;
+      const pageRuns = filtered.slice(start, start + pageSize);
+
+      if (total === 0) {
+        const empty = document.createElement("div");
+        empty.className = "placeholder";
+        empty.textContent = runs.length > 0
+          ? "No runs match the current filters."
+          : "No trace runs yet.";
+        host.appendChild(empty);
+        const label = runs.length > 0 ? "0 of " + runs.length + " runs" : "0 runs";
+        $("#timeline-meta").textContent = label;
+        return;
+      }
+
+      for (const run of pageRuns) {
         const card = document.createElement("article");
         card.className = "trace-run-card";
 
@@ -2525,8 +2715,21 @@ export class DashboardServer {
         card.appendChild(head);
 
         if (run.finalMessage) {
+          const resultKey = run.sessionId;
           const finalBlock = document.createElement("div");
           finalBlock.className = "trace-final";
+          if (state.expandedResults.has(resultKey)) {
+            finalBlock.classList.add("expanded");
+          }
+          finalBlock.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const isExpanded = finalBlock.classList.toggle("expanded");
+            if (isExpanded) {
+              state.expandedResults.add(resultKey);
+            } else {
+              state.expandedResults.delete(resultKey);
+            }
+          });
           const finalLabel = document.createElement("span");
           finalLabel.className = "trace-final-label";
           finalLabel.textContent = "Result:";
@@ -2570,6 +2773,16 @@ export class DashboardServer {
             }))
             .sort((a, b) => a.firstStepNo - b.firstStepNo);
 
+          const allStepsSorted = actions.slice().sort((a, b) => Number(a.stepNo || 0) - Number(b.stepNo || 0));
+          const totalStepDur = allStepsSorted.reduce((s, a) => s + Number(a.durationMs || 0), 0);
+
+          const stepsLabel = document.createElement("div");
+          stepsLabel.className = "trace-kv-line";
+          stepsLabel.textContent = allStepsSorted.length + " steps total";
+          card.appendChild(stepsLabel);
+
+          const listWrap = document.createElement("div");
+          listWrap.className = "trace-action-list-wrap";
           const list = document.createElement("div");
           list.className = "trace-action-list";
 
@@ -2577,66 +2790,117 @@ export class DashboardServer {
             const row = document.createElement("div");
             row.className = "trace-action-row";
 
-            const name = document.createElement("div");
-            name.className = "trace-action-name";
-            name.textContent = group.actionType;
-            row.appendChild(name);
+            const nameCell = document.createElement("div");
+            nameCell.className = "trace-action-name";
+            nameCell.textContent = group.actionType;
+            row.appendChild(nameCell);
 
-            const dots = document.createElement("div");
-            dots.className = "trace-action-dots";
+            const dotsCell = document.createElement("div");
+            dotsCell.className = "trace-action-dots";
             for (const step of group.steps) {
               const dot = document.createElement("span");
               dot.className = "trace-dot " + String(step.status || "ok");
               dot.title = "Step " + step.stepNo + " (" + String(step.status || "ok") + ")";
-              dots.appendChild(dot);
+              dotsCell.appendChild(dot);
             }
-            row.appendChild(dots);
+            row.appendChild(dotsCell);
 
-            const stats = document.createElement("div");
-            stats.className = "trace-action-stats";
+            const countCell = document.createElement("div");
+            countCell.className = "trace-action-count";
             const countPill = document.createElement("span");
             countPill.className = "trace-pill";
             countPill.textContent = String(group.steps.length) + " step" + (group.steps.length === 1 ? "" : "s");
-            stats.appendChild(countPill);
+            countCell.appendChild(countPill);
+            row.appendChild(countCell);
+
+            const durCell = document.createElement("div");
+            durCell.className = "trace-action-dur";
             const durPill = document.createElement("span");
             durPill.className = "trace-pill";
             durPill.textContent = formatDuration(group.totalDurationMs);
-            stats.appendChild(durPill);
-            if (group.errorCount > 0) {
-              stats.appendChild(makeStatusPill("error"));
-            }
-            const arrow = document.createElement("span");
-            arrow.className = "trace-action-arrow";
-            arrow.textContent = "\\u203A";
-            stats.appendChild(arrow);
-            row.appendChild(stats);
+            durCell.appendChild(durPill);
+            row.appendChild(durCell);
 
+            const errCell = document.createElement("div");
+            errCell.className = "trace-action-err";
+            if (group.errorCount > 0) {
+              errCell.appendChild(makeStatusPill("error"));
+            }
+            row.appendChild(errCell);
+
+            const arrowCell = document.createElement("div");
+            arrowCell.className = "trace-action-arrow";
+            arrowCell.textContent = "\\u203A";
+            row.appendChild(arrowCell);
+
+            const firstStepOfGroup = group.firstStepNo;
             row.addEventListener("click", () => {
               const panelTitle =
-                group.actionType +
+                (run.task || "Steps").slice(0, 60) +
                 " \\u2014 " +
-                group.steps.length + " step" + (group.steps.length === 1 ? "" : "s") +
+                allStepsSorted.length + " steps" +
                 " \\u2014 " +
-                formatDuration(group.totalDurationMs);
-              openTracePanel(panelTitle, group.steps);
+                formatDuration(totalStepDur);
+              openTracePanel(panelTitle, allStepsSorted, firstStepOfGroup);
             });
 
             list.appendChild(row);
           }
-          card.appendChild(list);
+          listWrap.appendChild(list);
+          card.appendChild(listWrap);
         }
 
         host.appendChild(card);
       }
 
-      $("#timeline-meta").textContent = runs.length + " run" + (runs.length === 1 ? "" : "s");
+      if (totalPages > 1) {
+        const pager = document.createElement("div");
+        pager.className = "trace-pager";
+
+        const prevBtn = document.createElement("button");
+        prevBtn.className = "trace-pager-btn";
+        prevBtn.textContent = "\\u2039 Prev";
+        prevBtn.disabled = page === 0;
+        prevBtn.addEventListener("click", () => {
+          state.tracePage = Math.max(0, state.tracePage - 1);
+          renderTraces(state.traceRuns);
+        });
+        pager.appendChild(prevBtn);
+
+        const info = document.createElement("span");
+        info.className = "trace-pager-info";
+        info.textContent = "Page " + (page + 1) + " of " + totalPages;
+        pager.appendChild(info);
+
+        const nextBtn = document.createElement("button");
+        nextBtn.className = "trace-pager-btn";
+        nextBtn.textContent = "Next \\u203A";
+        nextBtn.disabled = page >= totalPages - 1;
+        nextBtn.addEventListener("click", () => {
+          state.tracePage = Math.min(totalPages - 1, state.tracePage + 1);
+          renderTraces(state.traceRuns);
+        });
+        pager.appendChild(nextBtn);
+
+        host.appendChild(pager);
+      }
+
+      const metaLabel = total === runs.length
+        ? total + " run" + (total === 1 ? "" : "s")
+        : total + " of " + runs.length + " runs";
+      const skipped = state.traceSkippedFiles || 0;
+      $("#timeline-meta").textContent = metaLabel + (skipped > 0
+        ? " (" + skipped + " session file" + (skipped === 1 ? "" : "s") + " skipped — over 10MB)"
+        : "");
     }
 
     async function loadTraces(options = {}) {
       const silent = options.silent !== false;
-      const payload = await api("/api/traces?limit=12");
+      const payload = await api("/api/traces?limit=50");
       const runs = Array.isArray(payload.runs) ? payload.runs : [];
+      const skipped = Number(payload.skippedFiles || 0);
       state.traceRuns = runs;
+      state.traceSkippedFiles = skipped;
       renderTraces(runs);
       if (!silent) {
         setStatus("Action timeline refreshed.", "ok");
@@ -2947,6 +3211,22 @@ export class DashboardServer {
         }
       });
 
+      document.querySelectorAll(".trace-status-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".trace-status-btn").forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          state.traceStatusFilter = btn.dataset.status;
+          state.tracePage = 0;
+          renderTraces(state.traceRuns);
+        });
+      });
+
+      $("#trace-search").addEventListener("input", (event) => {
+        state.traceSearchFilter = event.target.value;
+        state.tracePage = 0;
+        renderTraces(state.traceRuns);
+      });
+
       $("#timeline-auto").addEventListener("change", (event) => {
         const enabled = event.target.checked;
         if (state.timelineTimer) {
@@ -3020,8 +3300,10 @@ export class DashboardServer {
         const limit = Number.isFinite(limitRaw)
           ? Math.max(1, Math.min(100, Math.round(limitRaw)))
           : 12;
+        const traceResult = this.readTraceRuns(limit);
         sendJson(res, 200, {
-          runs: this.readTraceRuns(limit),
+          runs: traceResult.runs,
+          skippedFiles: traceResult.skippedFiles,
           fetchedAt: nowIso(),
         });
         return;
