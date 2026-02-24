@@ -18,7 +18,7 @@ function defaultConfigObject() {
     workspaceDir: defaultWorkspaceDir(),
     stateDir: defaultStateDir(),
     sessionStorage: {
-      mode: "openclaw" as const,
+      mode: "unified" as const,
       storePath: path.join(defaultWorkspaceDir(), "sessions", "sessions.json"),
       markdownLog: true,
     },
@@ -468,8 +468,11 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
       // Legacy mode always wrote markdown; keep that behavior.
       sessionStorage.markdownLog = true;
     }
-    if ("mode" in sessionStorage && sessionStorage.mode === "markdown") {
-      sessionStorage.mode = "openclaw";
+    if ("mode" in sessionStorage) {
+      const mode = String(sessionStorage.mode ?? "").trim().toLowerCase();
+      if (mode === "markdown" || mode === "openclaw") {
+        sessionStorage.mode = "unified";
+      }
     }
     raw.sessionStorage = sessionStorage;
   }
@@ -618,7 +621,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     workspaceDir: resolvedWorkspaceDir,
     stateDir: resolvedStateDir,
     sessionStorage: {
-      mode: "openclaw",
+      mode: "unified",
       storePath: (() => {
         const defaultGlobalStorePath = resolvePath(
           path.join(defaultWorkspaceDir(), "sessions", "sessions.json"),

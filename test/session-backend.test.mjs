@@ -49,7 +49,7 @@ function collectText(message) {
 test("WorkspaceStore defaults to OpenClaw store + pi tree transcript + markdown log", async () => {
   await withTempHome("openpocket-session-backend-default-", () => {
     const cfg = loadConfig();
-    assert.equal(cfg.sessionStorage.mode, "openclaw");
+    assert.equal(cfg.sessionStorage.mode, "unified");
     assert.equal(cfg.sessionStorage.markdownLog, true);
 
     const store = new WorkspaceStore(cfg);

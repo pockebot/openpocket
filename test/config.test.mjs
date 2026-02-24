@@ -45,7 +45,7 @@ async function withTempCodexHome(prefix, fn) {
 test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
   await withTempHome("openpocket-config-default-", async (home) => {
     const cfg = loadConfig();
-    assert.equal(cfg.sessionStorage.mode, "openclaw");
+    assert.equal(cfg.sessionStorage.mode, "unified");
     assert.equal(cfg.sessionStorage.markdownLog, true);
     assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(cfg.agent.returnHomeOnTaskEnd, true);
@@ -151,7 +151,7 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     );
 
     const cfg = loadConfig();
-    assert.equal(cfg.sessionStorage.mode, "openclaw");
+    assert.equal(cfg.sessionStorage.mode, "unified");
     assert.equal(cfg.sessionStorage.markdownLog, true);
     assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(cfg.agent.returnHomeOnTaskEnd, false);
@@ -178,7 +178,7 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
 
     saveConfig(cfg);
     const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-    assert.equal(saved.sessionStorage.mode, "openclaw");
+    assert.equal(saved.sessionStorage.mode, "unified");
     assert.equal(saved.sessionStorage.markdownLog, true);
     assert.match(String(saved.sessionStorage.storePath ?? ""), /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(saved.session_storage, undefined);

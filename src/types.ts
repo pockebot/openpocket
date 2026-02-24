@@ -80,7 +80,7 @@ export interface DashboardConfig {
 }
 
 export interface SessionStorageConfig {
-  mode: "openclaw";
+  mode: "unified";
   storePath: string;
   markdownLog: boolean;
 }

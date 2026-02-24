@@ -3,7 +3,7 @@
   "workspaceDir": "~/.openpocket/workspace",
   "stateDir": "~/.openpocket/state",
   "sessionStorage": {
-    "mode": "openclaw",
+    "mode": "unified",
     "storePath": "~/.openpocket/workspace/sessions/sessions.json",
     "markdownLog": true
   },
