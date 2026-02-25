@@ -33,7 +33,9 @@ This page is the source-of-truth for current default config values and normaliza
     "contextBudgetChars": 150000,
     "lang": "en",
     "verbose": true,
-    "deviceId": null
+    "deviceId": null,
+    "runtimeBackend": "legacy_agent_core",
+    "legacyCodingExecutor": false
   },
   "screenshots": {
     "saveStepScreenshots": true,
@@ -242,6 +244,8 @@ Notes:
 - `agent.systemPromptMode` accepts only `full|minimal|none`; invalid values fall back to `full`.
 - `agent.contextBudgetChars` is clamped to at least `10000`.
 - `agent.progressReportInterval` is clamped to at least `1`.
+- `agent.runtimeBackend` accepts only `legacy_agent_core|pi_session_bridge`; other values fall back to `legacy_agent_core`.
+- `agent.legacyCodingExecutor` defaults to `false`; enabling it is a deprecated migration toggle.
 - `emulator.dataPartitionSizeGb` is clamped to `8..512` (GB).
 - `screenshots.maxCount` is clamped to at least `20`.
 - `scriptExecutor.timeoutSec` is clamped to at least `1`.

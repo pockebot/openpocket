@@ -32,7 +32,9 @@
     "contextBudgetChars": 150000,
     "lang": "en",
     "verbose": true,
-    "deviceId": null
+    "deviceId": null,
+    "runtimeBackend": "legacy_agent_core",
+    "legacyCodingExecutor": false
   },
   "screenshots": {
     "saveStepScreenshots": true,

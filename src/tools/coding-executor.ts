@@ -12,6 +12,9 @@ import {
   validateCommandPolicy,
 } from "../agent/tool-policy.js";
 
+export const LEGACY_CODING_EXECUTOR_DEPRECATION =
+  "Config key 'agent.legacyCodingExecutor' is deprecated and will be removed in a future release.";
+
 type ReadAction = Extract<AgentAction, { type: "read" }>;
 type WriteAction = Extract<AgentAction, { type: "write" }>;
 type EditAction = Extract<AgentAction, { type: "edit" }>;
