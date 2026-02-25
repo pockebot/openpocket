@@ -281,6 +281,9 @@ interface PhoneAgentRunContext {
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
+  lastScreenshotStartMs: number;
+  lastScreenshotEndMs: number;
+  lastModelInferenceStartMs: number;
 }
 
 type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {
@@ -1874,6 +1877,12 @@ export class AgentRuntime {
             if (!Number.isFinite(durationMs) || durationMs < 0) {
               durationMs = Math.max(0, Date.parse(endedAt) - stepStartedAtMs);
             }
+            const screenshotMs = ctx.lastScreenshotEndMs > ctx.lastScreenshotStartMs
+              ? Math.max(0, ctx.lastScreenshotEndMs - ctx.lastScreenshotStartMs)
+              : 0;
+            const modelInferenceMs = ctx.lastModelInferenceStartMs > 0 && stepStartedAtMs > ctx.lastModelInferenceStartMs
+              ? Math.max(0, stepStartedAtMs - ctx.lastModelInferenceStartMs)
+              : 0;
             return {
               actionType: action.type,
               currentApp,
@@ -1881,6 +1890,9 @@ export class AgentRuntime {
               endedAt,
               durationMs,
               status,
+              screenshotMs,
+              modelInferenceMs,
+              loopDelayMs: runtime.config.agent.loopDelayMs,
             };
           };
 

@@ -188,6 +188,9 @@ export async function runRuntimeAttempt(
       failMessage: null,
       stopRequested: deps.getStopRequested,
       lastAutoPermissionAllowAtMs: 0,
+      lastScreenshotStartMs: 0,
+      lastScreenshotEndMs: 0,
+      lastModelInferenceStartMs: 0,
       launchablePackages,
       effectivePromptMode,
       systemPrompt,
@@ -487,9 +490,11 @@ export async function runRuntimeAttempt(
           return messages;
         }
 
+        ctx.lastScreenshotStartMs = Date.now();
         const snapshot = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
         snapshot.installedPackages = launchablePackages;
         ctx.latestSnapshot = snapshot;
+        ctx.lastScreenshotEndMs = Date.now();
         shouldReturnHome = true;
 
         if (deps.config.screenshots.saveStepScreenshots) {
@@ -556,6 +561,7 @@ export async function runRuntimeAttempt(
           screenshotPath: ctx.lastScreenshotPath,
           timestamp: Date.now(),
         };
+        ctx.lastModelInferenceStartMs = Date.now();
         return [...filtered, observation];
       },
       followUpMode: "one-at-a-time",

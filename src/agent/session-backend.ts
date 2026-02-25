@@ -7,6 +7,9 @@ export interface SessionStepTraceDetails {
   endedAt: string;
   durationMs: number;
   status: "ok" | "error";
+  screenshotMs?: number;
+  modelInferenceMs?: number;
+  loopDelayMs?: number;
 }
 
 export interface SessionCreatePayload {

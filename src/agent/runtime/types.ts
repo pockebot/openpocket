@@ -141,6 +141,9 @@ export interface PhoneAgentRunContext {
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
+  lastScreenshotStartMs: number;
+  lastScreenshotEndMs: number;
+  lastModelInferenceStartMs: number;
 }
 
 export type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {
