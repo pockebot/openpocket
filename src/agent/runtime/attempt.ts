@@ -83,6 +83,8 @@ export async function runRuntimeAttempt(
     }
 
     const effectiveProfile = auth.baseUrl ? { ...profile, baseUrl: auth.baseUrl } : profile;
+    const isCodexModel = profile.model.toLowerCase().includes("codex");
+
     const piModel = buildPiAiModel(effectiveProfile);
     const isCodexResponsesModel =
       piModel.api === "openai-codex-responses" || piModel.provider === "openai-codex";
@@ -99,7 +101,7 @@ export async function runRuntimeAttempt(
         : auth.preferredMode === "completions"
           ? { ...piModel, api: "openai-completions" as PiApi }
           : piModel;
-      if (finalModel.api === "openai-responses" && auth.preferredMode !== "responses") {
+      if (finalModel.api === "openai-responses" && auth.preferredMode !== "responses" && !isCodexModel) {
         finalModel = { ...finalModel, api: "openai-completions" as PiApi };
       }
     }
