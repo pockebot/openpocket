@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   SessionBackend,
   SessionCreatePayload,
+  SessionEventPayload,
   SessionFinalizePayload,
   SessionStepPayload,
 } from "./session-backend.js";
@@ -159,6 +160,12 @@ export class SessionOpenclawStoreBackend implements SessionBackend {
   }
 
   appendStep(payload: SessionStepPayload): void {
+    this.upsert(payload.sessionId, payload.sessionKey, {
+      sessionFile: payload.sessionPath,
+    });
+  }
+
+  appendEvent(payload: SessionEventPayload): void {
     this.upsert(payload.sessionId, payload.sessionKey, {
       sessionFile: payload.sessionPath,
     });

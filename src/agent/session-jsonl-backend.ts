@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   SessionBackend,
   SessionCreatePayload,
+  SessionEventPayload,
   SessionFinalizePayload,
   SessionStepPayload,
 } from "./session-backend.js";
@@ -45,6 +46,19 @@ export class SessionJsonlBackend implements SessionBackend {
       actionJson: payload.actionJson,
       result: payload.result,
       trace: payload.trace ?? null,
+    });
+  }
+
+  appendEvent(payload: SessionEventPayload): void {
+    const jsonlPath = toJsonlSessionPath(payload.sessionPath);
+    writeJsonlLine(jsonlPath, {
+      event: "runtime_event_appended",
+      sessionId: payload.sessionId,
+      sessionPath: payload.sessionPath,
+      at: payload.at,
+      eventType: payload.eventType,
+      details: payload.details ?? null,
+      text: payload.text ?? "",
     });
   }
 

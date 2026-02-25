@@ -8,6 +8,7 @@ import { loadWorkspaceTemplate } from "./workspace-templates.js";
 import type {
   SessionBackend,
   SessionCreatePayload,
+  SessionEventPayload,
   SessionFinalizePayload,
   SessionStepPayload,
   SessionStepTraceDetails,
@@ -402,6 +403,26 @@ export class WorkspaceStore {
     };
     for (const backend of this.sessionBackends) {
       backend.appendStep(payload);
+    }
+  }
+
+  appendEvent(
+    session: SessionHandle,
+    eventType: string,
+    details?: Record<string, unknown>,
+    text?: string,
+  ): void {
+    const payload: SessionEventPayload = {
+      sessionId: session.id,
+      sessionPath: session.path,
+      sessionKey: session.sessionKey,
+      at: nowIso(),
+      eventType: String(eventType || "").trim() || "unknown",
+      details,
+      text,
+    };
+    for (const backend of this.sessionBackends) {
+      backend.appendEvent(payload);
     }
   }
 

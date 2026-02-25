@@ -40,8 +40,19 @@ export interface SessionFinalizePayload {
   message: string;
 }
 
+export interface SessionEventPayload {
+  sessionId: string;
+  sessionPath: string;
+  sessionKey?: string;
+  at: string;
+  eventType: string;
+  details?: Record<string, unknown>;
+  text?: string;
+}
+
 export interface SessionBackend {
   create(payload: SessionCreatePayload): void;
   appendStep(payload: SessionStepPayload): void;
+  appendEvent(payload: SessionEventPayload): void;
   finalize(payload: SessionFinalizePayload): void;
 }
