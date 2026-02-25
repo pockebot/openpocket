@@ -36,8 +36,9 @@ export interface AgentConfig {
    */
   runtimeBackend?: "legacy_agent_core" | "pi_session_bridge";
   /**
-   * Keep legacy CodingExecutor fallback enabled while pi coding tools migration is in progress.
-   * When false, unsupported/erroring pi coding actions fail fast.
+   * Deprecated migration toggle.
+   * When true, unsupported/erroring pi coding actions fall back to legacy CodingExecutor.
+   * Default is false and this key will be removed in a future release.
    */
   legacyCodingExecutor?: boolean;
 }

@@ -466,6 +466,12 @@ Example config template:
 
 - [`openpocket.config.example.json`](./openpocket.config.example.json)
 
+Coding runtime migration note:
+
+- `agent.legacyCodingExecutor` is now **off by default**.
+- `agent.legacyCodingExecutor=true` remains available as a temporary compatibility toggle, but it is **deprecated** and will be removed.
+- When fallback is disabled and a coding action is unsupported by pi coding tools, runtime errors point to this key explicitly.
+
 ### Supported Model Providers
 
 OpenPocket supports multiple AI model providers through OpenAI-compatible APIs:

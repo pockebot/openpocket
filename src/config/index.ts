@@ -49,7 +49,7 @@ function defaultConfigObject() {
       verbose: true,
       deviceId: null,
       runtimeBackend: "legacy_agent_core" as const,
-      legacyCodingExecutor: true,
+      legacyCodingExecutor: false,
     },
     screenshots: {
       saveStepScreenshots: true,
@@ -697,7 +697,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       runtimeBackend: String(agent.runtimeBackend ?? "legacy_agent_core") === "pi_session_bridge"
         ? "pi_session_bridge"
         : "legacy_agent_core",
-      legacyCodingExecutor: Boolean(agent.legacyCodingExecutor ?? true),
+      legacyCodingExecutor: Boolean(agent.legacyCodingExecutor ?? false),
     },
     screenshots: {
       saveStepScreenshots: Boolean(screenshots.saveStepScreenshots ?? true),
