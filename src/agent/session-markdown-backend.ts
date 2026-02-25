@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   SessionBackend,
   SessionCreatePayload,
+  SessionEventPayload,
   SessionFinalizePayload,
   SessionStepPayload,
 } from "./session-backend.js";
@@ -76,6 +77,10 @@ export class SessionMarkdownBackend implements SessionBackend {
       "",
     ].filter((line): line is string => line !== null).join("\n");
     fs.appendFileSync(markdownPath, block, "utf-8");
+  }
+
+  appendEvent(_payload: SessionEventPayload): void {
+    // Markdown stays task-step focused; runtime events are stored in unified jsonl.
   }
 
   finalize(payload: SessionFinalizePayload): void {

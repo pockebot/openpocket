@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { SessionManager, type AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import {
   type AssistantMessage as PiAssistantMessage,
   type Message as PiMessage,
@@ -16,6 +16,7 @@ import { getModelProfile, resolveModelAuth } from "../../config/index.js";
 import { sleep } from "../../utils/time.js";
 import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
 import { buildPiAiModel } from "../model-client.js";
+import { normalizePiSessionEvent } from "../pi-session-events.js";
 import { buildSystemPrompt, buildUserPrompt } from "../prompts.js";
 import type {
   PhoneAgentRunContext,
@@ -344,7 +345,81 @@ export async function runRuntimeAttempt(
       });
     };
 
+    const appendSessionEvent = (
+      eventType: string,
+      details?: Record<string, unknown>,
+      text?: string,
+    ) => {
+      try {
+        deps.workspace.appendEvent(session, eventType, details, text);
+      } catch {
+        // Best-effort telemetry write.
+      }
+    };
+
+    const persistNormalizedEvent = (event: AgentEvent) => {
+      const normalized = normalizePiSessionEvent(event as unknown as AgentSessionEvent);
+      if (!normalized) {
+        return;
+      }
+      const baseDetails = {
+        stepNo: ctx.stepCount,
+        currentApp: ctx.latestSnapshot?.currentApp ?? "unknown",
+      };
+      if (normalized.type === "tool_execution_start") {
+        appendSessionEvent(
+          "tool_execution_start",
+          {
+            ...baseDetails,
+            toolName: normalized.toolName,
+            ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+            ...(normalized.args !== undefined ? { args: normalized.args } : {}),
+          },
+          `tool_execution_start ${normalized.toolName}`,
+        );
+        return;
+      }
+      if (normalized.type === "tool_execution_update") {
+        const text = normalized.text || "";
+        appendSessionEvent(
+          "tool_execution_update",
+          {
+            ...baseDetails,
+            toolName: normalized.toolName,
+            ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+            ...(normalized.args !== undefined ? { args: normalized.args } : {}),
+            text,
+          },
+          text.trim() ? `tool_execution_update ${normalized.toolName}\n${text}` : `tool_execution_update ${normalized.toolName}`,
+        );
+        return;
+      }
+      if (normalized.type === "tool_execution_end") {
+        appendSessionEvent(
+          "tool_execution_end",
+          {
+            ...baseDetails,
+            toolName: normalized.toolName,
+            isError: normalized.isError,
+            ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+            ...(normalized.result !== undefined ? { result: normalized.result } : {}),
+          },
+          `tool_execution_end ${normalized.toolName} error=${String(normalized.isError)}`,
+        );
+        return;
+      }
+      if (
+        normalized.type === "agent_start"
+        || normalized.type === "agent_end"
+        || normalized.type === "turn_start"
+        || normalized.type === "turn_end"
+      ) {
+        appendSessionEvent(normalized.type, baseDetails, normalized.type);
+      }
+    };
+
     agent.subscribe((event: AgentEvent) => {
+      persistNormalizedEvent(event);
       if (event.type !== "turn_end") {
         return;
       }
