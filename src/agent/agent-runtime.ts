@@ -45,6 +45,7 @@ import { buildPiAiModel } from "./model-client.js";
 import { buildSystemPrompt, buildUserPrompt, type SystemPromptMode } from "./prompts.js";
 import { CHAT_TOOLS, TOOL_METAS, toolNameToActionType, type ToolMeta } from "./tools.js";
 import { normalizeAction } from "./actions.js";
+import { createImageService, type ImageGenerationService } from "../services/image-generation/index.js";
 import { runRuntimeAttempt } from "./runtime/attempt.js";
 import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
@@ -298,6 +299,7 @@ export class AgentRuntime {
   private readonly codingExecutor: CodingExecutor;
   private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
+  private readonly imageGenerationService: ImageGenerationService | null;
   private busy = false;
   private stopRequested = false;
   private currentTask: string | null = null;
@@ -321,7 +323,41 @@ export class AgentRuntime {
       config.screenshots.directory,
       config.screenshots.maxCount,
     );
+    // Initialize image generation service if enabled and configured
+    this.imageGenerationService = this.initializeImageGenerationService(config);
     this.agentFactory = options?.agentFactory ?? ((agentOptions: AgentOptions) => new Agent(agentOptions));
+  }
+
+  private initializeImageGenerationService(config: OpenPocketConfig): ImageGenerationService | null {
+    if (!config.imageGeneration.enabled) {
+      return null;
+    }
+
+    const apiKey = config.imageGeneration.apiKey || process.env[config.imageGeneration.apiKeyEnv];
+    if (!apiKey) {
+      // eslint-disable-next-line no-console
+      console.warn("[OpenPocket] Image generation enabled but no API key configured");
+      return null;
+    }
+
+    try {
+      // Only support fal provider for now
+      if (config.imageGeneration.provider !== "fal") {
+        // eslint-disable-next-line no-console
+        console.warn(`[OpenPocket] Image generation provider '${config.imageGeneration.provider}' not yet supported`);
+        return null;
+      }
+
+      return createImageService({
+        type: config.imageGeneration.provider,
+        apiKey,
+        model: config.imageGeneration.model,
+      });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("[OpenPocket] Failed to initialize image generation service:", error);
+      return null;
+    }
   }
 
   isBusy(): boolean {
@@ -2138,6 +2174,53 @@ export class AgentRuntime {
             ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
             ctx.history.push(`step ${step}: action=wait duration=${ms}`);
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
+          }
+
+          // ---- generate_image ----
+          if (action.type === "generate_image") {
+            if (!runtime.imageGenerationService) {
+              const msg = "Image generation requested, but service is not enabled or configured.";
+              ctx.failMessage = msg;
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+
+            try {
+              const result = await runtime.imageGenerationService.generate(action.prompt);
+              const resultText = `Image generated successfully.\nURL: ${result.url}\nProvider: ${result.provider}`;
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                resultText,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+              );
+              ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              ctx.history.push(`step ${step}: action=generate_image url=${result.url}`);
+              return { content: [{ type: "text" as const, text: resultText }], details: { imageUrl: result.url } };
+            } catch (error) {
+              const errorMsg = `Image generation failed: ${error instanceof Error ? error.message : String(error)}`;
+              ctx.failMessage = errorMsg;
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                errorMsg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
+              ctx.traces.push({ step, action, result: errorMsg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: errorMsg }], details: {} };
+            }
           }
 
           // ---- all other actions (tap, swipe, type, keyevent, launch_app, shell, run_script, read, write, edit, etc.) ----

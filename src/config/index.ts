@@ -158,6 +158,13 @@ function defaultConfigObject() {
         },
       },
     },
+    imageGeneration: {
+      enabled: false,
+      provider: "fal" as const,
+      apiKey: "",
+      apiKeyEnv: "FAL_API_KEY",
+      model: "fal-ai/nanobanana",
+    },
     models: {
       "gpt-5.2-codex": {
         baseUrl: "https://api.openai.com/v1",
@@ -607,6 +614,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
   const cron = (merged.cron ?? {}) as Record<string, unknown>;
   const dashboard = (merged.dashboard ?? {}) as Record<string, unknown>;
   const humanAuth = (merged.humanAuth ?? {}) as Record<string, unknown>;
+  const imageGeneration = (merged.imageGeneration ?? {}) as Record<string, unknown>;
   const sessionStorage = (merged.sessionStorage ?? {}) as Record<string, unknown>;
   const humanAuthTunnel = isObject(humanAuth.tunnel) ? humanAuth.tunnel : {};
   const humanAuthNgrok = isObject(humanAuthTunnel.ngrok) ? humanAuthTunnel.ngrok : {};
@@ -784,6 +792,18 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
         },
       },
     },
+    imageGeneration: {
+      enabled: Boolean(imageGeneration.enabled ?? false),
+      provider: (() => {
+        const provider = String(imageGeneration.provider ?? "fal");
+        return provider === "fal" || provider === "replicate" || provider === "huggingface"
+          ? provider
+          : "fal";
+      })(),
+      apiKey: String(imageGeneration.apiKey ?? ""),
+      apiKeyEnv: String(imageGeneration.apiKeyEnv ?? "FAL_API_KEY"),
+      model: imageGeneration.model ? String(imageGeneration.model) : undefined,
+    },
     models,
     configPath,
   };
@@ -828,6 +848,7 @@ export function saveConfig(config: OpenPocketConfig): void {
     cron: config.cron,
     dashboard: config.dashboard,
     humanAuth: config.humanAuth,
+    imageGeneration: config.imageGeneration,
     models: config.models,
   };
   fs.writeFileSync(config.configPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
