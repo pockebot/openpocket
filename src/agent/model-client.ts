@@ -49,6 +49,10 @@ function isChatGptBackendUrl(baseUrlLower: string): boolean {
   return baseUrlLower.includes("chatgpt.com/backend-api");
 }
 
+function isOpenAiBaseUrl(baseUrlLower: string): boolean {
+  return baseUrlLower.includes("openai.com") || baseUrlLower.includes("chatgpt.com");
+}
+
 function isCodexModelId(modelId: string): boolean {
   return modelId.trim().toLowerCase().includes("codex");
 }
@@ -103,6 +107,9 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
   if (isChatGptBackendUrl(baseUrlLower) && isCodexModelId(profile.model)) {
     api = "openai-codex-responses";
     provider = "openai-codex";
+  } else if (isOpenAiBaseUrl(baseUrlLower) && isCodexModelId(profile.model)) {
+    api = "openai-responses";
+    provider = "openai";
   } else if (baseUrlLower.includes("openrouter.ai")) {
     provider = "openrouter";
   } else if (baseUrlLower.includes("blockrun.ai")) {
