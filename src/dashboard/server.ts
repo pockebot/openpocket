@@ -697,6 +697,7 @@ export class DashboardServer {
         return this.emulator.status();
       } catch (error) {
         return {
+          targetType: this.config.target.type,
           avdName: this.config.emulator.avdName,
           devices: [],
           bootedDevices: [],
@@ -709,6 +710,7 @@ export class DashboardServer {
       mode: this.mode,
       gateway: this.gatewayStatus(),
       emulator: {
+        targetType: emulator.targetType,
         avdName: emulator.avdName,
         devices: emulator.devices,
         bootedDevices: emulator.bootedDevices,
@@ -2193,7 +2195,8 @@ export class DashboardServer {
       gatewayBadge.textContent = "Gateway: " + (gatewayRunning ? "Running" : "Stopped/Unknown");
       gatewayBadge.classList.toggle("ok", gatewayRunning);
 
-      emulatorBadge.textContent = "Emulator: " + (runtime?.emulator?.statusText || "Unknown");
+      const targetLabel = runtime?.emulator?.targetType || "emulator";
+      emulatorBadge.textContent = "Device (" + targetLabel + "): " + (runtime?.emulator?.statusText || "Unknown");
       emulatorBadge.classList.toggle("ok", emulatorRunning);
     }
 
@@ -2205,6 +2208,7 @@ export class DashboardServer {
         "<div>Dashboard: <code>" + (runtime.dashboard?.address || location.origin) + "</code></div>";
 
       $("#emulator-kv").innerHTML =
+        "<div>Target: <code>" + (runtime.emulator?.targetType || "emulator") + "</code></div>" +
         "<div>AVD: <code>" + (runtime.emulator?.avdName || "unknown") + "</code></div>" +
         "<div>Devices: " + ((runtime.emulator?.devices || []).join(", ") || "(none)") + "</div>" +
         "<div>Booted: " + ((runtime.emulator?.bootedDevices || []).join(", ") || "(none)") + "</div>";

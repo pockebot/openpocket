@@ -45,7 +45,7 @@ const TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        deviceId: { type: "string", description: "Target device ID (e.g. emulator-5554). Auto-detected if omitted." },
+        deviceId: { type: "string", description: "Target device ID (for example emulator-5554 or a physical device serial). Auto-detected if omitted." },
       },
     },
   },

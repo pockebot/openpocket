@@ -15,6 +15,7 @@ import { saveConfig } from "../config/index.js";
 import { AgentRuntime } from "../agent/agent-runtime.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
 import { extractPackageName } from "../device/adb-runtime.js";
+import { deviceTargetLabel, isEmulatorTarget } from "../device/target-types.js";
 import { HumanAuthBridge } from "../human-auth/bridge.js";
 import { LocalHumanAuthStack } from "../human-auth/local-stack.js";
 import { ChatAssistant } from "./chat-assistant.js";
@@ -25,7 +26,7 @@ export const TELEGRAM_MENU_COMMANDS: TelegramBot.BotCommand[] = [
   { command: "start", description: "Start or resume chat onboarding" },
   { command: "help", description: "Show command help" },
   { command: "context", description: "Inspect injected prompt context" },
-  { command: "status", description: "Show gateway and emulator status" },
+  { command: "status", description: "Show gateway and device status" },
   { command: "model", description: "Show or switch model profile" },
   { command: "startvm", description: "Start Android emulator" },
   { command: "stopvm", description: "Stop Android emulator" },
@@ -539,6 +540,10 @@ export class TelegramGateway {
   }
 
   private async ensurePlayStoreReady(chatId: number, locale: "zh" | "en"): Promise<boolean> {
+    if (!isEmulatorTarget(this.config.target.type)) {
+      this.playStorePreflightPassed = true;
+      return false;
+    }
     if (this.playStorePreflightPassed) {
       return false;
     }
@@ -1869,6 +1874,7 @@ export class TelegramGateway {
         [
           `Project: ${this.config.projectName}`,
           `Model: ${this.config.defaultModel}`,
+          `Target: ${this.config.target.type} (${deviceTargetLabel(this.config.target.type)})`,
           `Agent busy: ${this.agent.isBusy()}`,
           `Current task: ${this.agent.getCurrentTask() ?? "(none)"}`,
           `AVD: ${status.avdName}`,
@@ -1931,7 +1937,7 @@ export class TelegramGateway {
       this.log(`manual screenshot chat=${chatId} path=${screenshotPath}`);
       try {
         await this.bot.sendPhoto(chatId, screenshotPath, {
-          caption: "Current emulator screenshot.",
+          caption: "Current device screenshot.",
         });
         this.chat.appendExternalTurn(chatId, "assistant", "[shared current emulator screenshot]");
       } catch (error) {

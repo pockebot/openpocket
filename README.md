@@ -16,6 +16,7 @@ Status snapshot (February 2026):
 ### Implemented and usable now
 
 - Local Android emulator runtime driven by CLI + Telegram gateway + dashboard.
+- Configurable deployment target (`emulator`, `physical-phone`, `android-tv`, `cloud`) with adb transport.
 - Interactive setup (`openpocket onboard`) for consent, model/API key, Telegram, emulator boot, and human-auth mode.
 - Template-driven prompt system with runtime mode control (`full|minimal|none`) and workspace context budgets.
 - Bootstrap-driven chat onboarding (`BOOTSTRAP.md`, `PROFILE_ONBOARDING.json`) with persisted workspace onboarding state.
@@ -130,6 +131,11 @@ Or configure manually in `~/.openpocket/config.json`:
 
 ```json
 {
+  "target": {
+    "type": "emulator",
+    "adbEndpoint": "",
+    "cloudProvider": ""
+  },
   "emulator": {
     "avdName": "OpenPocket_AVD",
     "androidSdkRoot": "",
@@ -513,6 +519,8 @@ Command prefix by install mode:
 ./openpocket --help
 ./openpocket install-cli
 ./openpocket onboard
+./openpocket target show
+./openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
 ./openpocket config-show
 ./openpocket emulator start
 ./openpocket emulator status

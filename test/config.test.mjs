@@ -48,6 +48,9 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.equal(cfg.sessionStorage.mode, "unified");
     assert.equal(cfg.sessionStorage.markdownLog, true);
     assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
+    assert.equal(cfg.target.type, "emulator");
+    assert.equal(cfg.target.adbEndpoint, "");
+    assert.equal(cfg.target.cloudProvider, "");
     assert.equal(cfg.agent.returnHomeOnTaskEnd, true);
     assert.equal(cfg.agent.autoArtifactsEnabled, true);
     assert.equal(cfg.agent.systemPromptMode, "full");
@@ -92,6 +95,11 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
             dual_write_jsonl: true,
           },
           default_model: "gpt-5.2-codex",
+          deployment_target: {
+            target_type: "physical-phone",
+            adb_endpoint: "192.168.10.9",
+            cloud_provider: "mock-cloud",
+          },
           emulator: {
             avd_name: "TestAVD",
             data_partition_size_gb: 48,
@@ -156,6 +164,9 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     assert.equal(cfg.sessionStorage.mode, "unified");
     assert.equal(cfg.sessionStorage.markdownLog, true);
     assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
+    assert.equal(cfg.target.type, "physical-phone");
+    assert.equal(cfg.target.adbEndpoint, "192.168.10.9");
+    assert.equal(cfg.target.cloudProvider, "mock-cloud");
     assert.equal(cfg.agent.returnHomeOnTaskEnd, false);
     assert.equal(cfg.agent.autoArtifactsEnabled, false);
     assert.equal(cfg.agent.systemPromptMode, "minimal");
@@ -184,6 +195,9 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     assert.equal(saved.sessionStorage.mode, "unified");
     assert.equal(saved.sessionStorage.markdownLog, true);
     assert.match(String(saved.sessionStorage.storePath ?? ""), /workspace[\\/]+sessions[\\/]sessions\.json$/);
+    assert.equal(saved.target.type, "physical-phone");
+    assert.equal(saved.target.adbEndpoint, "192.168.10.9");
+    assert.equal(saved.target.cloudProvider, "mock-cloud");
     assert.equal(saved.session_storage, undefined);
     assert.equal(saved.agent.returnHomeOnTaskEnd, false);
     assert.equal(saved.agent.autoArtifactsEnabled, false);

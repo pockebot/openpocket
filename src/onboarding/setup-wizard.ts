@@ -12,6 +12,11 @@ import { saveConfig } from "../config/index.js";
 import { readCodexCliCredential } from "../config/codex-cli.js";
 import { ensureDir, nowIso } from "../utils/paths.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
+import {
+  deviceTargetLabel,
+  isEmulatorTarget,
+  normalizeDeviceTargetType,
+} from "../device/target-types.js";
 
 const require = createRequire(import.meta.url);
 const pkgJson = require("../../package.json") as { version: string; license: string };
@@ -38,6 +43,11 @@ const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 interface SetupState {
   updatedAt: string;
   consentAcceptedAt?: string;
+  targetType?: string;
+  targetConfiguredAt?: string;
+  targetAdbEndpoint?: string;
+  targetCloudProvider?: string;
+  targetConnectionMode?: "usb" | "wifi";
   modelProfile?: string;
   modelProvider?: string;
   modelConfiguredAt?: string;
@@ -772,9 +782,11 @@ function makeConsolePrompter(): SetupPrompter {
           "",
           "Steps:",
           "  1) Consent",
-          "  2) Model selection",
-          "  3) API key setup",
-          "  4) Emulator + Play Store check",
+          "  2) Deployment target",
+          "  3) Model selection",
+          "  4) API key setup",
+          "  5) Telegram setup",
+          "  6) Device onboarding checks",
         ].join("\n"),
       );
     },
@@ -879,6 +891,102 @@ async function runConsentStep(prompter: SetupPrompter, state: SetupState): Promi
     throw new Error("User consent not accepted. Setup aborted.");
   }
   state.consentAcceptedAt = nowIso();
+}
+
+function normalizeAdbEndpoint(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.includes(":")) {
+    return trimmed;
+  }
+  return `${trimmed}:5555`;
+}
+
+async function runDeploymentTargetStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  state: SetupState,
+): Promise<void> {
+  const currentType = normalizeDeviceTargetType(config.target.type);
+  const targetType = await prompter.select(
+    "Choose deployment target for Agent Phone",
+    [
+      { value: "emulator", label: "Emulator (local Android AVD)" },
+      { value: "physical-phone", label: "Physical Phone (ADB USB/Wi-Fi)" },
+      { value: "android-tv", label: "Android TV (ADB USB/Wi-Fi)" },
+      { value: "cloud", label: "Cloud (provider-managed device)" },
+    ],
+    currentType,
+  );
+
+  config.target.type = targetType;
+  state.targetType = targetType;
+  state.targetConfiguredAt = nowIso();
+
+  if (isEmulatorTarget(targetType)) {
+    config.target.adbEndpoint = "";
+  } else if (targetType === "physical-phone" || targetType === "android-tv") {
+    const connectionMode = await prompter.select(
+      "How will this device connect to your local runtime?",
+      [
+        { value: "usb", label: "USB (direct cable, recommended first)" },
+        { value: "wifi", label: "Wi-Fi (wireless debugging endpoint)" },
+      ],
+      config.target.adbEndpoint.trim() ? "wifi" : "usb",
+    );
+    state.targetConnectionMode = connectionMode;
+    if (connectionMode === "wifi") {
+      const endpoint = await prompter.text(
+        "Wireless debugging endpoint (IP or host, optional :port)",
+        config.target.adbEndpoint.trim(),
+        (inputText) => {
+          if (!inputText.trim()) {
+            return "Endpoint cannot be empty for Wi-Fi mode.";
+          }
+          return null;
+        },
+      );
+      config.target.adbEndpoint = normalizeAdbEndpoint(endpoint);
+    } else {
+      config.target.adbEndpoint = "";
+    }
+  } else {
+    const cloudProvider = await prompter.text(
+      "Cloud provider name (for tracking purpose)",
+      config.target.cloudProvider.trim(),
+      () => null,
+    );
+    config.target.cloudProvider = cloudProvider.trim();
+    const endpointRaw = await prompter.text(
+      "ADB endpoint for cloud device (optional, leave empty if not using adb yet)",
+      config.target.adbEndpoint.trim(),
+      () => null,
+    );
+    config.target.adbEndpoint = normalizeAdbEndpoint(endpointRaw);
+  }
+
+  const preferredDeviceId = await prompter.text(
+    "Preferred adb device ID (optional, leave empty for auto-select)",
+    config.agent.deviceId ?? "",
+    () => null,
+  );
+  config.agent.deviceId = preferredDeviceId.trim() ? preferredDeviceId.trim() : null;
+
+  state.targetAdbEndpoint = config.target.adbEndpoint;
+  state.targetCloudProvider = config.target.cloudProvider;
+  saveConfig(config);
+
+  await prompter.note(
+    "Deployment Target",
+    [
+      `Target type: ${config.target.type} (${deviceTargetLabel(config.target.type)})`,
+      `Preferred adb device: ${config.agent.deviceId || "(auto)"}`,
+      `ADB endpoint: ${config.target.adbEndpoint || "(none)"}`,
+      `Cloud provider: ${config.target.cloudProvider || "(none)"}`,
+    ].join("\n"),
+  );
 }
 
 async function runModelSelectionStep(
@@ -1109,6 +1217,17 @@ async function runVmStep(
   state: SetupState,
   emulator: SetupEmulator,
 ): Promise<void> {
+  if (!isEmulatorTarget(config.target.type)) {
+    await prompter.note(
+      "Device Onboarding Check",
+      [
+        `Target is ${config.target.type}; skipping emulator Play Store onboarding.`,
+        "Connect your target device and verify `adb devices` shows it as online before `openpocket gateway start`.",
+      ].join("\n"),
+    );
+    return;
+  }
+
   const choice = await prompter.select(
     "Do you want to launch the Android emulator now and complete Gmail sign-in for Play Store?",
     [
@@ -1506,6 +1625,7 @@ export async function runSetupWizard(
     }
     await prompter.intro("OpenPocket onboarding");
     await runConsentStep(prompter, state);
+    await runDeploymentTargetStep(config, prompter, state);
     const selectedModel = await runModelSelectionStep(config, prompter, state);
     await runApiKeyStep(config, prompter, state, selectedModel, options);
     await runTelegramStep(config, prompter, state);
@@ -1520,6 +1640,7 @@ export async function runSetupWizard(
         "  1) openpocket gateway start",
         "  2) Send a natural-language task directly in Telegram",
         "  3) If task is blocked by real-device auth, approve via Telegram link on your phone",
+        "Tip: switch deployment target later with `openpocket target set ...` (when gateway is stopped).",
       ].join("\n"),
     );
   } finally {
