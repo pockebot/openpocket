@@ -163,6 +163,14 @@ export const requestUserDecisionSchema = Type.Object({
   reason: ReasonParam,
 });
 
+export const requestUserInputSchema = Type.Object({
+  thought: ThoughtParam,
+  question: Type.String({ description: "Question shown to the user." }),
+  placeholder: Type.Optional(Type.String({ description: "Optional hint showing expected input format." })),
+  timeoutSec: Type.Optional(Type.Number({ description: "How long to wait for user input (default 300)." })),
+  reason: ReasonParam,
+});
+
 export const waitSchema = Type.Object({
   thought: ThoughtParam,
   durationMs: Type.Optional(Type.Number({ description: "Duration to wait in milliseconds (default 1000)." })),
@@ -196,6 +204,7 @@ export type MemorySearchParams = Static<typeof memorySearchSchema>;
 export type MemoryGetParams = Static<typeof memoryGetSchema>;
 export type RequestHumanAuthParams = Static<typeof requestHumanAuthSchema>;
 export type RequestUserDecisionParams = Static<typeof requestUserDecisionSchema>;
+export type RequestUserInputParams = Static<typeof requestUserInputSchema>;
 export type WaitParams = Static<typeof waitSchema>;
 export type FinishParams = Static<typeof finishSchema>;
 
@@ -228,6 +237,7 @@ export const TOOL_METAS: ToolMeta[] = [
   { name: "memory_get", description: "Read a safe snippet from MEMORY.md or memory/*.md with line range.", parameters: memoryGetSchema },
   { name: "request_human_auth", description: "Request human authorization for actions requiring real-device capabilities (camera, SMS/2FA, biometric, payment, OAuth, etc.).", parameters: requestHumanAuthSchema },
   { name: "request_user_decision", description: "Ask user to choose one option during task execution (mixed-initiative flow).", parameters: requestUserDecisionSchema },
+  { name: "request_user_input", description: "Ask user for a short non-sensitive text input needed to continue the task.", parameters: requestUserInputSchema },
   { name: "wait", description: "Wait / do nothing for a short period, e.g. while content is loading.", parameters: waitSchema },
   { name: "finish", description: "Signal that the user task is complete.", parameters: finishSchema },
 ];

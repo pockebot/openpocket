@@ -1261,6 +1261,50 @@ test("AgentRuntime redacts custom user decision input from logs/history", async 
   assert.doesNotMatch(sessionText, /user decision raw input:/i);
 });
 
+test("AgentRuntime redacts raw request_user_input text from session log", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need a car plate from user",
+        action: {
+          type: "request_user_input",
+          question: "Please provide your vehicle plate number.",
+          placeholder: "ABC-1234",
+          timeoutSec: 90,
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after user input" } },
+    ],
+  });
+
+  runtime.adb = {
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+
+  const secretInput = "CA-7XZ019";
+  const result = await runtime.runTask(
+    "user input redaction test",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    async () => ({
+      text: secretInput,
+      resolvedAt: new Date().toISOString(),
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /user_input input_len=\d+/);
+  assert.doesNotMatch(sessionText, /CA-7XZ019/);
+});
+
 test("AgentRuntime applies delegated location artifact after human auth approval", async () => {
   const adbActions = [];
   const emulatorCommands = [];

@@ -173,6 +173,23 @@ export interface UserDecisionResponse {
   resolvedAt: string;
 }
 
+export interface UserInputRequest {
+  sessionId: string;
+  sessionPath: string;
+  task: string;
+  step: number;
+  question: string;
+  placeholder?: string;
+  timeoutSec: number;
+  currentApp: string;
+  screenshotPath: string | null;
+}
+
+export interface UserInputResponse {
+  text: string;
+  resolvedAt: string;
+}
+
 export interface ModelProfile {
   baseUrl: string;
   model: string;
@@ -316,6 +333,13 @@ export type AgentAction =
       type: "request_user_decision";
       question: string;
       options: string[];
+      timeoutSec?: number;
+      reason?: string;
+    }
+  | {
+      type: "request_user_input";
+      question: string;
+      placeholder?: string;
       timeoutSec?: number;
       reason?: string;
     }

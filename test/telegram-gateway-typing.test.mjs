@@ -884,6 +884,60 @@ test("TelegramGateway resolves pending 2FA request from plain numeric text", asy
   });
 });
 
+test("TelegramGateway resolves pending user-input request from plain text", async () => {
+  await withTempHome("openpocket-telegram-user-input-inline-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.agent.captureManualScreenshot = async () => "";
+    gateway.chat.narrateEscalation = async () => "Please share the requested value.";
+
+    let decideCalled = false;
+    gateway.chat.decide = async () => {
+      decideCalled = true;
+      return {
+        mode: "chat",
+        task: "",
+        reply: "fallback",
+        confidence: 1,
+        reason: "fallback",
+      };
+    };
+
+    const pendingPromise = gateway.requestUserInputFromChat(9002, {
+      sessionId: "sess-1",
+      sessionPath: "/tmp/session-1.md",
+      task: "PayByPhone parking flow",
+      step: 3,
+      question: "Please provide your vehicle plate number.",
+      placeholder: "ABC-1234",
+      timeoutSec: 90,
+      currentApp: "com.paybyphone",
+      screenshotPath: null,
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 9002 },
+      text: "CA-7XZ019",
+    });
+
+    const resolved = await pendingPromise;
+    assert.equal(resolved.text, "CA-7XZ019");
+    assert.equal(decideCalled, false);
+    assert.equal(sent.length >= 2, true);
+    assert.equal(sent.some((item) => /Got it/i.test(item.text)), true);
+  });
+});
+
 test("TelegramGateway /start triggers onboarding reply when onboarding is pending", async () => {
   await withTempHome("openpocket-telegram-start-onboarding-", async () => {
     const cfg = loadConfig();
