@@ -16,8 +16,31 @@ function createRuntimeWithoutApiKey() {
 
   const cfg = loadConfig();
   cfg.agent.returnHomeOnTaskEnd = false;
-  cfg.models[cfg.defaultModel].apiKey = "";
-  cfg.models[cfg.defaultModel].apiKeyEnv = "MISSING_OPENAI_KEY";
+  const noKeyModel = cfg.models["claude-sonnet-4.6"] ? "claude-sonnet-4.6" : cfg.defaultModel;
+  cfg.defaultModel = noKeyModel;
+  cfg.models[noKeyModel].apiKey = "";
+  cfg.models[noKeyModel].apiKeyEnv = "MISSING_MODEL_KEY";
+
+  const runtime = new AgentRuntime(cfg);
+
+  if (prevHome === undefined) {
+    delete process.env.OPENPOCKET_HOME;
+  } else {
+    process.env.OPENPOCKET_HOME = prevHome;
+  }
+
+  return runtime;
+}
+
+function createRuntimeWithApiKey() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-runtime-seams-key-"));
+  const prevHome = process.env.OPENPOCKET_HOME;
+  process.env.OPENPOCKET_HOME = home;
+
+  const cfg = loadConfig();
+  cfg.agent.returnHomeOnTaskEnd = false;
+  cfg.models[cfg.defaultModel].apiKey = "test-key";
+  cfg.models[cfg.defaultModel].apiKeyEnv = "OPENAI_API_KEY";
 
   const runtime = new AgentRuntime(cfg);
 
@@ -50,6 +73,9 @@ function createAttemptDeps(runtime) {
     isPermissionDialogApp: (currentApp) => runtime.isPermissionDialogApp(currentApp),
     autoApprovePermissionDialog: (currentApp) => runtime.autoApprovePermissionDialog(currentApp),
     saveModelInputArtifacts: (params) => runtime.saveModelInputArtifacts(params),
+    piSessionBridgeFactory: async () => {
+      throw new Error("piSessionBridgeFactory not configured");
+    },
   };
 }
 
@@ -150,4 +176,112 @@ test("runTask entry and attempt layer keep result shape aligned", async () => {
   assert.equal(typeof attemptResult.result.sessionPath, "string");
   assert.equal(entryResult.skillPath, attemptResult.result.skillPath);
   assert.equal(entryResult.scriptPath, attemptResult.result.scriptPath);
+});
+
+test("runRuntimeAttempt uses pi_session_bridge backend when configured", async () => {
+  const runtime = createRuntimeWithApiKey();
+  runtime.config.agent.runtimeBackend = "pi_session_bridge";
+
+  let agentFactoryCalls = 0;
+  runtime.agentFactory = () => {
+    agentFactoryCalls += 1;
+    throw new Error("legacy agentFactory should not be used for pi_session_bridge");
+  };
+
+  let bridgeFactoryCalls = 0;
+  let bridgeDisposed = 0;
+  const listeners = new Set();
+  const deps = createAttemptDeps(runtime);
+  deps.piSessionBridgeFactory = async (options) => {
+    bridgeFactoryCalls += 1;
+    return {
+      sessionId: "pi-bridge-session",
+      sessionFile: "/tmp/pi-bridge-session.jsonl",
+      prompt: async (_text) => {
+        for (const listener of listeners) {
+          listener({
+            type: "turn_end",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "finish(message=\"pi-bridge-ok\")" }],
+              stopReason: "stop",
+              timestamp: Date.now(),
+            },
+            toolResults: [],
+          });
+        }
+      },
+      abort: async () => {},
+      dispose: () => {
+        bridgeDisposed += 1;
+      },
+      subscribeRaw: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      subscribeNormalized: (_listener) => () => {},
+    };
+  };
+
+  const outcome = await runRuntimeAttempt(deps, {
+    task: "pi-session-bridge seam test",
+    availableToolNames: ["finish"],
+  });
+
+  assert.equal(outcome.result.ok, true);
+  assert.match(outcome.result.message, /pi-bridge-ok/);
+  assert.equal(bridgeFactoryCalls, 1);
+  assert.equal(bridgeDisposed, 1);
+  assert.equal(agentFactoryCalls, 0);
+});
+
+test("runRuntimeAttempt falls back to legacy backend when phone-only tools are requested", async () => {
+  const runtime = createRuntimeWithApiKey();
+  runtime.config.agent.runtimeBackend = "pi_session_bridge";
+
+  let bridgeFactoryCalls = 0;
+  const deps = createAttemptDeps(runtime);
+  deps.piSessionBridgeFactory = async () => {
+    bridgeFactoryCalls += 1;
+    throw new Error("bridge backend should not be used for phone-only tools");
+  };
+
+  let legacyFactoryCalls = 0;
+  runtime.agentFactory = () => {
+    legacyFactoryCalls += 1;
+    const listeners = new Set();
+    return {
+      followUp() {},
+      subscribe(listener) {
+        listeners.add(listener);
+      },
+      async prompt() {
+        for (const listener of listeners) {
+          listener({
+            type: "turn_end",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "finish(message=\"legacy-fallback-ok\")" }],
+              stopReason: "stop",
+              timestamp: Date.now(),
+            },
+            toolResults: [],
+          });
+        }
+      },
+      async waitForIdle() {},
+      abort() {},
+    };
+  };
+  deps.agentFactory = runtime.agentFactory;
+
+  const outcome = await runRuntimeAttempt(deps, {
+    task: "legacy fallback seam test",
+    availableToolNames: ["tap"],
+  });
+
+  assert.equal(outcome.result.ok, true);
+  assert.match(outcome.result.message, /legacy-fallback-ok/);
+  assert.equal(legacyFactoryCalls, 1);
+  assert.equal(bridgeFactoryCalls, 0);
 });
