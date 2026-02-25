@@ -998,6 +998,66 @@ export class ChatAssistant {
       || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用|查询|查下|看看|帮我)/.test(t);
   }
 
+  private hasConcreteExecutableTarget(input: string): boolean {
+    const normalized = this.normalizeOneLine(input);
+    const lower = normalized.toLowerCase();
+    return /(?:^|[\s"'`])(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,12}(?:$|[\s"'`])/i.test(normalized)
+      || /\bcom\.[a-z0-9_.]+\b/i.test(lower)
+      || /`[^`]+`/.test(normalized)
+      || /\b(?:adb|npm|pnpm|yarn|gradle|python3?|node|shell|bash|keycode_)\b/i.test(lower);
+  }
+
+  private hasExplicitExecutionOutputConstraint(input: string): boolean {
+    const normalized = this.normalizeOneLine(input);
+    return /(内容为|内容是|写入|保存到|输出|打印|生成.*文件|创建.*文件|并开始实现|with content|write.*file|print|output|install.*emulator|build.*apk)/i
+      .test(normalized);
+  }
+
+  private looksLikeCapabilityQuestionOnly(input: string): boolean {
+    const normalized = this.normalizeOneLine(input);
+    if (!normalized) {
+      return false;
+    }
+    const lower = normalized.toLowerCase();
+    const startsWithCapabilityLead = /^(?:你|你能|你可以|你会|你可不可以|你能不能|你会不会|can you|could you|would you|are you able to|do you know how to)\s*/i
+      .test(normalized);
+    if (!startsWithCapabilityLead) {
+      return false;
+    }
+    const hasQuestionTone = /[?？]$/.test(normalized)
+      || /(可以吗|能吗|会吗|行吗|可不可以|能不能|会不会|can you|could you|would you|possible)/i.test(lower);
+    if (!hasQuestionTone) {
+      return false;
+    }
+    const hasImmediateCue = /(帮我|请你|请|马上|立即|直接|for me|go ahead|please)/i.test(normalized);
+    return !hasImmediateCue
+      && !this.hasConcreteExecutableTarget(normalized)
+      && !this.hasExplicitExecutionOutputConstraint(normalized);
+  }
+
+  private looksLikeExecutableIntent(input: string): boolean {
+    const normalized = this.normalizeOneLine(input);
+    if (!normalized) {
+      return false;
+    }
+    const lower = normalized.toLowerCase();
+    const hasExecutionVerb = /\b(create|write|edit|modify|build|compile|run|execute|install|open|launch|start|fix|implement|generate|code|script|deploy)\b/i
+      .test(lower)
+      || /(创建|新建|写|修改|编辑|实现|生成|构建|编译|运行|执行|安装|打开|启动|修复|开发|部署|做一个|做个|帮我做)/.test(normalized);
+    if (!hasExecutionVerb) {
+      return false;
+    }
+    const hasImperativeCue = /^(?:please|pls|open|launch|start|run|create|write|build|install|execute|帮我|请你|请|打开|启动|运行|创建|写|安装|执行|去|前往|给我)/i
+      .test(normalized)
+      || /(帮我|请你|请|马上|立即|直接|for me|go ahead)/i.test(normalized);
+    const hasConcreteTarget = this.hasConcreteExecutableTarget(normalized);
+    const hasOutputConstraint = this.hasExplicitExecutionOutputConstraint(normalized);
+    if (this.looksLikeCapabilityQuestionOnly(normalized) && !hasImperativeCue && !hasConcreteTarget && !hasOutputConstraint) {
+      return false;
+    }
+    return hasImperativeCue || hasConcreteTarget || hasOutputConstraint;
+  }
+
   private personaPresetFromAnswer(answer: string, locale: OnboardingLocale): string {
     const normalized = this.normalizeOneLine(answer).toLowerCase();
     for (const preset of this.localeTemplate(locale).personaPresets) {
@@ -2044,6 +2104,7 @@ export class ChatAssistant {
       "1) mode=task when user wants the assistant to operate phone/apps.",
       "1.1) Treat operation as happening on phone by default.",
       "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
+      "1.3) Question-like phrasing (e.g., 'can you ...? / 可以...吗？') must still be mode=task when it asks for executable outputs (create/write/build/run/install/open).",
       "2) requiresExternalObservation=true when answering requires checking real-world/device/runtime/tool state.",
       "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and general reasoning alone.",
       "4) mode=chat only when canAnswerDirectly=true and no phone/tool execution is needed.",
@@ -2175,6 +2236,25 @@ export class ChatAssistant {
     }
 
     const reasonPrefix = decided.reason ? `${decided.reason};` : "";
+    if (this.looksLikeExecutableIntent(normalizedInput)) {
+      return {
+        mode: "task",
+        task: normalizedInput,
+        reply: "",
+        confidence: Math.max(0.85, decided.confidence),
+        reason: `${reasonPrefix}executable_intent_task_bias`,
+      };
+    }
+    if (this.looksLikeCapabilityQuestionOnly(normalizedInput)) {
+      return {
+        mode: "chat",
+        task: "",
+        reply: decided.reply || "",
+        confidence: Math.max(0.75, decided.confidence),
+        reason: `${reasonPrefix}capability_only_chat`,
+      };
+    }
+
     const requiresExternalObservation =
       decided.requiresExternalObservation === true || decided.canAnswerDirectly === false;
     if (requiresExternalObservation) {
