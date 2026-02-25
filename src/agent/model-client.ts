@@ -50,7 +50,7 @@ function isChatGptBackendUrl(baseUrlLower: string): boolean {
 }
 
 function isOpenAiBaseUrl(baseUrlLower: string): boolean {
-  return baseUrlLower.includes("openai.com") || baseUrlLower.includes("chatgpt.com");
+  return baseUrlLower.includes("openai.com");
 }
 
 function isCodexModelId(modelId: string): boolean {
