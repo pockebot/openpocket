@@ -9,6 +9,7 @@ dist/
 frontend/.vitepress/dist/
 frontend/.vitepress/cache/
 frontend/.vitepress/.temp/
+.claude/*
 
 # npm auth
 .npmrc
