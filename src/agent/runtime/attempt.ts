@@ -458,6 +458,8 @@ export async function runRuntimeAttempt(
             const content: Array<PiTextContent | PiImageContent> = [
               { type: "text", text: observationText },
             ];
+
+            // Always send all recent frames so the model has full visual context
             for (const recent of observation.recentSnapshots) {
               if (recent.somScreenshotBase64) {
                 content.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });

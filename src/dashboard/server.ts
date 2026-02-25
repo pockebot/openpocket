@@ -73,6 +73,9 @@ interface DashboardTraceRun {
   actions: DashboardTraceAction[];
 }
 
+const TRACE_PARSE_MAX_BYTES = 10 * 1024 * 1024;
+const TRACE_PARSE_TAIL_BYTES = 2 * 1024 * 1024;
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -379,21 +382,63 @@ export class DashboardServer {
     };
   }
 
-  private parseSessionTraceFile(filePath: string): DashboardTraceRun[] {
+  private readTraceFileContent(filePath: string): { raw: string; truncated: boolean } | null {
     if (!fs.existsSync(filePath)) {
-      return [];
+      return null;
     }
+    let stat: fs.Stats;
     try {
-      const stat = fs.statSync(filePath);
-      if (stat.size > 10 * 1024 * 1024) {
-        return [];
-      }
+      stat = fs.statSync(filePath);
     } catch {
-      return [];
+      return null;
     }
-    const raw = fs.readFileSync(filePath, "utf-8");
+    if (stat.size <= 0) {
+      return { raw: "", truncated: false };
+    }
+
+    if (stat.size <= TRACE_PARSE_MAX_BYTES) {
+      try {
+        return { raw: fs.readFileSync(filePath, "utf-8"), truncated: false };
+      } catch {
+        return null;
+      }
+    }
+
+    const tailBytes = Math.max(1, Math.min(TRACE_PARSE_TAIL_BYTES, stat.size));
+    const offset = Math.max(0, stat.size - tailBytes);
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(filePath, "r");
+      const buffer = Buffer.allocUnsafe(tailBytes);
+      const bytesRead = fs.readSync(fd, buffer, 0, tailBytes, offset);
+      let raw = buffer.subarray(0, bytesRead).toString("utf-8");
+      // Drop the potentially partial first line when reading a tail chunk.
+      if (offset > 0) {
+        const firstLineBreak = raw.indexOf("\n");
+        raw = firstLineBreak >= 0 ? raw.slice(firstLineBreak + 1) : "";
+      }
+      return { raw, truncated: true };
+    } catch {
+      return null;
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // ignore close failures
+        }
+      }
+    }
+  }
+
+  private parseSessionTraceFile(filePath: string): { runs: DashboardTraceRun[]; truncated: boolean } {
+    const content = this.readTraceFileContent(filePath);
+    if (!content) {
+      return { runs: [], truncated: false };
+    }
+    const raw = content.raw;
     if (!raw.trim()) {
-      return [];
+      return { runs: [], truncated: content.truncated };
     }
 
     type RunAccumulator = {
@@ -629,28 +674,26 @@ export class DashboardServer {
         actions,
       });
     }
-    return results;
+    return { runs: results, truncated: content.truncated };
   }
 
-  private readTraceRuns(limitRuns = 12): { runs: DashboardTraceRun[]; skippedFiles: number } {
+  private readTraceRuns(limitRuns = 12): { runs: DashboardTraceRun[]; skippedFiles: number; truncatedFiles: number } {
     const limit = Math.max(1, Math.min(100, Math.round(limitRuns)));
     const sessionsDir = path.join(this.config.workspaceDir, "sessions");
     if (!fs.existsSync(sessionsDir)) {
-      return { runs: [], skippedFiles: 0 };
+      return { runs: [], skippedFiles: 0, truncatedFiles: 0 };
     }
     let skippedFiles = 0;
+    let truncatedFiles = 0;
     const candidates = fs.readdirSync(sessionsDir)
       .filter((name) => name.endsWith(".jsonl"))
       .map((name) => path.join(sessionsDir, name))
       .map((filePath) => {
         try {
           const stat = fs.statSync(filePath);
-          if (stat.size > 10 * 1024 * 1024) {
-            skippedFiles += 1;
-            return null;
-          }
           return { filePath, mtimeMs: stat.mtimeMs };
         } catch {
+          skippedFiles += 1;
           return null;
         }
       })
@@ -659,8 +702,11 @@ export class DashboardServer {
 
     const allRuns: DashboardTraceRun[] = [];
     for (const candidate of candidates) {
-      const fileRuns = this.parseSessionTraceFile(candidate.filePath);
-      allRuns.push(...fileRuns);
+      const parsed = this.parseSessionTraceFile(candidate.filePath);
+      if (parsed.truncated) {
+        truncatedFiles += 1;
+      }
+      allRuns.push(...parsed.runs);
       if (allRuns.length >= limit) {
         break;
       }
@@ -673,7 +719,7 @@ export class DashboardServer {
       }
       return 0;
     });
-    return { runs: allRuns.slice(0, limit), skippedFiles };
+    return { runs: allRuns.slice(0, limit), skippedFiles, truncatedFiles };
   }
 
   private async runEmulatorLifecycleExclusive<T>(action: string, fn: () => Promise<T>): Promise<T> {
@@ -721,6 +767,7 @@ export class DashboardServer {
         return this.emulator.status();
       } catch (error) {
         return {
+          targetType: this.config.target.type,
           avdName: this.config.emulator.avdName,
           devices: [],
           bootedDevices: [],
@@ -733,6 +780,7 @@ export class DashboardServer {
       mode: this.mode,
       gateway: this.gatewayStatus(),
       emulator: {
+        targetType: emulator.targetType,
         avdName: emulator.avdName,
         devices: emulator.devices,
         bootedDevices: emulator.bootedDevices,
@@ -2203,6 +2251,7 @@ export class DashboardServer {
       credentialStatus: {},
       traceRuns: [],
       traceSkippedFiles: 0,
+      traceTruncatedFiles: 0,
       tracePage: 0,
       tracePageSize: 5,
       traceStatusFilter: "all",
@@ -2257,7 +2306,8 @@ export class DashboardServer {
       gatewayBadge.textContent = "Gateway: " + (gatewayRunning ? "Running" : "Stopped/Unknown");
       gatewayBadge.classList.toggle("ok", gatewayRunning);
 
-      emulatorBadge.textContent = "Emulator: " + (runtime?.emulator?.statusText || "Unknown");
+      const targetLabel = runtime?.emulator?.targetType || "emulator";
+      emulatorBadge.textContent = "Device (" + targetLabel + "): " + (runtime?.emulator?.statusText || "Unknown");
       emulatorBadge.classList.toggle("ok", emulatorRunning);
     }
 
@@ -2269,6 +2319,7 @@ export class DashboardServer {
         "<div>Dashboard: <code>" + (runtime.dashboard?.address || location.origin) + "</code></div>";
 
       $("#emulator-kv").innerHTML =
+        "<div>Target: <code>" + (runtime.emulator?.targetType || "emulator") + "</code></div>" +
         "<div>AVD: <code>" + (runtime.emulator?.avdName || "unknown") + "</code></div>" +
         "<div>Devices: " + ((runtime.emulator?.devices || []).join(", ") || "(none)") + "</div>" +
         "<div>Booted: " + ((runtime.emulator?.bootedDevices || []).join(", ") || "(none)") + "</div>";
@@ -2979,9 +3030,23 @@ export class DashboardServer {
         ? total + " run" + (total === 1 ? "" : "s")
         : total + " of " + runs.length + " runs";
       const skipped = state.traceSkippedFiles || 0;
-      $("#timeline-meta").textContent = metaLabel + (skipped > 0
-        ? " (" + skipped + " session file" + (skipped === 1 ? "" : "s") + " skipped — over 10MB)"
-        : "");
+      const truncated = state.traceTruncatedFiles || 0;
+      const notes = [];
+      if (truncated > 0) {
+        notes.push(
+          truncated + " large session file" + (truncated === 1 ? "" : "s") +
+          " parsed from tail",
+        );
+      }
+      if (skipped > 0) {
+        notes.push(
+          skipped + " session file" + (skipped === 1 ? "" : "s") +
+          " skipped",
+        );
+      }
+      $("#timeline-meta").textContent = notes.length > 0
+        ? metaLabel + " (" + notes.join("; ") + ")"
+        : metaLabel;
     }
 
     async function loadTraces(options = {}) {
@@ -2989,8 +3054,10 @@ export class DashboardServer {
       const payload = await api("/api/traces?limit=50");
       const runs = Array.isArray(payload.runs) ? payload.runs : [];
       const skipped = Number(payload.skippedFiles || 0);
+      const truncated = Number(payload.truncatedFiles || 0);
       state.traceRuns = runs;
       state.traceSkippedFiles = skipped;
+      state.traceTruncatedFiles = truncated;
       renderTraces(runs);
       if (!silent) {
         setStatus("Action timeline refreshed.", "ok");
@@ -3338,16 +3405,31 @@ export class DashboardServer {
       if ($("#timeline-auto").checked) {
         $("#timeline-auto").dispatchEvent(new Event("change"));
       }
-      try {
-        await loadRuntime();
-        await loadConfigAndOnboarding();
-        await loadControlSettings();
-        await loadScopedFiles();
-        await loadLogs();
-        await loadTraces();
+
+      const startupTasks = [
+        { label: "runtime", run: () => loadRuntime() },
+        { label: "onboarding", run: () => loadConfigAndOnboarding() },
+        { label: "control", run: () => loadControlSettings() },
+        { label: "permissions", run: () => loadScopedFiles() },
+        { label: "logs", run: () => loadLogs() },
+        { label: "timeline", run: () => loadTraces() },
+      ];
+      const failures = [];
+
+      for (const task of startupTasks) {
+        try {
+          await task.run();
+        } catch (error) {
+          failures.push(task.label + ": " + (error?.message || "failed"));
+        }
+      }
+
+      if (failures.length === 0) {
         setStatus("Dashboard ready.", "ok");
-      } catch (error) {
-        setStatus(error.message || "Initialization failed", "error");
+      } else {
+        const preview = failures.slice(0, 2).join("; ");
+        const suffix = failures.length > 2 ? "; ..." : "";
+        setStatus("Dashboard partial init (" + failures.length + "): " + preview + suffix, "error");
       }
       state.runtimeTimer = setInterval(() => {
         loadRuntime().catch(() => {});
@@ -3394,6 +3476,7 @@ export class DashboardServer {
         sendJson(res, 200, {
           runs: traceResult.runs,
           skippedFiles: traceResult.skippedFiles,
+          truncatedFiles: traceResult.truncatedFiles,
           fetchedAt: nowIso(),
         });
         return;

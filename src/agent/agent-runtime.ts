@@ -1361,7 +1361,8 @@ export class AgentRuntime {
 
   private observeSnapshotState(snapshot: {
     currentApp: string;
-    uiElements: Array<{
+    screenshotBase64?: string;
+    uiElements?: Array<{
       text: string;
       contentDesc: string;
       resourceId: string;
@@ -1370,7 +1371,8 @@ export class AgentRuntime {
       scaledBounds: { left: number; top: number; right: number; bottom: number };
     }>;
   }): SnapshotObservation {
-    const tuples = snapshot.uiElements
+    const uiElements = Array.isArray(snapshot.uiElements) ? snapshot.uiElements : [];
+    const tuples = uiElements
       .map((item) => {
         const label = (item.text || item.contentDesc || item.resourceId || item.className || "")
           .replace(/\s+/g, " ")
@@ -1393,15 +1395,31 @@ export class AgentRuntime {
       .filter(Boolean)
       .slice(0, 6);
 
-    const hashInput = JSON.stringify({
-      app: snapshot.currentApp,
-      nodes: tuples.slice(0, 80),
-    });
-    const uiHash = createHash("sha1").update(hashInput).digest("hex").slice(0, 12);
+    const uiHash = (() => {
+      if (typeof snapshot.screenshotBase64 === "string" && snapshot.screenshotBase64.trim()) {
+        return createHash("sha1")
+          .update(Buffer.from(snapshot.screenshotBase64, "base64"))
+          .digest("hex")
+          .slice(0, 12);
+      }
+      const hashInput = JSON.stringify({
+        app: snapshot.currentApp,
+        nodes: tuples.slice(0, 80),
+      });
+      return createHash("sha1").update(hashInput).digest("hex").slice(0, 12);
+    })();
     return {
       app: snapshot.currentApp || "unknown",
       uiHash,
       labels,
+    };
+  }
+
+  private observeQuickSnapshotState(observation: { currentApp: string; screenshotHash: string }): SnapshotObservation {
+    return {
+      app: observation.currentApp || "unknown",
+      uiHash: observation.screenshotHash || "unknown",
+      labels: [],
     };
   }
 
@@ -1417,6 +1435,23 @@ export class AgentRuntime {
       `labels_after=${JSON.stringify(after.labels)}`,
       `note=${note}`,
     ].join(" ");
+  }
+
+  private computePostActionDelayMs(action: AgentAction, executionResult: string): number {
+    const baseDelayMs = Math.max(0, Math.round(this.config.agent.loopDelayMs || 0));
+    if (baseDelayMs <= 0 || action.type === "wait") {
+      return 0;
+    }
+
+    const stateChanged = /state_delta changed=true/i.test(executionResult);
+    if (stateChanged) {
+      return Math.min(baseDelayMs, 400);
+    }
+
+    if (action.type === "shell" || action.type === "keyevent") {
+      return Math.min(baseDelayMs, 500);
+    }
+    return baseDelayMs;
   }
 
   private pickPermissionDialogNode(
@@ -1491,7 +1526,7 @@ export class AgentRuntime {
     } catch {
       // Ignore status probe failure in tests/mocks.
     }
-    return this.config.agent.deviceId || "emulator-5554";
+    return this.config.agent.deviceId || "unknown-device";
   }
 
   private isPermissionDialogApp(currentApp: string): boolean {
@@ -1802,9 +1837,24 @@ export class AgentRuntime {
       const deltaTypes = new Set(["tap", "swipe", "type", "keyevent", "launch_app", "shell"]);
       if (deltaTypes.has(action.type)) {
         try {
-          const after = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, ctx.profile.model);
           const before = this.observeSnapshotState(snapshot);
-          const afterState = this.observeSnapshotState(after);
+          const adbWithQuickObservation = this.adb as AdbRuntime & {
+            captureQuickObservation?: (
+              preferred?: string | null,
+              modelName?: string,
+            ) => Promise<{ currentApp: string; screenshotHash: string }>;
+          };
+          let afterState: SnapshotObservation;
+          if (typeof adbWithQuickObservation.captureQuickObservation === "function") {
+            const quick = await adbWithQuickObservation.captureQuickObservation(
+              this.config.agent.deviceId,
+              ctx.profile.model,
+            );
+            afterState = this.observeQuickSnapshotState(quick);
+          } else {
+            const after = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, ctx.profile.model);
+            afterState = this.observeSnapshotState(after);
+          }
           stateDeltaLine = this.buildStateDeltaLine(before, afterState, action.type);
         } catch { /* best-effort */ }
       }
@@ -1883,7 +1933,7 @@ export class AgentRuntime {
             const modelInferenceMs = ctx.lastModelInferenceStartMs > 0 && stepStartedAtMs > ctx.lastModelInferenceStartMs
               ? Math.max(0, stepStartedAtMs - ctx.lastModelInferenceStartMs)
               : 0;
-            return {
+            const trace = {
               actionType: action.type,
               currentApp,
               startedAt: stepStartedAt,
@@ -1894,6 +1944,13 @@ export class AgentRuntime {
               modelInferenceMs,
               loopDelayMs: runtime.config.agent.loopDelayMs,
             };
+            // eslint-disable-next-line no-console
+            console.log(
+              `[OpenPocket][step ${step}] ts=${trace.endedAt} phase=end tool=${toolName} action=${trace.actionType}` +
+              ` app=${trace.currentApp} status=${trace.status} started_at=${trace.startedAt}` +
+              ` ended_at=${trace.endedAt} duration_ms=${trace.durationMs}`,
+            );
+            return trace;
           };
 
           if (!snapshot && action.type !== "finish") {
@@ -1911,8 +1968,8 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: msg }], details: {} };
           }
 
-            // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][step ${step}] tool=${toolName} action=${action.type}`);
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][step ${step}] ts=${stepStartedAt} phase=start tool=${toolName} action=${action.type}`);
 
           // ---- finish ----
           if (action.type === "finish") {
@@ -2013,11 +2070,19 @@ export class AgentRuntime {
 
             let decision: HumanAuthDecision;
             try {
+              const requestedTimeoutSec = Number(
+                action.timeoutSec ?? runtime.config.humanAuth.requestTimeoutSec,
+              );
+              const timeoutCapSec = Math.max(30, Math.round(runtime.config.humanAuth.requestTimeoutSec));
+              const timeoutSec = Math.min(
+                timeoutCapSec,
+                Math.max(30, Math.round(Number.isFinite(requestedTimeoutSec) ? requestedTimeoutSec : timeoutCapSec)),
+              );
               decision = await ctx.onHumanAuth({
                 sessionId: ctx.session.id, sessionPath: ctx.session.path, task: ctx.task, step,
                 capability: action.capability, instruction: action.instruction,
                 reason: action.reason ?? thought,
-                timeoutSec: Math.max(30, action.timeoutSec ?? runtime.config.humanAuth.requestTimeoutSec),
+                timeoutSec,
                 currentApp, screenshotPath: ctx.lastScreenshotPath,
               });
             } catch (error) {
@@ -2227,7 +2292,10 @@ export class AgentRuntime {
           }
 
           // Post-action delay (except wait which already slept)
-          await sleep(runtime.config.agent.loopDelayMs);
+          const postActionDelayMs = runtime.computePostActionDelayMs(action, executionResult);
+          if (postActionDelayMs > 0) {
+            await sleep(postActionDelayMs);
+          }
 
           return { content: [{ type: "text" as const, text: stepResult }], details: {} };
         },

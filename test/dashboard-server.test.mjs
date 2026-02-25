@@ -477,3 +477,98 @@ test("dashboard trace API splits multi-task reused session into separate runs", 
     }
   });
 });
+
+test("dashboard trace API parses recent runs from large session files via tail read", async () => {
+  await withTempHome("openpocket-dashboard-traces-large-tail-", async () => {
+    const cfg = loadConfig();
+    const sessionsDir = path.join(cfg.workspaceDir, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+
+    const sessionPath = path.join(sessionsDir, "session-large-tail.jsonl");
+    const oversizedPrefix = "x".repeat((11 * 1024 * 1024) + 1024);
+    fs.writeFileSync(sessionPath, `${oversizedPrefix}\n`, "utf-8");
+
+    const lines = [
+      {
+        type: "session",
+        id: "large-tail-demo",
+        version: 1,
+        cwd: cfg.workspaceDir,
+        timestamp: "2026-02-24T12:00:00.000Z",
+      },
+      {
+        type: "message",
+        timestamp: "2026-02-24T12:00:01.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Open Slack and check unread messages." }],
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-02-24T12:00:01.200Z",
+        message: {
+          role: "custom",
+          customType: "openpocket_session_meta",
+          content: [{ type: "text", text: "model_profile: gpt-5\nmodel_name: gpt-5" }],
+          details: { modelProfile: "gpt-5", modelName: "gpt-5" },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-02-24T12:00:03.000Z",
+        message: {
+          role: "custom",
+          customType: "openpocket_action_trace",
+          content: [{ type: "text", text: "step: 1" }],
+          details: {
+            stepNo: 1,
+            actionType: "launch_app",
+            currentApp: "com.Slack",
+            status: "ok",
+            startedAt: "2026-02-24T12:00:01.500Z",
+            endedAt: "2026-02-24T12:00:03.000Z",
+            durationMs: 1500,
+            reasoning: "Launch Slack first.",
+            result: "Slack opened.",
+          },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-02-24T12:00:05.000Z",
+        message: {
+          role: "assistant",
+          model: "session-task-outcome",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Slack unread messages checked." }],
+        },
+      },
+    ];
+    fs.appendFileSync(sessionPath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`, "utf-8");
+
+    const server = new DashboardServer({
+      config: cfg,
+      mode: "standalone",
+      host: "127.0.0.1",
+      port: 0,
+    });
+    await server.start();
+    const base = server.address;
+
+    try {
+      const payload = await requestJson(base, "/api/traces?limit=10");
+      assert.equal(Array.isArray(payload.runs), true);
+      assert.equal(Number(payload.truncatedFiles) >= 1, true);
+
+      const run = payload.runs.find((item) => item.sessionId === "large-tail-demo");
+      assert.equal(Boolean(run), true);
+      assert.equal(run.task, "Open Slack and check unread messages.");
+      assert.equal(run.status, "success");
+      assert.equal(run.actions.length, 1);
+      assert.equal(run.actions[0].actionType, "launch_app");
+    } finally {
+      await server.stop();
+    }
+  });
+});

@@ -36,6 +36,7 @@ test("init creates config and workspace files", () => {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(cfg.projectName, "OpenPocket");
   assert.equal(cfg.defaultModel, "gpt-5.2-codex");
+  assert.equal(cfg.target.type, "emulator");
 
   const mustFiles = [
     "AGENTS.md",
@@ -186,6 +187,29 @@ test("onboard --force clears previous config and onboarding state", () => {
   assert.equal(saved.humanAuth.tunnel.ngrok.authtoken, "");
   assert.equal(saved.emulator.dataPartitionSizeGb, 24);
   assert.equal(fs.existsSync(onboardingPath), false);
+});
+
+test("onboard --target presets deployment target before interactive setup", () => {
+  const runtimeHome = makeHome("openpocket-ts-onboard-target-runtime-");
+  const shellHome = makeHome("openpocket-ts-onboard-target-shell-");
+  const cfgPath = path.join(runtimeHome, "config.json");
+
+  const init = runCli(["init"], {
+    OPENPOCKET_HOME: runtimeHome,
+    HOME: shellHome,
+  });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const onboard = runCli(["onboard", "--target", "physical-phone"], {
+    OPENPOCKET_HOME: runtimeHome,
+    HOME: shellHome,
+  });
+  assert.equal(onboard.status, 1);
+  assert.match(onboard.stderr, /interactive terminal/i);
+
+  const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(saved.target.type, "physical-phone");
+  assert.match(onboard.stdout, /target preset/i);
 });
 
 test("legacy snake_case config is migrated to camelCase by init", () => {
@@ -356,6 +380,49 @@ test("dashboard command validates subcommand", () => {
   const run = runCli(["dashboard", "noop"]);
   assert.equal(run.status, 1);
   assert.match(run.stderr, /Unknown dashboard subcommand/);
+});
+
+test("target show prints deployment target summary", () => {
+  const home = makeHome("openpocket-ts-target-show-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(["target", "show"], {
+    OPENPOCKET_HOME: home,
+  });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.match(run.stdout, /Deployment Target/i);
+  assert.match(run.stdout, /emulator/i);
+});
+
+test("target set updates config for physical phone deployment", () => {
+  const home = makeHome("openpocket-ts-target-set-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const setRun = runCli(
+    [
+      "target",
+      "set",
+      "--type",
+      "physical-phone",
+      "--adb-endpoint",
+      "192.168.50.10",
+      "--device",
+      "R5CX123456A",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(setRun.status, 0, setRun.stderr || setRun.stdout);
+  assert.match(setRun.stdout, /Deployment target updated/i);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "physical-phone");
+  assert.equal(cfg.target.adbEndpoint, "192.168.50.10:5555");
+  assert.equal(cfg.agent.deviceId, "R5CX123456A");
 });
 
 test("test permission-app task prints recommended telegram flow", () => {

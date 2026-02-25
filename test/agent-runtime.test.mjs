@@ -340,6 +340,43 @@ test("AgentRuntime injects BOOTSTRAP guidance into system prompt context", async
   assert.match(capturedSystemPrompt, /runtime-bootstrap-check/);
 });
 
+test("AgentRuntime prefers quick observation for post-action state delta when available", async () => {
+  let screenCaptureCalls = 0;
+  let quickObservationCalls = 0;
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "tap once", action: { type: "tap", x: 120, y: 240 } },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => {
+      screenCaptureCalls += 1;
+      return makeSnapshot({
+        screenshotBase64: Buffer.from(`frame-${screenCaptureCalls}`).toString("base64"),
+        somScreenshotBase64: null,
+        uiElements: [],
+      });
+    },
+    captureQuickObservation: async () => {
+      quickObservationCalls += 1;
+      return {
+        currentApp: "com.android.launcher3",
+        screenshotHash: `quick-hash-${quickObservationCalls}`,
+      };
+    },
+    executeAction: async () => "Tapped at (120, 240)",
+  };
+
+  const result = await runtime.runTask("quick observation delta path");
+  assert.equal(result.ok, true);
+  assert.equal(quickObservationCalls >= 1, true);
+  assert.equal(screenCaptureCalls, 2);
+});
+
 test("AgentRuntime hides workspace tools for phone-style tasks", async () => {
   let capturedToolNames = [];
   const runtime = setupRuntime({
@@ -390,6 +427,55 @@ test("AgentRuntime keeps workspace tools for workspace-oriented tasks", async ()
   assert.equal(capturedToolNames.includes("read"), true);
   assert.equal(capturedToolNames.includes("exec"), true);
   assert.equal(capturedToolNames.includes("memory_search"), true);
+});
+
+test("AgentRuntime caps human-auth timeout to configured limit", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "need oauth auth",
+        action: {
+          type: "request_human_auth",
+          capability: "oauth",
+          instruction: "Please login",
+          timeoutSec: 600,
+        },
+      },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      screenshotBase64: Buffer.from("screen").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    executeAction: async () => "ok",
+  };
+
+  let observedTimeoutSec = 0;
+  const result = await runtime.runTask(
+    "oauth timeout cap test",
+    undefined,
+    undefined,
+    async (request) => {
+      observedTimeoutSec = request.timeoutSec;
+      return {
+        requestId: "test-request",
+        approved: true,
+        status: "approved",
+        message: "approved",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(observedTimeoutSec, runtime.config.humanAuth.requestTimeoutSec);
 });
 
 test("AgentRuntime exposes read tool for phone tasks when a matching skill exists", async () => {

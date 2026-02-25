@@ -15,6 +15,13 @@ function createRuntimeWithoutApiKey() {
   process.env.OPENPOCKET_HOME = home;
 
   const cfg = loadConfig();
+  // Use a non-codex profile so auth resolution cannot fall back to Codex CLI.
+  const nonCodexModelKey = Object.entries(cfg.models).find(([, profile]) => (
+    !String(profile.model ?? "").toLowerCase().includes("codex")
+  ))?.[0];
+  if (nonCodexModelKey) {
+    cfg.defaultModel = nonCodexModelKey;
+  }
   cfg.agent.returnHomeOnTaskEnd = false;
   const noKeyModel = cfg.models["claude-sonnet-4.6"] ? "claude-sonnet-4.6" : cfg.defaultModel;
   cfg.defaultModel = noKeyModel;

@@ -1,3 +1,18 @@
+export type DeviceTargetType = "emulator" | "physical-phone" | "android-tv" | "cloud";
+
+export interface DeviceTargetConfig {
+  type: DeviceTargetType;
+  /**
+   * Optional adb endpoint used for network devices (for example: 192.168.1.8:5555).
+   * Leave empty for USB-connected devices.
+   */
+  adbEndpoint: string;
+  /**
+   * Reserved for cloud integrations. Current runtime still uses adb transport.
+   */
+  cloudProvider: string;
+}
+
 export interface EmulatorConfig {
   avdName: string;
   androidSdkRoot: string;
@@ -218,6 +233,7 @@ export interface OpenPocketConfig {
   stateDir: string;
   sessionStorage: SessionStorageConfig;
   defaultModel: string;
+  target: DeviceTargetConfig;
   emulator: EmulatorConfig;
   telegram: TelegramConfig;
   agent: AgentConfig;
@@ -234,6 +250,7 @@ export interface OpenPocketConfig {
 }
 
 export interface EmulatorStatus {
+  targetType: DeviceTargetType;
   avdName: string;
   devices: string[];
   bootedDevices: string[];
