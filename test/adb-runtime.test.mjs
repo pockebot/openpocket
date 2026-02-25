@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { AdbRuntime } = await import("../dist/device/adb-runtime.js");
+const { AdbRuntime, extractPackageName } = await import("../dist/device/adb-runtime.js");
 
 function makeConfig() {
   return {
@@ -215,4 +215,14 @@ test("AdbRuntime uses escaped adb input for passwords with special characters", 
     emulator.calls.some((args) => args.includes("clipboard") || args.includes("KEYCODE_PASTE") || args.includes("ADB_INPUT_B64")),
     false,
   );
+});
+
+test("extractPackageName parses top resumed activity from activity dump", () => {
+  const dump = "topResumedActivity=ActivityRecord{157928692 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t6}";
+  assert.equal(extractPackageName(dump), "com.google.android.apps.nexuslauncher");
+});
+
+test("extractPackageName parses ACTIVITY fallback line", () => {
+  const dump = "ACTIVITY com.twitter.android/.StartActivity 8cae290 pid=27347 userId=0";
+  assert.equal(extractPackageName(dump), "com.twitter.android");
 });

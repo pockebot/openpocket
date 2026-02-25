@@ -206,17 +206,26 @@ export async function runRuntimeAttempt(
             const content: Array<PiTextContent | PiImageContent> = [
               { type: "text", text: observationText },
             ];
-            for (const recent of observation.recentSnapshots) {
-              if (recent.somScreenshotBase64) {
-                content.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });
-              } else {
-                content.push({ type: "image", data: recent.screenshotBase64, mimeType: "image/png" });
+
+            const renderSnapshotImage = (item: ScreenSnapshot): PiImageContent => {
+              if (item.somScreenshotBase64) {
+                return { type: "image", data: item.somScreenshotBase64, mimeType: "image/png" };
+              }
+              return { type: "image", data: item.screenshotBase64, mimeType: "image/png" };
+            };
+
+            const hasRecentNoChange = ctx.history
+              .slice(-3)
+              .some((line) => /state_delta changed=false/i.test(line));
+
+            if (hasRecentNoChange && observation.recentSnapshots.length > 0) {
+              const previous = observation.recentSnapshots[observation.recentSnapshots.length - 1];
+              if (previous) {
+                content.push(renderSnapshotImage(previous));
               }
             }
-            if (snapshot.somScreenshotBase64) {
-              content.push({ type: "image", data: snapshot.somScreenshotBase64, mimeType: "image/png" });
-            }
-            content.push({ type: "image", data: snapshot.screenshotBase64, mimeType: "image/png" });
+
+            content.push(renderSnapshotImage(snapshot));
             return [{ role: "user", content, timestamp: message.timestamp }];
           }
           if (message.role === "user" || message.role === "assistant" || message.role === "toolResult") {

@@ -1,4 +1,5 @@
 import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types.js";
+import { createHash } from "node:crypto";
 import { nowIso } from "../utils/paths.js";
 import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
 import { sleep } from "../utils/time.js";
@@ -9,6 +10,8 @@ export function extractPackageName(input: string): string {
     /mCurrentFocus=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
     /mFocusedApp=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
     /topResumedActivity=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
+    /ResumedActivity:.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
+    /ACTIVITY\s+([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
   ];
 
   for (const re of patterns) {
@@ -165,6 +168,7 @@ function errorMessage(error: unknown): string {
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
+  private readonly screenSizeCache = new Map<string, { width: number; height: number; updatedAtMs: number }>();
 
   constructor(config: OpenPocketConfig, emulator: EmulatorManager) {
     this.config = config;
@@ -331,26 +335,69 @@ export class AdbRuntime {
     }
   }
 
+  private resolveScreenSize(deviceId: string): { width: number; height: number } {
+    const cached = this.screenSizeCache.get(deviceId);
+    if (cached && Date.now() - cached.updatedAtMs < 30_000) {
+      return {
+        width: cached.width,
+        height: cached.height,
+      };
+    }
+    let output = "";
+    try {
+      output = this.emulator.runAdb(["-s", deviceId, "shell", "wm", "size"]);
+    } catch {
+      output = "";
+    }
+    const parsed = parseScreenSize(output);
+    this.screenSizeCache.set(deviceId, {
+      width: parsed.width,
+      height: parsed.height,
+      updatedAtMs: Date.now(),
+    });
+    return parsed;
+  }
+
+  private resolveCurrentApp(deviceId: string): string {
+    const probes: Array<string[]> = [
+      ["-s", deviceId, "shell", "dumpsys", "activity", "activities"],
+      ["-s", deviceId, "shell", "dumpsys", "window", "windows"],
+    ];
+    for (const args of probes) {
+      try {
+        const dump = this.emulator.runAdb(args);
+        const parsed = extractPackageName(dump);
+        if (parsed && parsed !== "unknown") {
+          return parsed;
+        }
+      } catch {
+        // try next probe
+      }
+    }
+    return "unknown";
+  }
+
+  async captureQuickObservation(preferred?: string | null, modelName?: string): Promise<{
+    deviceId: string;
+    currentApp: string;
+    screenshotHash: string;
+  }> {
+    const deviceId = this.resolveDeviceId(preferred);
+    const { data } = this.emulator.captureScreenshotBuffer(deviceId);
+    const scaled = await scaleScreenshot(data, modelName);
+    return {
+      deviceId,
+      currentApp: this.resolveCurrentApp(deviceId),
+      screenshotHash: createHash("sha1").update(scaled.data).digest("hex").slice(0, 12),
+    };
+  }
+
   async captureScreenSnapshot(preferred?: string | null, modelName?: string): Promise<ScreenSnapshot> {
     const deviceId = this.resolveDeviceId(preferred);
 
     const { data } = this.emulator.captureScreenshotBuffer(deviceId);
-    let screenSizeOutput = "";
-    try {
-      screenSizeOutput = this.emulator.runAdb(["-s", deviceId, "shell", "wm", "size"]);
-    } catch {
-      // Device may be transiently offline immediately after boot; parseScreenSize
-      // will fall back to defaults (1080x1920) when given an empty string.
-    }
-    const { width, height } = parseScreenSize(screenSizeOutput);
-
-    let currentApp = "unknown";
-    try {
-      const windowDump = this.emulator.runAdb(["-s", deviceId, "shell", "dumpsys", "window", "windows"]);
-      currentApp = extractPackageName(windowDump);
-    } catch {
-      currentApp = "unknown";
-    }
+    const { width, height } = this.resolveScreenSize(deviceId);
+    const currentApp = this.resolveCurrentApp(deviceId);
 
     const scaled = await scaleScreenshot(data, modelName);
     const uiElements = this.captureUiElements(
