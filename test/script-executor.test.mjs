@@ -25,7 +25,7 @@ test("ScriptExecutor blocks commands outside allowlist", async () => {
   const cfg = loadConfig();
   const exec = new ScriptExecutor(cfg);
 
-  const result = await exec.execute("curl https://example.com");
+  const result = await exec.execute("date");
   assert.equal(result.ok, false);
   assert.match(result.stderr, /not allowed/i);
 });

@@ -129,6 +129,48 @@ Examples:
 `);
 }
 
+type CliChildProcessError = Error & {
+  stderr?: Buffer | string;
+  stdout?: Buffer | string;
+  status?: number | null;
+  signal?: NodeJS.Signals | null;
+};
+
+function formatCliError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const childError = error as CliChildProcessError;
+  const toText = (value: unknown): string => {
+    if (value === null || value === undefined) {
+      return "";
+    }
+    if (Buffer.isBuffer(value)) {
+      return value.toString("utf-8").trim().slice(0, 600);
+    }
+    if (typeof value === "string") {
+      return value.trim().slice(0, 600);
+    }
+    return "";
+  };
+  const parts = [error.message];
+  const stderr = toText(childError.stderr);
+  const stdout = toText(childError.stdout);
+  if (stderr) {
+    parts.push(`stderr: ${stderr}`);
+  }
+  if (stdout) {
+    parts.push(`stdout: ${stdout}`);
+  }
+  if (typeof childError.status === "number") {
+    parts.push(`exitCode: ${String(childError.status)}`);
+  }
+  if (childError.signal) {
+    parts.push(`signal: ${childError.signal}`);
+  }
+  return parts.join("\n");
+}
+
 function openUrlInBrowser(url: string): void {
   if (process.platform === "darwin") {
     spawnSync("/usr/bin/open", [url], { stdio: "ignore" });
@@ -2070,7 +2112,7 @@ if (isMainEntry) {
     })
     .catch((error) => {
       // eslint-disable-next-line no-console
-      console.error(cliTheme.error(`OpenPocket error: ${(error as Error).message}`));
+      console.error(cliTheme.error(`OpenPocket error: ${formatCliError(error)}`));
       process.exitCode = 1;
     });
 }

@@ -28,8 +28,9 @@ import { EmulatorManager } from "../device/emulator-manager.js";
 import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder.js";
 import { SkillLoader } from "../skills/skill-loader.js";
 import { ScriptExecutor } from "../tools/script-executor.js";
-import { CodingExecutor } from "../tools/coding-executor.js";
+import { CodingExecutor, LEGACY_CODING_EXECUTOR_DEPRECATION } from "../tools/coding-executor.js";
 import { MemoryExecutor } from "../tools/memory-executor.js";
+import { PiCodingToolsExecutor } from "./pi-coding-tools.js";
 import { Agent, type AgentMessage, type AgentTool, type AgentEvent, type AgentOptions } from "@mariozechner/pi-agent-core";
 import {
   type AssistantMessage as PiAssistantMessage,
@@ -48,6 +49,7 @@ import { normalizeAction } from "./actions.js";
 import { runRuntimeAttempt } from "./runtime/attempt.js";
 import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
+import { createPiSessionBridge } from "./pi-session-bridge.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
@@ -112,6 +114,9 @@ const SYSTEM_PROMPT_MAX_CHARS_TOTAL_DEFAULT = 150_000;
 const ACTION_TYPE_TO_TOOL_NAME = new Map<string, string>(
   TOOL_METAS.map((meta) => [toolNameToActionType(meta.name), meta.name]),
 );
+const LEGACY_CODING_EXECUTOR_OPT_IN_HINT =
+  `${LEGACY_CODING_EXECUTOR_DEPRECATION} ` +
+  "If absolutely necessary during migration, set `agent.legacyCodingExecutor=true` temporarily.";
 const CODING_TOOL_NAMES = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 const WORKSPACE_TOOL_NAMES = new Set([...CODING_TOOL_NAMES, ...MEMORY_TOOL_NAMES]);
@@ -276,6 +281,9 @@ interface PhoneAgentRunContext {
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
+  lastScreenshotStartMs: number;
+  lastScreenshotEndMs: number;
+  lastModelInferenceStartMs: number;
 }
 
 type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {
@@ -296,6 +304,7 @@ export class AgentRuntime {
   private readonly autoArtifactBuilder: AutoArtifactBuilder;
   private readonly scriptExecutor: ScriptExecutor;
   private readonly codingExecutor: CodingExecutor;
+  private readonly piCodingToolsExecutor: PiCodingToolsExecutor;
   private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
   private busy = false;
@@ -316,6 +325,7 @@ export class AgentRuntime {
     this.autoArtifactBuilder = new AutoArtifactBuilder(config);
     this.scriptExecutor = new ScriptExecutor(config);
     this.codingExecutor = new CodingExecutor(config);
+    this.piCodingToolsExecutor = new PiCodingToolsExecutor(config);
     this.memoryExecutor = new MemoryExecutor(config);
     this.screenshotStore = new ScreenshotStore(
       config.screenshots.directory,
@@ -1785,7 +1795,39 @@ export class AgentRuntime {
           sr.stderr ? `stderr=${sr.stderr}` : "",
         ].filter(Boolean).join("\n");
       } else if (["read", "write", "edit", "apply_patch", "exec", "process"].includes(action.type)) {
-        executionResult = await this.codingExecutor.execute(action);
+        const codingAction = action as Extract<AgentAction, {
+          type: "read" | "write" | "edit" | "apply_patch" | "exec" | "process";
+        }>;
+        let piResult: string | null = null;
+        let piError: Error | null = null;
+        try {
+          piResult = await this.piCodingToolsExecutor.execute(codingAction);
+        } catch (error) {
+          piError = error as Error;
+        }
+
+        if (piResult !== null) {
+          executionResult = `${piResult}\n[coding_backend=pi_coding_tools]`;
+        } else if (!this.config.agent.legacyCodingExecutor) {
+          if (piError) {
+            throw piError;
+          }
+          throw new Error(
+            `coding action '${codingAction.type}' is not supported by pi coding backend and legacy fallback is disabled. ` +
+            LEGACY_CODING_EXECUTOR_OPT_IN_HINT,
+          );
+        } else {
+          if (piError && this.config.agent.verbose) {
+            // eslint-disable-next-line no-console
+            console.log(`[OpenPocket][coding-backend] pi_coding_tools failed: ${piError.message}; fallback=legacy`);
+          }
+          executionResult = await this.codingExecutor.execute(codingAction);
+          executionResult = [
+            executionResult,
+            "[coding_backend=legacy_coding_executor]",
+            `[deprecated_config_key=agent.legacyCodingExecutor] ${LEGACY_CODING_EXECUTOR_DEPRECATION}`,
+          ].join("\n");
+        }
       } else if (action.type === "memory_search" || action.type === "memory_get") {
         executionResult = this.memoryExecutor.execute(action);
       } else {
@@ -1885,6 +1927,12 @@ export class AgentRuntime {
             if (!Number.isFinite(durationMs) || durationMs < 0) {
               durationMs = Math.max(0, Date.parse(endedAt) - stepStartedAtMs);
             }
+            const screenshotMs = ctx.lastScreenshotEndMs > ctx.lastScreenshotStartMs
+              ? Math.max(0, ctx.lastScreenshotEndMs - ctx.lastScreenshotStartMs)
+              : 0;
+            const modelInferenceMs = ctx.lastModelInferenceStartMs > 0 && stepStartedAtMs > ctx.lastModelInferenceStartMs
+              ? Math.max(0, stepStartedAtMs - ctx.lastModelInferenceStartMs)
+              : 0;
             const trace = {
               actionType: action.type,
               currentApp,
@@ -1892,6 +1940,9 @@ export class AgentRuntime {
               endedAt,
               durationMs,
               status,
+              screenshotMs,
+              modelInferenceMs,
+              loopDelayMs: runtime.config.agent.loopDelayMs,
             };
             // eslint-disable-next-line no-console
             console.log(
@@ -2633,6 +2684,7 @@ export class AgentRuntime {
                 : TOOL_METAS;
               return this.buildPhoneAgentTools(ctx, this, toolMetas);
             },
+            piSessionBridgeFactory: (options) => createPiSessionBridge(options),
             parseTextualToolFallback: (message, fallbackTask) => this.parseTextualToolFallback(message, fallbackTask),
             isPermissionDialogApp: (currentApp) => this.isPermissionDialogApp(currentApp),
             autoApprovePermissionDialog: (currentApp) => this.autoApprovePermissionDialog(currentApp),

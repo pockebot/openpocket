@@ -15,6 +15,51 @@ import {
 const STANDARD_SCREEN_WIDTH = 1080;
 const STANDARD_SCREEN_HEIGHT = 2400;
 const STANDARD_SCREEN_DENSITY = 420;
+const EXEC_ERROR_SNIPPET_LIMIT = 500;
+
+type ExecLikeError = Error & {
+  stderr?: Buffer | string;
+  stdout?: Buffer | string;
+  status?: number | null;
+  signal?: NodeJS.Signals | null;
+  code?: string | number;
+};
+
+function toSnippet(value: unknown, limit = EXEC_ERROR_SNIPPET_LIMIT): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf-8").trim().slice(0, limit);
+  }
+  if (typeof value === "string") {
+    return value.trim().slice(0, limit);
+  }
+  return "";
+}
+
+function looksLikeAdbServerIssue(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const childError = error as ExecLikeError;
+  const combined = [
+    error.message,
+    toSnippet(childError.stderr),
+    toSnippet(childError.stdout),
+  ]
+    .join("\n")
+    .toLowerCase();
+
+  return [
+    "cannot connect to daemon",
+    "daemon not running",
+    "failed to start daemon",
+    "server version",
+    "didn't ack",
+    "failed to check server version",
+  ].some((needle) => combined.includes(needle));
+}
 
 export function buildEmulatorStartArgs(params: {
   avdName: string;
@@ -132,13 +177,60 @@ export class EmulatorManager {
   }
 
   private adb(args: string[], timeoutMs = 15000): string {
-    const output = execFileSync(this.adbBinary(), args, {
+    const adbPath = this.adbBinary();
+    const run = (): string => execFileSync(adbPath, args, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: timeoutMs,
       maxBuffer: 64 * 1024 * 1024,
     });
-    return output;
+
+    try {
+      return run();
+    } catch (error) {
+      if (
+        args[0] !== "start-server"
+        && args[0] !== "kill-server"
+        && looksLikeAdbServerIssue(error)
+      ) {
+        try {
+          execFileSync(adbPath, ["start-server"], {
+            encoding: "utf-8",
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 15000,
+            maxBuffer: 8 * 1024 * 1024,
+          });
+          return run();
+        } catch {
+          // fall through to enriched error below
+        }
+      }
+
+      throw this.buildAdbError(adbPath, args, error);
+    }
+  }
+
+  private buildAdbError(adbPath: string, args: string[], error: unknown): Error {
+    if (!(error instanceof Error)) {
+      return new Error(`adb failed for '${adbPath} ${args.join(" ")}'`);
+    }
+    const childError = error as ExecLikeError;
+    const parts = [`adb failed for '${adbPath} ${args.join(" ")}'`, error.message];
+    const stderr = toSnippet(childError.stderr);
+    const stdout = toSnippet(childError.stdout);
+    if (stderr) {
+      parts.push(`stderr: ${stderr}`);
+    }
+    if (stdout) {
+      parts.push(`stdout: ${stdout}`);
+    }
+    if (typeof childError.status === "number") {
+      parts.push(`exitCode: ${String(childError.status)}`);
+    }
+    if (childError.signal) {
+      parts.push(`signal: ${childError.signal}`);
+    }
+    return new Error(parts.join("\n"));
   }
 
   private targetType() {

@@ -307,3 +307,48 @@ test("extractPackageName parses ACTIVITY fallback line", () => {
   const dump = "ACTIVITY com.twitter.android/.StartActivity 8cae290 pid=27347 userId=0";
   assert.equal(extractPackageName(dump), "com.twitter.android");
 });
+
+test("AdbRuntime shell supports explicit sh -lc wrapping via useShellWrap", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  await runtime.executeAction({
+    type: "shell",
+    command: "mkdir -p /sdcard/smoke && echo ok > /sdcard/smoke/main.txt",
+    useShellWrap: true,
+  });
+
+  assert.equal(emulator.calls.length, 1);
+  assert.deepEqual(
+    emulator.calls[0].slice(0, 5),
+    ["-s", "emulator-5554", "shell", "sh", "-lc"],
+  );
+  assert.equal(
+    emulator.calls[0][5],
+    "mkdir -p /sdcard/smoke && echo ok > /sdcard/smoke/main.txt",
+  );
+});
+
+test("AdbRuntime shell preserves wrapped command and quoted arguments", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  await runtime.executeAction({
+    type: "shell",
+    command: "sh -lc 'echo first && echo second'",
+  });
+  await runtime.executeAction({
+    type: "shell",
+    command: "settings put global device_name \"Pixel 9 Pro\"",
+  });
+
+  assert.deepEqual(
+    emulator.calls[0].slice(0, 5),
+    ["-s", "emulator-5554", "shell", "sh", "-lc"],
+  );
+  assert.equal(emulator.calls[0][5], "echo first && echo second");
+  assert.deepEqual(
+    emulator.calls[1],
+    ["-s", "emulator-5554", "shell", "settings", "put", "global", "device_name", "Pixel 9 Pro"],
+  );
+});

@@ -54,6 +54,8 @@ function defaultConfigObject() {
       lang: "en" as const,
       verbose: true,
       deviceId: null,
+      runtimeBackend: "legacy_agent_core" as const,
+      legacyCodingExecutor: false,
     },
     screenshots: {
       saveStepScreenshots: true,
@@ -262,6 +264,21 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeAllowedCommands(raw: unknown, fallback: string[]): string[] {
+  const source = Array.isArray(raw) ? raw : fallback;
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of source) {
+    const item = String(value ?? "").trim();
+    if (!item || seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    normalized.push(item);
+  }
+  return normalized.length > 0 ? normalized : [...fallback];
+}
+
 function deepMerge<T>(base: T, incoming: unknown): T {
   if (!isObject(base) || !isObject(incoming)) {
     return (incoming as T) ?? base;
@@ -361,6 +378,8 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     system_prompt_mode: "systemPromptMode",
     context_budget_chars: "contextBudgetChars",
     device_id: "deviceId",
+    runtime_backend: "runtimeBackend",
+    legacy_coding_executor: "legacyCodingExecutor",
   };
   for (const [oldKey, newKey] of Object.entries(agentMap)) {
     if (oldKey in agent && !(newKey in agent)) {
@@ -703,6 +722,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       lang: "en",
       verbose: Boolean(agent.verbose),
       deviceId: agent.deviceId ? String(agent.deviceId) : null,
+      runtimeBackend: String(agent.runtimeBackend ?? "legacy_agent_core") === "pi_session_bridge"
+        ? "pi_session_bridge"
+        : "legacy_agent_core",
+      legacyCodingExecutor: Boolean(agent.legacyCodingExecutor ?? false),
     },
     screenshots: {
       saveStepScreenshots: Boolean(screenshots.saveStepScreenshots ?? true),
@@ -713,9 +736,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       enabled: Boolean(scriptExecutor.enabled ?? true),
       timeoutSec: Math.max(1, Number(scriptExecutor.timeoutSec ?? 60)),
       maxOutputChars: Math.max(1000, Number(scriptExecutor.maxOutputChars ?? 6000)),
-      allowedCommands: Array.isArray(scriptExecutor.allowedCommands)
-        ? scriptExecutor.allowedCommands.map((v) => String(v))
-        : defaultConfigObject().scriptExecutor.allowedCommands,
+      allowedCommands: normalizeAllowedCommands(
+        scriptExecutor.allowedCommands,
+        defaultConfigObject().scriptExecutor.allowedCommands,
+      ),
     },
     codingTools: {
       enabled: Boolean(codingTools.enabled ?? true),
@@ -724,9 +748,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       maxOutputChars: Math.max(1000, Number(codingTools.maxOutputChars ?? 12000)),
       allowBackground: Boolean(codingTools.allowBackground ?? true),
       applyPatchEnabled: Boolean(codingTools.applyPatchEnabled ?? true),
-      allowedCommands: Array.isArray(codingTools.allowedCommands)
-        ? codingTools.allowedCommands.map((v) => String(v))
-        : defaultConfigObject().codingTools.allowedCommands,
+      allowedCommands: normalizeAllowedCommands(
+        codingTools.allowedCommands,
+        defaultConfigObject().codingTools.allowedCommands,
+      ),
     },
     memoryTools: {
       enabled: Boolean(memoryTools.enabled ?? true),

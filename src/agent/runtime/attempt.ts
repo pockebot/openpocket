@@ -1,5 +1,11 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  AuthStorage,
+  DefaultResourceLoader,
+  ModelRegistry,
+  SessionManager,
+  type AgentSessionEvent,
+} from "@mariozechner/pi-coding-agent";
 import {
   type AssistantMessage as PiAssistantMessage,
   type Message as PiMessage,
@@ -11,10 +17,12 @@ import {
   streamSimple,
 } from "@mariozechner/pi-ai";
 
-import type { ScreenSnapshot } from "../../types.js";
+import type { OpenPocketConfig, ScreenSnapshot } from "../../types.js";
 import { getModelProfile, resolveModelAuth } from "../../config/index.js";
 import { sleep } from "../../utils/time.js";
+import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
 import { buildPiAiModel } from "../model-client.js";
+import { normalizePiSessionEvent } from "../pi-session-events.js";
 import { buildSystemPrompt, buildUserPrompt } from "../prompts.js";
 import type {
   PhoneAgentRunContext,
@@ -35,6 +43,26 @@ interface ScreenObservationMessage {
 }
 
 const MAX_REUSED_SESSION_MESSAGES = 64;
+const PHONE_ONLY_TOOL_NAMES = new Set([
+  "tap",
+  "tap_element",
+  "swipe",
+  "type_text",
+  "keyevent",
+  "launch_app",
+  "shell",
+  "run_script",
+  "request_human_auth",
+  "request_user_decision",
+  "request_user_input",
+  "wait",
+]);
+
+export function resolveRuntimeBackend(config: OpenPocketConfig): "legacy_agent_core" | "pi_session_bridge" {
+  return config.agent.runtimeBackend === "pi_session_bridge"
+    ? "pi_session_bridge"
+    : "legacy_agent_core";
+}
 
 function loadReusedSessionMessages(sessionPath: string): AgentMessage[] {
   try {
@@ -133,8 +161,16 @@ export async function runRuntimeAttempt(
     });
     deps.setLastSystemPromptReport(report);
 
-    const launchablePackages = typeof deps.adb.queryLaunchablePackages === "function"
-      ? deps.adb.queryLaunchablePackages(deps.config.agent.deviceId) : [];
+    const launchablePackages = (() => {
+      if (typeof deps.adb.queryLaunchablePackages !== "function") {
+        return [];
+      }
+      try {
+        return deps.adb.queryLaunchablePackages(deps.config.agent.deviceId);
+      } catch {
+        return [];
+      }
+    })();
 
     const ctx: PhoneAgentRunContext = {
       task: request.task,
@@ -152,6 +188,9 @@ export async function runRuntimeAttempt(
       failMessage: null,
       stopRequested: deps.getStopRequested,
       lastAutoPermissionAllowAtMs: 0,
+      lastScreenshotStartMs: 0,
+      lastScreenshotEndMs: 0,
+      lastModelInferenceStartMs: 0,
       launchablePackages,
       effectivePromptMode,
       systemPrompt,
@@ -161,7 +200,17 @@ export async function runRuntimeAttempt(
       onProgress: request.onProgress,
     };
 
-    const tools = deps.buildPhoneAgentTools(ctx, request.availableToolNames);
+    const runtimeBackend = resolveRuntimeBackend(deps.config);
+    const requestedToolNames = request.availableToolNames;
+    const hasPhoneOnlyTools = Array.isArray(requestedToolNames) && requestedToolNames
+      .some((name) => PHONE_ONLY_TOOL_NAMES.has(String(name)));
+    const usePiSessionBridge = runtimeBackend === "pi_session_bridge" && !hasPhoneOnlyTools;
+    const availableToolNamesForRun = usePiSessionBridge
+      ? requestedToolNames
+      : runtimeBackend === "pi_session_bridge"
+        ? ensureAndroidCustomToolNames(requestedToolNames)
+        : requestedToolNames;
+    const tools = deps.buildPhoneAgentTools(ctx, availableToolNamesForRun);
     const apiKey = auth.apiKey;
     const turnFallbackTasks: Promise<void>[] = [];
 
@@ -173,6 +222,209 @@ export async function runRuntimeAttempt(
     };
     const thinkingLevel: ThinkingLevel = profile.reasoningEffort && profile.reasoningEffort in thinkingMap
       ? thinkingMap[profile.reasoningEffort] : "off";
+
+    if (usePiSessionBridge) {
+      const appendSessionEvent = (
+        eventType: string,
+        details?: Record<string, unknown>,
+        text?: string,
+      ) => {
+        try {
+          deps.workspace.appendEvent(session, eventType, details, text);
+        } catch {
+          // Best-effort telemetry write.
+        }
+      };
+
+      const persistNormalizedEvent = (event: AgentSessionEvent) => {
+        const normalized = normalizePiSessionEvent(event);
+        if (!normalized) {
+          return;
+        }
+        const baseDetails = {
+          stepNo: ctx.stepCount,
+          currentApp: ctx.latestSnapshot?.currentApp ?? "unknown",
+        };
+        if (normalized.type === "tool_execution_start") {
+          shouldReturnHome = true;
+          appendSessionEvent(
+            "tool_execution_start",
+            {
+              ...baseDetails,
+              toolName: normalized.toolName,
+              ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+              ...(normalized.args !== undefined ? { args: normalized.args } : {}),
+            },
+            `tool_execution_start ${normalized.toolName}`,
+          );
+          return;
+        }
+        if (normalized.type === "tool_execution_update") {
+          const text = normalized.text || "";
+          appendSessionEvent(
+            "tool_execution_update",
+            {
+              ...baseDetails,
+              toolName: normalized.toolName,
+              ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+              ...(normalized.args !== undefined ? { args: normalized.args } : {}),
+              text,
+            },
+            text.trim() ? `tool_execution_update ${normalized.toolName}\n${text}` : `tool_execution_update ${normalized.toolName}`,
+          );
+          return;
+        }
+        if (normalized.type === "tool_execution_end") {
+          appendSessionEvent(
+            "tool_execution_end",
+            {
+              ...baseDetails,
+              toolName: normalized.toolName,
+              isError: normalized.isError,
+              ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+              ...(normalized.result !== undefined ? { result: normalized.result } : {}),
+            },
+            `tool_execution_end ${normalized.toolName} error=${String(normalized.isError)}`,
+          );
+          return;
+        }
+        if (
+          normalized.type === "agent_start"
+          || normalized.type === "agent_end"
+          || normalized.type === "turn_start"
+          || normalized.type === "turn_end"
+        ) {
+          appendSessionEvent(normalized.type, baseDetails, normalized.type);
+        }
+      };
+
+      const authStorage = AuthStorage.inMemory();
+      authStorage.setRuntimeApiKey(finalModel.provider, apiKey);
+      const modelRegistry = new ModelRegistry(authStorage);
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: deps.config.workspaceDir,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        systemPrompt,
+      });
+      await resourceLoader.reload();
+
+      const bridge = await deps.piSessionBridgeFactory({
+        createOptions: {
+          cwd: deps.config.workspaceDir,
+          model: finalModel,
+          thinkingLevel: thinkingLevel as any,
+          tools,
+          resourceLoader,
+          authStorage,
+          modelRegistry,
+          sessionManager: SessionManager.open(session.path),
+        },
+      });
+
+      const bridgeState: { lastAssistantMessage: PiAssistantMessage | null } = {
+        lastAssistantMessage: null,
+      };
+      let abortRequested = false;
+      let stopPollTimer: NodeJS.Timeout | null = null;
+      const unsubscribe = bridge.subscribeRaw((event) => {
+        persistNormalizedEvent(event as AgentSessionEvent);
+        if (event.type === "turn_end") {
+          const maybeAssistant = event.message as PiAssistantMessage;
+          if (maybeAssistant?.role === "assistant") {
+            bridgeState.lastAssistantMessage = maybeAssistant;
+          }
+        }
+      });
+
+      try {
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][pi-session-bridge] starting task: ${request.task}`);
+        stopPollTimer = setInterval(() => {
+          if (abortRequested || !ctx.stopRequested()) {
+            return;
+          }
+          abortRequested = true;
+          ctx.failMessage = "Task stopped by user.";
+          void bridge.abort().catch(() => {});
+        }, 250);
+        await bridge.prompt(`Task: ${request.task}`);
+      } finally {
+        if (stopPollTimer) {
+          clearInterval(stopPollTimer);
+        }
+        unsubscribe();
+        bridge.dispose();
+      }
+
+      if (!ctx.finishMessage && !ctx.failMessage && bridgeState.lastAssistantMessage) {
+        const lastAssistantMessage = bridgeState.lastAssistantMessage;
+        if (lastAssistantMessage.stopReason === "error" || lastAssistantMessage.stopReason === "aborted") {
+          const detail = lastAssistantMessage.errorMessage || lastAssistantMessage.stopReason;
+          ctx.failMessage = `Model response error: ${detail}`;
+        } else {
+          const parsed = deps.parseTextualToolFallback(lastAssistantMessage, ctx.task);
+          if (parsed) {
+            const fallbackTool = tools.find((item) => item.name === parsed.toolName);
+            if (!fallbackTool) {
+              ctx.failMessage = `Model textual fallback resolved unknown tool '${parsed.toolName}'.`;
+            } else {
+              try {
+                await fallbackTool.execute(`bridge-text-fallback-${Date.now()}`, parsed.params);
+              } catch (error) {
+                ctx.failMessage = `Textual tool fallback execution error: ${(error as Error).message}`;
+              }
+            }
+          } else {
+            ctx.failMessage = "Model response did not include a tool call.";
+          }
+        }
+      }
+
+      if (!ctx.finishMessage && !ctx.failMessage && ctx.stopRequested()) {
+        ctx.failMessage = "Task stopped by user.";
+      }
+
+      if (ctx.finishMessage) {
+        deps.workspace.finalizeSession(session, true, ctx.finishMessage);
+        deps.workspace.appendDailyMemory(profileKey, request.task, true, ctx.finishMessage);
+        const artifacts = deps.autoArtifactBuilder.build({
+          task: request.task,
+          sessionPath: session.path,
+          ok: true,
+          finalMessage: ctx.finishMessage,
+          traces: ctx.traces,
+        });
+        if (artifacts.skillPath) {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][artifact] auto skill: ${artifacts.skillPath}`);
+        }
+        if (artifacts.scriptPath) {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
+        }
+        return {
+          result: {
+            ok: true,
+            message: ctx.finishMessage,
+            sessionPath: session.path,
+            skillPath: artifacts.skillPath,
+            scriptPath: artifacts.scriptPath,
+          },
+          shouldReturnHome,
+        };
+      }
+
+      const failMsg = ctx.failMessage || "Agent stopped without finishing.";
+      deps.workspace.finalizeSession(session, false, failMsg);
+      deps.workspace.appendDailyMemory(profileKey, request.task, false, failMsg);
+      return {
+        result: { ok: false, message: failMsg, sessionPath: session.path, skillPath: null, scriptPath: null },
+        shouldReturnHome,
+      };
+    }
 
     const agent = deps.agentFactory({
       initialState: {
@@ -240,9 +492,11 @@ export async function runRuntimeAttempt(
           return messages;
         }
 
+        ctx.lastScreenshotStartMs = Date.now();
         const snapshot = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
         snapshot.installedPackages = launchablePackages;
         ctx.latestSnapshot = snapshot;
+        ctx.lastScreenshotEndMs = Date.now();
         shouldReturnHome = true;
 
         if (deps.config.screenshots.saveStepScreenshots) {
@@ -309,6 +563,7 @@ export async function runRuntimeAttempt(
           screenshotPath: ctx.lastScreenshotPath,
           timestamp: Date.now(),
         };
+        ctx.lastModelInferenceStartMs = Date.now();
         return [...filtered, observation];
       },
       followUpMode: "one-at-a-time",
@@ -335,7 +590,81 @@ export async function runRuntimeAttempt(
       });
     };
 
+    const appendSessionEvent = (
+      eventType: string,
+      details?: Record<string, unknown>,
+      text?: string,
+    ) => {
+      try {
+        deps.workspace.appendEvent(session, eventType, details, text);
+      } catch {
+        // Best-effort telemetry write.
+      }
+    };
+
+    const persistNormalizedEvent = (event: AgentEvent) => {
+      const normalized = normalizePiSessionEvent(event as unknown as AgentSessionEvent);
+      if (!normalized) {
+        return;
+      }
+      const baseDetails = {
+        stepNo: ctx.stepCount,
+        currentApp: ctx.latestSnapshot?.currentApp ?? "unknown",
+      };
+      if (normalized.type === "tool_execution_start") {
+        appendSessionEvent(
+          "tool_execution_start",
+          {
+            ...baseDetails,
+            toolName: normalized.toolName,
+            ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+            ...(normalized.args !== undefined ? { args: normalized.args } : {}),
+          },
+          `tool_execution_start ${normalized.toolName}`,
+        );
+        return;
+      }
+      if (normalized.type === "tool_execution_update") {
+        const text = normalized.text || "";
+        appendSessionEvent(
+          "tool_execution_update",
+          {
+            ...baseDetails,
+            toolName: normalized.toolName,
+            ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+            ...(normalized.args !== undefined ? { args: normalized.args } : {}),
+            text,
+          },
+          text.trim() ? `tool_execution_update ${normalized.toolName}\n${text}` : `tool_execution_update ${normalized.toolName}`,
+        );
+        return;
+      }
+      if (normalized.type === "tool_execution_end") {
+        appendSessionEvent(
+          "tool_execution_end",
+          {
+            ...baseDetails,
+            toolName: normalized.toolName,
+            isError: normalized.isError,
+            ...(normalized.toolCallId ? { toolCallId: normalized.toolCallId } : {}),
+            ...(normalized.result !== undefined ? { result: normalized.result } : {}),
+          },
+          `tool_execution_end ${normalized.toolName} error=${String(normalized.isError)}`,
+        );
+        return;
+      }
+      if (
+        normalized.type === "agent_start"
+        || normalized.type === "agent_end"
+        || normalized.type === "turn_start"
+        || normalized.type === "turn_end"
+      ) {
+        appendSessionEvent(normalized.type, baseDetails, normalized.type);
+      }
+    };
+
     agent.subscribe((event: AgentEvent) => {
+      persistNormalizedEvent(event);
       if (event.type !== "turn_end") {
         return;
       }

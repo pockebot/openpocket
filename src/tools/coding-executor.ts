@@ -1,11 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { fileURLToPath } from "node:url";
 
 import type { AgentAction, OpenPocketConfig } from "../types.js";
 import { applyPatch } from "./apply-patch.js";
-import { openpocketHome } from "../utils/paths.js";
+import {
+  buildSafeProcessEnv,
+  pathWithin,
+  resolveWorkdirPolicy,
+  resolveWorkspacePathPolicy,
+  validateCommandPolicy,
+} from "../agent/tool-policy.js";
+
+export const LEGACY_CODING_EXECUTOR_DEPRECATION =
+  "Config key 'agent.legacyCodingExecutor' is deprecated and will be removed in a future release.";
 
 type ReadAction = Extract<AgentAction, { type: "read" }>;
 type WriteAction = Extract<AgentAction, { type: "write" }>;
@@ -32,48 +40,6 @@ type ProcessSession = {
   resolveDone: () => void;
 };
 
-const DENY_PATTERNS: RegExp[] = [
-  /\bsudo\b/i,
-  /\bshutdown\b/i,
-  /\breboot\b/i,
-  /\bpoweroff\b/i,
-  /\bhalt\b/i,
-  /\bmkfs\b/i,
-  /\bdd\s+if=/i,
-  /\brm\s+.*-[a-z]*r[a-z]*f[a-z]*\s+\//i,
-  /\brm\s+.*-[a-z]*f[a-z]*r[a-z]*\s+\//i,
-  /\brm\s+-rf\s/i,
-  /\bcurl\b/i,
-  /\bwget\b/i,
-  /\beval\b/i,
-  /\bsource\b/i,
-  /`[^`]+`/,
-  /\$\([^)]+\)/,
-];
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const BUNDLED_SKILLS_DIR = path.resolve(path.join(__dirname, "..", "..", "skills"));
-
-/** Split a pipe chain into individual command segments. */
-function splitPipelineSegments(line: string): string[] {
-  return line
-    .split(/&&|\|\||;|\|/)
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
-
-function extractCommandName(segment: string): string {
-  const tokens = segment.split(/\s+/).filter(Boolean);
-  let i = 0;
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(tokens[i])) {
-    i += 1;
-  }
-  const raw = tokens[i] ?? "";
-  // Strip any leading path (e.g. /usr/bin/node -> node) to prevent allowlist bypass.
-  return raw.includes("/") ? raw.split("/").pop() ?? "" : raw;
-}
-
 function truncate(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
@@ -99,120 +65,45 @@ export class CodingExecutor {
     this.config = config;
   }
 
-  /** Build an env object that strips sensitive API keys and tokens. */
-  private buildSafeEnv(): Record<string, string | undefined> {
-    const sensitivePatterns = [
-      /api[_-]?key/i,
-      /secret/i,
-      /token/i,
-      /password/i,
-      /credential/i,
-      /auth/i,
-    ];
-    const env: Record<string, string | undefined> = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      const isSensitive = sensitivePatterns.some((pattern) => pattern.test(key));
-      if (!isSensitive) {
-        env[key] = value;
-      }
-    }
-    // Preserve PATH and common non-sensitive vars even if they match loosely.
-    env.PATH = process.env.PATH;
-    env.HOME = process.env.HOME;
-    env.USER = process.env.USER;
-    env.SHELL = process.env.SHELL;
-    env.LANG = process.env.LANG;
-    env.TERM = process.env.TERM;
-    return env;
-  }
-
-  private pathWithin(root: string, target: string): boolean {
-    const rel = path.relative(root, target);
-    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-  }
-
   private resolveWorkspacePath(
     inputPath: string,
     purpose: string,
     options?: { allowSkillRootsForRead?: boolean },
   ): string {
-    const raw = String(inputPath || "").trim();
-    if (!raw) {
-      throw new Error(`${purpose}: path is required.`);
+    const resolved = resolveWorkspacePathPolicy({
+      workspaceDir: this.config.workspaceDir,
+      inputPath,
+      purpose,
+      workspaceOnly: this.config.codingTools.workspaceOnly,
+      allowSkillRootsForRead: options?.allowSkillRootsForRead,
+    });
+    if (!resolved.ok || !resolved.resolved) {
+      throw new Error(resolved.error ?? `${purpose}: path is not allowed.`);
     }
-    const resolved = path.resolve(this.config.workspaceDir, raw);
-    if (!this.config.codingTools.workspaceOnly) {
-      return resolved;
-    }
-    if (this.pathWithin(this.config.workspaceDir, resolved)) {
-      return resolved;
-    }
-    if (options?.allowSkillRootsForRead) {
-      const skillRoots = [
-        path.join(this.config.workspaceDir, "skills"),
-        path.join(openpocketHome(), "skills"),
-        BUNDLED_SKILLS_DIR,
-      ];
-      if (skillRoots.some((root) => this.pathWithin(root, resolved))) {
-        return resolved;
-      }
-    }
-    if (!this.pathWithin(this.config.workspaceDir, resolved)) {
-      throw new Error(`${purpose}: path escapes workspace (${raw}).`);
-    }
-    return resolved;
+    return resolved.resolved;
   }
 
   private resolveWorkdir(inputPath?: string): string {
-    if (!inputPath || !inputPath.trim()) {
-      return this.config.workspaceDir;
+    const resolved = resolveWorkdirPolicy({
+      workspaceDir: this.config.workspaceDir,
+      inputPath,
+      workspaceOnly: this.config.codingTools.workspaceOnly,
+    });
+    if (!resolved.ok || !resolved.resolved) {
+      throw new Error(resolved.error ?? "exec: workdir is not allowed.");
     }
-    const raw = inputPath.trim();
-    const resolved = path.resolve(this.config.workspaceDir, raw);
-    if (!this.config.codingTools.workspaceOnly) {
-      return resolved;
-    }
-    const relative = path.relative(this.config.workspaceDir, resolved);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`exec: workdir escapes workspace (${raw}).`);
-    }
-    return resolved;
+    return resolved.resolved;
   }
 
   private validateCommand(command: string): string | null {
-    if (!this.config.codingTools.enabled) {
-      return "coding tools are disabled by config.";
-    }
-    if (!command.trim()) {
-      return "command is empty.";
-    }
-    // Run deny patterns against the raw (un-stripped) command to prevent bypass via
-    // comments, backticks, or $() substitutions.
-    for (const deny of DENY_PATTERNS) {
-      if (deny.test(command)) {
-        return `command blocked by safety rule: ${deny}`;
-      }
-    }
-    const allow = new Set(this.config.codingTools.allowedCommands);
-    const lines = command.split(/\r?\n/);
-    for (const rawLine of lines) {
-      // Do NOT strip comments before allowlist check — the full raw line
-      // is what bash actually executes.
-      const line = rawLine.trim();
-      if (!line || line.startsWith("#")) {
-        continue;
-      }
-      for (const segment of splitPipelineSegments(line)) {
-        const cmd = extractCommandName(segment);
-        if (!cmd) {
-          continue;
-        }
-        if (!allow.has(cmd)) {
-          return `command '${cmd}' is not allowed by codingTools.allowedCommands.`;
-        }
-      }
-    }
-    return null;
+    return validateCommandPolicy({
+      enabled: this.config.codingTools.enabled,
+      disabledMessage: "coding tools are disabled by config.",
+      command,
+      emptyMessage: "command is empty.",
+      allowCommands: this.config.codingTools.allowedCommands,
+      allowlistName: "codingTools.allowedCommands",
+    });
   }
 
   private appendSessionOutput(session: ProcessSession, chunk: Buffer | string): void {
@@ -284,7 +175,7 @@ export class CodingExecutor {
     const start = Math.max(0, from - 1);
     const end = Math.min(lines.length, start + maxLines);
     const snippet = lines.slice(start, end).join("\n");
-    const rel = this.pathWithin(this.config.workspaceDir, filePath)
+    const rel = pathWithin(this.config.workspaceDir, filePath)
       ? (path.relative(this.config.workspaceDir, filePath) || path.basename(filePath))
       : filePath;
     return [
@@ -366,7 +257,7 @@ export class CodingExecutor {
 
     const child = spawn("bash", ["-lc", command], {
       cwd,
-      env: this.buildSafeEnv(),
+      env: buildSafeProcessEnv(process.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
 

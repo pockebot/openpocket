@@ -273,6 +273,20 @@ OpenPocket currently has two E2E paths:
    - Validates agent + Telegram + relay/ngrok + approval handoff.
    - Scenarios: `camera`, `microphone`, `location`, `contacts`, `sms`, `calendar`, `photos`, `notification`, `2fa`.
 
+3. `scripts/smoke/dual-side-smoke.sh`
+   - Dual-side smoke gate for coding + Android event lineage.
+   - Covers:
+     - Telegram coding instruction -> local file write verification.
+     - Android build/install/run/logcat-style tool chain events.
+     - Unified session trace lineage checks across tool events.
+   - Runs fast with deterministic mocks and no real device dependency.
+
+Run it locally:
+
+```bash
+bash scripts/smoke/dual-side-smoke.sh
+```
+
 ## Key Capabilities
 
 - **Local emulator-first runtime**: execution stays on your machine via adb, not a hosted cloud phone.
@@ -471,6 +485,12 @@ Primary config file:
 Example config template:
 
 - [`openpocket.config.example.json`](./openpocket.config.example.json)
+
+Coding runtime migration note:
+
+- `agent.legacyCodingExecutor` is now **off by default**.
+- `agent.legacyCodingExecutor=true` remains available as a temporary compatibility toggle, but it is **deprecated** and will be removed.
+- When fallback is disabled and a coding action is unsupported by pi coding tools, runtime errors point to this key explicitly.
 
 ### Supported Model Providers
 

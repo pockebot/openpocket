@@ -5,6 +5,7 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding
 import type {
   SessionBackend,
   SessionCreatePayload,
+  SessionEventPayload,
   SessionFinalizePayload,
   SessionStepPayload,
 } from "./session-backend.js";
@@ -194,6 +195,25 @@ export class SessionPiTreeJsonlBackend implements SessionBackend {
         ...trace,
         reasoning: payload.thought || "",
         result: payload.result,
+      },
+    });
+  }
+
+  appendEvent(payload: SessionEventPayload): void {
+    const manager = SessionManager.open(payload.sessionPath);
+    const text = typeof payload.text === "string" && payload.text.trim()
+      ? payload.text.trim()
+      : `event: ${payload.eventType}`;
+    appendCustomLogMessage({
+      manager,
+      customType: "openpocket_event",
+      content: text,
+      timestamp: toUnixMs(payload.at),
+      details: {
+        sessionId: payload.sessionId,
+        sessionKey: payload.sessionKey,
+        eventType: payload.eventType,
+        ...(payload.details ?? {}),
       },
     });
   }
