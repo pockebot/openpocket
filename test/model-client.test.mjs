@@ -19,9 +19,9 @@ function makeProfile() {
 // buildPiAiModel tests
 // ---------------------------------------------------------------------------
 
-test("buildPiAiModel selects openai-completions for codex models on OpenAI", () => {
+test("buildPiAiModel selects openai-responses for codex models on OpenAI", () => {
   const model = buildPiAiModel(makeProfile());
-  assert.equal(model.api, "openai-completions");
+  assert.equal(model.api, "openai-responses");
   assert.equal(model.provider, "openai");
   assert.equal(model.id, "gpt-5.2-codex");
 });
