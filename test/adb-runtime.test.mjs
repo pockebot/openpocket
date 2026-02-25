@@ -23,6 +23,8 @@ class FakeEmulator {
       : ["com.android.adbkeyboard/.AdbIME", "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME"];
     this.currentIme = options.defaultIme ?? "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME";
     this.clipboardText = "";
+    this.powerDumps = Array.isArray(options.powerDumps) ? [...options.powerDumps] : [];
+    this.policyDumps = Array.isArray(options.policyDumps) ? [...options.policyDumps] : [];
   }
 
   status() {
@@ -35,6 +37,26 @@ class FakeEmulator {
 
   runAdb(args) {
     this.calls.push(args);
+
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "dumpsys" &&
+      args[4] === "power"
+    ) {
+      return this.powerDumps.length > 0 ? this.powerDumps.shift() : "mInteractive=true";
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "dumpsys" &&
+      args[4] === "window" &&
+      args[5] === "policy"
+    ) {
+      return this.policyDumps.length > 0
+        ? this.policyDumps.shift()
+        : "isStatusBarKeyguard=false\nmShowingLockscreen=false";
+    }
 
     if (
       args[0] === "-s" &&
@@ -214,6 +236,65 @@ test("AdbRuntime uses escaped adb input for passwords with special characters", 
   assert.equal(
     emulator.calls.some((args) => args.includes("clipboard") || args.includes("KEYCODE_PASTE") || args.includes("ADB_INPUT_B64")),
     false,
+  );
+});
+
+test("AdbRuntime wakes and dismisses keyguard before interactive action on physical phone", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=false"],
+    policyDumps: [
+      "KeyguardServiceDelegate: showing=true",
+      "KeyguardServiceDelegate: showing=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "keyevent", keycode: "KEYCODE_HOME" });
+  assert.match(result, /Sent keyevent KEYCODE_HOME/i);
+  assert.equal(
+    emulator.calls.some(
+      (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_WAKEUP",
+    ),
+    true,
+  );
+  assert.equal(
+    emulator.calls.some((args) => args[0] === "-s" && args[2] === "shell" && args[3] === "wm" && args[4] === "dismiss-keyguard"),
+    true,
+  );
+});
+
+test("AdbRuntime fails clearly when physical phone stays locked after unlock attempts", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone" },
+    },
+    emulator,
+  );
+
+  await assert.rejects(
+    runtime.executeAction({ type: "tap", x: 120, y: 300 }),
+    /is locked/i,
+  );
+  assert.equal(
+    emulator.calls.some(
+      (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_MENU",
+    ),
+    true,
   );
 });
 

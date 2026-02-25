@@ -4,6 +4,7 @@ import { nowIso } from "../utils/paths.js";
 import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
 import { sleep } from "../utils/time.js";
 import { EmulatorManager } from "./emulator-manager.js";
+import { normalizeDeviceTargetType } from "./target-types.js";
 
 export function extractPackageName(input: string): string {
   const patterns = [
@@ -173,6 +174,123 @@ export class AdbRuntime {
   constructor(config: OpenPocketConfig, emulator: EmulatorManager) {
     this.config = config;
     this.emulator = emulator;
+  }
+
+  private targetType() {
+    return normalizeDeviceTargetType(this.config.target?.type);
+  }
+
+  private shouldPrepareInteractiveTarget(): boolean {
+    const targetType = this.targetType();
+    return targetType === "physical-phone" || targetType === "android-tv";
+  }
+
+  private isDisplayInteractive(deviceId: string): boolean | null {
+    try {
+      const dump = this.emulator.runAdb(["-s", deviceId, "shell", "dumpsys", "power"], 8_000);
+      if (/mInteractive=true/i.test(dump)) {
+        return true;
+      }
+      if (/mInteractive=false/i.test(dump)) {
+        return false;
+      }
+      if (/Display Power:\s*state=ON/i.test(dump)) {
+        return true;
+      }
+      if (/Display Power:\s*state=(OFF|DOZE|DOZE_SUSPEND)/i.test(dump)) {
+        return false;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private isKeyguardShowing(deviceId: string): boolean | null {
+    try {
+      const dump = this.emulator.runAdb(["-s", deviceId, "shell", "dumpsys", "window", "policy"], 8_000);
+      if (
+        /isStatusBarKeyguard=true/i.test(dump)
+        || /mShowingLockscreen=true/i.test(dump)
+        || /mKeyguardShowing=true/i.test(dump)
+        || /KeyguardServiceDelegate[\s\S]{0,500}\bshowing=true\b/i.test(dump)
+      ) {
+        return true;
+      }
+      if (
+        /isStatusBarKeyguard=false/i.test(dump)
+        || /mShowingLockscreen=false/i.test(dump)
+        || /mKeyguardShowing=false/i.test(dump)
+        || /KeyguardServiceDelegate[\s\S]{0,500}\bshowing=false\b/i.test(dump)
+      ) {
+        return false;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async ensureInteractiveTargetReady(deviceId: string): Promise<void> {
+    if (!this.shouldPrepareInteractiveTarget()) {
+      return;
+    }
+
+    const interactive = this.isDisplayInteractive(deviceId);
+    if (interactive !== true) {
+      try {
+        this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_WAKEUP"]);
+      } catch {
+        // Best effort wake-up.
+      }
+      await sleep(280);
+    }
+
+    const keyguardBefore = this.isKeyguardShowing(deviceId);
+    if (keyguardBefore === false) {
+      return;
+    }
+
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "wm", "dismiss-keyguard"]);
+    } catch {
+      // Best effort dismiss.
+    }
+    await sleep(180);
+
+    const keyguardAfterDismiss = this.isKeyguardShowing(deviceId);
+    if (keyguardAfterDismiss === false) {
+      return;
+    }
+
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_MENU"]);
+    } catch {
+      // Best effort unlock gesture surrogate.
+    }
+    await sleep(180);
+
+    const keyguardAfterMenu = this.isKeyguardShowing(deviceId);
+    if (keyguardAfterMenu === true) {
+      throw new Error(
+        `Target device '${deviceId}' is locked. Please unlock and keep the screen on, then retry.`,
+      );
+    }
+  }
+
+  private shouldPrepareForAction(action: AgentAction): boolean {
+    switch (action.type) {
+      case "tap":
+      case "tap_element":
+      case "swipe":
+      case "type":
+      case "keyevent":
+      case "launch_app":
+      case "shell":
+        return true;
+      default:
+        return false;
+    }
   }
 
   private normalizeClipboardText(text: string): string {
@@ -383,6 +501,7 @@ export class AdbRuntime {
     screenshotHash: string;
   }> {
     const deviceId = this.resolveDeviceId(preferred);
+    await this.ensureInteractiveTargetReady(deviceId);
     const { data } = this.emulator.captureScreenshotBuffer(deviceId);
     const scaled = await scaleScreenshot(data, modelName);
     return {
@@ -394,6 +513,7 @@ export class AdbRuntime {
 
   async captureScreenSnapshot(preferred?: string | null, modelName?: string): Promise<ScreenSnapshot> {
     const deviceId = this.resolveDeviceId(preferred);
+    await this.ensureInteractiveTargetReady(deviceId);
 
     const { data } = this.emulator.captureScreenshotBuffer(deviceId);
     const { width, height } = this.resolveScreenSize(deviceId);
@@ -511,6 +631,9 @@ export class AdbRuntime {
 
   async executeAction(action: AgentAction, preferred?: string | null): Promise<string> {
     const deviceId = this.resolveDeviceId(preferred);
+    if (this.shouldPrepareForAction(action)) {
+      await this.ensureInteractiveTargetReady(deviceId);
+    }
 
     switch (action.type) {
       case "tap": {
