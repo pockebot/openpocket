@@ -6,6 +6,11 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import type { EmulatorStatus, OpenPocketConfig } from "../types.js";
 import { ensureDir, nowForFilename } from "../utils/paths.js";
 import { sleep } from "../utils/time.js";
+import {
+  isEmulatorTarget,
+  normalizeDeviceTargetType,
+  shouldIncludeDeviceForTarget,
+} from "./target-types.js";
 
 const STANDARD_SCREEN_WIDTH = 1080;
 const STANDARD_SCREEN_HEIGHT = 2400;
@@ -136,14 +141,55 @@ export class EmulatorManager {
     return output;
   }
 
-  emulatorDevices(): string[] {
+  private targetType() {
+    return normalizeDeviceTargetType(this.config.target?.type);
+  }
+
+  private targetAdbEndpoint(): string | null {
+    const raw = String(this.config.target?.adbEndpoint ?? "").trim();
+    if (!raw) {
+      return null;
+    }
+    if (raw.includes(":")) {
+      return raw;
+    }
+    return `${raw}:5555`;
+  }
+
+  private ensureTargetEndpointConnectedIfNeeded(): void {
+    if (isEmulatorTarget(this.targetType())) {
+      return;
+    }
+    const endpoint = this.targetAdbEndpoint();
+    if (!endpoint) {
+      return;
+    }
+    try {
+      this.adb(["connect", endpoint], 8_000);
+    } catch {
+      // Best-effort connect probe; device can still be reachable over USB.
+    }
+  }
+
+  private onlineAdbDevices(): string[] {
+    this.ensureTargetEndpointConnectedIfNeeded();
     const output = this.adb(["devices"]);
     return output
       .split("\n")
       .slice(1)
       .map((line) => line.trim())
-      .filter((line) => line.startsWith("emulator-") && line.includes("\tdevice"))
-      .map((line) => line.split("\t", 1)[0]);
+      .filter((line) => line.includes("\tdevice"))
+      .map((line) => line.split("\t", 1)[0])
+      .filter(Boolean);
+  }
+
+  emulatorDevices(): string[] {
+    return this.onlineAdbDevices().filter((line) => line.startsWith("emulator-"));
+  }
+
+  targetDevices(): string[] {
+    const target = this.targetType();
+    return this.onlineAdbDevices().filter((deviceId) => shouldIncludeDeviceForTarget(target, deviceId));
   }
 
   isBooted(deviceId: string): boolean {
@@ -156,9 +202,10 @@ export class EmulatorManager {
   }
 
   status(): EmulatorStatus {
-    const devices = this.emulatorDevices();
+    const devices = this.targetDevices();
     const bootedDevices = devices.filter((d) => this.isBooted(d));
     return {
+      targetType: this.targetType(),
       avdName: this.config.emulator.avdName,
       devices,
       bootedDevices,
@@ -470,6 +517,25 @@ export class EmulatorManager {
   }
 
   async start(headless?: boolean): Promise<string> {
+    if (!isEmulatorTarget(this.targetType())) {
+      const status = this.status();
+      if (status.bootedDevices.length > 0) {
+        return `Target device ready: ${status.bootedDevices.join(", ")}`;
+      }
+      if (status.devices.length > 0) {
+        return `Target device online (boot in progress): ${status.devices.join(", ")}`;
+      }
+      const endpoint = this.targetAdbEndpoint();
+      if (endpoint) {
+        throw new Error(
+          `No target device online after adb connect ${endpoint}. Ensure wireless debugging is enabled and device is paired.`,
+        );
+      }
+      throw new Error(
+        "No target device online. Connect a device over USB, or set target.adbEndpoint for wireless debugging.",
+      );
+    }
+
     const timeoutMs = Math.max(20, this.config.emulator.bootTimeoutSec) * 1000;
     const status = this.status();
     if (status.devices.length > 0) {
@@ -533,6 +599,9 @@ export class EmulatorManager {
   }
 
   stop(): string {
+    if (!isEmulatorTarget(this.targetType())) {
+      return "Stop is only supported for emulator target.";
+    }
     const devices = this.emulatorDevices();
     if (devices.length === 0) {
       return "No running emulator found.";
@@ -548,6 +617,9 @@ export class EmulatorManager {
   }
 
   hideWindow(): string {
+    if (!isEmulatorTarget(this.targetType())) {
+      return "Window controls are only supported for emulator target.";
+    }
     if (process.platform !== "darwin") {
       return "hide-window currently supports macOS only.";
     }
@@ -562,6 +634,9 @@ export class EmulatorManager {
   }
 
   showWindow(): string {
+    if (!isEmulatorTarget(this.targetType())) {
+      return "Window controls are only supported for emulator target.";
+    }
     if (process.platform !== "darwin") {
       return "show-window currently supports macOS only.";
     }
@@ -602,6 +677,9 @@ export class EmulatorManager {
    * If the process is currently headless (-no-window), it is restarted in windowed mode.
    */
   async ensureWindowVisible(): Promise<string> {
+    if (!isEmulatorTarget(this.targetType())) {
+      return "Window controls are only supported for emulator target.";
+    }
     if (process.platform !== "darwin") {
       return this.showWindow();
     }
@@ -637,6 +715,9 @@ export class EmulatorManager {
   }
 
   async ensureHiddenBackground(): Promise<string> {
+    if (!isEmulatorTarget(this.targetType())) {
+      return "Window controls are only supported for emulator target.";
+    }
     if (process.platform !== "darwin") {
       return this.hideWindow();
     }
@@ -672,6 +753,9 @@ export class EmulatorManager {
    * This never restarts to headless fallback.
    */
   async hideWindowInPlace(): Promise<string> {
+    if (!isEmulatorTarget(this.targetType())) {
+      return "Window controls are only supported for emulator target.";
+    }
     if (process.platform !== "darwin") {
       return this.hideWindow();
     }
@@ -772,11 +856,17 @@ export class EmulatorManager {
   }
 
   private resolveOnlineDevice(preferredDeviceId?: string): string {
-    const devices = this.emulatorDevices();
+    const status = this.status();
+    const devices = status.devices;
     if (devices.length === 0) {
-      throw new Error("No running emulator found.");
+      const endpoint = this.targetAdbEndpoint();
+      if (endpoint && !isEmulatorTarget(this.targetType())) {
+        throw new Error(`No online target device found (tried adb connect ${endpoint}).`);
+      }
+      throw new Error("No online target device found.");
     }
-    const deviceId = preferredDeviceId ?? devices[0];
+    const configuredDeviceId = this.config.agent.deviceId?.trim() || "";
+    const deviceId = preferredDeviceId ?? (configuredDeviceId || devices[0]);
     if (!devices.includes(deviceId)) {
       throw new Error(`Device '${deviceId}' is not online. Online devices: ${devices.join(", ")}`);
     }

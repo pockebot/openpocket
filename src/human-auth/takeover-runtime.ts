@@ -55,7 +55,7 @@ export class LocalHumanAuthTakeoverRuntime implements HumanAuthTakeoverRuntime {
     if (status.devices.length > 0) {
       return status.devices[0];
     }
-    throw new Error("No running emulator found for takeover.");
+    throw new Error("No online target device found for takeover.");
   }
 
   async captureFrame(): Promise<HumanAuthTakeoverFrame> {
@@ -123,4 +123,3 @@ export class LocalHumanAuthTakeoverRuntime implements HumanAuthTakeoverRuntime {
     return `Keyevent ${keycode} sent to ${deviceId}.`;
   }
 }
-

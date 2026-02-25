@@ -11,6 +11,7 @@ import {
 } from "../utils/paths.js";
 import { ensureWorkspaceBootstrap } from "../memory/workspace.js";
 import { CODEX_CLI_BASE_URL, readCodexCliCredential } from "./codex-cli.js";
+import { normalizeDeviceTargetType } from "../device/target-types.js";
 
 function defaultConfigObject() {
   return {
@@ -23,6 +24,11 @@ function defaultConfigObject() {
       markdownLog: true,
     },
     defaultModel: "gpt-5.2-codex",
+    target: {
+      type: "emulator" as const,
+      adbEndpoint: "",
+      cloudProvider: "",
+    },
     emulator: {
       avdName: "OpenPocket_AVD",
       androidSdkRoot: process.env.ANDROID_SDK_ROOT ?? "",
@@ -281,6 +287,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     state_dir: "stateDir",
     session_storage: "sessionStorage",
     default_model: "defaultModel",
+    deployment_target: "target",
     script_executor: "scriptExecutor",
     coding_tools: "codingTools",
     memory_tools: "memoryTools",
@@ -311,6 +318,21 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
   }
   if (Object.keys(emulator).length > 0) {
     raw.emulator = emulator;
+  }
+
+  const target = isObject(raw.target) ? { ...raw.target } : {};
+  const targetMap: Record<string, string> = {
+    target_type: "type",
+    adb_endpoint: "adbEndpoint",
+    cloud_provider: "cloudProvider",
+  };
+  for (const [oldKey, newKey] of Object.entries(targetMap)) {
+    if (oldKey in target && !(newKey in target)) {
+      target[newKey] = target[oldKey];
+    }
+  }
+  if (Object.keys(target).length > 0) {
+    raw.target = target;
   }
 
   const telegram = isObject(raw.telegram) ? { ...raw.telegram } : {};
@@ -596,6 +618,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     throw new Error(`defaultModel '${defaultModel}' is not present in models.`);
   }
 
+  const target = (merged.target ?? {}) as Record<string, unknown>;
   const emulator = (merged.emulator ?? {}) as Record<string, unknown>;
   const telegram = (merged.telegram ?? {}) as Record<string, unknown>;
   const agent = (merged.agent ?? {}) as Record<string, unknown>;
@@ -641,6 +664,11 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       markdownLog: Boolean(sessionStorage.markdownLog ?? true),
     },
     defaultModel,
+    target: {
+      type: normalizeDeviceTargetType(target.type),
+      adbEndpoint: String(target.adbEndpoint ?? "").trim(),
+      cloudProvider: String(target.cloudProvider ?? "").trim(),
+    },
     emulator: {
       avdName: String(emulator.avdName ?? "OpenPocket_AVD"),
       androidSdkRoot: String(emulator.androidSdkRoot ?? ""),
@@ -817,6 +845,7 @@ export function saveConfig(config: OpenPocketConfig): void {
     stateDir: config.stateDir,
     sessionStorage: config.sessionStorage,
     defaultModel: config.defaultModel,
+    target: config.target,
     emulator: config.emulator,
     telegram: config.telegram,
     agent: config.agent,

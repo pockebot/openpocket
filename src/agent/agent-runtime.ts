@@ -1516,7 +1516,7 @@ export class AgentRuntime {
     } catch {
       // Ignore status probe failure in tests/mocks.
     }
-    return this.config.agent.deviceId || "emulator-5554";
+    return this.config.agent.deviceId || "unknown-device";
   }
 
   private isPermissionDialogApp(currentApp: string): boolean {

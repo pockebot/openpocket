@@ -310,7 +310,7 @@ export class AdbRuntime {
       return status.devices[0];
     }
 
-    throw new Error("No running emulator device found.");
+    throw new Error("No online target device found.");
   }
 
   queryLaunchablePackages(preferred?: string | null): string[] {
