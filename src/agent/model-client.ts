@@ -107,9 +107,6 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
   if (isChatGptBackendUrl(baseUrlLower) && isCodexModelId(profile.model)) {
     api = "openai-codex-responses";
     provider = "openai-codex";
-  } else if (baseUrlLower.includes("tawbird.de5.net") && isCodexModelId(profile.model)) {
-    api = "openai-responses";
-    provider = "openai";
   } else if (isOpenAiBaseUrl(baseUrlLower) && isCodexModelId(profile.model)) {
     api = "openai-responses";
     provider = "openai";

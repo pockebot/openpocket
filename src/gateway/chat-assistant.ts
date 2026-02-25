@@ -603,6 +603,16 @@ export class ChatAssistant {
     return input.replace(/\s+/g, " ").trim();
   }
 
+  private normalizeMultiline(input: string): string {
+    return String(input || "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[ \t]+/g, " ").trim())
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
   private normalizeAssistantName(input: string): string {
     return this.normalizeOneLine(input)
       .replace(/[。！？.!?]+$/g, "")
@@ -1265,6 +1275,10 @@ export class ChatAssistant {
       "5) If reusable artifacts were generated, mention reuse in one short natural sentence.",
       "6) Use locale hint language.",
       "7) Keep concise and natural; do not expose internal logs.",
+      "8) Preserve line breaks. Use short bullets when listing multiple stores/options.",
+      "9) For shopping/comparison tasks, list one seller per line in this shape:",
+      '   "- Seller — price — stock — link"',
+      "10) If you do not have a reliable direct link, explicitly say 'link unavailable'. Never invent links.",
       "",
       "TASK_OUTCOME_REPORTER.md:",
       this.readTaskOutcomeReporterGuide(),
@@ -2327,18 +2341,232 @@ export class ChatAssistant {
       .trim();
   }
 
+  private looksLikeShoppingTask(task: string): boolean {
+    const text = String(task || "");
+    return /(where\s+to\s+buy|where\s+can\s+i\s+buy|buy\s+\w|purchase\s+\w|shop\s+for|shopping\s+for|for\s+sale|哪里买|购买\w|去哪买)/i
+      .test(text);
+  }
+
+  private deriveShoppingQuery(task: string, base: string, context: string): string {
+    const candidates: string[] = [];
+    const quoted = `${base}\n${context}`.match(/[“"]([^”"\n]{4,120})[”"]/);
+    if (quoted?.[1]) {
+      candidates.push(quoted[1]);
+    }
+    const firstLine = String(base || "").split("\n")[0] || "";
+    if (firstLine) {
+      const lineMatch = firstLine.match(/(?:buy|for)\s+(.+?)(?:\s+\(matches|\s+\(likely|:|$)/i);
+      if (lineMatch?.[1]) {
+        candidates.push(lineMatch[1]);
+      }
+    }
+    candidates.push(String(task || ""));
+    for (const raw of candidates) {
+      const cleaned = raw
+        .replace(/^find\s+/i, "")
+        .replace(/^search(?:\s+for)?\s+/i, "")
+        .replace(/^look(?:\s+for)?\s+/i, "")
+        .replace(/^where\s+(?:can\s+i\s+)?buy\s+/i, "")
+        .replace(/^where\s+to\s+buy\s+/i, "")
+        .replace(/\bwhere\s+is\s+available\s+to\s+buy\b/gi, " ")
+        .replace(/\bwhere\s+to\s+buy\b/gi, " ")
+        .replace(/\bavailable\s+to\s+buy\b/gi, " ")
+        .replace(/\bavailability\b/gi, " ")
+        .replace(/,?\s*where\s+is\s+available\b/gi, "")
+        .replace(/\bfor\s+(men|women|kids|sale)\b/gi, "")
+        .replace(/[,:;]+$/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (cleaned.length >= 4) {
+        return cleaned.slice(0, 120);
+      }
+    }
+    return "product";
+  }
+
+  private extractUrls(text: string): string[] {
+    const matches = String(text || "").match(/https?:\/\/[^\s<>"'`)\]]+/gi) || [];
+    const cleaned = matches
+      .map((url) => url.replace(/[),.;!?]+$/g, ""))
+      .filter((url) => url.length > 0);
+    return Array.from(new Set(cleaned));
+  }
+
+  private isLikelySearchUrl(url: string): boolean {
+    const lower = String(url || "").toLowerCase();
+    return /[?&](q|query|s|_nkw|vst)=/.test(lower)
+      || /\/search(?:\/|$|\?)/.test(lower)
+      || /\/sch\/i\.html/.test(lower);
+  }
+
+  private buildStoreSearchLink(storeLabel: string, query: string): string {
+    const encoded = encodeURIComponent(query);
+    const normalized = storeLabel.toLowerCase();
+    if (normalized === "goat") {
+      return `https://www.goat.com/search?query=${encoded}`;
+    }
+    if (normalized === "stockx") {
+      return `https://stockx.com/search?s=${encoded}`;
+    }
+    if (normalized === "farfetch") {
+      return `https://www.farfetch.com/shopping/men/search/items.aspx?q=${encoded}`;
+    }
+    if (normalized === "ebay") {
+      return `https://www.ebay.com/sch/i.html?_nkw=${encoded}`;
+    }
+    if (normalized === "nike") {
+      return `https://www.nike.com/w?q=${encoded}&vst=${encoded}`;
+    }
+    if (normalized === "flight club") {
+      return `https://www.google.com/search?q=site%3Awww.flightclub.com+${encoded}`;
+    }
+    return `https://www.google.com/search?q=${encoded}`;
+  }
+
+  private downgradeShoppingClaimsWhenUnverified(message: string, locale: OnboardingLocale): string {
+    const lines = this.normalizeMultiline(message).split("\n");
+    const transformed = lines.map((line, idx) => {
+      let next = line;
+      if (idx === 0) {
+        if (locale === "zh") {
+          next = next.replace(/^可购买(?:渠道)?/i, "已发现相关商品列表");
+        } else {
+          next = next
+            .replace(/^available to buy now for\b/i, "Observed listings for")
+            .replace(/^available now for\b/i, "Observed listings for")
+            .replace(/^available places to buy\b/i, "Observed listings for");
+        }
+      }
+      if (locale === "zh") {
+        next = next
+          .replace(/有货/gi, "页面显示有货（未验证）")
+          .replace(/现货/gi, "页面显示现货（未验证）");
+      } else {
+        next = next
+          .replace(/\bin stock online\b/gi, "listed as in stock (unverified)")
+          .replace(/\bin stock\b/gi, "listed as in stock (unverified)");
+      }
+      return next;
+    });
+    const disclaimer = locale === "zh"
+      ? "说明：本次未抓到可验证的商品直达链接；价格/库存来自页面摘要，可能变化。"
+      : "Note: No verifiable direct product URLs were captured; price/stock come from listing snippets and may change.";
+    return `${transformed.join("\n")}\n${disclaimer}`.trim();
+  }
+
+  private appendShoppingLinksIfNeeded(input: TaskOutcomeNarrationInput, message: string): string {
+    const base = String(message || "").trim();
+    if (!base || !input.ok || !this.looksLikeShoppingTask(input.task)) {
+      return base;
+    }
+
+    const context = [
+      base,
+      String(input.rawResult || ""),
+      ...input.recentProgress.map((item) => String(item.message || "")),
+      ...input.recentProgress.map((item) => String(item.thought || "")),
+    ].join("\n");
+
+    const stores: Array<{ label: string; regex: RegExp; domains: string[] }> = [
+      {
+        label: "GOAT",
+        regex: /\bgoat\b/i,
+        domains: ["goat.com"],
+      },
+      {
+        label: "StockX",
+        regex: /\bstockx\b/i,
+        domains: ["stockx.com"],
+      },
+      {
+        label: "Farfetch",
+        regex: /\bfarfetch\b/i,
+        domains: ["farfetch.com"],
+      },
+      {
+        label: "eBay",
+        regex: /\bebay\b/i,
+        domains: ["ebay.com"],
+      },
+      {
+        label: "Flight Club",
+        regex: /\bflight\s*club\b/i,
+        domains: ["flightclub.com"],
+      },
+      {
+        label: "Nike",
+        regex: /\bnike\b/i,
+        domains: ["nike.com"],
+      },
+    ];
+
+    const baseUrls = this.extractUrls(base);
+    const contextUrls = this.extractUrls(context);
+    const linkLines: string[] = [];
+    const missingStores: string[] = [];
+    let verifiedDirectCount = 0;
+
+    for (const store of stores) {
+      if (!store.regex.test(context)) {
+        continue;
+      }
+
+      const baseHasDirect = baseUrls.some((url) => store.domains.some((domain) => url.toLowerCase().includes(domain))
+        && !this.isLikelySearchUrl(url));
+      if (baseHasDirect) {
+        verifiedDirectCount += 1;
+        continue;
+      }
+
+      const directFromContext = contextUrls.find((url) => store.domains.some((domain) => url.toLowerCase().includes(domain))
+        && !this.isLikelySearchUrl(url));
+      if (directFromContext) {
+        verifiedDirectCount += 1;
+        linkLines.push(`- ${store.label}: ${directFromContext}`);
+        continue;
+      }
+      const unavailable = input.locale === "zh" ? "暂无可验证直达链接" : "link unavailable";
+      linkLines.push(`- ${store.label}: ${unavailable}`);
+      missingStores.push(store.label);
+    }
+
+    if (linkLines.length === 0) {
+      return base;
+    }
+
+    const allMissingDirectLinks = verifiedDirectCount === 0;
+    const summary = allMissingDirectLinks
+      ? this.downgradeShoppingClaimsWhenUnverified(base, input.locale)
+      : base;
+
+    const title = allMissingDirectLinks
+      ? (input.locale === "zh" ? "商店链接：" : "Store links:")
+      : (input.locale === "zh" ? "购买链接（已验证）：" : "Store links (verified):");
+    const query = this.deriveShoppingQuery(input.task, base, context);
+    const searchTitle = input.locale === "zh"
+      ? "快捷搜索链接（非商品直达页）："
+      : "Quick search links (not direct product pages):";
+    const searchLines = missingStores
+      .map((store) => `- ${store}: ${this.buildStoreSearchLink(store, query)}`);
+    const searchSection = searchLines.length > 0
+      ? `\n\n${searchTitle}\n${searchLines.join("\n")}`
+      : "";
+    return `${summary}\n\n${title}\n${linkLines.join("\n")}${searchSection}`;
+  }
+
   private fallbackTaskOutcomeNarration(input: TaskOutcomeNarrationInput): string {
     const cleaned = this.sanitizeOutcomeBoilerplate(input.rawResult);
     const base = cleaned || (input.ok
       ? (input.locale === "zh" ? "结果已获取，但可用细节较少。" : "I got the result, but details are limited.")
       : this.trimForPrompt(input.rawResult, 400));
+    const enrichedBase = this.appendShoppingLinksIfNeeded(input, base);
     const reuseNote =
       input.ok && (input.skillPath || input.scriptPath)
         ? (input.locale === "zh"
           ? "另外，我已把这次流程沉淀成可复用的自动化资产，下次可以更快复用。"
           : "Also, I saved this workflow as reusable automation assets for faster reuse next time.")
         : "";
-    return reuseNote ? `${base}\n${reuseNote}` : base;
+    return reuseNote ? `${enrichedBase}\n${reuseNote}` : enrichedBase;
   }
 
   private fallbackEscalationNarration(input: EscalationNarrationInput): string {
@@ -2536,8 +2764,11 @@ export class ChatAssistant {
       if (!message) {
         return this.fallbackTaskOutcomeNarration(input);
       }
-      const normalized = this.normalizeOneLine(message);
-      return normalized || this.fallbackTaskOutcomeNarration(input);
+      const normalized = this.normalizeMultiline(message);
+      if (!normalized) {
+        return this.fallbackTaskOutcomeNarration(input);
+      }
+      return this.appendShoppingLinksIfNeeded(input, normalized);
     } catch {
       return this.fallbackTaskOutcomeNarration(input);
     }

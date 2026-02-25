@@ -83,6 +83,28 @@ type PendingUserInput = {
   timeout: NodeJS.Timeout;
 };
 
+type ChatContextSensitivity = "non_sensitive" | "sensitive";
+type ChatContextItemSource = "plain_chat" | "request_user_input";
+
+type ChatContextItem = {
+  key: string;
+  value: string;
+  sensitivity: ChatContextSensitivity;
+  source: ChatContextItemSource;
+  updatedAt: string;
+};
+
+type ChatContextPair = {
+  key: string;
+  value: string;
+};
+
+type ChatContextExtractor = {
+  id: string;
+  extractFromPlainText?: (text: string) => ChatContextPair[];
+  extractFromUserInput?: (request: UserInputRequest, text: string) => ChatContextPair[];
+};
+
 type QueuedChatTask = {
   chatId: number;
   task: string;
@@ -106,6 +128,8 @@ export class TelegramGateway {
   private readonly typingSessions = new Map<number, { refs: number; timer: NodeJS.Timeout }>();
   private readonly pendingUserDecisions = new Map<number, PendingUserDecision>();
   private readonly pendingUserInputs = new Map<number, PendingUserInput>();
+  private readonly chatContextStore = new Map<number, Map<string, ChatContextItem>>();
+  private readonly chatContextExtractors: ChatContextExtractor[];
   private readonly pendingChatTasks: QueuedChatTask[] = [];
   private drainingChatTaskQueue = false;
   private lastSyncedBotDisplayName: string | null = null;
@@ -117,12 +141,14 @@ export class TelegramGateway {
   private running = false;
   private stoppedPromise: Promise<void> | null = null;
   private stopResolver: (() => void) | null = null;
+  private static readonly CHAT_CONTEXT_TTL_MS = 12 * 60 * 60 * 1000;
 
   constructor(config: OpenPocketConfig, options?: TelegramGatewayOptions) {
     this.config = config;
     this.emulator = new EmulatorManager(config);
     this.agent = new AgentRuntime(config);
     this.chat = new ChatAssistant(config);
+    this.chatContextExtractors = this.buildChatContextExtractors();
     const onLogLine = options?.onLogLine ?? null;
     const logger =
       options?.logger ??
@@ -203,6 +229,20 @@ export class TelegramGateway {
     return `${oneLine.slice(0, Math.max(0, maxChars - 3))}...`;
   }
 
+  private compactMultiline(text: string, maxChars: number): string {
+    const normalized = String(text || "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[ \t]+/g, " ").trim())
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (normalized.length <= maxChars) {
+      return normalized;
+    }
+    return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+  }
+
   private sanitizeForChat(text: string, maxChars: number): string {
     const withoutInternalLines = text
       .split("\n")
@@ -216,6 +256,21 @@ export class TelegramGateway {
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
 
     return this.compact(redacted, maxChars);
+  }
+
+  private sanitizeForChatMultiline(text: string, maxChars: number): string {
+    const withoutInternalLines = String(text || "")
+      .split("\n")
+      .filter((line) => !/^\s*(Session|Auto skill|Auto script)\s*:/i.test(line))
+      .join("\n");
+
+    const redacted = withoutInternalLines
+      .replace(/local_screenshot=\S+/gi, "local_screenshot=[saved locally]")
+      .replace(/runDir=\S+/gi, "runDir=[local-dir]")
+      .replace(/\/(?:Users|home|var|tmp)\/[^\s)\]]+/g, "[local-path]")
+      .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
+
+    return this.compactMultiline(redacted, maxChars);
   }
 
   private escapeTelegramHtml(text: string): string {
@@ -789,6 +844,263 @@ export class TelegramGateway {
     return /[\u4e00-\u9fff]/.test(task) ? "zh" : "en";
   }
 
+  private buildChatContextExtractors(): ChatContextExtractor[] {
+    return [
+      {
+        id: "generic_key_value_pairs",
+        extractFromPlainText: (text) => this.extractGenericKeyValuePairs(text),
+        extractFromUserInput: (request, text) => {
+          const key = this.deriveUserInputContextKey(request);
+          const value = this.normalizeContextValue(text);
+          if (!key || !value) {
+            return [];
+          }
+          return [{ key, value }];
+        },
+      },
+    ];
+  }
+
+  private normalizeContextKey(rawKey: string, fallbackIndex: number): string {
+    const ascii = String(rawKey || "")
+      .normalize("NFKD")
+      .replace(/[^\x00-\x7F]/g, " ")
+      .toLowerCase();
+    const normalized = ascii
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    if (normalized) {
+      return normalized.slice(0, 48);
+    }
+    return `field_${Math.max(1, fallbackIndex)}`;
+  }
+
+  private normalizeContextValue(rawValue: string): string {
+    return String(rawValue || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+  }
+
+  private deriveUserInputContextKey(request: UserInputRequest): string {
+    const normalized = String(request.question || "")
+      .normalize("NFKD")
+      .replace(/[^\x00-\x7F]/g, " ")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+    const stopWords = new Set([
+      "please",
+      "provide",
+      "share",
+      "reply",
+      "your",
+      "the",
+      "a",
+      "an",
+      "to",
+      "with",
+      "for",
+      "and",
+      "value",
+      "requested",
+      "text",
+    ]);
+    const tokens = normalized
+      ? normalized
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length > 1 && !stopWords.has(token))
+      : [];
+    if (tokens.length > 0) {
+      return tokens.slice(0, 6).join("_");
+    }
+    const step = Number.isFinite(request.step) ? Math.max(1, Math.trunc(request.step)) : 1;
+    return `user_input_step_${step}`;
+  }
+
+  private isSensitiveContextText(text: string): boolean {
+    return /(password|passcode|otp|one[-\s]?time|verification|auth(?:orization)?\s*code|2fa|cvv|cvc|credit\s*card|debit\s*card|card\s*number|bank\s*account|ssn|social\s*security|passport|identity|id\s*number|银行卡|信用卡|借记卡|卡号|密码|验证码|一次性|支付|身份证|护照|社保)/i
+      .test(String(text || ""));
+  }
+
+  private buildNonSensitiveChatContextItems(
+    pairs: ChatContextPair[],
+    source: ChatContextItemSource,
+  ): ChatContextItem[] {
+    const itemsByKey = new Map<string, ChatContextItem>();
+    let fallbackIndex = 1;
+    for (const pair of pairs) {
+      const key = this.normalizeContextKey(pair.key, fallbackIndex);
+      fallbackIndex += 1;
+      const value = this.normalizeContextValue(pair.value);
+      if (!key || !value) {
+        continue;
+      }
+      if (this.isSensitiveContextText(`${key}\n${value}`)) {
+        continue;
+      }
+      itemsByKey.set(key, {
+        key,
+        value,
+        sensitivity: "non_sensitive",
+        source,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    return [...itemsByKey.values()];
+  }
+
+  private extractGenericKeyValuePairs(text: string): ChatContextPair[] {
+    const input = String(text || "").trim();
+    if (!input || input.startsWith("/")) {
+      return [];
+    }
+    const regex = /(^|[,\n;，；])\s*([^,\n;，；:=]{1,40})\s*[:：=]\s*([^,\n;，；]{1,120})/g;
+    const pairs: ChatContextPair[] = [];
+    let match: RegExpExecArray | null = null;
+    while ((match = regex.exec(input)) !== null) {
+      const key = String(match[2] || "").trim();
+      const value = String(match[3] || "").trim();
+      if (!key || !value) {
+        continue;
+      }
+      pairs.push({ key, value });
+    }
+    return pairs;
+  }
+
+  private extractChatContextItemsFromPlainText(text: string): ChatContextItem[] {
+    const pairs: ChatContextPair[] = [];
+    for (const extractor of this.chatContextExtractors) {
+      if (!extractor.extractFromPlainText) {
+        continue;
+      }
+      const extracted = extractor.extractFromPlainText(text);
+      if (Array.isArray(extracted) && extracted.length > 0) {
+        pairs.push(...extracted);
+      }
+    }
+    return this.buildNonSensitiveChatContextItems(pairs, "plain_chat");
+  }
+
+  private extractChatContextItemsFromUserInput(
+    request: UserInputRequest,
+    input: string,
+  ): ChatContextItem[] {
+    const value = String(input || "").trim();
+    if (!value) {
+      return [];
+    }
+    if (this.isSensitiveContextText(`${request.question ?? ""}\n${request.placeholder ?? ""}`)) {
+      return [];
+    }
+
+    const pairs: ChatContextPair[] = [];
+    for (const extractor of this.chatContextExtractors) {
+      if (!extractor.extractFromUserInput) {
+        continue;
+      }
+      const extracted = extractor.extractFromUserInput(request, value);
+      if (Array.isArray(extracted) && extracted.length > 0) {
+        pairs.push(...extracted);
+      }
+    }
+    return this.buildNonSensitiveChatContextItems(pairs, "request_user_input");
+  }
+
+  private upsertChatContextItems(chatId: number, items: ChatContextItem[]): ChatContextItem[] {
+    if (items.length === 0) {
+      return [];
+    }
+    this.pruneExpiredChatContext(chatId);
+    const bucket = this.chatContextStore.get(chatId) ?? new Map<string, ChatContextItem>();
+    this.chatContextStore.set(chatId, bucket);
+    for (const item of items) {
+      bucket.set(item.key, item);
+    }
+    return items;
+  }
+
+  private pruneExpiredChatContext(chatId: number): void {
+    const bucket = this.chatContextStore.get(chatId);
+    if (!bucket || bucket.size === 0) {
+      return;
+    }
+    const cutoff = Date.now() - TelegramGateway.CHAT_CONTEXT_TTL_MS;
+    for (const [key, item] of bucket.entries()) {
+      const ts = Date.parse(item.updatedAt);
+      if (!Number.isFinite(ts) || ts < cutoff) {
+        bucket.delete(key);
+      }
+    }
+    if (bucket.size === 0) {
+      this.chatContextStore.delete(chatId);
+    }
+  }
+
+  private clearChatContext(chatId: number): void {
+    this.chatContextStore.delete(chatId);
+  }
+
+  private isLikelyTaskInstruction(text: string): boolean {
+    const normalized = String(text || "").trim();
+    if (!normalized) {
+      return false;
+    }
+    return /^(?:\/run\b|open\b|start\b|launch\b|go\b|use\b|run\b|please\b|打开|开始|启动|请|帮我|去|前往)/i.test(normalized);
+  }
+
+  private buildChatContextSavedMessage(locale: "zh" | "en", items: ChatContextItem[]): string {
+    const keys = Array.from(new Set(items.map((item) => item.key))).slice(0, 6);
+    if (keys.length === 0) {
+      return locale === "zh"
+        ? "已记录非敏感上下文信息，后续任务可复用。"
+        : "Saved non-sensitive context for reuse in upcoming tasks.";
+    }
+    if (locale === "zh") {
+      return `已记录上下文字段：${keys.join("、")}。后续任务可复用这些非敏感信息。`;
+    }
+    return `Saved context fields: ${keys.join(", ")}. I will reuse these non-sensitive values in upcoming tasks.`;
+  }
+
+  private enrichTaskWithChatContext(task: string, chatId: number | null): string {
+    if (chatId === null) {
+      return task;
+    }
+    this.pruneExpiredChatContext(chatId);
+    const bucket = this.chatContextStore.get(chatId);
+    if (!bucket || bucket.size === 0) {
+      return task;
+    }
+
+    const taskLower = task.toLowerCase();
+    const contextLines: string[] = [];
+    const items = [...bucket.values()]
+      .filter((item) => item.sensitivity === "non_sensitive")
+      .sort((a, b) => a.key.localeCompare(b.key));
+    for (const item of items) {
+      const keyLower = item.key.toLowerCase();
+      const valueLower = item.value.toLowerCase();
+      if (taskLower.includes(`${keyLower}=`) || taskLower.includes(valueLower)) {
+        continue;
+      }
+      contextLines.push(`- ${item.key}=${item.value}`);
+    }
+    if (contextLines.length === 0) {
+      return task;
+    }
+
+    return [
+      task,
+      "",
+      "[Telegram context cache]",
+      "Use these non-sensitive user-provided fields when relevant:",
+      ...contextLines,
+      "- Do not treat these as credentials/OTP/payment data.",
+    ].join("\n");
+  }
+
   private normalizeAppToken(app: string): string {
     const normalized = String(app || "").trim().toLowerCase();
     return normalized || "unknown";
@@ -1310,6 +1622,8 @@ export class TelegramGateway {
 
     clearTimeout(pending.timeout);
     this.pendingUserInputs.delete(chatId);
+    const contextItems = this.extractChatContextItemsFromUserInput(pending.request, normalized);
+    this.upsertChatContextItems(chatId, contextItems);
     pending.resolve({
       text: normalized,
       resolvedAt: new Date().toISOString(),
@@ -1649,6 +1963,7 @@ export class TelegramGateway {
 
     if (text === "/clear") {
       this.chat.clear(chatId);
+      this.clearChatContext(chatId);
       await this.bot.sendMessage(chatId, "Conversation memory cleared.");
       return;
     }
@@ -1656,6 +1971,7 @@ export class TelegramGateway {
     const newSessionMatch = text.match(/^\/new(?:\s+(.+))?$/i);
     if (newSessionMatch) {
       this.chat.clear(chatId);
+      this.clearChatContext(chatId);
       const droppedQueued = this.clearQueuedTasksForChat(chatId);
       if (droppedQueued > 0) {
         this.log(`cleared queued tasks chat=${chatId} count=${droppedQueued} reason=/new`);
@@ -1688,6 +2004,7 @@ export class TelegramGateway {
 
     if (text === "/reset") {
       this.chat.clear(chatId);
+      this.clearChatContext(chatId);
       this.playStorePreflightPassed = false;
       this.playStorePreflightTriggered = false;
       this.playStorePreflightDeferredNotified = false;
@@ -1768,6 +2085,22 @@ export class TelegramGateway {
 
     if (await this.tryResolvePendingOtpFromPlainText(chatId, text)) {
       return;
+    }
+
+    const onboardingPendingNow = this.chat.isOnboardingPending();
+    if (!text.startsWith("/") && !onboardingPendingNow) {
+      const contextItems = this.extractChatContextItemsFromPlainText(text);
+      const savedItems = this.upsertChatContextItems(chatId, contextItems);
+      if (savedItems.length > 0) {
+        if (!this.isLikelyTaskInstruction(text)) {
+          const locale = this.inferLocale(message);
+          await this.bot.sendMessage(
+            chatId,
+            this.sanitizeForChat(this.buildChatContextSavedMessage(locale, savedItems), 1800),
+          );
+          return;
+        }
+      }
     }
 
     const onboardingPendingBefore = this.chat.isOnboardingPending();
@@ -1873,6 +2206,7 @@ export class TelegramGateway {
     sessionKey: string;
   }): Promise<CronRunResult> {
     const { chatId, task, source, modelName, sessionKey } = params;
+    const agentTask = this.enrichTaskWithChatContext(task, chatId);
     const progressLocale = this.inferTaskLocale(task);
     const progressNarrationState: ProgressNarrationState = {
       lastNotifiedProgress: null,
@@ -1970,7 +2304,7 @@ export class TelegramGateway {
 
         try {
           const result = await this.agent.runTask(
-            task,
+            agentTask,
             modelName ?? undefined,
             chatId === null
               ? undefined
@@ -2094,7 +2428,10 @@ export class TelegramGateway {
               skillPath: result.skillPath ?? null,
               scriptPath: result.scriptPath ?? null,
             });
-
+            const finalForChat = this.sanitizeForChatMultiline(
+              this.stripStepCounterTelemetry(finalMessage),
+              1800,
+            );
             // Check if message contains an image URL
             const imageUrlMatch = finalMessage.match(/https:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)/i);
             if (imageUrlMatch) {
@@ -2123,10 +2460,10 @@ export class TelegramGateway {
             } else {
               await this.bot.sendMessage(
                 chatId,
-                this.sanitizeForChat(
-                  this.stripStepCounterTelemetry(finalMessage),
-                  1800,
-                ),
+                finalForChat,
+                {
+                  disable_web_page_preview: true,
+                },
               );
               this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
             }
