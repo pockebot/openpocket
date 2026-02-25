@@ -258,6 +258,21 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeAllowedCommands(raw: unknown, fallback: string[]): string[] {
+  const source = Array.isArray(raw) ? raw : fallback;
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of source) {
+    const item = String(value ?? "").trim();
+    if (!item || seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    normalized.push(item);
+  }
+  return normalized.length > 0 ? normalized : [...fallback];
+}
+
 function deepMerge<T>(base: T, incoming: unknown): T {
   if (!isObject(base) || !isObject(incoming)) {
     return (incoming as T) ?? base;
@@ -693,9 +708,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       enabled: Boolean(scriptExecutor.enabled ?? true),
       timeoutSec: Math.max(1, Number(scriptExecutor.timeoutSec ?? 60)),
       maxOutputChars: Math.max(1000, Number(scriptExecutor.maxOutputChars ?? 6000)),
-      allowedCommands: Array.isArray(scriptExecutor.allowedCommands)
-        ? scriptExecutor.allowedCommands.map((v) => String(v))
-        : defaultConfigObject().scriptExecutor.allowedCommands,
+      allowedCommands: normalizeAllowedCommands(
+        scriptExecutor.allowedCommands,
+        defaultConfigObject().scriptExecutor.allowedCommands,
+      ),
     },
     codingTools: {
       enabled: Boolean(codingTools.enabled ?? true),
@@ -704,9 +720,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       maxOutputChars: Math.max(1000, Number(codingTools.maxOutputChars ?? 12000)),
       allowBackground: Boolean(codingTools.allowBackground ?? true),
       applyPatchEnabled: Boolean(codingTools.applyPatchEnabled ?? true),
-      allowedCommands: Array.isArray(codingTools.allowedCommands)
-        ? codingTools.allowedCommands.map((v) => String(v))
-        : defaultConfigObject().codingTools.allowedCommands,
+      allowedCommands: normalizeAllowedCommands(
+        codingTools.allowedCommands,
+        defaultConfigObject().codingTools.allowedCommands,
+      ),
     },
     memoryTools: {
       enabled: Boolean(memoryTools.enabled ?? true),
