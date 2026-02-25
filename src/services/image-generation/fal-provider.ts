@@ -53,7 +53,7 @@ export class FalProvider extends ImageGenerationProvider {
   constructor(config: FalProviderConfig) {
     super();
     this.apiKey = config.apiKey;
-    this.model = config.model ?? "fal-ai/nanobanana";
+    this.model = config.model ?? "fal-ai/nano-banana";
     this.baseUrl = config.baseUrl ?? "https://queue.fal.run";
   }
 

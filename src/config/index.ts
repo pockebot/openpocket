@@ -163,7 +163,7 @@ function defaultConfigObject() {
       provider: "fal" as const,
       apiKey: "",
       apiKeyEnv: "FAL_API_KEY",
-      model: "fal-ai/nanobanana",
+      model: "fal-ai/nano-banana",
     },
     models: {
       "gpt-5.2-codex": {
@@ -579,9 +579,9 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       model.reasoningEffort ?? model.reasoning_effort ?? null;
     const reasoningEffort =
       reasoningRaw === "low" ||
-      reasoningRaw === "medium" ||
-      reasoningRaw === "high" ||
-      reasoningRaw === "xhigh"
+        reasoningRaw === "medium" ||
+        reasoningRaw === "high" ||
+        reasoningRaw === "xhigh"
         ? reasoningRaw
         : null;
     const tempRaw = model.temperature;
@@ -747,7 +747,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       localRelayStateFile: resolvePath(
         String(
           humanAuth.localRelayStateFile ??
-            path.join(resolvedStateDir, "human-auth-relay", "requests.json"),
+          path.join(resolvedStateDir, "human-auth-relay", "requests.json"),
         ),
       ),
       relayBaseUrl: String(humanAuth.relayBaseUrl ?? "").trim().replace(/\/+$/, ""),
@@ -768,23 +768,23 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
           executable:
             String(
               humanAuthNgrok.executable ??
-                defaultConfigObject().humanAuth.tunnel.ngrok.executable,
+              defaultConfigObject().humanAuth.tunnel.ngrok.executable,
             ).trim() || "ngrok",
           authtoken: String(humanAuthNgrok.authtoken ?? ""),
           authtokenEnv:
             String(
               humanAuthNgrok.authtokenEnv ??
-                defaultConfigObject().humanAuth.tunnel.ngrok.authtokenEnv,
+              defaultConfigObject().humanAuth.tunnel.ngrok.authtokenEnv,
             ).trim() || "NGROK_AUTHTOKEN",
           apiBaseUrl:
             String(
               humanAuthNgrok.apiBaseUrl ??
-                defaultConfigObject().humanAuth.tunnel.ngrok.apiBaseUrl,
+              defaultConfigObject().humanAuth.tunnel.ngrok.apiBaseUrl,
             ).trim().replace(/\/+$/, "") || "http://127.0.0.1:4040",
           startupTimeoutSec: (() => {
             const raw = Number(
               humanAuthNgrok.startupTimeoutSec ??
-                defaultConfigObject().humanAuth.tunnel.ngrok.startupTimeoutSec,
+              defaultConfigObject().humanAuth.tunnel.ngrok.startupTimeoutSec,
             );
             const value = Number.isFinite(raw) ? raw : 20;
             return Math.max(3, Math.round(value));

@@ -2094,14 +2094,42 @@ export class TelegramGateway {
               skillPath: result.skillPath ?? null,
               scriptPath: result.scriptPath ?? null,
             });
-            await this.bot.sendMessage(
-              chatId,
-              this.sanitizeForChat(
-                this.stripStepCounterTelemetry(finalMessage),
-                1800,
-              ),
-            );
-            this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
+
+            // Check if message contains an image URL
+            const imageUrlMatch = finalMessage.match(/https:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)/i);
+            if (imageUrlMatch) {
+              const imageUrl = imageUrlMatch[0];
+              const caption = this.sanitizeForChat(
+                this.stripStepCounterTelemetry(finalMessage.replace(imageUrl, "").trim()),
+                1000,
+              );
+              try {
+                await this.bot.sendPhoto(chatId, imageUrl, {
+                  caption: caption || undefined,
+                });
+                this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
+              } catch (error) {
+                // Fallback to text message if photo send fails
+                this.log(`Failed to send photo, falling back to text: ${(error as Error).message}`);
+                await this.bot.sendMessage(
+                  chatId,
+                  this.sanitizeForChat(
+                    this.stripStepCounterTelemetry(finalMessage),
+                    1800,
+                  ),
+                );
+                this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
+              }
+            } else {
+              await this.bot.sendMessage(
+                chatId,
+                this.sanitizeForChat(
+                  this.stripStepCounterTelemetry(finalMessage),
+                  1800,
+                ),
+              );
+              this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
+            }
           }
 
           return {
