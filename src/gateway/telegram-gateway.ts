@@ -2,7 +2,15 @@ import TelegramBot, { type Message } from "node-telegram-bot-api";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AgentProgressUpdate, CronJob, OpenPocketConfig, UserDecisionRequest, UserDecisionResponse } from "../types.js";
+import type {
+  AgentProgressUpdate,
+  CronJob,
+  OpenPocketConfig,
+  UserDecisionRequest,
+  UserDecisionResponse,
+  UserInputRequest,
+  UserInputResponse,
+} from "../types.js";
 import { saveConfig } from "../config/index.js";
 import { AgentRuntime } from "../agent/agent-runtime.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
@@ -68,6 +76,13 @@ type PendingUserDecision = {
   timeout: NodeJS.Timeout;
 };
 
+type PendingUserInput = {
+  request: UserInputRequest;
+  resolve: (value: UserInputResponse) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
+};
+
 type QueuedChatTask = {
   chatId: number;
   task: string;
@@ -90,6 +105,7 @@ export class TelegramGateway {
   private readonly typingIntervalMs: number;
   private readonly typingSessions = new Map<number, { refs: number; timer: NodeJS.Timeout }>();
   private readonly pendingUserDecisions = new Map<number, PendingUserDecision>();
+  private readonly pendingUserInputs = new Map<number, PendingUserInput>();
   private readonly pendingChatTasks: QueuedChatTask[] = [];
   private drainingChatTaskQueue = false;
   private lastSyncedBotDisplayName: string | null = null;
@@ -1282,6 +1298,26 @@ export class TelegramGateway {
     return true;
   }
 
+  private async tryResolvePendingUserInput(chatId: number, text: string): Promise<boolean> {
+    const pending = this.pendingUserInputs.get(chatId);
+    if (!pending) {
+      return false;
+    }
+    const normalized = String(text || "").trim();
+    if (!normalized) {
+      return false;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingUserInputs.delete(chatId);
+    pending.resolve({
+      text: normalized,
+      resolvedAt: new Date().toISOString(),
+    });
+    await this.bot.sendMessage(chatId, "Got it. Continuing.");
+    return true;
+  }
+
   private requestUserDecisionFromChat(
     chatId: number,
     request: UserDecisionRequest,
@@ -1350,6 +1386,75 @@ export class TelegramGateway {
     });
   }
 
+  private requestUserInputFromChat(
+    chatId: number,
+    request: UserInputRequest,
+  ): Promise<UserInputResponse> {
+    const screenshotPromise = this.agent.captureManualScreenshot().catch(() => "");
+    return new Promise<UserInputResponse>(async (resolve, reject) => {
+      if (this.pendingUserInputs.has(chatId)) {
+        const existing = this.pendingUserInputs.get(chatId)!;
+        clearTimeout(existing.timeout);
+        this.pendingUserInputs.delete(chatId);
+        existing.reject(new Error("Superseded by a newer user-input request."));
+      }
+
+      const timeout = setTimeout(() => {
+        this.pendingUserInputs.delete(chatId);
+        reject(new Error("User input timed out."));
+      }, Math.max(15_000, request.timeoutSec * 1000));
+
+      this.pendingUserInputs.set(chatId, {
+        request,
+        resolve,
+        reject,
+        timeout,
+      });
+
+      const locale = this.inferTaskLocale(`${request.question}\n${request.placeholder ?? ""}`);
+      const escalationIntro = this.sanitizeForChat(
+        await this.chat.narrateEscalation({
+          event: "user_decision",
+          locale,
+          task: request.task,
+          question: request.question,
+          options: [],
+          hasWebLink: false,
+          includeLocalSecurityAssurance: false,
+        }),
+        1000,
+      );
+      const questionTitle = locale === "zh" ? "需要的信息：" : "Requested value:";
+      const placeholderLine = request.placeholder
+        ? (locale === "zh"
+          ? `格式提示：${request.placeholder}`
+          : `Format hint: ${request.placeholder}`)
+        : "";
+      const replyHint = locale === "zh" ? "请直接回复文本内容。" : "Reply with the text value.";
+      const prompt = [
+        escalationIntro,
+        "",
+        questionTitle,
+        request.question,
+        placeholderLine,
+        "",
+        replyHint,
+      ].filter(Boolean).join("\n");
+      const screenshotPath = await screenshotPromise;
+      if (screenshotPath) {
+        try {
+          await this.bot.sendPhoto(chatId, screenshotPath, {
+            caption: this.sanitizeForChat(prompt, 950),
+          });
+          return;
+        } catch {
+          // Fall back to text-only prompt below.
+        }
+      }
+      await this.bot.sendMessage(chatId, this.sanitizeForChat(prompt, 1800));
+    });
+  }
+
   private async consumeMessage(message: Message): Promise<void> {
     const chatId = message.chat.id;
     if (!this.allowed(chatId)) {
@@ -1358,6 +1463,10 @@ export class TelegramGateway {
 
     const text = message.text?.trim();
     if (!text) {
+      return;
+    }
+
+    if (!text.startsWith("/") && await this.tryResolvePendingUserInput(chatId, text)) {
       return;
     }
 
@@ -1802,6 +1911,7 @@ export class TelegramGateway {
                 progress.step === 1
                 || action === "finish"
                 || action === "request_human_auth"
+                || action === "request_user_input"
                 || /(error|failed|timeout|interrupted|rejected)/i.test(
                   `${progress.message} ${progress.thought}`,
                 );
@@ -1966,6 +2076,9 @@ export class TelegramGateway {
               ? undefined
               : async (request) => this.requestUserDecisionFromChat(chatId, request),
             sessionKey,
+            chatId === null
+              ? undefined
+              : async (request) => this.requestUserInputFromChat(chatId, request),
           );
           await progressWork;
 

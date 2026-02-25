@@ -155,6 +155,7 @@ export async function runRuntimeAttempt(
       systemPrompt,
       onHumanAuth: request.onHumanAuth,
       onUserDecision: request.onUserDecision,
+      onUserInput: request.onUserInput,
       onProgress: request.onProgress,
     };
 

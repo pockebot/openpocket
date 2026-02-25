@@ -11,6 +11,8 @@ import type {
   HumanAuthRequest,
   UserDecisionRequest,
   UserDecisionResponse,
+  UserInputRequest,
+  UserInputResponse,
   OpenPocketConfig,
   ModelProfile,
   SkillInfo,
@@ -272,6 +274,7 @@ interface PhoneAgentRunContext {
   systemPrompt: string;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
+  onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
 }
 
@@ -2057,6 +2060,68 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
           }
 
+          // ---- request_user_input ----
+          if (action.type === "request_user_input") {
+            if (!ctx.onUserInput) {
+              const msg = "User input required, but no handler configured.";
+              ctx.failMessage = msg;
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+            let response: UserInputResponse;
+            try {
+              response = await ctx.onUserInput({
+                sessionId: ctx.session.id,
+                sessionPath: ctx.session.path,
+                task: ctx.task,
+                step,
+                question: action.question,
+                placeholder: action.placeholder,
+                timeoutSec: Math.max(20, action.timeoutSec ?? 300),
+                currentApp: snapshot?.currentApp ?? "unknown",
+                screenshotPath: ctx.lastScreenshotPath,
+              });
+            } catch (error) {
+              const msg = `User input failed: ${(error as Error).message}`;
+              ctx.failMessage = msg;
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+            const text = typeof response.text === "string" ? response.text : String(response.text ?? "");
+            const resolvedAt = typeof response.resolvedAt === "string" && response.resolvedAt.trim()
+              ? response.resolvedAt.trim()
+              : nowIso();
+            const logResultText = `user_input input_len=${text.length} at=${resolvedAt}`;
+            const modelResultText = `user_input value=${JSON.stringify(text)} input_len=${text.length} at=${resolvedAt}`;
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              logResultText,
+              buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+            );
+            ctx.traces.push({ step, action, result: logResultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.history.push(`step ${step}: action=request_user_input input_len=${text.length}`);
+            return { content: [{ type: "text" as const, text: modelResultText }], details: {} };
+          }
+
           // ---- wait ----
           if (action.type === "wait") {
             const ms = action.durationMs ?? 1000;
@@ -2433,6 +2498,7 @@ export class AgentRuntime {
     promptMode?: "full" | "minimal" | "none",
     onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
     sessionKey?: string,
+    onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse,
   ): Promise<AgentRunResult> {
     const hasSkillMatch = this.skillLoader.buildPromptContextForTask(task, {
       maxSummaryItems: 1,
@@ -2450,6 +2516,7 @@ export class AgentRuntime {
       promptMode,
       onUserDecision,
       availableToolNames: activeToolNames,
+      onUserInput,
     };
 
     return runRuntimeTask(
