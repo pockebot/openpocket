@@ -25,6 +25,7 @@
     "prepack": "npm run build",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "npm run build && node --test test/*.test.mjs",
+    "smoke:dual-side": "bash scripts/smoke/dual-side-smoke.sh",
     "test:special-input": "npm run build && node scripts/verify-special-input.mjs",
     "test:e2e:docker": "bash scripts/test-e2e-docker.sh",
     "dev": "tsx src/cli.ts",
