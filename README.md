@@ -520,6 +520,7 @@ Command prefix by install mode:
 ./openpocket install-cli
 ./openpocket onboard
 ./openpocket target show
+./openpocket target set --type physical-phone
 ./openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
 ./openpocket config-show
 ./openpocket emulator start

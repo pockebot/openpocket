@@ -109,6 +109,7 @@ Examples:
   openpocket onboard
   openpocket onboard --target physical-phone
   openpocket onboard --force
+  openpocket target set --type physical-phone
   openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
   openpocket target set --type physical-phone --device R5CX123456A
   openpocket emulator start
@@ -321,6 +322,112 @@ function ensureGatewayStoppedForTargetSwitch(): void {
   }
 }
 
+type ConnectedTargetDevice = {
+  deviceId: string;
+  hint: string;
+};
+
+function adbDeviceProp(
+  emulator: EmulatorManager,
+  deviceId: string,
+  prop: string,
+): string {
+  try {
+    return String(
+      emulator.runAdb(["-s", deviceId, "shell", "getprop", prop], 4_000),
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
+function discoverConnectedTargetDevices(cfg: OpenPocketConfig): ConnectedTargetDevice[] {
+  const runtimeConfig = JSON.parse(JSON.stringify(cfg)) as OpenPocketConfig;
+  const emulator = new EmulatorManager(runtimeConfig);
+  let status: { devices: string[] };
+  try {
+    status = emulator.status();
+  } catch (error) {
+    printWarn(`Unable to query adb device list: ${(error as Error).message}`);
+    return [];
+  }
+  return status.devices.map((deviceId) => {
+    const manufacturer = adbDeviceProp(emulator, deviceId, "ro.product.manufacturer");
+    const model = adbDeviceProp(emulator, deviceId, "ro.product.model");
+    const release = adbDeviceProp(emulator, deviceId, "ro.build.version.release");
+    const pieces = [manufacturer, model].map((v) => v.trim()).filter(Boolean);
+    const modelText = pieces.length > 0 ? pieces.join(" ") : "Unknown model";
+    const versionText = release ? `Android ${release}` : "Android (unknown)";
+    return {
+      deviceId,
+      hint: `${modelText} | ${versionText}`,
+    };
+  });
+}
+
+async function chooseTargetDeviceId(
+  candidates: ConnectedTargetDevice[],
+  configuredDeviceId: string | null,
+): Promise<string | null> {
+  if (candidates.length === 0) {
+    printWarn("No online adb device detected for this target. Keep preferred device as auto mode.");
+    return configuredDeviceId?.trim() ? configuredDeviceId : null;
+  }
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    printInfo(`Detected one device and selected it automatically: ${only.deviceId} (${only.hint})`);
+    return only.deviceId;
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    printWarn(
+      `Detected ${candidates.length} devices, but current shell is non-interactive; keep preferred device as auto mode.`,
+    );
+    return configuredDeviceId?.trim() ? configuredDeviceId : null;
+  }
+
+  const autoValue = "__auto__";
+  const configured = configuredDeviceId?.trim() || "";
+  const options: CliSelectOption<string>[] = [
+    {
+      value: autoValue,
+      label: "Auto-select device at runtime",
+      hint: "No fixed serial in config",
+    },
+    ...candidates.map((item) => ({
+      value: item.deviceId,
+      label: item.deviceId,
+      hint: item.hint,
+    })),
+  ];
+  const initial = candidates.some((item) => item.deviceId === configured)
+    ? configured
+    : autoValue;
+
+  const rl = createInterface({ input, output });
+  try {
+    const selected = await selectByArrowKeys(
+      rl,
+      "Choose preferred target device",
+      options,
+      initial,
+    );
+    if (selected === autoValue) {
+      return null;
+    }
+    return selected;
+  } finally {
+    if (input.setRawMode) {
+      try {
+        input.setRawMode(false);
+      } catch {
+        // Ignore raw mode reset errors.
+      }
+    }
+    input.pause();
+    rl.close();
+  }
+}
+
 async function runTargetCommand(configPath: string | undefined, args: string[]): Promise<number> {
   const sub = (args[0] ?? "show").trim();
   if (sub !== "show" && sub !== "set") {
@@ -380,6 +487,16 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
 
   if (isEmulatorTarget(cfg.target.type)) {
     cfg.target.adbEndpoint = "";
+  }
+
+  const shouldPromptDeviceSelection =
+    deviceIdRaw === null
+    && !clearDevice
+    && (cfg.target.type === "physical-phone" || cfg.target.type === "android-tv")
+    && (typeRaw !== null || adbEndpointRaw !== null || clearAdbEndpoint);
+  if (shouldPromptDeviceSelection) {
+    const candidates = discoverConnectedTargetDevices(cfg);
+    cfg.agent.deviceId = await chooseTargetDeviceId(candidates, cfg.agent.deviceId);
   }
 
   saveConfig(cfg);
