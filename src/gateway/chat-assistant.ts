@@ -990,12 +990,43 @@ export class ChatAssistant {
   }
 
   private looksLikeTaskInstruction(input: string): boolean {
-    const t = this.normalizeOneLine(input).toLowerCase();
+    const normalized = this.normalizeOneLine(input);
+    const t = normalized.toLowerCase();
     if (!t) {
       return false;
     }
-    return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start|check|query|look up|find)\b/.test(t)
-      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用|查询|查下|看看|帮我)/.test(t);
+    const capabilityOnly =
+      /(what can you do|what are you capable of|can you code\??|can you write code\??|are you able to code\??|do you support coding\??)/i
+        .test(normalized)
+      || /(你(能|会|可以).{0,8}(做什么|干什么|提供什么|支持什么|帮什么)|会写代码吗|能写代码吗|会不会写代码|能不能写代码)/i
+        .test(normalized);
+    if (capabilityOnly) {
+      return false;
+    }
+
+    const hasPhoneOperationVerb =
+      /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start|check|query|look up|find)\b/
+        .test(t)
+      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用|查询|查下|看看|进入|运行|执行)/.test(normalized);
+    if (hasPhoneOperationVerb) {
+      return true;
+    }
+
+    const hasBuildVerb =
+      /\b(create|build|implement|generate|write|develop|code|fix|edit|update)\b/.test(t)
+      || /(创建|新建|编写|写|开发|实现|生成|修复|修改|编辑|更新)/.test(normalized);
+    if (!hasBuildVerb) {
+      return false;
+    }
+
+    const hasTaskTarget =
+      /\b(file|folder|directory|project|app|application|program|script|code|apk|android|emulator|repo|repository|javascript|typescript|python|java|kotlin|gradle)\b/i
+        .test(normalized)
+      || /(文件|目录|项目|应用|程序|脚本|代码|安卓|模拟器|仓库|工程|贪吃蛇|手机应用|APP)/i.test(normalized)
+      || /(?:^|[\s"'`])(?:[\w.-]+\/)+[\w.-]+/.test(normalized)
+      || /\.[a-zA-Z0-9]{1,8}\b/.test(normalized);
+
+    return hasTaskTarget;
   }
 
   private personaPresetFromAnswer(answer: string, locale: OnboardingLocale): string {
@@ -2194,6 +2225,16 @@ export class ChatAssistant {
         reply: "",
         confidence: 0.6,
         reason: `${reasonPrefix}low_confidence_task_fallback`,
+      };
+    }
+
+    if (this.looksLikeTaskInstruction(normalizedInput)) {
+      return {
+        mode: "task",
+        task: normalizedInput,
+        reply: "",
+        confidence: Math.max(0.75, decided.confidence),
+        reason: `${reasonPrefix}executable_intent_task_fallback`,
       };
     }
 

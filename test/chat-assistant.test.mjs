@@ -187,6 +187,42 @@ test("ChatAssistant decide upgrades high-confidence chat to task when grounding 
   assert.match(out.reason, /requires_external_observation/);
 });
 
+test("ChatAssistant decide forces task for executable coding request phrased as feasibility question", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.classifyWithModel = async () => ({
+    mode: "chat",
+    task: "",
+    reply: "I can describe how to do this.",
+    confidence: 0.96,
+    reason: "model_classify",
+    requiresExternalObservation: false,
+    canAnswerDirectly: true,
+  });
+
+  const input = "你再写一个程序，能够稳定地在现在的 ADK 当中，以及在 Emulator 里面运行的一个贪吃蛇游戏的 APP，可以吗？";
+  const out = await assistant.decide(240, input);
+  assert.equal(out.mode, "task");
+  assert.equal(out.task, input);
+  assert.match(out.reason, /executable_intent_task_fallback/);
+});
+
+test("ChatAssistant decide keeps chat for pure coding capability question", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.classifyWithModel = async () => ({
+    mode: "chat",
+    task: "",
+    reply: "Yes, I can help with coding.",
+    confidence: 0.94,
+    reason: "model_classify",
+    requiresExternalObservation: false,
+    canAnswerDirectly: true,
+  });
+
+  const out = await assistant.decide(241, "你会写代码吗？");
+  assert.equal(out.mode, "chat");
+  assert.equal(out.reason, "model_classify;grounding_audit:test_default_grounding_audit");
+});
+
 test("ChatAssistant decide reports missing API key without heuristics", async () => {
   await withTempCodexHome("openpocket-codex-empty-", async () => {
     const { assistant } = createAssistant();
