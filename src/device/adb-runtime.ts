@@ -132,6 +132,110 @@ function encodeInputText(text: string): string {
     .replace(/\n/g, "%s");
 }
 
+function stripOuterQuotes(value: string): string {
+  const input = String(value ?? "").trim();
+  if (input.length < 2) {
+    return input;
+  }
+  if (input.startsWith("'") && input.endsWith("'")) {
+    // Decode the common shell-safe single-quote escape sequence.
+    return input.slice(1, -1).replace(/'\\''/g, "'");
+  }
+  if (input.startsWith("\"") && input.endsWith("\"")) {
+    return input
+      .slice(1, -1)
+      .replace(/\\\\/g, "\\")
+      .replace(/\\"/g, "\"")
+      .replace(/\\\$/g, "$")
+      .replace(/\\`/g, "`");
+  }
+  return input;
+}
+
+function parseExplicitShellWrap(command: string): { shell: "sh" | "bash"; mode: "-c" | "-lc"; script: string } | null {
+  const normalized = String(command || "").trim();
+  const wrapped = normalized.match(/^(sh|bash)\s+(-lc|-c)\s+([\s\S]+)$/i);
+  if (!wrapped) {
+    return null;
+  }
+  const shell = wrapped[1]?.toLowerCase() === "bash" ? "bash" : "sh";
+  const mode = wrapped[2] === "-c" ? "-c" : "-lc";
+  const script = stripOuterQuotes(String(wrapped[3] ?? ""));
+  return { shell, mode, script };
+}
+
+function splitShellArgs(command: string): string[] {
+  const normalized = String(command || "").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | "\"" | null = null;
+  let escaping = false;
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    const ch = normalized[i];
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+
+    if (quote === null) {
+      if (/\s/.test(ch)) {
+        if (current) {
+          args.push(current);
+          current = "";
+        }
+        continue;
+      }
+      if (ch === "'" || ch === "\"") {
+        quote = ch as "'" | "\"";
+        continue;
+      }
+      if (ch === "\\") {
+        escaping = true;
+        continue;
+      }
+      current += ch;
+      continue;
+    }
+
+    if (quote === "'") {
+      if (ch === "'") {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    // double-quoted text
+    if (ch === "\"") {
+      quote = null;
+      continue;
+    }
+    if (ch === "\\") {
+      escaping = true;
+      continue;
+    }
+    current += ch;
+  }
+
+  if (quote !== null) {
+    throw new Error("invalid shell command: unterminated quoted string");
+  }
+  if (escaping) {
+    current += "\\";
+  }
+  if (current) {
+    args.push(current);
+  }
+  return args;
+}
+
 function hasNonAscii(text: string): boolean {
   return /[^\x00-\x7F]/.test(text);
 }
@@ -544,7 +648,29 @@ export class AdbRuntime {
         return `Launched package ${action.packageName}`;
       }
       case "shell": {
-        const parts = action.command.trim().split(/\s+/);
+        const command = String(action.command ?? "").trim();
+        if (!command) {
+          return "Skipped empty shell command";
+        }
+        if (action.useShellWrap) {
+          this.emulator.runAdb(["-s", deviceId, "shell", "sh", "-lc", command]);
+          return `Executed shell command: ${action.command}`;
+        }
+
+        const wrapped = parseExplicitShellWrap(command);
+        if (wrapped) {
+          this.emulator.runAdb([
+            "-s",
+            deviceId,
+            "shell",
+            wrapped.shell,
+            wrapped.mode,
+            wrapped.script,
+          ]);
+          return `Executed shell command: ${action.command}`;
+        }
+
+        const parts = splitShellArgs(command);
         if (parts.length === 0) {
           return "Skipped empty shell command";
         }

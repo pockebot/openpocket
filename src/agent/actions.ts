@@ -116,6 +116,7 @@ export function normalizeAction(input: unknown): AgentAction {
     return {
       type,
       command: String(input.command ?? ""),
+      useShellWrap: Boolean(input.useShellWrap),
       reason: input.reason ? String(input.reason) : undefined,
     };
   }

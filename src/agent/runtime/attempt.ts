@@ -14,6 +14,7 @@ import {
 import type { OpenPocketConfig, ScreenSnapshot } from "../../types.js";
 import { getModelProfile, resolveModelAuth } from "../../config/index.js";
 import { sleep } from "../../utils/time.js";
+import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
 import { buildPiAiModel } from "../model-client.js";
 import { buildSystemPrompt, buildUserPrompt } from "../prompts.js";
 import type {
@@ -167,7 +168,11 @@ export async function runRuntimeAttempt(
       onProgress: request.onProgress,
     };
 
-    const tools = deps.buildPhoneAgentTools(ctx, request.availableToolNames);
+    const runtimeBackend = resolveRuntimeBackend(deps.config);
+    const availableToolNamesForRun = runtimeBackend === "pi_session_bridge"
+      ? ensureAndroidCustomToolNames(request.availableToolNames)
+      : request.availableToolNames;
+    const tools = deps.buildPhoneAgentTools(ctx, availableToolNamesForRun);
     const apiKey = auth.apiKey;
     const turnFallbackTasks: Promise<void>[] = [];
 

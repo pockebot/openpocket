@@ -294,7 +294,16 @@ export type AgentAction =
   | { type: "type"; text: string; reason?: string }
   | { type: "keyevent"; keycode: string; reason?: string }
   | { type: "launch_app"; packageName: string; reason?: string }
-  | { type: "shell"; command: string; reason?: string }
+  | {
+      type: "shell";
+      command: string;
+      /**
+       * When true, execute as `sh -lc <command>` on device.
+       * Use for shell operators/heredoc/redirect-heavy commands.
+       */
+      useShellWrap?: boolean;
+      reason?: string;
+    }
   | { type: "run_script"; script: string; timeoutSec?: number; reason?: string }
   | { type: "read"; path: string; from?: number; lines?: number; reason?: string }
   | { type: "write"; path: string; content: string; append?: boolean; reason?: string }
