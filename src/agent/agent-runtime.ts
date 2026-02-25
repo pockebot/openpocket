@@ -30,6 +30,7 @@ import { SkillLoader } from "../skills/skill-loader.js";
 import { ScriptExecutor } from "../tools/script-executor.js";
 import { CodingExecutor } from "../tools/coding-executor.js";
 import { MemoryExecutor } from "../tools/memory-executor.js";
+import { PiCodingToolsExecutor } from "./pi-coding-tools.js";
 import { Agent, type AgentMessage, type AgentTool, type AgentEvent, type AgentOptions } from "@mariozechner/pi-agent-core";
 import {
   type AssistantMessage as PiAssistantMessage,
@@ -296,6 +297,7 @@ export class AgentRuntime {
   private readonly autoArtifactBuilder: AutoArtifactBuilder;
   private readonly scriptExecutor: ScriptExecutor;
   private readonly codingExecutor: CodingExecutor;
+  private readonly piCodingToolsExecutor: PiCodingToolsExecutor;
   private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
   private busy = false;
@@ -316,6 +318,7 @@ export class AgentRuntime {
     this.autoArtifactBuilder = new AutoArtifactBuilder(config);
     this.scriptExecutor = new ScriptExecutor(config);
     this.codingExecutor = new CodingExecutor(config);
+    this.piCodingToolsExecutor = new PiCodingToolsExecutor(config);
     this.memoryExecutor = new MemoryExecutor(config);
     this.screenshotStore = new ScreenshotStore(
       config.screenshots.directory,
@@ -1750,7 +1753,32 @@ export class AgentRuntime {
           sr.stderr ? `stderr=${sr.stderr}` : "",
         ].filter(Boolean).join("\n");
       } else if (["read", "write", "edit", "apply_patch", "exec", "process"].includes(action.type)) {
-        executionResult = await this.codingExecutor.execute(action);
+        const codingAction = action as Extract<AgentAction, {
+          type: "read" | "write" | "edit" | "apply_patch" | "exec" | "process";
+        }>;
+        let piResult: string | null = null;
+        let piError: Error | null = null;
+        try {
+          piResult = await this.piCodingToolsExecutor.execute(codingAction);
+        } catch (error) {
+          piError = error as Error;
+        }
+
+        if (piResult !== null) {
+          executionResult = `${piResult}\n[coding_backend=pi_coding_tools]`;
+        } else if (!this.config.agent.legacyCodingExecutor) {
+          if (piError) {
+            throw piError;
+          }
+          throw new Error(`coding action '${codingAction.type}' is not supported by pi coding backend and legacy fallback is disabled.`);
+        } else {
+          if (piError && this.config.agent.verbose) {
+            // eslint-disable-next-line no-console
+            console.log(`[OpenPocket][coding-backend] pi_coding_tools failed: ${piError.message}; fallback=legacy`);
+          }
+          executionResult = await this.codingExecutor.execute(codingAction);
+          executionResult = `${executionResult}\n[coding_backend=legacy_coding_executor]`;
+        }
       } else if (action.type === "memory_search" || action.type === "memory_get") {
         executionResult = this.memoryExecutor.execute(action);
       } else {
