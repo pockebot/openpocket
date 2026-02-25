@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 
 import type { OpenPocketConfig } from "../types.js";
 import { ensureDir, nowForFilename } from "../utils/paths.js";
+import { buildSafeProcessEnv, validateCommandPolicy } from "../agent/tool-policy.js";
 
 export interface ScriptExecutionResult {
   ok: boolean;
@@ -15,41 +16,6 @@ export interface ScriptExecutionResult {
   durationMs: number;
   stdout: string;
   stderr: string;
-}
-
-const DENY_PATTERNS: RegExp[] = [
-  /\bsudo\b/i,
-  /\bshutdown\b/i,
-  /\breboot\b/i,
-  /\bpoweroff\b/i,
-  /\bhalt\b/i,
-  /\bmkfs\b/i,
-  /\bdd\s+if=/i,
-  /rm\s+-rf\s+\/(\s|$)/i,
-];
-
-function stripComments(line: string): string {
-  const idx = line.indexOf("#");
-  if (idx < 0) {
-    return line;
-  }
-  return line.slice(0, idx);
-}
-
-function splitToCommandSegments(line: string): string[] {
-  return line
-    .split(/&&|\|\||;/)
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
-
-function extractCommandName(segment: string): string {
-  const tokens = segment.split(/\s+/).filter(Boolean);
-  let i = 0;
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(tokens[i])) {
-    i += 1;
-  }
-  return tokens[i] ?? "";
 }
 
 function truncate(text: string, maxChars: number): string {
@@ -71,44 +37,18 @@ export class ScriptExecutor {
   }
 
   private validateScript(script: string): string | null {
-    if (!this.config.scriptExecutor.enabled) {
-      return "Script executor is disabled by config.";
-    }
-
-    if (script.trim().length === 0) {
-      return "Script is empty.";
-    }
-
     if (script.length > 12_000) {
       return "Script exceeds max length (12000 characters).";
     }
 
-    for (const deny of DENY_PATTERNS) {
-      if (deny.test(script)) {
-        return `Script blocked by safety rule: ${deny}`;
-      }
-    }
-
-    const allow = new Set(this.config.scriptExecutor.allowedCommands);
-    const lines = script.split(/\r?\n/);
-
-    for (const rawLine of lines) {
-      const line = stripComments(rawLine).trim();
-      if (!line) {
-        continue;
-      }
-      for (const segment of splitToCommandSegments(line)) {
-        const cmd = extractCommandName(segment);
-        if (!cmd) {
-          continue;
-        }
-        if (!allow.has(cmd)) {
-          return `Command '${cmd}' is not allowed by scriptExecutor.allowedCommands.`;
-        }
-      }
-    }
-
-    return null;
+    return validateCommandPolicy({
+      enabled: this.config.scriptExecutor.enabled,
+      disabledMessage: "Script executor is disabled by config.",
+      command: script,
+      emptyMessage: "Script is empty.",
+      allowCommands: this.config.scriptExecutor.allowedCommands,
+      allowlistName: "scriptExecutor.allowedCommands",
+    });
   }
 
   async execute(script: string, timeoutSec?: number): Promise<ScriptExecutionResult> {
@@ -143,7 +83,7 @@ export class ScriptExecutor {
     const result = await new Promise<ScriptExecutionResult>((resolve) => {
       const child = spawn("bash", [scriptPath], {
         cwd: this.scriptsDir,
-        env: process.env,
+        env: buildSafeProcessEnv(process.env),
         stdio: ["ignore", "pipe", "pipe"],
       });
 
