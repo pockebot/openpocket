@@ -703,6 +703,37 @@ test("ChatAssistant narrateTaskOutcome falls back and strips boilerplate", async
   assert.match(out, /Weather is 51F/i);
 });
 
+test("ChatAssistant narrateTaskOutcome keeps multiline result, marks unavailable direct links, and adds labeled search fallbacks", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.requestTaskOutcomeNarration = async () => [
+    "Available places to buy Nike Mind 002:",
+    "- GOAT — $189 — In stock online",
+    "- StockX — $290 — In stock online",
+  ].join("\n");
+
+  const out = await assistant.narrateTaskOutcome({
+    task: "Find where to buy mike mind 02 for men, where is available to buy",
+    locale: "en",
+    ok: true,
+    rawResult: "GOAT and StockX listings found for Nike Mind 002.",
+    recentProgress: [],
+    skillPath: null,
+    scriptPath: null,
+  });
+
+  assert.match(out, /Observed listings for Nike Mind 002:/);
+  assert.match(out, /\n- GOAT/);
+  assert.match(out, /listed as in stock \(unverified\)/);
+  assert.match(out, /No verifiable direct product URLs were captured/);
+  assert.match(out, /Store links:/);
+  assert.doesNotMatch(out, /Store links \(verified\):/);
+  assert.match(out, /- GOAT: link unavailable/);
+  assert.match(out, /- StockX: link unavailable/);
+  assert.match(out, /Quick search links \(not direct product pages\):/);
+  assert.match(out, /https:\/\/www\.goat\.com\/search\?query=Nike%20Mind%20002/);
+  assert.match(out, /https:\/\/stockx\.com\/search\?s=Nike%20Mind%20002/);
+});
+
 test("ChatAssistant narrateEscalation fallback generates concise local-security reassurance", async () => {
   const { assistant } = createAssistant();
   const out = await assistant.narrateEscalation({

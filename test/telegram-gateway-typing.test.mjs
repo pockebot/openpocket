@@ -1982,3 +1982,52 @@ test("TelegramGateway suppresses low-signal repetitive narration even if model r
     }
   });
 });
+
+test("TelegramGateway preserves multiline final outcome formatting for shopping results", async () => {
+  await withTempHome("openpocket-telegram-final-multiline-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text, options) => {
+      sent.push({ chatId, text, options });
+      return {};
+    };
+    gateway.bot.sendChatAction = async () => true;
+
+    gateway.chat.narrateTaskOutcome = async () => [
+      "Available places to buy Nike Mind 002:",
+      "- GOAT — $189 — In stock online",
+      "- StockX — $290 — In stock online",
+      "",
+      "Shopping links:",
+      "- GOAT: https://www.goat.com/search?query=nike%20mind%2002",
+      "- StockX: https://stockx.com/search?s=nike%20mind%2002",
+    ].join("\n");
+
+    gateway.agent.runTask = async () => ({
+      ok: true,
+      message: "Listings found.",
+      sessionPath: "/tmp/session-shopping.md",
+    });
+
+    const result = await gateway.runTaskAndReport({
+      chatId: 9401,
+      task: "Find where to buy nike mind 02",
+      source: "chat",
+      modelName: null,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /Available places to buy Nike Mind 002/);
+    assert.match(sent[0].text, /\n- GOAT/);
+    assert.match(sent[0].text, /Shopping links:/);
+    assert.match(sent[0].text, /https:\/\/www\.goat\.com\/search\?query=/);
+    assert.equal(sent[0].options?.disable_web_page_preview, true);
+  });
+});

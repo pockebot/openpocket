@@ -229,6 +229,20 @@ export class TelegramGateway {
     return `${oneLine.slice(0, Math.max(0, maxChars - 3))}...`;
   }
 
+  private compactMultiline(text: string, maxChars: number): string {
+    const normalized = String(text || "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[ \t]+/g, " ").trim())
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (normalized.length <= maxChars) {
+      return normalized;
+    }
+    return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+  }
+
   private sanitizeForChat(text: string, maxChars: number): string {
     const withoutInternalLines = text
       .split("\n")
@@ -242,6 +256,21 @@ export class TelegramGateway {
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
 
     return this.compact(redacted, maxChars);
+  }
+
+  private sanitizeForChatMultiline(text: string, maxChars: number): string {
+    const withoutInternalLines = String(text || "")
+      .split("\n")
+      .filter((line) => !/^\s*(Session|Auto skill|Auto script)\s*:/i.test(line))
+      .join("\n");
+
+    const redacted = withoutInternalLines
+      .replace(/local_screenshot=\S+/gi, "local_screenshot=[saved locally]")
+      .replace(/runDir=\S+/gi, "runDir=[local-dir]")
+      .replace(/\/(?:Users|home|var|tmp)\/[^\s)\]]+/g, "[local-path]")
+      .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
+
+    return this.compactMultiline(redacted, maxChars);
   }
 
   private escapeTelegramHtml(text: string): string {
@@ -2399,12 +2428,16 @@ export class TelegramGateway {
               skillPath: result.skillPath ?? null,
               scriptPath: result.scriptPath ?? null,
             });
+            const finalForChat = this.sanitizeForChatMultiline(
+              this.stripStepCounterTelemetry(finalMessage),
+              1800,
+            );
             await this.bot.sendMessage(
               chatId,
-              this.sanitizeForChat(
-                this.stripStepCounterTelemetry(finalMessage),
-                1800,
-              ),
+              finalForChat,
+              {
+                disable_web_page_preview: true,
+              },
             );
             this.chat.appendExternalTurn(chatId, "assistant", finalMessage);
           }
