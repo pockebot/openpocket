@@ -198,6 +198,10 @@ export interface ModelProfile {
   maxTokens: number;
   reasoningEffort: "low" | "medium" | "high" | "xhigh" | null;
   temperature: number | null;
+  /** Optional: Override the API type (e.g., "openai-responses", "openai-completions") */
+  api?: string;
+  /** Optional: Override the provider (e.g., "openai", "openai-codex") */
+  provider?: string;
 }
 
 export interface OpenPocketConfig {

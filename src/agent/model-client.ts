@@ -98,6 +98,22 @@ function extractThinking(msg: AssistantMessage): string {
  * OpenAI-compatible endpoint).
  */
 export function buildPiAiModel(profile: ModelProfile): Model<Api> {
+  // If profile explicitly specifies api and provider, use them directly
+  if (profile.api && profile.provider) {
+    return {
+      id: profile.model,
+      name: profile.model,
+      api: profile.api as Api,
+      provider: profile.provider,
+      baseUrl: profile.baseUrl,
+      reasoning: profile.reasoningEffort !== null,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: profile.maxTokens,
+    };
+  }
+
   // Detect provider / api from baseUrl.
   const baseUrlLower = profile.baseUrl.toLowerCase();
 
