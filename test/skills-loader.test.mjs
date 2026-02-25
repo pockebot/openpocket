@@ -96,3 +96,45 @@ test("SkillLoader supports SKILL.md directory layout and metadata gating", () =>
   assert.equal(skill?.name, "PayByPhone Flow");
   assert.match(skill?.path || "", /paybyphone_flow[\\/]+SKILL\.md$/i);
 });
+
+test("SkillLoader boosts matching by generic metadata triggers", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-trigger-"));
+  process.env.OPENPOCKET_HOME = home;
+  const cfg = loadConfig();
+
+  const skillsDir = path.join(cfg.workspaceDir, "skills");
+  fs.mkdirSync(skillsDir, { recursive: true });
+
+  const xSkillDir = path.join(skillsDir, "x-twitter-login-recovery");
+  fs.mkdirSync(xSkillDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(xSkillDir, "SKILL.md"),
+    [
+      "---",
+      'name: "X Twitter Login Recovery"',
+      'description: "Recover X login when attestation denied happens"',
+      'metadata: {"openclaw":{"triggers":{"any":["x","twitter","tweet","attestation denied","attestationdenied","推特"]}}}',
+      "---",
+      "",
+      "# X Twitter Login Recovery",
+      "",
+      "Use deterministic fallback order for login recovery.",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  fs.writeFileSync(
+    path.join(skillsDir, "generic-login.md"),
+    "# Generic Login\n\nHandle normal username/password login flows.",
+    "utf-8",
+  );
+
+  const loader = new SkillLoader(cfg);
+  const context = loader.buildPromptContextForTask(
+    "Open X app, login, and fix LoginError.AttestationDenied before posting a tweet.",
+  );
+
+  assert.equal(context.activeEntries.length > 0, true);
+  assert.equal(context.activeEntries[0].skill.id, "x-twitter-login-recovery");
+  assert.match(context.activeEntries[0].reason, /metadata\.any/i);
+});
