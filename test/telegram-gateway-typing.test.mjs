@@ -938,6 +938,204 @@ test("TelegramGateway resolves pending user-input request from plain text", asyn
   });
 });
 
+test("TelegramGateway captures non-sensitive context key-values from plain chat and acknowledges without routing", async () => {
+  await withTempHome("openpocket-telegram-profile-capture-inline-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.chat.isOnboardingPending = () => false;
+
+    let decideCalled = false;
+    gateway.chat.decide = async () => {
+      decideCalled = true;
+      return {
+        mode: "chat",
+        task: "",
+        reply: "fallback",
+        confidence: 1,
+        reason: "fallback",
+      };
+    };
+
+    await gateway.consumeMessage({
+      chat: { id: 9301 },
+      from: { id: 1, is_bot: false, language_code: "zh-CN", first_name: "Tester" },
+      text: "vehicle_plate: CA-7XZ019, spot_code: 15800",
+    });
+
+    assert.equal(decideCalled, false);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].text, /已记录/);
+  });
+});
+
+test("TelegramGateway injects captured non-sensitive context into subsequent task execution", async () => {
+  await withTempHome("openpocket-telegram-profile-inject-task-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.bot.sendMessage = async () => ({});
+    gateway.bot.sendChatAction = async () => true;
+    gateway.chat.narrateTaskOutcome = async () => "done";
+    gateway.chat.isOnboardingPending = () => false;
+
+    await gateway.consumeMessage({
+      chat: { id: 9302 },
+      from: { id: 1, is_bot: false, language_code: "en", first_name: "Tester" },
+      text: "vehicle_plate: CA-7XZ019, spot_code: 15800",
+    });
+
+    let executedTask = "";
+    gateway.agent.runTask = async (task) => {
+      executedTask = task;
+      return {
+        ok: true,
+        message: "done",
+        sessionPath: "/tmp/session-9302.jsonl",
+      };
+    };
+
+    const result = await gateway.runTaskAndReport({
+      chatId: 9302,
+      task: "Open PayByPhone and start parking session.",
+      source: "chat",
+      modelName: null,
+      sessionKey: "telegram:chat:9302",
+    });
+
+    assert.equal(result.ok, true);
+    assert.match(executedTask, /vehicle_plate=CA-7XZ019/);
+    assert.match(executedTask, /spot_code=15800/);
+  });
+});
+
+test("TelegramGateway reuses request_user_input response in subsequent task execution context", async () => {
+  await withTempHome("openpocket-telegram-profile-from-user-input-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.bot.sendMessage = async () => ({});
+    gateway.bot.sendChatAction = async () => true;
+    gateway.agent.captureManualScreenshot = async () => "";
+    gateway.chat.narrateEscalation = async () => "Please share the requested value.";
+    gateway.chat.narrateTaskOutcome = async () => "done";
+
+    const pendingPromise = gateway.requestUserInputFromChat(9303, {
+      sessionId: "sess-profile",
+      sessionPath: "/tmp/sess-profile.jsonl",
+      task: "PayByPhone parking flow",
+      step: 4,
+      question: "Please provide your vehicle plate number.",
+      placeholder: "ABC-1234",
+      timeoutSec: 90,
+      currentApp: "com.paybyphone",
+      screenshotPath: null,
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 9303 },
+      text: "CA-7XZ019",
+    });
+
+    const resolved = await pendingPromise;
+    assert.equal(resolved.text, "CA-7XZ019");
+
+    let executedTask = "";
+    gateway.agent.runTask = async (task) => {
+      executedTask = task;
+      return {
+        ok: true,
+        message: "done",
+        sessionPath: "/tmp/session-9303.jsonl",
+      };
+    };
+
+    const result = await gateway.runTaskAndReport({
+      chatId: 9303,
+      task: "Open PayByPhone and continue parking flow.",
+      source: "chat",
+      modelName: null,
+      sessionKey: "telegram:chat:9303",
+    });
+
+    assert.equal(result.ok, true);
+    assert.match(executedTask, /=CA-7XZ019/);
+  });
+});
+
+test("TelegramGateway does not persist sensitive user-input values into task context", async () => {
+  await withTempHome("openpocket-telegram-sensitive-context-guard-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.bot.sendMessage = async () => ({});
+    gateway.bot.sendChatAction = async () => true;
+    gateway.agent.captureManualScreenshot = async () => "";
+    gateway.chat.narrateEscalation = async () => "Please share the requested value.";
+    gateway.chat.narrateTaskOutcome = async () => "done";
+
+    const pendingPromise = gateway.requestUserInputFromChat(9304, {
+      sessionId: "sess-sensitive",
+      sessionPath: "/tmp/sess-sensitive.jsonl",
+      task: "Sensitive flow",
+      step: 2,
+      question: "Please provide your account password.",
+      placeholder: "your password",
+      timeoutSec: 90,
+      currentApp: "com.example",
+      screenshotPath: null,
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 9304 },
+      text: "secret-pass-123",
+    });
+    await pendingPromise;
+
+    let executedTask = "";
+    gateway.agent.runTask = async (task) => {
+      executedTask = task;
+      return {
+        ok: true,
+        message: "done",
+        sessionPath: "/tmp/session-9304.jsonl",
+      };
+    };
+
+    const result = await gateway.runTaskAndReport({
+      chatId: 9304,
+      task: "Continue flow.",
+      source: "chat",
+      modelName: null,
+      sessionKey: "telegram:chat:9304",
+    });
+
+    assert.equal(result.ok, true);
+    assert.doesNotMatch(executedTask, /secret-pass-123/);
+  });
+});
+
 test("TelegramGateway /start triggers onboarding reply when onboarding is pending", async () => {
   await withTempHome("openpocket-telegram-start-onboarding-", async () => {
     const cfg = loadConfig();
