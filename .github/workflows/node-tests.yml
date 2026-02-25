@@ -37,3 +37,7 @@ jobs:
 
     - name: Run tests
       run: npm run test
+
+    - name: Run dual-side smoke gate
+      if: matrix.node-version == '22.x'
+      run: npm run smoke:dual-side
