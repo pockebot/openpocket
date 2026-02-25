@@ -20,6 +20,7 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /Never type internal logs\/history\/JSON/);
   assert.match(prompt, /in-emulator permission dialogs/i);
   assert.match(prompt, /request_user_decision must not be used to collect credentials/i);
+  assert.match(prompt, /request_user_input must not be used to collect credentials/i);
   assert.match(prompt, /For sensitive values, call request_human_auth/i);
   assert.match(prompt, /Workspace context .* already injected/i);
   assert.doesNotMatch(
@@ -51,6 +52,7 @@ test("buildSystemPrompt supports minimal mode", () => {
   assert.match(prompt, /Call exactly one tool per step/);
   assert.match(prompt, /tap Allow locally/i);
   assert.match(prompt, /Use request_user_decision only for non-sensitive preference\/choice disambiguation/i);
+  assert.match(prompt, /Use request_user_input for non-sensitive short text values/i);
   assert.match(prompt, /Never use request_user_decision to collect credentials\/OTP\/payment/i);
   assert.match(prompt, /already injected in this prompt/i);
   assert.match(prompt, /Workspace Prompt Context/);

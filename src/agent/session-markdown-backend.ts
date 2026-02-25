@@ -51,11 +51,16 @@ export class SessionMarkdownBackend implements SessionBackend {
   }
 
   appendStep(payload: SessionStepPayload): void {
+    const trace = payload.trace;
     const markdownPath = toMarkdownSessionPath(payload.sessionPath);
     const block = [
       `### Step ${payload.stepNo}`,
       "",
       `- at: ${payload.at}`,
+      trace ? `- action: ${trace.actionType}` : null,
+      trace ? `- app: ${trace.currentApp}` : null,
+      trace ? `- duration_ms: ${trace.durationMs}` : null,
+      trace ? `- status: ${trace.status}` : null,
       "- thought:",
       "```text",
       payload.thought || "(empty)",
@@ -69,7 +74,7 @@ export class SessionMarkdownBackend implements SessionBackend {
       payload.result,
       "```",
       "",
-    ].join("\n");
+    ].filter((line): line is string => line !== null).join("\n");
     fs.appendFileSync(markdownPath, block, "utf-8");
   }
 

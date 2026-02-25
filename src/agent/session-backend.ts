@@ -1,5 +1,14 @@
 export type SessionFinalStatus = "SUCCESS" | "FAILED";
 
+export interface SessionStepTraceDetails {
+  actionType: string;
+  currentApp: string;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  status: "ok" | "error";
+}
+
 export interface SessionCreatePayload {
   sessionId: string;
   sessionPath: string;
@@ -19,6 +28,7 @@ export interface SessionStepPayload {
   thought: string;
   actionJson: string;
   result: string;
+  trace?: SessionStepTraceDetails;
 }
 
 export interface SessionFinalizePayload {

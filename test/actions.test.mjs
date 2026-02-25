@@ -54,6 +54,28 @@ test("normalizeAction supports request_human_auth with defaults", () => {
   assert.match(fallback.instruction, /Human authorization is required/);
 });
 
+test("normalizeAction supports request_user_input with defaults", () => {
+  const request = normalizeAction({
+    type: "request_user_input",
+    question: "Please share your vehicle plate number.",
+    placeholder: "ABC-1234",
+  });
+  assert.equal(request.type, "request_user_input");
+  assert.equal(request.question, "Please share your vehicle plate number.");
+  assert.equal(request.placeholder, "ABC-1234");
+  assert.equal(request.timeoutSec, 300);
+
+  const fallback = normalizeAction({
+    type: "request_user_input",
+    instruction: "请输入车辆信息",
+    placeholder: "   ",
+  });
+  assert.equal(fallback.type, "request_user_input");
+  assert.equal(fallback.question, "请输入车辆信息");
+  assert.equal(fallback.placeholder, undefined);
+  assert.equal(fallback.timeoutSec, 300);
+});
+
 test("normalizeAction falls back for unknown action", () => {
   const out = normalizeAction({ type: "unknown_x" });
   assert.equal(out.type, "wait");

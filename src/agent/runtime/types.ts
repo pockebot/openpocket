@@ -12,6 +12,8 @@ import type {
   ScreenSnapshot,
   UserDecisionRequest,
   UserDecisionResponse,
+  UserInputRequest,
+  UserInputResponse,
 } from "../../types.js";
 import type { SessionHandle, WorkspaceStore } from "../../memory/workspace.js";
 import type { AdbRuntime } from "../../device/adb-runtime.js";
@@ -28,6 +30,7 @@ export interface RunTaskRequest {
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
   promptMode?: SystemPromptMode;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
+  onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   availableToolNames?: string[];
 }
 
@@ -134,6 +137,7 @@ export interface PhoneAgentRunContext {
   systemPrompt: string;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
+  onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
 }
 

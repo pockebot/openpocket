@@ -82,6 +82,14 @@ function hasAssistantMessage(manager: SessionManager): boolean {
   ));
 }
 
+function compactLine(text: string, maxChars: number): string {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
 export class SessionPiTreeJsonlBackend implements SessionBackend {
   create(payload: SessionCreatePayload): void {
     ensureDir(path.dirname(payload.sessionPath));
@@ -132,6 +140,14 @@ export class SessionPiTreeJsonlBackend implements SessionBackend {
 
   appendStep(payload: SessionStepPayload): void {
     const manager = SessionManager.open(payload.sessionPath);
+    const trace = payload.trace ?? {
+      actionType: "unknown",
+      currentApp: "unknown",
+      startedAt: payload.at,
+      endedAt: payload.at,
+      durationMs: 0,
+      status: "ok" as const,
+    };
     const text = [
       `step: ${payload.stepNo}`,
       `at: ${payload.at}`,
@@ -151,6 +167,33 @@ export class SessionPiTreeJsonlBackend implements SessionBackend {
         sessionId: payload.sessionId,
         sessionKey: payload.sessionKey,
         stepNo: payload.stepNo,
+        trace,
+      },
+    });
+
+    const traceText = [
+      `step: ${payload.stepNo}`,
+      `action: ${trace.actionType}`,
+      `app: ${trace.currentApp}`,
+      `status: ${trace.status}`,
+      `started_at: ${trace.startedAt}`,
+      `ended_at: ${trace.endedAt}`,
+      `duration_ms: ${trace.durationMs}`,
+      `reasoning: ${compactLine(payload.thought || "(empty)", 280)}`,
+      `result: ${compactLine(payload.result || "(empty)", 360)}`,
+    ].join("\n");
+    appendCustomLogMessage({
+      manager,
+      customType: "openpocket_action_trace",
+      content: traceText,
+      timestamp: toUnixMs(trace.endedAt || payload.at),
+      details: {
+        sessionId: payload.sessionId,
+        sessionKey: payload.sessionKey,
+        stepNo: payload.stepNo,
+        ...trace,
+        reasoning: payload.thought || "",
+        result: payload.result,
       },
     });
   }

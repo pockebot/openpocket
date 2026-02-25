@@ -44,6 +44,7 @@ export class SessionJsonlBackend implements SessionBackend {
       thought: payload.thought || "",
       actionJson: payload.actionJson,
       result: payload.result,
+      trace: payload.trace ?? null,
     });
   }
 

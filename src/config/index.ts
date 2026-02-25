@@ -862,21 +862,41 @@ function shouldUseCodexCliFallback(profile: ModelProfile): boolean {
   return isOpenAiLikeBaseUrl(profile.baseUrl);
 }
 
+function shouldPreferResponsesMode(profile: ModelProfile): boolean {
+  if (!isOpenAiLikeBaseUrl(profile.baseUrl)) {
+    return false;
+  }
+  const model = profile.model.trim().toLowerCase();
+  // OpenAI GPT-5 family models are responses-first. Prefer that transport
+  // to avoid chat/completions-specific incompatibilities.
+  return model.startsWith("gpt-5");
+}
+
 export function resolveModelAuth(profile: ModelProfile): ResolvedModelAuth | null {
+  const preferredMode = shouldPreferResponsesMode(profile) ? "responses" : undefined;
+
   if (profile.apiKey?.trim()) {
-    return {
+    const resolved: ResolvedModelAuth = {
       apiKey: profile.apiKey.trim(),
       source: "config",
     };
+    if (preferredMode) {
+      resolved.preferredMode = preferredMode;
+    }
+    return resolved;
   }
 
   if (profile.apiKeyEnv?.trim()) {
     const envApiKey = process.env[profile.apiKeyEnv]?.trim();
     if (envApiKey) {
-      return {
+      const resolved: ResolvedModelAuth = {
         apiKey: envApiKey,
         source: "env",
       };
+      if (preferredMode) {
+        resolved.preferredMode = preferredMode;
+      }
+      return resolved;
     }
   }
 

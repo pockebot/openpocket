@@ -11,6 +11,8 @@ import type {
   HumanAuthRequest,
   UserDecisionRequest,
   UserDecisionResponse,
+  UserInputRequest,
+  UserInputResponse,
   OpenPocketConfig,
   ModelProfile,
   SkillInfo,
@@ -272,6 +274,7 @@ interface PhoneAgentRunContext {
   systemPrompt: string;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
+  onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
 }
 
@@ -1816,11 +1819,43 @@ export class AgentRuntime {
           ctx.stepCount += 1;
           const step = ctx.stepCount;
           const snapshot = ctx.latestSnapshot;
+          const stepStartedAtMs = Date.now();
+          const stepStartedAtHr = process.hrtime.bigint();
+          const stepStartedAt = nowIso();
+          const buildStepTrace = (
+            currentApp: string,
+            status: "ok" | "error" = "ok",
+          ) => {
+            const endedAt = nowIso();
+            const elapsedNs = process.hrtime.bigint() - stepStartedAtHr;
+            let durationMs = Number(elapsedNs / 1_000_000n);
+            if (elapsedNs > 0n && durationMs === 0) {
+              durationMs = 1;
+            }
+            if (!Number.isFinite(durationMs) || durationMs < 0) {
+              durationMs = Math.max(0, Date.parse(endedAt) - stepStartedAtMs);
+            }
+            return {
+              actionType: action.type,
+              currentApp,
+              startedAt: stepStartedAt,
+              endedAt,
+              durationMs,
+              status,
+            };
+          };
 
           if (!snapshot && action.type !== "finish") {
             const msg = "No screen snapshot available for tool execution.";
             ctx.failMessage = msg;
-            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              msg,
+              buildStepTrace("unknown", "error"),
+            );
             ctx.traces.push({ step, action, result: msg, thought, currentApp: "unknown" });
             return { content: [{ type: "text" as const, text: msg }], details: {} };
           }
@@ -1832,7 +1867,14 @@ export class AgentRuntime {
           if (action.type === "finish") {
             ctx.finishMessage = action.message || "Task completed.";
             const resultText = `FINISH: ${ctx.finishMessage}`;
-            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              resultText,
+              buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+            );
             ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
             ctx.history.push(`step ${step}: action=finish message=${ctx.finishMessage}`);
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
@@ -1852,7 +1894,14 @@ export class AgentRuntime {
               }
               if (permOnly) {
                 const msg = "permission auto-approved locally (VM policy)";
-                runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+                runtime.workspace.appendStep(
+                  ctx.session,
+                  step,
+                  thought,
+                  JSON.stringify(action, null, 2),
+                  msg,
+                  buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+                );
                 ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
                 ctx.history.push(`step ${step}: action=request_human_auth(permission) auto_approved`);
                 return { content: [{ type: "text" as const, text: msg }], details: {} };
@@ -1879,7 +1928,14 @@ export class AgentRuntime {
                   delegation?.message ? `delegation=${delegation.message}` : "",
                   delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
                 ].filter(Boolean).join("\n");
-                runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+                runtime.workspace.appendStep(
+                  ctx.session,
+                  step,
+                  thought,
+                  JSON.stringify(action, null, 2),
+                  resultText,
+                  buildStepTrace(currentApp, "ok"),
+                );
                 ctx.traces.push({ step, action, result: resultText, thought, currentApp });
                 ctx.history.push("step " + step + ": action=request_human_auth decision=approved(cached_oauth)");
                 if (delegationTemplate) {
@@ -1892,7 +1948,14 @@ export class AgentRuntime {
             if (!ctx.onHumanAuth) {
               const msg = `Human authorization required (${action.capability}), but no handler configured.`;
               ctx.failMessage = msg;
-              runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(currentApp, "error"),
+              );
               ctx.traces.push({ step, action, result: msg, thought, currentApp });
               return { content: [{ type: "text" as const, text: msg }], details: {} };
             }
@@ -1918,7 +1981,14 @@ export class AgentRuntime {
               delegation?.message ? `delegation=${delegation.message}` : "",
               delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
             ].filter(Boolean).join("\n");
-            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              resultText,
+              buildStepTrace(currentApp, decision.approved ? "ok" : "error"),
+            );
             ctx.traces.push({ step, action, result: resultText, thought, currentApp });
             ctx.history.push(`step ${step}: action=request_human_auth decision=${decision.status}`);
             if (delegationTemplate) {
@@ -1936,7 +2006,14 @@ export class AgentRuntime {
             if (!ctx.onUserDecision) {
               const msg = "User decision required, but no handler configured.";
               ctx.failMessage = msg;
-              runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
               ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
               return { content: [{ type: "text" as const, text: msg }], details: {} };
             }
@@ -1951,7 +2028,14 @@ export class AgentRuntime {
             } catch (error) {
               const msg = `User decision failed: ${(error as Error).message}`;
               ctx.failMessage = msg;
-              runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), msg);
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
               ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
               return { content: [{ type: "text" as const, text: msg }], details: {} };
             }
@@ -1963,10 +2047,79 @@ export class AgentRuntime {
             const selectedSource = matchedOption ? "listed_option" : "custom_input";
             const resultText =
               `user_decision selected="${selectedForLog}" source=${selectedSource} input_len=${String(decision.rawInput || "").length} at=${decision.resolvedAt}`;
-            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              resultText,
+              buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+            );
             ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
             ctx.history.push(`step ${step}: action=request_user_decision selected=${selectedForLog}`);
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
+          }
+
+          // ---- request_user_input ----
+          if (action.type === "request_user_input") {
+            if (!ctx.onUserInput) {
+              const msg = "User input required, but no handler configured.";
+              ctx.failMessage = msg;
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+            let response: UserInputResponse;
+            try {
+              response = await ctx.onUserInput({
+                sessionId: ctx.session.id,
+                sessionPath: ctx.session.path,
+                task: ctx.task,
+                step,
+                question: action.question,
+                placeholder: action.placeholder,
+                timeoutSec: Math.max(20, action.timeoutSec ?? 300),
+                currentApp: snapshot?.currentApp ?? "unknown",
+                screenshotPath: ctx.lastScreenshotPath,
+              });
+            } catch (error) {
+              const msg = `User input failed: ${(error as Error).message}`;
+              ctx.failMessage = msg;
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+            const text = typeof response.text === "string" ? response.text : String(response.text ?? "");
+            const resolvedAt = typeof response.resolvedAt === "string" && response.resolvedAt.trim()
+              ? response.resolvedAt.trim()
+              : nowIso();
+            const logResultText = `user_input input_len=${text.length} at=${resolvedAt}`;
+            const modelResultText = `user_input value=${JSON.stringify(text)} input_len=${text.length} at=${resolvedAt}`;
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              logResultText,
+              buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+            );
+            ctx.traces.push({ step, action, result: logResultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.history.push(`step ${step}: action=request_user_input input_len=${text.length}`);
+            return { content: [{ type: "text" as const, text: modelResultText }], details: {} };
           }
 
           // ---- wait ----
@@ -1974,7 +2127,14 @@ export class AgentRuntime {
             const ms = action.durationMs ?? 1000;
             await sleep(ms);
             const resultText = `Waited ${ms}ms`;
-            runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), resultText);
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              resultText,
+              buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+            );
             ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
             ctx.history.push(`step ${step}: action=wait duration=${ms}`);
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
@@ -1986,7 +2146,17 @@ export class AgentRuntime {
             ? `${executionResult}\nlocal_screenshot=${ctx.lastScreenshotPath}`
             : executionResult;
 
-          runtime.workspace.appendStep(ctx.session, step, thought, JSON.stringify(action, null, 2), stepResult);
+          runtime.workspace.appendStep(
+            ctx.session,
+            step,
+            thought,
+            JSON.stringify(action, null, 2),
+            stepResult,
+            buildStepTrace(
+              snapshot?.currentApp ?? "unknown",
+              /action execution error:/i.test(executionResult) ? "error" : "ok",
+            ),
+          );
           ctx.traces.push({ step, action, result: stepResult, thought, currentApp: snapshot?.currentApp ?? "unknown" });
           ctx.history.push(`step ${step}: app=${snapshot?.currentApp ?? "unknown"} action=${action.type} result=${executionResult}`);
 
@@ -2328,6 +2498,7 @@ export class AgentRuntime {
     promptMode?: "full" | "minimal" | "none",
     onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
     sessionKey?: string,
+    onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse,
   ): Promise<AgentRunResult> {
     const hasSkillMatch = this.skillLoader.buildPromptContextForTask(task, {
       maxSummaryItems: 1,
@@ -2345,6 +2516,7 @@ export class AgentRuntime {
       promptMode,
       onUserDecision,
       availableToolNames: activeToolNames,
+      onUserInput,
     };
 
     return runRuntimeTask(

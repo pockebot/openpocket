@@ -339,6 +339,44 @@ test("resolveModelAuth does not use Codex CLI fallback for non-codex models", as
   });
 });
 
+test("resolveModelAuth prefers responses mode for OpenAI GPT-5 profiles", () => {
+  const prevOpenAi = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "env-key";
+  try {
+    const gpt5Resolved = resolveModelAuth({
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-5",
+      apiKey: "",
+      apiKeyEnv: "OPENAI_API_KEY",
+      maxTokens: 512,
+      reasoningEffort: "medium",
+      temperature: null,
+    });
+    assert.equal(gpt5Resolved?.apiKey, "env-key");
+    assert.equal(gpt5Resolved?.source, "env");
+    assert.equal(gpt5Resolved?.preferredMode, "responses");
+
+    const gpt4Resolved = resolveModelAuth({
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o",
+      apiKey: "",
+      apiKeyEnv: "OPENAI_API_KEY",
+      maxTokens: 512,
+      reasoningEffort: null,
+      temperature: null,
+    });
+    assert.equal(gpt4Resolved?.apiKey, "env-key");
+    assert.equal(gpt4Resolved?.source, "env");
+    assert.equal(gpt4Resolved?.preferredMode, undefined);
+  } finally {
+    if (prevOpenAi === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = prevOpenAi;
+    }
+  }
+});
+
 test("getModelProfile throws on unknown profile", async () => {
   await withTempHome("openpocket-config-unknown-", async () => {
     const cfg = loadConfig();

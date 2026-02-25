@@ -79,6 +79,9 @@ function actionSummary(action: AgentAction): string {
   if (action.type === "request_user_decision") {
     return `request_user_decision(${compactText(action.question, 72)})`;
   }
+  if (action.type === "request_user_input") {
+    return `request_user_input(${compactText(action.question, 72)})`;
+  }
   if (action.type === "finish") {
     return "finish(...)";
   }

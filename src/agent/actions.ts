@@ -9,6 +9,14 @@ function toNumber(value: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function toOptionalTrimmedString(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 const HUMAN_AUTH_CAPABILITIES = new Set([
   "camera",
   "qr",
@@ -240,6 +248,16 @@ export function normalizeAction(input: unknown): AgentAction {
       type,
       question: String(input.question ?? input.instruction ?? "Please choose one option."),
       options,
+      timeoutSec: toNumber(input.timeoutSec, 300),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "request_user_input") {
+    return {
+      type,
+      question: String(input.question ?? input.instruction ?? "Please provide the requested value."),
+      placeholder: toOptionalTrimmedString(input.placeholder ?? input.hint),
       timeoutSec: toNumber(input.timeoutSec, 300),
       reason: input.reason ? String(input.reason) : undefined,
     };

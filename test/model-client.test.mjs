@@ -117,11 +117,12 @@ test("ModelClient respects baseUrl override", () => {
 
 test("ModelClient builds pi-ai tools from TOOL_METAS", async () => {
   const { TOOL_METAS } = await import("../dist/agent/tools.js");
-  assert.equal(TOOL_METAS.length, 20);
+  assert.equal(TOOL_METAS.length, 21);
   const names = TOOL_METAS.map((t) => t.name);
   assert.ok(names.includes("tap"));
   assert.ok(names.includes("finish"));
   assert.ok(names.includes("request_human_auth"));
+  assert.ok(names.includes("request_user_input"));
 
   // Each tool meta has valid TypeBox-generated schema with properties
   for (const meta of TOOL_METAS) {
