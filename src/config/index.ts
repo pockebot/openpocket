@@ -48,6 +48,8 @@ function defaultConfigObject() {
       lang: "en" as const,
       verbose: true,
       deviceId: null,
+      runtimeBackend: "legacy_agent_core" as const,
+      legacyCodingExecutor: true,
     },
     screenshots: {
       saveStepScreenshots: true,
@@ -339,6 +341,8 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     system_prompt_mode: "systemPromptMode",
     context_budget_chars: "contextBudgetChars",
     device_id: "deviceId",
+    runtime_backend: "runtimeBackend",
+    legacy_coding_executor: "legacyCodingExecutor",
   };
   for (const [oldKey, newKey] of Object.entries(agentMap)) {
     if (oldKey in agent && !(newKey in agent)) {
@@ -675,6 +679,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       lang: "en",
       verbose: Boolean(agent.verbose),
       deviceId: agent.deviceId ? String(agent.deviceId) : null,
+      runtimeBackend: String(agent.runtimeBackend ?? "legacy_agent_core") === "pi_session_bridge"
+        ? "pi_session_bridge"
+        : "legacy_agent_core",
+      legacyCodingExecutor: Boolean(agent.legacyCodingExecutor ?? true),
     },
     screenshots: {
       saveStepScreenshots: Boolean(screenshots.saveStepScreenshots ?? true),

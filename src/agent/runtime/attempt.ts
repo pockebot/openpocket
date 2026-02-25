@@ -11,7 +11,7 @@ import {
   streamSimple,
 } from "@mariozechner/pi-ai";
 
-import type { ScreenSnapshot } from "../../types.js";
+import type { OpenPocketConfig, ScreenSnapshot } from "../../types.js";
 import { getModelProfile, resolveModelAuth } from "../../config/index.js";
 import { sleep } from "../../utils/time.js";
 import { buildPiAiModel } from "../model-client.js";
@@ -35,6 +35,12 @@ interface ScreenObservationMessage {
 }
 
 const MAX_REUSED_SESSION_MESSAGES = 64;
+
+export function resolveRuntimeBackend(config: OpenPocketConfig): "legacy_agent_core" | "pi_session_bridge" {
+  return config.agent.runtimeBackend === "pi_session_bridge"
+    ? "pi_session_bridge"
+    : "legacy_agent_core";
+}
 
 function loadReusedSessionMessages(sessionPath: string): AgentMessage[] {
   try {

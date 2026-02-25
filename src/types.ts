@@ -29,6 +29,17 @@ export interface AgentConfig {
   lang: "en";
   verbose: boolean;
   deviceId: string | null;
+  /**
+   * Runtime backend selector for incremental migration.
+   * - `legacy_agent_core`: current AgentRuntime execution path (default)
+   * - `pi_session_bridge`: reserved for pi-coding-agent AgentSession bridge path
+   */
+  runtimeBackend?: "legacy_agent_core" | "pi_session_bridge";
+  /**
+   * Keep legacy CodingExecutor fallback enabled while pi coding tools migration is in progress.
+   * When false, unsupported/erroring pi coding actions fail fast.
+   */
+  legacyCodingExecutor?: boolean;
 }
 
 export interface ScreenshotConfig {
