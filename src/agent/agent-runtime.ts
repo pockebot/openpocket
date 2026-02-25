@@ -49,6 +49,7 @@ import { normalizeAction } from "./actions.js";
 import { runRuntimeAttempt } from "./runtime/attempt.js";
 import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
+import { createPiSessionBridge } from "./pi-session-bridge.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
@@ -2593,6 +2594,7 @@ export class AgentRuntime {
                 : TOOL_METAS;
               return this.buildPhoneAgentTools(ctx, this, toolMetas);
             },
+            piSessionBridgeFactory: (options) => createPiSessionBridge(options),
             parseTextualToolFallback: (message, fallbackTask) => this.parseTextualToolFallback(message, fallbackTask),
             isPermissionDialogApp: (currentApp) => this.isPermissionDialogApp(currentApp),
             autoApprovePermissionDialog: (currentApp) => this.autoApprovePermissionDialog(currentApp),
