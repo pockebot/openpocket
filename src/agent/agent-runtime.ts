@@ -1885,7 +1885,7 @@ export class AgentRuntime {
             if (!Number.isFinite(durationMs) || durationMs < 0) {
               durationMs = Math.max(0, Date.parse(endedAt) - stepStartedAtMs);
             }
-            return {
+            const trace = {
               actionType: action.type,
               currentApp,
               startedAt: stepStartedAt,
@@ -1893,6 +1893,13 @@ export class AgentRuntime {
               durationMs,
               status,
             };
+            // eslint-disable-next-line no-console
+            console.log(
+              `[OpenPocket][step ${step}] ts=${trace.endedAt} phase=end tool=${toolName} action=${trace.actionType}` +
+              ` app=${trace.currentApp} status=${trace.status} started_at=${trace.startedAt}` +
+              ` ended_at=${trace.endedAt} duration_ms=${trace.durationMs}`,
+            );
+            return trace;
           };
 
           if (!snapshot && action.type !== "finish") {
@@ -1910,8 +1917,8 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: msg }], details: {} };
           }
 
-            // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][step ${step}] tool=${toolName} action=${action.type}`);
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][step ${step}] ts=${stepStartedAt} phase=start tool=${toolName} action=${action.type}`);
 
           // ---- finish ----
           if (action.type === "finish") {
