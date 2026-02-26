@@ -62,14 +62,14 @@ const rawSiteUrl =
   process.env.VERCEL_URL?.trim() ||
   defaultSiteUrl;
 const siteUrl = normalizeSiteUrl(rawSiteUrl);
-const faviconPath = withAssetVersion(withDocsBase("/favicon.ico"));
+const faviconPath = withAssetVersion(withDocsBase("/openpocket-logo.png"));
 const canonicalPath = normalizedBase;
 const canonicalUrl = toAbsoluteUrl(siteUrl, canonicalPath);
 const twitterSite = process.env.DOCS_TWITTER_SITE?.trim() ?? "";
 const twitterCreator = process.env.DOCS_TWITTER_CREATOR?.trim() ?? "";
 const siteHead = [
-  ["link", { rel: "icon", href: faviconPath, type: "image/x-icon", sizes: "any" }],
-  ["link", { rel: "shortcut icon", href: faviconPath, type: "image/x-icon" }],
+  ["link", { rel: "icon", href: faviconPath, type: "image/png", sizes: "64x64" }],
+  ["link", { rel: "shortcut icon", href: faviconPath, type: "image/png" }],
   ["link", { rel: "canonical", href: canonicalUrl }],
   ["meta", { name: "application-name", content: siteTitle }],
   ["meta", { name: "apple-mobile-web-app-title", content: siteTitle }],
