@@ -6,6 +6,7 @@ import test from "node:test";
 
 const { loadConfig } = await import("../dist/config/index.js");
 const { AgentRuntime } = await import("../dist/agent/agent-runtime.js");
+const { buildPaymentArtifactKey } = await import("../dist/phone-use-util/index.js");
 
 function makeSnapshot(overrides = {}) {
   return {
@@ -823,6 +824,99 @@ test("AgentRuntime escalates capability probe after tap_element action", async (
   assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
 });
 
+test("AgentRuntime escalates payment capability probe with dynamic fields from ui tree context", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "open checkout", action: { type: "tap", x: 480, y: 2060 } },
+      { thought: "done", action: { type: "finish", message: "checkout ready" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.shop.app",
+      screenshotBase64: Buffer.from("secure-checkout").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "payment",
+      phase: "requested",
+      packageName: "com.shop.app",
+      source: "window_secure",
+      observedAt: new Date().toISOString(),
+      confidence: 0.97,
+      evidence: "FLAG_SECURE payment checkout",
+      paymentContext: {
+        secureWindow: true,
+        secureEvidence: "FLAG_SECURE payment checkout",
+        fieldCandidates: [
+          {
+            semantic: "card_number",
+            label: "Card Number",
+            resourceIdHint: "card_number",
+            artifactKey: buildPaymentArtifactKey("card_number", "card_number", 0),
+            required: true,
+            confidence: 0.96,
+            inputType: "card-number",
+          },
+          {
+            semantic: "expiry",
+            label: "Expiration (MM/YY)",
+            resourceIdHint: "expiry",
+            artifactKey: buildPaymentArtifactKey("expiry", "expiry", 0),
+            required: true,
+            confidence: 0.92,
+            inputType: "expiry",
+          },
+          {
+            semantic: "cvc",
+            label: "Security Code (CVC/CVV)",
+            resourceIdHint: "cvc",
+            artifactKey: buildPaymentArtifactKey("cvc", "cvc", 0),
+            required: true,
+            confidence: 0.91,
+            inputType: "cvc",
+          },
+        ],
+      },
+    },
+  ]);
+
+  const result = await runtime.runTask(
+    "payment probe to human auth",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-probe-payment",
+        approved: true,
+        status: "approved",
+        message: "Payment delegated",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "payment");
+  assert.equal(authRequests[0].uiTemplate?.artifactKind, "form");
+  assert.equal(authRequests[0].uiTemplate?.requireArtifactOnApprove, true);
+  assert.equal(authRequests[0].uiTemplate?.fields?.length, 3);
+  assert.equal(authRequests[0].uiTemplate?.allowPhotoAttachment, false);
+});
+
 test("AgentRuntime reuses approved capability probe auth within one task", async () => {
   const authRequests = [];
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-capability-probe-artifact-"));
@@ -1610,6 +1704,106 @@ test("AgentRuntime applies delegated payment artifact after human auth approval"
     assert.equal(actions.some((action) => action.type === "type" && action.text === "4111111111111111"), true);
     assert.equal(actions.some((action) => action.type === "type" && action.text === "02/32"), true);
     assert.equal(actions.some((action) => action.type === "type" && action.text === "182"), true);
+  } finally {
+    fs.rmSync(artifactFile, { force: true });
+  }
+});
+
+test("AgentRuntime applies delegated payment form artifact with billing fields", async () => {
+  const actions = [];
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-payment-form-${Date.now()}.json`);
+  const cardKey = buildPaymentArtifactKey("card_number", "card_number", 0);
+  const expiryKey = buildPaymentArtifactKey("expiry", "expiry", 0);
+  const cvcKey = buildPaymentArtifactKey("cvc", "cvc", 0);
+  const nameKey = buildPaymentArtifactKey("billing_name", "billing_name", 0);
+  const emailKey = buildPaymentArtifactKey("billing_email", "billing_email", 0);
+  const addressKey = buildPaymentArtifactKey("billing_address_line1", "billing_address", 0);
+  const zipKey = buildPaymentArtifactKey("postal_code", "postal_code", 0);
+
+  fs.writeFileSync(
+    artifactFile,
+    JSON.stringify({
+      kind: "form",
+      capability: "payment",
+      fields: {
+        [cardKey]: "4111111111111111",
+        [expiryKey]: "02/32",
+        [cvcKey]: "182",
+        [nameKey]: "Sergio Chan",
+        [emailKey]: "sergio@example.com",
+        [addressKey]: "1 Market St",
+        [zipKey]: "94105",
+      },
+    }),
+    "utf-8",
+  );
+
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need payment details",
+        action: {
+          type: "request_human_auth",
+          capability: "payment",
+          instruction: "Provide secure payment fields.",
+          timeoutSec: 120,
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after delegated payment form fields" } },
+    ],
+  });
+
+  runtime.adb = {
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
+  };
+  runtime.emulator = {
+    runAdb: (args) => {
+      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
+        return [
+          "<hierarchy>",
+          '<node index="0" text="Card number" resource-id="com.demo:id/card_number" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,320][1020,430]" />',
+          '<node index="1" text="Expiration" resource-id="com.demo:id/expiry" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,440][520,550]" />',
+          '<node index="2" text="Security code" resource-id="com.demo:id/cvc" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="true" bounds="[560,440][1020,550]" />',
+          '<node index="3" text="Name" resource-id="com.demo:id/billing_name" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,560][1020,670]" />',
+          '<node index="4" text="Email" resource-id="com.demo:id/billing_email" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,680][1020,790]" />',
+          '<node index="5" text="Billing address" resource-id="com.demo:id/billing_address" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,800][1020,910]" />',
+          '<node index="6" text="ZIP Code" resource-id="com.demo:id/postal_code" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,920][520,1030]" />',
+          "</hierarchy>",
+        ].join("");
+      }
+      return "ok";
+    },
+  };
+
+  try {
+    const result = await runtime.runTask(
+      "delegated payment form test",
+      undefined,
+      undefined,
+      async () => ({
+        requestId: "req-payment-form",
+        approved: true,
+        status: "approved",
+        message: "Payment form details shared",
+        decidedAt: new Date().toISOString(),
+        artifactPath: artifactFile,
+      }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "4111111111111111"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "02/32"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "182"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "Sergio Chan"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "sergio@example.com"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "1 Market St"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "94105"), true);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }

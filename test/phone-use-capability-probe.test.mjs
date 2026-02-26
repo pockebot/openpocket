@@ -3,9 +3,14 @@ import assert from "node:assert/strict";
 
 import {
   PhoneUseCapabilityProbe,
+  buildPaymentArtifactKey,
+  inferPaymentFieldSemantic,
+  parsePaymentArtifactKey,
+  parsePaymentUiTreeFieldCandidates,
   parseActivityLogCapabilitySignals,
   parseAppOpsCapabilitySignals,
   parseCameraDumpsysCapabilitySignals,
+  parseWindowSecurePaymentSignal,
   parseAgoDurationMs,
 } from "../dist/phone-use-util/index.js";
 
@@ -79,6 +84,63 @@ test("parseActivityLogCapabilitySignals detects cross-app photo intent", () => {
   assert.equal(signals[0].capability, "photos");
   assert.equal(signals[0].phase, "requested");
   assert.equal(signals[0].packageName, "com.Slack");
+});
+
+test("parseWindowSecurePaymentSignal detects secure payment surface from focused package", () => {
+  const dumpsys = [
+    "mCurrentFocus=Window{ab12cd3 u0 com.shop.app/.CheckoutActivity}",
+    "Window #9 Window{ab12cd3 u0 com.shop.app/.CheckoutActivity}:",
+    "  mAttrs={(0,0)(fillxfill) sim=#20 ty=APPLICATION fl=FLAG_SECURE HARDWARE_ACCELERATED}",
+    "  secure=true",
+  ].join("\n");
+  const signal = parseWindowSecurePaymentSignal(dumpsys, {
+    foregroundPackage: "com.shop.app",
+    candidatePackages: ["com.shop.app"],
+    observedAt: "2026-02-26T00:00:00.000Z",
+  });
+  assert.equal(Boolean(signal), true);
+  assert.equal(signal.packageName, "com.shop.app");
+  assert.match(signal.evidence, /FLAG_SECURE/i);
+});
+
+test("parsePaymentUiTreeFieldCandidates extracts semantic payment fields", () => {
+  const xml = [
+    "<hierarchy>",
+    '<node index="0" text="Card number" resource-id="com.shop:id/card_number" class="android.widget.EditText" package="com.shop" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,320][1020,430]" />',
+    '<node index="1" text="Expiration date, 2 digit month, 2 digit year" resource-id="com.shop:id/expiry" class="android.widget.EditText" package="com.shop" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,440][520,550]" />',
+    '<node index="2" text="Security code" resource-id="com.shop:id/cvc" class="android.widget.EditText" package="com.shop" content-desc="" clickable="true" enabled="true" focusable="true" password="true" bounds="[560,440][1020,550]" />',
+    '<node index="3" text="Billing ZIP" resource-id="com.shop:id/postal_code" class="android.widget.EditText" package="com.shop" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,560][520,670]" />',
+    "</hierarchy>",
+  ].join("");
+  const fields = parsePaymentUiTreeFieldCandidates(xml);
+  assert.equal(fields.some((field) => field.semantic === "card_number"), true);
+  assert.equal(fields.some((field) => field.semantic === "expiry"), true);
+  assert.equal(fields.some((field) => field.semantic === "cvc"), true);
+  assert.equal(fields.some((field) => field.semantic === "postal_code"), true);
+  const cardField = fields.find((field) => field.semantic === "card_number");
+  assert.equal(cardField.required, true);
+  assert.equal(cardField.inputType, "card-number");
+});
+
+test("payment artifact key helpers round-trip semantic/resource hints", () => {
+  const key = buildPaymentArtifactKey("billing_email", "billing_email", 2);
+  const parsed = parsePaymentArtifactKey(key);
+  assert.equal(Boolean(parsed), true);
+  assert.equal(parsed.semantic, "billing_email");
+  assert.equal(parsed.resourceIdHint, "billing_email");
+  assert.equal(parsed.index, 2);
+});
+
+test("inferPaymentFieldSemantic identifies billing email hints", () => {
+  const inferred = inferPaymentFieldSemantic({
+    label: "Email",
+    hint: "Billing email address",
+    resourceId: "com.shop:id/billing_email",
+    contentDesc: "",
+    className: "android.widget.EditText",
+  });
+  assert.equal(inferred.semantic, "billing_email");
+  assert.equal(inferred.confidence > 0.6, true);
 });
 
 test("PhoneUseCapabilityProbe dedupes repeated capability events", () => {
@@ -194,4 +256,54 @@ test("PhoneUseCapabilityProbe poll checks candidate package when foreground swit
   assert.equal(events[0].capability, "camera");
   assert.equal(events[0].phase, "requested");
   assert.equal(events[0].packageName, "com.Slack");
+});
+
+test("PhoneUseCapabilityProbe poll emits payment event from secure window + ui tree", () => {
+  const probe = new PhoneUseCapabilityProbe({
+    adbRunner: {
+      run: (_deviceId, args) => {
+        const joined = args.join(" ");
+        if (joined.includes("cmd appops")) {
+          return "";
+        }
+        if (joined.includes("dumpsys media.camera")) {
+          return "Active Camera Clients:\n[]";
+        }
+        if (joined.includes("logcat")) {
+          return "";
+        }
+        if (joined.includes("dumpsys window windows")) {
+          return [
+            "mCurrentFocus=Window{ab12cd3 u0 com.shop.app/.CheckoutActivity}",
+            "Window #9 Window{ab12cd3 u0 com.shop.app/.CheckoutActivity}:",
+            "  mAttrs={(0,0)(fillxfill) sim=#20 ty=APPLICATION fl=FLAG_SECURE HARDWARE_ACCELERATED}",
+            "  secure=true",
+          ].join("\n");
+        }
+        if (joined.includes("exec-out uiautomator dump /dev/tty")) {
+          return [
+            "<hierarchy>",
+            '<node index="0" text="Card number" resource-id="com.shop:id/card_number" class="android.widget.EditText" package="com.shop" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,320][1020,430]" />',
+            '<node index="1" text="Expiration date" resource-id="com.shop:id/expiry" class="android.widget.EditText" package="com.shop" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,440][520,550]" />',
+            '<node index="2" text="CVC" resource-id="com.shop:id/cvc" class="android.widget.EditText" package="com.shop" content-desc="" clickable="true" enabled="true" focusable="true" password="true" bounds="[560,440][1020,550]" />',
+            "</hierarchy>",
+          ].join("");
+        }
+        return "";
+      },
+    },
+    nowMs: () => 3_000_000,
+    nowIso: () => "2026-02-26T00:00:00.000Z",
+    minPollIntervalMs: 300,
+  });
+
+  const events = probe.poll({
+    deviceId: "emulator-5554",
+    foregroundPackage: "com.shop.app",
+  });
+  const payment = events.find((event) => event.capability === "payment");
+  assert.equal(Boolean(payment), true);
+  assert.equal(payment.source, "window_secure");
+  assert.equal(payment.paymentContext?.secureWindow, true);
+  assert.equal((payment.paymentContext?.fieldCandidates?.length ?? 0) >= 3, true);
 });

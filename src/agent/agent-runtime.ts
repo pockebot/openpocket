@@ -9,6 +9,7 @@ import type {
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
+  HumanAuthUiField,
   HumanAuthUiTemplate,
   UserDecisionRequest,
   UserDecisionResponse,
@@ -52,7 +53,13 @@ import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
 import { createPiSessionBridge } from "./pi-session-bridge.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
-import { PhoneUseCapabilityProbe, type CapabilityProbeEvent } from "../phone-use-util/index.js";
+import {
+  PhoneUseCapabilityProbe,
+  inferPaymentFieldSemantic,
+  parsePaymentArtifactKey,
+  type CapabilityProbeEvent,
+  type PaymentFieldSemantic,
+} from "../phone-use-util/index.js";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
   "permissioncontroller",
@@ -226,12 +233,12 @@ type PaymentInputNode = CredentialInputNode & {
   contentDesc: string;
 };
 
-type DelegatedPaymentCard = {
-  cardNumber: string;
-  expiry: string;
-  cvc: string;
-  zip: string;
-  cardholderName: string;
+type DelegatedPaymentField = {
+  semantic: PaymentFieldSemantic;
+  value: string;
+  label: string;
+  artifactKey: string;
+  resourceIdHint: string;
 };
 
 type OauthCredentialCache = {
@@ -864,34 +871,176 @@ export class AgentRuntime {
     return { username, password };
   }
 
-  private extractDelegatedPaymentCard(
-    artifactJson: Record<string, unknown> | null,
-  ): DelegatedPaymentCard | null {
-    if (!artifactJson) {
-      return null;
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  private paymentFieldLabelForSemantic(semantic: PaymentFieldSemantic, fallback: string): string {
+    switch (semantic) {
+      case "card_number":
+        return "card_number";
+      case "expiry":
+        return "expiry";
+      case "cvc":
+        return "cvc";
+      case "cardholder_name":
+        return "cardholder_name";
+      case "billing_name":
+        return "billing_name";
+      case "postal_code":
+        return "postal_code";
+      case "billing_address_line1":
+        return "billing_address_line1";
+      case "billing_address_line2":
+        return "billing_address_line2";
+      case "billing_city":
+        return "billing_city";
+      case "billing_state":
+        return "billing_state";
+      case "billing_country":
+        return "billing_country";
+      case "billing_email":
+        return "billing_email";
+      case "billing_phone":
+        return "billing_phone";
+      default: {
+        const normalized = this.normalizePermissionUiText(fallback).replace(/[^a-z0-9]+/g, "_");
+        return normalized || "payment_field";
+      }
     }
-    if (String(artifactJson.kind ?? "") !== "payment_card_v1") {
-      return null;
+  }
+
+  private inferPaymentSemanticFromArtifactKey(rawKey: string): {
+    semantic: PaymentFieldSemantic;
+    resourceIdHint: string;
+  } {
+    const parsed = parsePaymentArtifactKey(rawKey);
+    if (parsed) {
+      return {
+        semantic: parsed.semantic ?? "unknown",
+        resourceIdHint: parsed.resourceIdHint,
+      };
     }
-    const cardNumber = typeof artifactJson.cardNumber === "string"
-      ? artifactJson.cardNumber.replace(/\s+/g, "")
-      : "";
-    const expiry = typeof artifactJson.expiry === "string" ? artifactJson.expiry.trim() : "";
-    const cvc = typeof artifactJson.cvc === "string" ? artifactJson.cvc.trim() : "";
-    const zip = typeof artifactJson.zip === "string" ? artifactJson.zip.trim() : "";
-    const cardholderName = typeof artifactJson.cardholderName === "string"
-      ? artifactJson.cardholderName.trim()
-      : "";
-    if (!cardNumber && !expiry && !cvc && !zip && !cardholderName) {
-      return null;
-    }
+    const normalizedKey = this.normalizePermissionUiText(String(rawKey || ""));
+    const inferred = inferPaymentFieldSemantic({
+      label: normalizedKey,
+      hint: normalizedKey,
+      resourceId: normalizedKey,
+      contentDesc: normalizedKey,
+      className: "",
+    });
     return {
-      cardNumber,
-      expiry,
-      cvc,
-      zip,
-      cardholderName,
+      semantic: inferred.semantic,
+      resourceIdHint: normalizedKey.replace(/[^a-z0-9]+/g, "_"),
     };
+  }
+
+  private normalizePaymentFieldValue(semantic: PaymentFieldSemantic, rawValue: string): string {
+    const value = String(rawValue || "").trim();
+    if (!value) {
+      return "";
+    }
+    if (semantic === "card_number") {
+      return value.replace(/\s+/g, "");
+    }
+    return value;
+  }
+
+  private extractDelegatedPaymentFields(
+    artifactJson: Record<string, unknown> | null,
+  ): DelegatedPaymentField[] {
+    if (!artifactJson) {
+      return [];
+    }
+    const out: DelegatedPaymentField[] = [];
+    const fieldsRaw = this.isRecord(artifactJson.fields)
+      ? artifactJson.fields
+      : this.isRecord(artifactJson.form_data)
+        ? artifactJson.form_data
+        : null;
+
+    const pushField = (
+      semantic: PaymentFieldSemantic,
+      valueRaw: unknown,
+      artifactKey: string,
+      labelFallback: string,
+      resourceIdHint = "",
+    ) => {
+      const value = typeof valueRaw === "string" || typeof valueRaw === "number"
+        ? this.normalizePaymentFieldValue(semantic, String(valueRaw))
+        : "";
+      if (!value) {
+        return;
+      }
+      out.push({
+        semantic,
+        value,
+        artifactKey,
+        label: this.paymentFieldLabelForSemantic(semantic, labelFallback),
+        resourceIdHint,
+      });
+    };
+
+    const kind = String(artifactJson.kind ?? "").trim().toLowerCase();
+    if ((kind === "payment_card_v1" || kind === "payment_card") && (!fieldsRaw || Object.keys(fieldsRaw).length === 0)) {
+      pushField("card_number", artifactJson.cardNumber ?? artifactJson.card_number, "payment_card_number", "card_number");
+      pushField("expiry", artifactJson.expiry, "payment_expiry", "expiry");
+      pushField("cvc", artifactJson.cvc ?? artifactJson.cvv, "payment_cvc", "cvc");
+      pushField("postal_code", artifactJson.zip ?? artifactJson.postalCode, "payment_postal_code", "postal_code");
+      pushField("cardholder_name", artifactJson.cardholderName ?? artifactJson.cardholder_name, "payment_cardholder_name", "cardholder_name");
+    }
+
+    if (fieldsRaw) {
+      for (const [rawKey, rawValue] of Object.entries(fieldsRaw)) {
+        if ((typeof rawValue !== "string" && typeof rawValue !== "number")) {
+          continue;
+        }
+        const valueText = String(rawValue).trim();
+        if (!valueText) {
+          continue;
+        }
+        const parsed = this.inferPaymentSemanticFromArtifactKey(rawKey);
+        pushField(
+          parsed.semantic,
+          valueText,
+          rawKey,
+          rawKey,
+          parsed.resourceIdHint,
+        );
+      }
+    }
+
+    const deduped = new Map<string, DelegatedPaymentField>();
+    for (const field of out) {
+      const key = `${field.semantic}|${field.artifactKey}`;
+      if (!deduped.has(key)) {
+        deduped.set(key, field);
+      }
+    }
+
+    return [...deduped.values()];
+  }
+
+  private isPaymentArtifactKind(kind: string): boolean {
+    const normalized = String(kind || "").trim().toLowerCase();
+    return normalized === "payment_card_v1" || normalized === "payment_card";
+  }
+
+  private shouldDeleteSensitiveDelegationArtifact(
+    capability: HumanAuthCapability,
+    artifactJson: Record<string, unknown> | null,
+  ): boolean {
+    const kind = String(artifactJson?.kind ?? "").trim().toLowerCase();
+    if (kind === "credentials") {
+      return true;
+    }
+    if (this.isPaymentArtifactKind(kind)) {
+      return true;
+    }
+    if (capability === "payment") {
+      return true;
+    }
+    return false;
   }
 
   private getCachedOauthCredentials(maxAgeMs = 15 * 60 * 1000): { username: string; password: string } | null {
@@ -1174,9 +1323,32 @@ export class AgentRuntime {
     };
   }
 
+  private paymentSemanticScore(node: PaymentInputNode, target: PaymentFieldSemantic): number {
+    const inferred = inferPaymentFieldSemantic({
+      label: node.text,
+      hint: node.hint,
+      resourceId: node.resourceId,
+      contentDesc: node.contentDesc,
+      className: node.className,
+    });
+    if (inferred.semantic === target) {
+      return 170 + Math.round(inferred.confidence * 70);
+    }
+    if (
+      (target === "billing_name" && inferred.semantic === "cardholder_name")
+      || (target === "cardholder_name" && inferred.semantic === "billing_name")
+    ) {
+      return 130;
+    }
+    if (target === "unknown") {
+      return 40;
+    }
+    return 0;
+  }
+
   private paymentHintScore(
     node: PaymentInputNode,
-    target: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
+    field: DelegatedPaymentField,
   ): number {
     const combined = this.normalizePermissionUiText(
       `${node.resourceId} ${node.hint} ${node.text} ${node.contentDesc} ${node.className}`,
@@ -1184,65 +1356,49 @@ export class AgentRuntime {
     if (!combined) {
       return 0;
     }
-
-    if (target === "cardNumber") {
-      if (combined.includes("card number") || combined.includes("cc-number") || combined.includes("cardnumber")) {
-        return 240;
+    let score = this.paymentSemanticScore(node, field.semantic);
+    const resourceHint = this.normalizePermissionUiText(field.resourceIdHint).replace(/[^a-z0-9]+/g, "_");
+    if (resourceHint) {
+      const normalizedNodeResource = this.normalizePermissionUiText(node.resourceId).replace(/[^a-z0-9]+/g, "_");
+      if (normalizedNodeResource.includes(resourceHint)) {
+        score += 220;
       }
-      if (combined.includes("card") && combined.includes("number")) {
-        return 180;
-      }
-      if (combined.includes("pan")) {
-        return 120;
-      }
-      return 0;
     }
 
-    if (target === "expiry") {
-      if (combined.includes("expiration") || combined.includes("expiry")) {
-        return 220;
+    const labelTokens = this.normalizePermissionUiText(field.label)
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 3);
+    for (const token of labelTokens) {
+      if (combined.includes(token)) {
+        score += 18;
       }
-      if (combined.includes("exp") && (combined.includes("date") || combined.includes("month") || combined.includes("year"))) {
-        return 180;
-      }
-      if (combined.includes("mm/yy") || combined.includes("month") || combined.includes("year")) {
-        return 150;
-      }
-      return 0;
     }
 
-    if (target === "cvc") {
-      if (combined.includes("security code")) {
-        return 240;
-      }
-      if (combined.includes("cvv") || combined.includes("cvc") || combined.includes("csc")) {
-        return 220;
-      }
-      if (combined.includes("security") && combined.includes("code")) {
-        return 180;
-      }
-      return 0;
+    if (field.semantic === "cvc" && node.password) {
+      score += 25;
+    }
+    if (field.semantic === "card_number" && /\b(number|pan|card)\b/.test(combined)) {
+      score += 30;
+    }
+    if (field.semantic === "expiry" && /\b(exp|expiry|expiration|mm|yy)\b/.test(combined)) {
+      score += 30;
+    }
+    if (field.semantic === "postal_code" && /\b(postal|zip|postcode)\b/.test(combined)) {
+      score += 30;
+    }
+    if (field.semantic === "billing_email" && /\b(email|e-mail)\b/.test(combined)) {
+      score += 35;
+    }
+    if (field.semantic === "billing_phone" && /\b(phone|mobile|tel|telephone)\b/.test(combined)) {
+      score += 35;
     }
 
-    if (target === "zip") {
-      if (combined.includes("postal") || combined.includes("zip")) {
-        return 220;
-      }
-      return 0;
-    }
-
-    if (combined.includes("cardholder") || combined.includes("holder name")) {
-      return 220;
-    }
-    if (combined.includes("name")) {
-      return 140;
-    }
-    return 0;
+    return score;
   }
 
   private pickPaymentInputNode(
     nodes: PaymentInputNode[],
-    target: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
+    field: DelegatedPaymentField,
     used: Set<PaymentInputNode>,
   ): PaymentInputNode | null {
     const available = nodes.filter((node) => !used.has(node));
@@ -1252,7 +1408,7 @@ export class AgentRuntime {
     const scored = available
       .map((node) => ({
         node,
-        score: this.paymentHintScore(node, target),
+        score: this.paymentHintScore(node, field),
       }))
       .sort((a, b) => {
         if (b.score !== a.score) {
@@ -1264,10 +1420,49 @@ export class AgentRuntime {
         return a.node.left - b.node.left;
       });
 
-    if ((scored[0]?.score ?? 0) > 0) {
-      return scored[0]?.node ?? null;
+    const best = scored[0];
+    if (!best) {
+      return null;
     }
-    return available[0] ?? null;
+    if (best.score > 0) {
+      return best.node;
+    }
+    if (field.semantic === "unknown") {
+      return best.node;
+    }
+    return null;
+  }
+
+  private paymentFieldOrderScore(semantic: PaymentFieldSemantic): number {
+    switch (semantic) {
+      case "card_number":
+        return 0;
+      case "expiry":
+        return 1;
+      case "cvc":
+        return 2;
+      case "cardholder_name":
+      case "billing_name":
+        return 3;
+      case "billing_address_line1":
+        return 4;
+      case "billing_address_line2":
+        return 5;
+      case "billing_city":
+        return 6;
+      case "billing_state":
+        return 7;
+      case "postal_code":
+        return 8;
+      case "billing_country":
+        return 9;
+      case "billing_email":
+        return 10;
+      case "billing_phone":
+        return 11;
+      default:
+        return 20;
+    }
   }
 
   private credentialHintScore(node: CredentialInputNode, target: "username" | "password"): number {
@@ -1451,78 +1646,48 @@ export class AgentRuntime {
   }
 
   private async applyPaymentDelegation(
-    payment: DelegatedPaymentCard,
+    fields: DelegatedPaymentField[],
   ): Promise<DelegationApplyResult> {
     const deviceId = this.resolveDelegationDeviceId();
     const uiDumpXml = this.captureUiDumpXml(deviceId);
     const nodes = this.parsePaymentInputNodes(uiDumpXml);
     const used = new Set<PaymentInputNode>();
+    const orderedFields = [...fields]
+      .map((field, index) => ({ field, index }))
+      .sort((a, b) => {
+        const scoreA = this.paymentFieldOrderScore(a.field.semantic);
+        const scoreB = this.paymentFieldOrderScore(b.field.semantic);
+        if (scoreA !== scoreB) {
+          return scoreA - scoreB;
+        }
+        return a.index - b.index;
+      })
+      .map((item) => item.field);
 
     const typedFields: string[] = [];
     const deferredFields: string[] = [];
-    const maybeType = async (
-      fieldName: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
-      fieldValue: string,
-      focusReason: string,
-      typeReason: string,
-      displayName: string,
-    ) => {
-      if (!fieldValue) {
-        return;
+    for (const field of orderedFields) {
+      if (!field.value) {
+        continue;
       }
-      const node = this.pickPaymentInputNode(nodes, fieldName, used);
+      const node = this.pickPaymentInputNode(nodes, field, used);
       if (!node) {
-        deferredFields.push(displayName);
-        return;
+        deferredFields.push(field.label);
+        continue;
       }
       used.add(node);
-      await this.tapCredentialNode(node, focusReason);
+      const semanticReasonToken = field.semantic.replace(/[^a-z0-9_]+/g, "_");
+      await this.tapCredentialNode(node, `human_auth_focus_payment_${semanticReasonToken}`);
       await this.adb.executeAction(
         {
           type: "type",
-          text: fieldValue,
-          reason: typeReason,
+          text: field.value,
+          reason: `human_auth_delegate_payment_${semanticReasonToken}`,
         },
         this.config.agent.deviceId,
       );
-      typedFields.push(displayName);
-    };
-
-    await maybeType(
-      "cardNumber",
-      payment.cardNumber,
-      "human_auth_focus_payment_card_number",
-      "human_auth_delegate_payment_card_number",
-      "card_number",
-    );
-    await maybeType(
-      "expiry",
-      payment.expiry,
-      "human_auth_focus_payment_expiry",
-      "human_auth_delegate_payment_expiry",
-      "expiry",
-    );
-    await maybeType(
-      "cvc",
-      payment.cvc,
-      "human_auth_focus_payment_cvc",
-      "human_auth_delegate_payment_cvc",
-      "cvc",
-    );
-    await maybeType(
-      "zip",
-      payment.zip,
-      "human_auth_focus_payment_zip",
-      "human_auth_delegate_payment_zip",
-      "zip",
-    );
-    await maybeType(
-      "cardholderName",
-      payment.cardholderName,
-      "human_auth_focus_payment_cardholder",
-      "human_auth_delegate_payment_cardholder",
-      "cardholder_name",
-    );
+      typedFields.push(field.label);
+    }
 
     const parts: string[] = [];
     if (typedFields.length > 0) {
@@ -2088,6 +2253,10 @@ export class AgentRuntime {
         const confidence = Number.isFinite(event.confidence)
           ? event.confidence.toFixed(2)
           : "0.00";
+        if (event.capability === "payment") {
+          const fieldCount = event.paymentContext?.fieldCandidates?.length ?? 0;
+          return `${event.capability}/${event.phase} pkg=${event.packageName} src=${event.source} fields=${fieldCount} conf=${confidence}`;
+        }
         return `${event.capability}/${event.phase} pkg=${event.packageName} src=${event.source} conf=${confidence}`;
       })
       .join("; ");
@@ -2182,17 +2351,133 @@ export class AgentRuntime {
         return "location";
       case "photos":
         return "files";
+      case "payment":
+        return "payment";
       default:
         return null;
     }
   }
 
   private buildCapabilityProbeInstruction(event: CapabilityProbeEvent): string {
+    if (event.capability === "payment") {
+      return `Secure payment input was detected in ${event.packageName}. Fill required payment/billing fields from your Human Phone and approve to delegate them to Agent Phone.`;
+    }
     const target = event.capability === "photos" ? "photos" : event.capability;
     return `App ${event.packageName} requested ${target} access. Approve only if you want to delegate ${target} data from your Human Phone for this task step.`;
   }
 
+  private paymentSemanticToUiFieldType(semantic: PaymentFieldSemantic): HumanAuthUiField["type"] {
+    switch (semantic) {
+      case "card_number":
+        return "card-number";
+      case "expiry":
+        return "expiry";
+      case "cvc":
+        return "cvc";
+      case "billing_email":
+        return "email";
+      default:
+        return "text";
+    }
+  }
+
+  private paymentFieldPlaceholder(semantic: PaymentFieldSemantic): string {
+    switch (semantic) {
+      case "card_number":
+        return "e.g., 4111111111111111";
+      case "expiry":
+        return "e.g., 02/32";
+      case "cvc":
+        return "e.g., 182";
+      case "postal_code":
+        return "e.g., 94105";
+      case "billing_email":
+        return "e.g., name@example.com";
+      case "billing_phone":
+        return "e.g., +1 415 555 0123";
+      default:
+        return "";
+    }
+  }
+
+  private buildPaymentProbeFields(event: CapabilityProbeEvent): HumanAuthUiField[] {
+    const candidates = Array.isArray(event.paymentContext?.fieldCandidates)
+      ? event.paymentContext?.fieldCandidates ?? []
+      : [];
+    if (candidates.length > 0) {
+      return candidates.map((candidate) => ({
+        id: candidate.artifactKey,
+        artifactKey: candidate.artifactKey,
+        label: candidate.label,
+        type: this.paymentSemanticToUiFieldType(candidate.semantic),
+        required: candidate.required,
+        placeholder: this.paymentFieldPlaceholder(candidate.semantic),
+        autocomplete: candidate.semantic === "card_number"
+          ? "cc-number"
+          : candidate.semantic === "expiry"
+            ? "cc-exp"
+            : candidate.semantic === "cvc"
+              ? "cc-csc"
+              : candidate.semantic === "billing_name" || candidate.semantic === "cardholder_name"
+                ? "name"
+                : candidate.semantic === "billing_email"
+                  ? "email"
+                  : candidate.semantic === "postal_code"
+                    ? "postal-code"
+                    : candidate.semantic === "billing_phone"
+                      ? "tel"
+                      : undefined,
+      }));
+    }
+    return [
+      {
+        id: "payment_field__card_number__na__0",
+        artifactKey: "payment_field__card_number__na__0",
+        label: "Card Number",
+        type: "card-number",
+        required: true,
+        autocomplete: "cc-number",
+      },
+      {
+        id: "payment_field__expiry__na__0",
+        artifactKey: "payment_field__expiry__na__0",
+        label: "Expiration (MM/YY)",
+        type: "expiry",
+        required: true,
+        autocomplete: "cc-exp",
+      },
+      {
+        id: "payment_field__cvc__na__0",
+        artifactKey: "payment_field__cvc__na__0",
+        label: "Security Code (CVC/CVV)",
+        type: "cvc",
+        required: true,
+        autocomplete: "cc-csc",
+      },
+    ];
+  }
+
   private buildCapabilityProbeUiTemplate(event: CapabilityProbeEvent): HumanAuthUiTemplate {
+    if (event.capability === "payment") {
+      const fields = this.buildPaymentProbeFields(event);
+      return {
+        templateId: "capability-probe-payment-v1",
+        title: "Human Auth Required: Secure Payment",
+        summary: `OpenPocket detected a secure payment surface in ${event.packageName}. Fill the requested fields from your Human Phone to continue.`,
+        capabilityHint: `detected=payment/${event.phase} source=${event.source} secure=true fields=${fields.length}`,
+        artifactKind: "form",
+        requireArtifactOnApprove: true,
+        allowTextAttachment: false,
+        allowLocationAttachment: false,
+        allowPhotoAttachment: false,
+        allowAudioAttachment: false,
+        allowFileAttachment: false,
+        approveLabel: "Approve and Continue",
+        rejectLabel: "Reject",
+        notePlaceholder: "Optional context (never paste card data here)",
+        fields,
+      };
+    }
     const titleTarget = event.capability === "photos" ? "Photo Library" : event.capability;
     const base: HumanAuthUiTemplate = {
       templateId: `capability-probe-${event.capability}-v1`,
@@ -2245,6 +2530,20 @@ export class AgentRuntime {
       .filter((event) => this.mapProbeCapabilityToHumanAuthCapability(event.capability) !== null)
       .filter((event) => !this.isPermissionDialogApp(event.packageName))
       .sort((a, b) => {
+        const priority = (event: CapabilityProbeEvent): number => {
+          if (event.capability === "payment") {
+            return 0;
+          }
+          if (event.capability === "camera") {
+            return 1;
+          }
+          return 2;
+        };
+        const pa = priority(a);
+        const pb = priority(b);
+        if (pa !== pb) {
+          return pa - pb;
+        }
         if (a.phase !== b.phase) {
           return a.phase === "requested" ? -1 : 1;
         }
@@ -2282,6 +2581,9 @@ export class AgentRuntime {
     capability: HumanAuthCapability,
     packageName: string,
   ): string {
+    if (capability === "payment") {
+      return `${capability}:${String(packageName || "").toLowerCase()}`;
+    }
     void packageName;
     return capability;
   }
@@ -2723,7 +3025,7 @@ export class AgentRuntime {
     try {
       const artifactJson = this.readJsonArtifact(decision.artifactPath);
       // Immediately delete sensitive artifacts from disk to avoid plaintext lingering.
-      if (artifactJson?.kind === "credentials" || artifactJson?.kind === "payment_card_v1") {
+      if (this.shouldDeleteSensitiveDelegationArtifact(capability, artifactJson)) {
         try {
           fs.unlinkSync(decision.artifactPath);
         } catch {
@@ -2747,10 +3049,10 @@ export class AgentRuntime {
         }
       }
 
-      if (!artifactResult && (capability === "payment" || artifactJson?.kind === "payment_card_v1")) {
-        const payment = this.extractDelegatedPaymentCard(artifactJson);
-        if (payment) {
-          artifactResult = await this.applyPaymentDelegation(payment);
+      if (!artifactResult && (capability === "payment" || this.isPaymentArtifactKind(String(artifactJson?.kind ?? "")))) {
+        const paymentFields = this.extractDelegatedPaymentFields(artifactJson);
+        if (paymentFields.length > 0) {
+          artifactResult = await this.applyPaymentDelegation(paymentFields);
         }
       }
 
