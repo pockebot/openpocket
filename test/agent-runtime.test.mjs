@@ -702,6 +702,67 @@ test("AgentRuntime pauses for request_human_auth and resumes after approval", as
   assert.equal(actions.some((item) => item.type === "request_human_auth"), false);
 });
 
+test("AgentRuntime escalates capability probe camera event to human auth", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "open camera entry", action: { type: "tap", x: 360, y: 720 } },
+      { thought: "done", action: { type: "finish", message: "camera entry opened" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.Slack",
+      screenshotBase64: Buffer.from("slack-camera").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "camera",
+      phase: "requested",
+      packageName: "com.Slack",
+      source: "activity_log",
+      observedAt: new Date().toISOString(),
+      confidence: 0.95,
+      evidence: "camera intent start",
+    },
+  ]);
+
+  const result = await runtime.runTask(
+    "probe to human auth test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-probe-camera",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "camera");
+  assert.equal(authRequests[0].uiTemplate?.requireArtifactOnApprove, true);
+  assert.equal(authRequests[0].uiTemplate?.allowPhotoAttachment, true);
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
+});
+
 test("AgentRuntime fails when request_human_auth is rejected", async () => {
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,

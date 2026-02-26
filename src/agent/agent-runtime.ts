@@ -58,6 +58,7 @@ const AUTO_PERMISSION_DIALOG_PACKAGES = [
   "permissioncontroller",
   "packageinstaller",
 ];
+const CAPABILITY_PROBE_HUMAN_AUTH_COOLDOWN_MS = 90_000;
 
 const PERMISSION_APPROVE_TEXT_HINTS = [
   "while using",
@@ -310,6 +311,7 @@ export class AgentRuntime {
   private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
   private readonly capabilityProbe: PhoneUseCapabilityProbe;
+  private readonly capabilityProbeAuthCooldownByKey = new Map<string, number>();
   private busy = false;
   private stopRequested = false;
   private currentTask: string | null = null;
@@ -1523,6 +1525,191 @@ export class AgentRuntime {
     return `capability_probe count=${events.length} ${detail}`;
   }
 
+  private mapProbeCapabilityToHumanAuthCapability(
+    capability: CapabilityProbeEvent["capability"],
+  ): HumanAuthCapability | null {
+    switch (capability) {
+      case "camera":
+        return "camera";
+      case "microphone":
+        return "microphone";
+      case "location":
+        return "location";
+      case "photos":
+        return "files";
+      default:
+        return null;
+    }
+  }
+
+  private buildCapabilityProbeInstruction(event: CapabilityProbeEvent): string {
+    const target = event.capability === "photos" ? "photos" : event.capability;
+    return `App ${event.packageName} requested ${target} access. Approve only if you want to delegate ${target} data from your Human Phone for this task step.`;
+  }
+
+  private buildCapabilityProbeUiTemplate(event: CapabilityProbeEvent): HumanAuthUiTemplate {
+    const titleTarget = event.capability === "photos" ? "Photo Library" : event.capability;
+    const base: HumanAuthUiTemplate = {
+      templateId: `capability-probe-${event.capability}-v1`,
+      title: `Human Auth Required: ${titleTarget}`,
+      summary: `OpenPocket detected ${event.capability} activity from ${event.packageName}. Provide data from your Human Phone and approve to continue.`,
+      capabilityHint: `detected=${event.capability}/${event.phase} source=${event.source}`,
+      requireArtifactOnApprove: true,
+      allowTextAttachment: true,
+      approveLabel: "Approve and Continue",
+      rejectLabel: "Reject",
+    };
+    if (event.capability === "camera") {
+      return {
+        ...base,
+        allowPhotoAttachment: true,
+        allowFileAttachment: true,
+        fileAccept: "image/*",
+      };
+    }
+    if (event.capability === "photos") {
+      return {
+        ...base,
+        allowPhotoAttachment: true,
+        allowFileAttachment: true,
+        fileAccept: "image/*",
+      };
+    }
+    if (event.capability === "microphone") {
+      return {
+        ...base,
+        allowAudioAttachment: true,
+        allowFileAttachment: true,
+        fileAccept: "audio/*",
+      };
+    }
+    if (event.capability === "location") {
+      return {
+        ...base,
+        allowLocationAttachment: true,
+      };
+    }
+    return base;
+  }
+
+  private pickCapabilityProbeEventForHumanAuth(
+    events: CapabilityProbeEvent[],
+    observedAppAfterAction: string,
+  ): CapabilityProbeEvent | null {
+    if (this.isPermissionDialogApp(observedAppAfterAction)) {
+      return null;
+    }
+    const candidates = events
+      .filter((event) => this.mapProbeCapabilityToHumanAuthCapability(event.capability) !== null)
+      .filter((event) => !this.isPermissionDialogApp(event.packageName))
+      .sort((a, b) => {
+        if (b.confidence !== a.confidence) {
+          return b.confidence - a.confidence;
+        }
+        if (a.phase !== b.phase) {
+          return a.phase === "requested" ? -1 : 1;
+        }
+        if (a.packageName !== b.packageName) {
+          return a.packageName.localeCompare(b.packageName);
+        }
+        return a.source.localeCompare(b.source);
+      });
+    return candidates[0] ?? null;
+  }
+
+  private shouldThrottleCapabilityProbeHumanAuth(
+    capability: HumanAuthCapability,
+    packageName: string,
+  ): boolean {
+    const nowMs = Date.now();
+    for (const [key, ts] of this.capabilityProbeAuthCooldownByKey.entries()) {
+      if (nowMs - ts > CAPABILITY_PROBE_HUMAN_AUTH_COOLDOWN_MS * 2) {
+        this.capabilityProbeAuthCooldownByKey.delete(key);
+      }
+    }
+    const key = `${capability}|${String(packageName || "").toLowerCase()}`;
+    const last = this.capabilityProbeAuthCooldownByKey.get(key) ?? 0;
+    if (nowMs - last < CAPABILITY_PROBE_HUMAN_AUTH_COOLDOWN_MS) {
+      return true;
+    }
+    this.capabilityProbeAuthCooldownByKey.set(key, nowMs);
+    return false;
+  }
+
+  private async maybeEscalateCapabilityProbeToHumanAuth(
+    events: CapabilityProbeEvent[],
+    ctx: PhoneAgentRunContext,
+    currentApp: string,
+  ): Promise<string[]> {
+    if (events.length === 0 || !this.config.humanAuth.enabled) {
+      return [];
+    }
+
+    const event = this.pickCapabilityProbeEventForHumanAuth(events, currentApp);
+    if (!event) {
+      return [];
+    }
+    const capability = this.mapProbeCapabilityToHumanAuthCapability(event.capability);
+    if (!capability) {
+      return [];
+    }
+
+    if (this.shouldThrottleCapabilityProbeHumanAuth(capability, event.packageName)) {
+      return [
+        `human_auth_probe skipped=throttled capability=${capability} pkg=${event.packageName}`,
+      ];
+    }
+
+    if (!ctx.onHumanAuth) {
+      const msg = `Human authorization required (${capability}) but no handler configured for capability probe.`;
+      ctx.failMessage = msg;
+      return [`human_auth_probe error=${JSON.stringify(msg)}`];
+    }
+
+    const timeoutCapSec = Math.max(30, Math.round(this.config.humanAuth.requestTimeoutSec));
+    const timeoutSec = Math.min(timeoutCapSec, 180);
+
+    let decision: HumanAuthDecision;
+    try {
+      decision = await ctx.onHumanAuth({
+        sessionId: ctx.session.id,
+        sessionPath: ctx.session.path,
+        task: ctx.task,
+        step: ctx.stepCount,
+        capability,
+        instruction: this.buildCapabilityProbeInstruction(event),
+        reason: `capability_probe:${event.capability}:${event.phase}:${event.source}`,
+        timeoutSec,
+        currentApp,
+        screenshotPath: ctx.lastScreenshotPath,
+        uiTemplate: this.buildCapabilityProbeUiTemplate(event),
+      });
+    } catch (error) {
+      decision = {
+        requestId: "capability-probe-local-error",
+        approved: false,
+        status: "rejected",
+        message: `Human auth error: ${(error as Error).message}`,
+        decidedAt: nowIso(),
+        artifactPath: null,
+      };
+    }
+
+    const delegation = await this.applyHumanDelegation(capability, decision, currentApp);
+    const lines = [
+      `human_auth_probe capability=${capability} status=${decision.status} pkg=${event.packageName}`,
+      decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
+      delegation?.message ? `delegation=${delegation.message}` : "",
+      delegation?.templateHint ? `delegation_template=${delegation.templateHint}` : "",
+    ].filter(Boolean);
+
+    if (!decision.approved) {
+      ctx.failMessage = `Human authorization ${decision.status}: ${decision.message}`;
+    }
+
+    return lines;
+  }
+
   private computePostActionDelayMs(action: AgentAction, executionResult: string): number {
     const baseDelayMs = Math.max(0, Math.round(this.config.agent.loopDelayMs || 0));
     if (baseDelayMs <= 0 || action.type === "wait") {
@@ -1970,6 +2157,17 @@ export class AgentRuntime {
           executionResult += `\n${probeLine}`;
           // eslint-disable-next-line no-console
           console.log(`[OpenPocket][capability-probe] ${probeLine}`);
+        }
+        const escalationLines = await this.maybeEscalateCapabilityProbeToHumanAuth(
+          events,
+          ctx,
+          observedAppAfterAction,
+        );
+        if (escalationLines.length > 0) {
+          const escalationText = escalationLines.join("\n");
+          executionResult += `\n${escalationText}`;
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][capability-probe] ${escalationText}`);
         }
       } catch (error) {
         if (this.config.agent.verbose) {
@@ -2760,6 +2958,7 @@ export class AgentRuntime {
           this.stopRequested = false;
           this.currentTask = activeTask;
           this.currentTaskStartedAtMs = Date.now();
+          this.capabilityProbeAuthCooldownByKey.clear();
         },
         executeAttempt: async (attemptRequest) => runRuntimeAttempt(
           {
@@ -2815,6 +3014,7 @@ export class AgentRuntime {
           this.currentTask = null;
           this.currentTaskStartedAtMs = null;
           this.stopRequested = false;
+          this.capabilityProbeAuthCooldownByKey.clear();
         },
       },
       request,
