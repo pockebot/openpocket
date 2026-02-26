@@ -95,3 +95,14 @@ test("normalizeAction supports memory tools with defaults", () => {
   assert.equal(get.from, 1);
   assert.equal(get.lines, 120);
 });
+
+test("normalizeAction supports shell wrapping flag", () => {
+  const shell = normalizeAction({
+    type: "shell",
+    command: "echo hello && echo world",
+    useShellWrap: true,
+  });
+  assert.equal(shell.type, "shell");
+  assert.equal(shell.command, "echo hello && echo world");
+  assert.equal(shell.useShellWrap, true);
+});

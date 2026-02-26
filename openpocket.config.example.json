@@ -8,6 +8,11 @@
     "markdownLog": true
   },
   "defaultModel": "gpt-5.2-codex",
+  "target": {
+    "type": "emulator",
+    "adbEndpoint": "",
+    "cloudProvider": ""
+  },
   "emulator": {
     "avdName": "OpenPocket_AVD",
     "androidSdkRoot": "",
@@ -32,7 +37,9 @@
     "contextBudgetChars": 150000,
     "lang": "en",
     "verbose": true,
-    "deviceId": null
+    "deviceId": null,
+    "runtimeBackend": "legacy_agent_core",
+    "legacyCodingExecutor": false
   },
   "screenshots": {
     "saveStepScreenshots": true,

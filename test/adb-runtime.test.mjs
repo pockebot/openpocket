@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { AdbRuntime } = await import("../dist/device/adb-runtime.js");
+const { AdbRuntime, extractPackageName } = await import("../dist/device/adb-runtime.js");
 
 function makeConfig() {
   return {
@@ -23,6 +23,8 @@ class FakeEmulator {
       : ["com.android.adbkeyboard/.AdbIME", "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME"];
     this.currentIme = options.defaultIme ?? "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME";
     this.clipboardText = "";
+    this.powerDumps = Array.isArray(options.powerDumps) ? [...options.powerDumps] : [];
+    this.policyDumps = Array.isArray(options.policyDumps) ? [...options.policyDumps] : [];
   }
 
   status() {
@@ -35,6 +37,26 @@ class FakeEmulator {
 
   runAdb(args) {
     this.calls.push(args);
+
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "dumpsys" &&
+      args[4] === "power"
+    ) {
+      return this.powerDumps.length > 0 ? this.powerDumps.shift() : "mInteractive=true";
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "dumpsys" &&
+      args[4] === "window" &&
+      args[5] === "policy"
+    ) {
+      return this.policyDumps.length > 0
+        ? this.policyDumps.shift()
+        : "isStatusBarKeyguard=false\nmShowingLockscreen=false";
+    }
 
     if (
       args[0] === "-s" &&
@@ -214,5 +236,119 @@ test("AdbRuntime uses escaped adb input for passwords with special characters", 
   assert.equal(
     emulator.calls.some((args) => args.includes("clipboard") || args.includes("KEYCODE_PASTE") || args.includes("ADB_INPUT_B64")),
     false,
+  );
+});
+
+test("AdbRuntime wakes and dismisses keyguard before interactive action on physical phone", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=false"],
+    policyDumps: [
+      "KeyguardServiceDelegate: showing=true",
+      "KeyguardServiceDelegate: showing=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "keyevent", keycode: "KEYCODE_HOME" });
+  assert.match(result, /Sent keyevent KEYCODE_HOME/i);
+  assert.equal(
+    emulator.calls.some(
+      (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_WAKEUP",
+    ),
+    true,
+  );
+  assert.equal(
+    emulator.calls.some((args) => args[0] === "-s" && args[2] === "shell" && args[3] === "wm" && args[4] === "dismiss-keyguard"),
+    true,
+  );
+});
+
+test("AdbRuntime fails clearly when physical phone stays locked after unlock attempts", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone" },
+    },
+    emulator,
+  );
+
+  await assert.rejects(
+    runtime.executeAction({ type: "tap", x: 120, y: 300 }),
+    /is locked/i,
+  );
+  assert.equal(
+    emulator.calls.some(
+      (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_MENU",
+    ),
+    true,
+  );
+});
+
+test("extractPackageName parses top resumed activity from activity dump", () => {
+  const dump = "topResumedActivity=ActivityRecord{157928692 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t6}";
+  assert.equal(extractPackageName(dump), "com.google.android.apps.nexuslauncher");
+});
+
+test("extractPackageName parses ACTIVITY fallback line", () => {
+  const dump = "ACTIVITY com.twitter.android/.StartActivity 8cae290 pid=27347 userId=0";
+  assert.equal(extractPackageName(dump), "com.twitter.android");
+});
+
+test("AdbRuntime shell supports explicit sh -lc wrapping via useShellWrap", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  await runtime.executeAction({
+    type: "shell",
+    command: "mkdir -p /sdcard/smoke && echo ok > /sdcard/smoke/main.txt",
+    useShellWrap: true,
+  });
+
+  assert.equal(emulator.calls.length, 1);
+  assert.deepEqual(
+    emulator.calls[0].slice(0, 5),
+    ["-s", "emulator-5554", "shell", "sh", "-lc"],
+  );
+  assert.equal(
+    emulator.calls[0][5],
+    "mkdir -p /sdcard/smoke && echo ok > /sdcard/smoke/main.txt",
+  );
+});
+
+test("AdbRuntime shell preserves wrapped command and quoted arguments", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  await runtime.executeAction({
+    type: "shell",
+    command: "sh -lc 'echo first && echo second'",
+  });
+  await runtime.executeAction({
+    type: "shell",
+    command: "settings put global device_name \"Pixel 9 Pro\"",
+  });
+
+  assert.deepEqual(
+    emulator.calls[0].slice(0, 5),
+    ["-s", "emulator-5554", "shell", "sh", "-lc"],
+  );
+  assert.equal(emulator.calls[0][5], "echo first && echo second");
+  assert.deepEqual(
+    emulator.calls[1],
+    ["-s", "emulator-5554", "shell", "settings", "put", "global", "device_name", "Pixel 9 Pro"],
   );
 });

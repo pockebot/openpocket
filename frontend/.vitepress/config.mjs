@@ -255,6 +255,7 @@ const baseSidebar = [
     items: [
       { text: "Index", link: "/get-started/" },
       { text: "Quickstart", link: "/get-started/quickstart" },
+      { text: "Device Targets", link: "/get-started/device-targets" },
       { text: "Configuration", link: "/get-started/configuration" },
       { text: "Deploy Documentation Site", link: "/get-started/deploy-docs" },
     ],

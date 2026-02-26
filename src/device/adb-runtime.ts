@@ -1,14 +1,18 @@
 import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types.js";
+import { createHash } from "node:crypto";
 import { nowIso } from "../utils/paths.js";
 import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
 import { sleep } from "../utils/time.js";
 import { EmulatorManager } from "./emulator-manager.js";
+import { normalizeDeviceTargetType } from "./target-types.js";
 
 export function extractPackageName(input: string): string {
   const patterns = [
     /mCurrentFocus=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
     /mFocusedApp=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
     /topResumedActivity=.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
+    /ResumedActivity:.*\s([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
+    /ACTIVITY\s+([A-Za-z0-9._$]+)\/[A-Za-z0-9._$]+/,
   ];
 
   for (const re of patterns) {
@@ -132,6 +136,110 @@ function encodeInputText(text: string): string {
     .replace(/\n/g, "%s");
 }
 
+function stripOuterQuotes(value: string): string {
+  const input = String(value ?? "").trim();
+  if (input.length < 2) {
+    return input;
+  }
+  if (input.startsWith("'") && input.endsWith("'")) {
+    // Decode the common shell-safe single-quote escape sequence.
+    return input.slice(1, -1).replace(/'\\''/g, "'");
+  }
+  if (input.startsWith("\"") && input.endsWith("\"")) {
+    return input
+      .slice(1, -1)
+      .replace(/\\\\/g, "\\")
+      .replace(/\\"/g, "\"")
+      .replace(/\\\$/g, "$")
+      .replace(/\\`/g, "`");
+  }
+  return input;
+}
+
+function parseExplicitShellWrap(command: string): { shell: "sh" | "bash"; mode: "-c" | "-lc"; script: string } | null {
+  const normalized = String(command || "").trim();
+  const wrapped = normalized.match(/^(sh|bash)\s+(-lc|-c)\s+([\s\S]+)$/i);
+  if (!wrapped) {
+    return null;
+  }
+  const shell = wrapped[1]?.toLowerCase() === "bash" ? "bash" : "sh";
+  const mode = wrapped[2] === "-c" ? "-c" : "-lc";
+  const script = stripOuterQuotes(String(wrapped[3] ?? ""));
+  return { shell, mode, script };
+}
+
+function splitShellArgs(command: string): string[] {
+  const normalized = String(command || "").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | "\"" | null = null;
+  let escaping = false;
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    const ch = normalized[i];
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+
+    if (quote === null) {
+      if (/\s/.test(ch)) {
+        if (current) {
+          args.push(current);
+          current = "";
+        }
+        continue;
+      }
+      if (ch === "'" || ch === "\"") {
+        quote = ch as "'" | "\"";
+        continue;
+      }
+      if (ch === "\\") {
+        escaping = true;
+        continue;
+      }
+      current += ch;
+      continue;
+    }
+
+    if (quote === "'") {
+      if (ch === "'") {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    // double-quoted text
+    if (ch === "\"") {
+      quote = null;
+      continue;
+    }
+    if (ch === "\\") {
+      escaping = true;
+      continue;
+    }
+    current += ch;
+  }
+
+  if (quote !== null) {
+    throw new Error("invalid shell command: unterminated quoted string");
+  }
+  if (escaping) {
+    current += "\\";
+  }
+  if (current) {
+    args.push(current);
+  }
+  return args;
+}
+
 function hasNonAscii(text: string): boolean {
   return /[^\x00-\x7F]/.test(text);
 }
@@ -165,10 +273,128 @@ function errorMessage(error: unknown): string {
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
+  private readonly screenSizeCache = new Map<string, { width: number; height: number; updatedAtMs: number }>();
 
   constructor(config: OpenPocketConfig, emulator: EmulatorManager) {
     this.config = config;
     this.emulator = emulator;
+  }
+
+  private targetType() {
+    return normalizeDeviceTargetType(this.config.target?.type);
+  }
+
+  private shouldPrepareInteractiveTarget(): boolean {
+    const targetType = this.targetType();
+    return targetType === "physical-phone" || targetType === "android-tv";
+  }
+
+  private isDisplayInteractive(deviceId: string): boolean | null {
+    try {
+      const dump = this.emulator.runAdb(["-s", deviceId, "shell", "dumpsys", "power"], 8_000);
+      if (/mInteractive=true/i.test(dump)) {
+        return true;
+      }
+      if (/mInteractive=false/i.test(dump)) {
+        return false;
+      }
+      if (/Display Power:\s*state=ON/i.test(dump)) {
+        return true;
+      }
+      if (/Display Power:\s*state=(OFF|DOZE|DOZE_SUSPEND)/i.test(dump)) {
+        return false;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private isKeyguardShowing(deviceId: string): boolean | null {
+    try {
+      const dump = this.emulator.runAdb(["-s", deviceId, "shell", "dumpsys", "window", "policy"], 8_000);
+      if (
+        /isStatusBarKeyguard=true/i.test(dump)
+        || /mShowingLockscreen=true/i.test(dump)
+        || /mKeyguardShowing=true/i.test(dump)
+        || /KeyguardServiceDelegate[\s\S]{0,500}\bshowing=true\b/i.test(dump)
+      ) {
+        return true;
+      }
+      if (
+        /isStatusBarKeyguard=false/i.test(dump)
+        || /mShowingLockscreen=false/i.test(dump)
+        || /mKeyguardShowing=false/i.test(dump)
+        || /KeyguardServiceDelegate[\s\S]{0,500}\bshowing=false\b/i.test(dump)
+      ) {
+        return false;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async ensureInteractiveTargetReady(deviceId: string): Promise<void> {
+    if (!this.shouldPrepareInteractiveTarget()) {
+      return;
+    }
+
+    const interactive = this.isDisplayInteractive(deviceId);
+    if (interactive !== true) {
+      try {
+        this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_WAKEUP"]);
+      } catch {
+        // Best effort wake-up.
+      }
+      await sleep(280);
+    }
+
+    const keyguardBefore = this.isKeyguardShowing(deviceId);
+    if (keyguardBefore === false) {
+      return;
+    }
+
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "wm", "dismiss-keyguard"]);
+    } catch {
+      // Best effort dismiss.
+    }
+    await sleep(180);
+
+    const keyguardAfterDismiss = this.isKeyguardShowing(deviceId);
+    if (keyguardAfterDismiss === false) {
+      return;
+    }
+
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_MENU"]);
+    } catch {
+      // Best effort unlock gesture surrogate.
+    }
+    await sleep(180);
+
+    const keyguardAfterMenu = this.isKeyguardShowing(deviceId);
+    if (keyguardAfterMenu === true) {
+      throw new Error(
+        `Target device '${deviceId}' is locked. Please unlock and keep the screen on, then retry.`,
+      );
+    }
+  }
+
+  private shouldPrepareForAction(action: AgentAction): boolean {
+    switch (action.type) {
+      case "tap":
+      case "tap_element":
+      case "swipe":
+      case "type":
+      case "keyevent":
+      case "launch_app":
+      case "shell":
+        return true;
+      default:
+        return false;
+    }
   }
 
   private normalizeClipboardText(text: string): string {
@@ -306,7 +532,7 @@ export class AdbRuntime {
       return status.devices[0];
     }
 
-    throw new Error("No running emulator device found.");
+    throw new Error("No online target device found.");
   }
 
   queryLaunchablePackages(preferred?: string | null): string[] {
@@ -331,26 +557,71 @@ export class AdbRuntime {
     }
   }
 
+  private resolveScreenSize(deviceId: string): { width: number; height: number } {
+    const cached = this.screenSizeCache.get(deviceId);
+    if (cached && Date.now() - cached.updatedAtMs < 30_000) {
+      return {
+        width: cached.width,
+        height: cached.height,
+      };
+    }
+    let output = "";
+    try {
+      output = this.emulator.runAdb(["-s", deviceId, "shell", "wm", "size"]);
+    } catch {
+      output = "";
+    }
+    const parsed = parseScreenSize(output);
+    this.screenSizeCache.set(deviceId, {
+      width: parsed.width,
+      height: parsed.height,
+      updatedAtMs: Date.now(),
+    });
+    return parsed;
+  }
+
+  private resolveCurrentApp(deviceId: string): string {
+    const probes: Array<string[]> = [
+      ["-s", deviceId, "shell", "dumpsys", "activity", "activities"],
+      ["-s", deviceId, "shell", "dumpsys", "window", "windows"],
+    ];
+    for (const args of probes) {
+      try {
+        const dump = this.emulator.runAdb(args);
+        const parsed = extractPackageName(dump);
+        if (parsed && parsed !== "unknown") {
+          return parsed;
+        }
+      } catch {
+        // try next probe
+      }
+    }
+    return "unknown";
+  }
+
+  async captureQuickObservation(preferred?: string | null, modelName?: string): Promise<{
+    deviceId: string;
+    currentApp: string;
+    screenshotHash: string;
+  }> {
+    const deviceId = this.resolveDeviceId(preferred);
+    await this.ensureInteractiveTargetReady(deviceId);
+    const { data } = this.emulator.captureScreenshotBuffer(deviceId);
+    const scaled = await scaleScreenshot(data, modelName);
+    return {
+      deviceId,
+      currentApp: this.resolveCurrentApp(deviceId),
+      screenshotHash: createHash("sha1").update(scaled.data).digest("hex").slice(0, 12),
+    };
+  }
+
   async captureScreenSnapshot(preferred?: string | null, modelName?: string): Promise<ScreenSnapshot> {
     const deviceId = this.resolveDeviceId(preferred);
+    await this.ensureInteractiveTargetReady(deviceId);
 
     const { data } = this.emulator.captureScreenshotBuffer(deviceId);
-    let screenSizeOutput = "";
-    try {
-      screenSizeOutput = this.emulator.runAdb(["-s", deviceId, "shell", "wm", "size"]);
-    } catch {
-      // Device may be transiently offline immediately after boot; parseScreenSize
-      // will fall back to defaults (1080x1920) when given an empty string.
-    }
-    const { width, height } = parseScreenSize(screenSizeOutput);
-
-    let currentApp = "unknown";
-    try {
-      const windowDump = this.emulator.runAdb(["-s", deviceId, "shell", "dumpsys", "window", "windows"]);
-      currentApp = extractPackageName(windowDump);
-    } catch {
-      currentApp = "unknown";
-    }
+    const { width, height } = this.resolveScreenSize(deviceId);
+    const currentApp = this.resolveCurrentApp(deviceId);
 
     const scaled = await scaleScreenshot(data, modelName);
     const uiElements = this.captureUiElements(
@@ -464,6 +735,9 @@ export class AdbRuntime {
 
   async executeAction(action: AgentAction, preferred?: string | null): Promise<string> {
     const deviceId = this.resolveDeviceId(preferred);
+    if (this.shouldPrepareForAction(action)) {
+      await this.ensureInteractiveTargetReady(deviceId);
+    }
 
     switch (action.type) {
       case "tap": {
@@ -544,7 +818,29 @@ export class AdbRuntime {
         return `Launched package ${action.packageName}`;
       }
       case "shell": {
-        const parts = action.command.trim().split(/\s+/);
+        const command = String(action.command ?? "").trim();
+        if (!command) {
+          return "Skipped empty shell command";
+        }
+        if (action.useShellWrap) {
+          this.emulator.runAdb(["-s", deviceId, "shell", "sh", "-lc", command]);
+          return `Executed shell command: ${action.command}`;
+        }
+
+        const wrapped = parseExplicitShellWrap(command);
+        if (wrapped) {
+          this.emulator.runAdb([
+            "-s",
+            deviceId,
+            "shell",
+            wrapped.shell,
+            wrapped.mode,
+            wrapped.script,
+          ]);
+          return `Executed shell command: ${action.command}`;
+        }
+
+        const parts = splitShellArgs(command);
         if (parts.length === 0) {
           return "Skipped empty shell command";
         }

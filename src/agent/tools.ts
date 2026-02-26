@@ -64,6 +64,9 @@ export const launchAppSchema = Type.Object({
 export const shellSchema = Type.Object({
   thought: ThoughtParam,
   command: Type.String({ description: "The adb shell command to execute." }),
+  useShellWrap: Type.Optional(Type.Boolean({
+    description: "When true, run as sh -lc '<command>' for complex shell syntax (redirects/heredoc/operators).",
+  })),
   reason: ReasonParam,
 });
 
@@ -232,7 +235,7 @@ export const TOOL_METAS: ToolMeta[] = [
   { name: "type_text", description: "Type text into the currently focused input field.", parameters: typeTextSchema },
   { name: "keyevent", description: "Send an Android keyevent (e.g. KEYCODE_BACK, KEYCODE_HOME, KEYCODE_ENTER).", parameters: keyeventSchema },
   { name: "launch_app", description: "Launch an Android application by package name.", parameters: launchAppSchema },
-  { name: "shell", description: "Execute a raw adb shell command.", parameters: shellSchema },
+  { name: "shell", description: "Execute an adb shell command (optionally wrapped with sh -lc).", parameters: shellSchema },
   { name: "run_script", description: "Run a short deterministic script as a fallback action.", parameters: runScriptSchema },
   { name: "read", description: "Read a workspace file (optionally with line range).", parameters: readSchema },
   { name: "write", description: "Create or overwrite a workspace file. Supports append mode.", parameters: writeSchema },

@@ -1,5 +1,6 @@
 import type { AgentTool, Agent, AgentOptions } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage as PiAssistantMessage } from "@mariozechner/pi-ai";
+import type { PiSessionBridge, PiSessionBridgeOptions } from "../pi-session-bridge.js";
 
 import type {
   AgentAction,
@@ -108,6 +109,7 @@ export interface RuntimeAttemptDependencies {
   buildSystemPromptReport: (params: BuildSystemPromptReportParams) => unknown;
   setLastSystemPromptReport: (report: unknown) => void;
   buildPhoneAgentTools: (ctx: PhoneAgentRunContext, availableToolNames?: string[]) => AgentTool<any>[];
+  piSessionBridgeFactory: (options?: PiSessionBridgeOptions) => Promise<PiSessionBridge>;
   parseTextualToolFallback: (message: PiAssistantMessage, task?: string) => ParsedTextualToolFallback | null;
   isPermissionDialogApp: (currentApp: string) => boolean;
   autoApprovePermissionDialog: (currentApp: string) => Promise<DelegationApplyLike | null>;
@@ -139,6 +141,9 @@ export interface PhoneAgentRunContext {
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
+  lastScreenshotStartMs: number;
+  lastScreenshotEndMs: number;
+  lastModelInferenceStartMs: number;
 }
 
 export type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {

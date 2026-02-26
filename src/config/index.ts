@@ -11,6 +11,7 @@ import {
 } from "../utils/paths.js";
 import { ensureWorkspaceBootstrap } from "../memory/workspace.js";
 import { CODEX_CLI_BASE_URL, readCodexCliCredential } from "./codex-cli.js";
+import { normalizeDeviceTargetType } from "../device/target-types.js";
 
 function defaultConfigObject() {
   return {
@@ -23,6 +24,11 @@ function defaultConfigObject() {
       markdownLog: true,
     },
     defaultModel: "gpt-5.2-codex",
+    target: {
+      type: "emulator" as const,
+      adbEndpoint: "",
+      cloudProvider: "",
+    },
     emulator: {
       avdName: "OpenPocket_AVD",
       androidSdkRoot: process.env.ANDROID_SDK_ROOT ?? "",
@@ -48,6 +54,8 @@ function defaultConfigObject() {
       lang: "en" as const,
       verbose: true,
       deviceId: null,
+      runtimeBackend: "legacy_agent_core" as const,
+      legacyCodingExecutor: false,
     },
     screenshots: {
       saveStepScreenshots: true,
@@ -263,6 +271,21 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeAllowedCommands(raw: unknown, fallback: string[]): string[] {
+  const source = Array.isArray(raw) ? raw : fallback;
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of source) {
+    const item = String(value ?? "").trim();
+    if (!item || seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    normalized.push(item);
+  }
+  return normalized.length > 0 ? normalized : [...fallback];
+}
+
 function deepMerge<T>(base: T, incoming: unknown): T {
   if (!isObject(base) || !isObject(incoming)) {
     return (incoming as T) ?? base;
@@ -288,6 +311,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     state_dir: "stateDir",
     session_storage: "sessionStorage",
     default_model: "defaultModel",
+    deployment_target: "target",
     script_executor: "scriptExecutor",
     coding_tools: "codingTools",
     memory_tools: "memoryTools",
@@ -320,6 +344,21 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     raw.emulator = emulator;
   }
 
+  const target = isObject(raw.target) ? { ...raw.target } : {};
+  const targetMap: Record<string, string> = {
+    target_type: "type",
+    adb_endpoint: "adbEndpoint",
+    cloud_provider: "cloudProvider",
+  };
+  for (const [oldKey, newKey] of Object.entries(targetMap)) {
+    if (oldKey in target && !(newKey in target)) {
+      target[newKey] = target[oldKey];
+    }
+  }
+  if (Object.keys(target).length > 0) {
+    raw.target = target;
+  }
+
   const telegram = isObject(raw.telegram) ? { ...raw.telegram } : {};
   const telegramMap: Record<string, string> = {
     bot_token: "botToken",
@@ -346,6 +385,8 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     system_prompt_mode: "systemPromptMode",
     context_budget_chars: "contextBudgetChars",
     device_id: "deviceId",
+    runtime_backend: "runtimeBackend",
+    legacy_coding_executor: "legacyCodingExecutor",
   };
   for (const [oldKey, newKey] of Object.entries(agentMap)) {
     if (oldKey in agent && !(newKey in agent)) {
@@ -603,6 +644,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     throw new Error(`defaultModel '${defaultModel}' is not present in models.`);
   }
 
+  const target = (merged.target ?? {}) as Record<string, unknown>;
   const emulator = (merged.emulator ?? {}) as Record<string, unknown>;
   const telegram = (merged.telegram ?? {}) as Record<string, unknown>;
   const agent = (merged.agent ?? {}) as Record<string, unknown>;
@@ -649,6 +691,11 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       markdownLog: Boolean(sessionStorage.markdownLog ?? true),
     },
     defaultModel,
+    target: {
+      type: normalizeDeviceTargetType(target.type),
+      adbEndpoint: String(target.adbEndpoint ?? "").trim(),
+      cloudProvider: String(target.cloudProvider ?? "").trim(),
+    },
     emulator: {
       avdName: String(emulator.avdName ?? "OpenPocket_AVD"),
       androidSdkRoot: String(emulator.androidSdkRoot ?? ""),
@@ -683,6 +730,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       lang: "en",
       verbose: Boolean(agent.verbose),
       deviceId: agent.deviceId ? String(agent.deviceId) : null,
+      runtimeBackend: String(agent.runtimeBackend ?? "legacy_agent_core") === "pi_session_bridge"
+        ? "pi_session_bridge"
+        : "legacy_agent_core",
+      legacyCodingExecutor: Boolean(agent.legacyCodingExecutor ?? false),
     },
     screenshots: {
       saveStepScreenshots: Boolean(screenshots.saveStepScreenshots ?? true),
@@ -693,9 +744,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       enabled: Boolean(scriptExecutor.enabled ?? true),
       timeoutSec: Math.max(1, Number(scriptExecutor.timeoutSec ?? 60)),
       maxOutputChars: Math.max(1000, Number(scriptExecutor.maxOutputChars ?? 6000)),
-      allowedCommands: Array.isArray(scriptExecutor.allowedCommands)
-        ? scriptExecutor.allowedCommands.map((v) => String(v))
-        : defaultConfigObject().scriptExecutor.allowedCommands,
+      allowedCommands: normalizeAllowedCommands(
+        scriptExecutor.allowedCommands,
+        defaultConfigObject().scriptExecutor.allowedCommands,
+      ),
     },
     codingTools: {
       enabled: Boolean(codingTools.enabled ?? true),
@@ -704,9 +756,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       maxOutputChars: Math.max(1000, Number(codingTools.maxOutputChars ?? 12000)),
       allowBackground: Boolean(codingTools.allowBackground ?? true),
       applyPatchEnabled: Boolean(codingTools.applyPatchEnabled ?? true),
-      allowedCommands: Array.isArray(codingTools.allowedCommands)
-        ? codingTools.allowedCommands.map((v) => String(v))
-        : defaultConfigObject().codingTools.allowedCommands,
+      allowedCommands: normalizeAllowedCommands(
+        codingTools.allowedCommands,
+        defaultConfigObject().codingTools.allowedCommands,
+      ),
     },
     memoryTools: {
       enabled: Boolean(memoryTools.enabled ?? true),
@@ -837,6 +890,7 @@ export function saveConfig(config: OpenPocketConfig): void {
     stateDir: config.stateDir,
     sessionStorage: config.sessionStorage,
     defaultModel: config.defaultModel,
+    target: config.target,
     emulator: config.emulator,
     telegram: config.telegram,
     agent: config.agent,

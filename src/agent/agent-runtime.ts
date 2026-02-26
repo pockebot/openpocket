@@ -28,8 +28,9 @@ import { EmulatorManager } from "../device/emulator-manager.js";
 import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder.js";
 import { SkillLoader } from "../skills/skill-loader.js";
 import { ScriptExecutor } from "../tools/script-executor.js";
-import { CodingExecutor } from "../tools/coding-executor.js";
+import { CodingExecutor, LEGACY_CODING_EXECUTOR_DEPRECATION } from "../tools/coding-executor.js";
 import { MemoryExecutor } from "../tools/memory-executor.js";
+import { PiCodingToolsExecutor } from "./pi-coding-tools.js";
 import { Agent, type AgentMessage, type AgentTool, type AgentEvent, type AgentOptions } from "@mariozechner/pi-agent-core";
 import {
   type AssistantMessage as PiAssistantMessage,
@@ -49,6 +50,7 @@ import { createImageService, type ImageGenerationService } from "../services/ima
 import { runRuntimeAttempt } from "./runtime/attempt.js";
 import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
+import { createPiSessionBridge } from "./pi-session-bridge.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
@@ -113,6 +115,9 @@ const SYSTEM_PROMPT_MAX_CHARS_TOTAL_DEFAULT = 150_000;
 const ACTION_TYPE_TO_TOOL_NAME = new Map<string, string>(
   TOOL_METAS.map((meta) => [toolNameToActionType(meta.name), meta.name]),
 );
+const LEGACY_CODING_EXECUTOR_OPT_IN_HINT =
+  `${LEGACY_CODING_EXECUTOR_DEPRECATION} ` +
+  "If absolutely necessary during migration, set `agent.legacyCodingExecutor=true` temporarily.";
 const CODING_TOOL_NAMES = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 const WORKSPACE_TOOL_NAMES = new Set([...CODING_TOOL_NAMES, ...MEMORY_TOOL_NAMES]);
@@ -277,6 +282,9 @@ interface PhoneAgentRunContext {
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
+  lastScreenshotStartMs: number;
+  lastScreenshotEndMs: number;
+  lastModelInferenceStartMs: number;
 }
 
 type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {
@@ -297,6 +305,7 @@ export class AgentRuntime {
   private readonly autoArtifactBuilder: AutoArtifactBuilder;
   private readonly scriptExecutor: ScriptExecutor;
   private readonly codingExecutor: CodingExecutor;
+  private readonly piCodingToolsExecutor: PiCodingToolsExecutor;
   private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
   private readonly imageGenerationService: ImageGenerationService | null;
@@ -318,6 +327,7 @@ export class AgentRuntime {
     this.autoArtifactBuilder = new AutoArtifactBuilder(config);
     this.scriptExecutor = new ScriptExecutor(config);
     this.codingExecutor = new CodingExecutor(config);
+    this.piCodingToolsExecutor = new PiCodingToolsExecutor(config);
     this.memoryExecutor = new MemoryExecutor(config);
     this.screenshotStore = new ScreenshotStore(
       config.screenshots.directory,
@@ -1387,7 +1397,8 @@ export class AgentRuntime {
 
   private observeSnapshotState(snapshot: {
     currentApp: string;
-    uiElements: Array<{
+    screenshotBase64?: string;
+    uiElements?: Array<{
       text: string;
       contentDesc: string;
       resourceId: string;
@@ -1396,7 +1407,8 @@ export class AgentRuntime {
       scaledBounds: { left: number; top: number; right: number; bottom: number };
     }>;
   }): SnapshotObservation {
-    const tuples = snapshot.uiElements
+    const uiElements = Array.isArray(snapshot.uiElements) ? snapshot.uiElements : [];
+    const tuples = uiElements
       .map((item) => {
         const label = (item.text || item.contentDesc || item.resourceId || item.className || "")
           .replace(/\s+/g, " ")
@@ -1419,15 +1431,31 @@ export class AgentRuntime {
       .filter(Boolean)
       .slice(0, 6);
 
-    const hashInput = JSON.stringify({
-      app: snapshot.currentApp,
-      nodes: tuples.slice(0, 80),
-    });
-    const uiHash = createHash("sha1").update(hashInput).digest("hex").slice(0, 12);
+    const uiHash = (() => {
+      if (typeof snapshot.screenshotBase64 === "string" && snapshot.screenshotBase64.trim()) {
+        return createHash("sha1")
+          .update(Buffer.from(snapshot.screenshotBase64, "base64"))
+          .digest("hex")
+          .slice(0, 12);
+      }
+      const hashInput = JSON.stringify({
+        app: snapshot.currentApp,
+        nodes: tuples.slice(0, 80),
+      });
+      return createHash("sha1").update(hashInput).digest("hex").slice(0, 12);
+    })();
     return {
       app: snapshot.currentApp || "unknown",
       uiHash,
       labels,
+    };
+  }
+
+  private observeQuickSnapshotState(observation: { currentApp: string; screenshotHash: string }): SnapshotObservation {
+    return {
+      app: observation.currentApp || "unknown",
+      uiHash: observation.screenshotHash || "unknown",
+      labels: [],
     };
   }
 
@@ -1443,6 +1471,23 @@ export class AgentRuntime {
       `labels_after=${JSON.stringify(after.labels)}`,
       `note=${note}`,
     ].join(" ");
+  }
+
+  private computePostActionDelayMs(action: AgentAction, executionResult: string): number {
+    const baseDelayMs = Math.max(0, Math.round(this.config.agent.loopDelayMs || 0));
+    if (baseDelayMs <= 0 || action.type === "wait") {
+      return 0;
+    }
+
+    const stateChanged = /state_delta changed=true/i.test(executionResult);
+    if (stateChanged) {
+      return Math.min(baseDelayMs, 400);
+    }
+
+    if (action.type === "shell" || action.type === "keyevent") {
+      return Math.min(baseDelayMs, 500);
+    }
+    return baseDelayMs;
   }
 
   private pickPermissionDialogNode(
@@ -1517,7 +1562,7 @@ export class AgentRuntime {
     } catch {
       // Ignore status probe failure in tests/mocks.
     }
-    return this.config.agent.deviceId || "emulator-5554";
+    return this.config.agent.deviceId || "unknown-device";
   }
 
   private isPermissionDialogApp(currentApp: string): boolean {
@@ -1786,7 +1831,39 @@ export class AgentRuntime {
           sr.stderr ? `stderr=${sr.stderr}` : "",
         ].filter(Boolean).join("\n");
       } else if (["read", "write", "edit", "apply_patch", "exec", "process"].includes(action.type)) {
-        executionResult = await this.codingExecutor.execute(action);
+        const codingAction = action as Extract<AgentAction, {
+          type: "read" | "write" | "edit" | "apply_patch" | "exec" | "process";
+        }>;
+        let piResult: string | null = null;
+        let piError: Error | null = null;
+        try {
+          piResult = await this.piCodingToolsExecutor.execute(codingAction);
+        } catch (error) {
+          piError = error as Error;
+        }
+
+        if (piResult !== null) {
+          executionResult = `${piResult}\n[coding_backend=pi_coding_tools]`;
+        } else if (!this.config.agent.legacyCodingExecutor) {
+          if (piError) {
+            throw piError;
+          }
+          throw new Error(
+            `coding action '${codingAction.type}' is not supported by pi coding backend and legacy fallback is disabled. ` +
+            LEGACY_CODING_EXECUTOR_OPT_IN_HINT,
+          );
+        } else {
+          if (piError && this.config.agent.verbose) {
+            // eslint-disable-next-line no-console
+            console.log(`[OpenPocket][coding-backend] pi_coding_tools failed: ${piError.message}; fallback=legacy`);
+          }
+          executionResult = await this.codingExecutor.execute(codingAction);
+          executionResult = [
+            executionResult,
+            "[coding_backend=legacy_coding_executor]",
+            `[deprecated_config_key=agent.legacyCodingExecutor] ${LEGACY_CODING_EXECUTOR_DEPRECATION}`,
+          ].join("\n");
+        }
       } else if (action.type === "memory_search" || action.type === "memory_get") {
         executionResult = this.memoryExecutor.execute(action);
       } else {
@@ -1796,9 +1873,24 @@ export class AgentRuntime {
       const deltaTypes = new Set(["tap", "swipe", "type", "keyevent", "launch_app", "shell"]);
       if (deltaTypes.has(action.type)) {
         try {
-          const after = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, ctx.profile.model);
           const before = this.observeSnapshotState(snapshot);
-          const afterState = this.observeSnapshotState(after);
+          const adbWithQuickObservation = this.adb as AdbRuntime & {
+            captureQuickObservation?: (
+              preferred?: string | null,
+              modelName?: string,
+            ) => Promise<{ currentApp: string; screenshotHash: string }>;
+          };
+          let afterState: SnapshotObservation;
+          if (typeof adbWithQuickObservation.captureQuickObservation === "function") {
+            const quick = await adbWithQuickObservation.captureQuickObservation(
+              this.config.agent.deviceId,
+              ctx.profile.model,
+            );
+            afterState = this.observeQuickSnapshotState(quick);
+          } else {
+            const after = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, ctx.profile.model);
+            afterState = this.observeSnapshotState(after);
+          }
           stateDeltaLine = this.buildStateDeltaLine(before, afterState, action.type);
         } catch { /* best-effort */ }
       }
@@ -1871,14 +1963,30 @@ export class AgentRuntime {
             if (!Number.isFinite(durationMs) || durationMs < 0) {
               durationMs = Math.max(0, Date.parse(endedAt) - stepStartedAtMs);
             }
-            return {
+            const screenshotMs = ctx.lastScreenshotEndMs > ctx.lastScreenshotStartMs
+              ? Math.max(0, ctx.lastScreenshotEndMs - ctx.lastScreenshotStartMs)
+              : 0;
+            const modelInferenceMs = ctx.lastModelInferenceStartMs > 0 && stepStartedAtMs > ctx.lastModelInferenceStartMs
+              ? Math.max(0, stepStartedAtMs - ctx.lastModelInferenceStartMs)
+              : 0;
+            const trace = {
               actionType: action.type,
               currentApp,
               startedAt: stepStartedAt,
               endedAt,
               durationMs,
               status,
+              screenshotMs,
+              modelInferenceMs,
+              loopDelayMs: runtime.config.agent.loopDelayMs,
             };
+            // eslint-disable-next-line no-console
+            console.log(
+              `[OpenPocket][step ${step}] ts=${trace.endedAt} phase=end tool=${toolName} action=${trace.actionType}` +
+              ` app=${trace.currentApp} status=${trace.status} started_at=${trace.startedAt}` +
+              ` ended_at=${trace.endedAt} duration_ms=${trace.durationMs}`,
+            );
+            return trace;
           };
 
           if (!snapshot && action.type !== "finish") {
@@ -1896,8 +2004,8 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: msg }], details: {} };
           }
 
-            // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][step ${step}] tool=${toolName} action=${action.type}`);
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][step ${step}] ts=${stepStartedAt} phase=start tool=${toolName} action=${action.type}`);
 
           // ---- finish ----
           if (action.type === "finish") {
@@ -1998,11 +2106,19 @@ export class AgentRuntime {
 
             let decision: HumanAuthDecision;
             try {
+              const requestedTimeoutSec = Number(
+                action.timeoutSec ?? runtime.config.humanAuth.requestTimeoutSec,
+              );
+              const timeoutCapSec = Math.max(30, Math.round(runtime.config.humanAuth.requestTimeoutSec));
+              const timeoutSec = Math.min(
+                timeoutCapSec,
+                Math.max(30, Math.round(Number.isFinite(requestedTimeoutSec) ? requestedTimeoutSec : timeoutCapSec)),
+              );
               decision = await ctx.onHumanAuth({
                 sessionId: ctx.session.id, sessionPath: ctx.session.path, task: ctx.task, step,
                 capability: action.capability, instruction: action.instruction,
                 reason: action.reason ?? thought,
-                timeoutSec: Math.max(30, action.timeoutSec ?? runtime.config.humanAuth.requestTimeoutSec),
+                timeoutSec,
                 currentApp, screenshotPath: ctx.lastScreenshotPath,
               });
             } catch (error) {
@@ -2259,7 +2375,10 @@ export class AgentRuntime {
           }
 
           // Post-action delay (except wait which already slept)
-          await sleep(runtime.config.agent.loopDelayMs);
+          const postActionDelayMs = runtime.computePostActionDelayMs(action, executionResult);
+          if (postActionDelayMs > 0) {
+            await sleep(postActionDelayMs);
+          }
 
           return { content: [{ type: "text" as const, text: stepResult }], details: {} };
         },
@@ -2648,6 +2767,7 @@ export class AgentRuntime {
                 : TOOL_METAS;
               return this.buildPhoneAgentTools(ctx, this, toolMetas);
             },
+            piSessionBridgeFactory: (options) => createPiSessionBridge(options),
             parseTextualToolFallback: (message, fallbackTask) => this.parseTextualToolFallback(message, fallbackTask),
             isPermissionDialogApp: (currentApp) => this.isPermissionDialogApp(currentApp),
             autoApprovePermissionDialog: (currentApp) => this.autoApprovePermissionDialog(currentApp),

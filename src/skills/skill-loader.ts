@@ -98,6 +98,12 @@ type SkillRequirements = {
   os: string[];
 };
 
+type SkillTriggers = {
+  any: string[];
+  all: string[];
+  none: string[];
+};
+
 function listSkillMarkdownFilesRecursive(root: string): string[] {
   if (!fs.existsSync(root)) {
     return [];
@@ -285,6 +291,26 @@ function parseSkillRequirements(
     env: toStringArray(requires?.env),
     config: toStringArray(requires?.config),
     os: toStringArray(openclaw?.os).map(mapOsToken).filter(Boolean),
+  };
+}
+
+function parseSkillTriggers(
+  metadata: Record<string, unknown> | null,
+): SkillTriggers {
+  const openclawRaw = metadata?.openclaw;
+  const openclaw = openclawRaw && typeof openclawRaw === "object" && !Array.isArray(openclawRaw)
+    ? openclawRaw as Record<string, unknown>
+    : null;
+
+  const triggersRaw = openclaw?.triggers;
+  const triggers = triggersRaw && typeof triggersRaw === "object" && !Array.isArray(triggersRaw)
+    ? triggersRaw as Record<string, unknown>
+    : null;
+
+  return {
+    any: toStringArray(triggers?.any),
+    all: toStringArray(triggers?.all),
+    none: toStringArray(triggers?.none),
   };
 }
 
@@ -495,6 +521,24 @@ export class SkillLoader {
 
     const reasons: string[] = [];
     let score = 0;
+    const triggers = parseSkillTriggers(skill.metadata);
+
+    const matchedNone = triggers.none.filter((phrase) => hasWordMatch(normalizedTask, phrase));
+    if (matchedNone.length > 0) {
+      return { score: 0, reason: `blocked by metadata.none (${matchedNone[0]})` };
+    }
+
+    const matchedAll = triggers.all.filter((phrase) => hasWordMatch(normalizedTask, phrase));
+    if (triggers.all.length > 0 && matchedAll.length === triggers.all.length) {
+      score += 160;
+      reasons.push(`metadata.all x${matchedAll.length}`);
+    }
+
+    const matchedAny = triggers.any.filter((phrase) => hasWordMatch(normalizedTask, phrase));
+    if (matchedAny.length > 0) {
+      score += 110 + Math.min(60, matchedAny.length * 15);
+      reasons.push(`metadata.any x${matchedAny.length}`);
+    }
 
     if (hasWordMatch(normalizedTask, `$${skill.id}`) || hasWordMatch(normalizedTask, skill.id)) {
       score += 120;

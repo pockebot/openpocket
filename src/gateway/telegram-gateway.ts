@@ -15,6 +15,7 @@ import { saveConfig } from "../config/index.js";
 import { AgentRuntime } from "../agent/agent-runtime.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
 import { extractPackageName } from "../device/adb-runtime.js";
+import { deviceTargetLabel, isEmulatorTarget } from "../device/target-types.js";
 import { HumanAuthBridge } from "../human-auth/bridge.js";
 import { LocalHumanAuthStack } from "../human-auth/local-stack.js";
 import { ChatAssistant } from "./chat-assistant.js";
@@ -25,7 +26,7 @@ export const TELEGRAM_MENU_COMMANDS: TelegramBot.BotCommand[] = [
   { command: "start", description: "Start or resume chat onboarding" },
   { command: "help", description: "Show command help" },
   { command: "context", description: "Inspect injected prompt context" },
-  { command: "status", description: "Show gateway and emulator status" },
+  { command: "status", description: "Show gateway and device status" },
   { command: "model", description: "Show or switch model profile" },
   { command: "startvm", description: "Start Android emulator" },
   { command: "stopvm", description: "Stop Android emulator" },
@@ -215,6 +216,22 @@ export class TelegramGateway {
   private log(message: string): void {
     const line = `[OpenPocket][gateway] ${new Date().toISOString()} ${message}`;
     this.writeLogLine(line);
+  }
+
+  private durationMsBetween(startHr: bigint, endHr: bigint): number {
+    const elapsedNs = endHr - startHr;
+    if (elapsedNs <= 0n) {
+      return 0;
+    }
+    const durationMs = Number(elapsedNs / 1_000_000n);
+    if (durationMs > 0) {
+      return durationMs;
+    }
+    return 1;
+  }
+
+  private durationMsSince(startHr: bigint): number {
+    return this.durationMsBetween(startHr, process.hrtime.bigint());
   }
 
   isRunning(): boolean {
@@ -539,6 +556,10 @@ export class TelegramGateway {
   }
 
   private async ensurePlayStoreReady(chatId: number, locale: "zh" | "en"): Promise<boolean> {
+    if (!isEmulatorTarget(this.config.target.type)) {
+      this.playStorePreflightPassed = true;
+      return false;
+    }
     if (this.playStorePreflightPassed) {
       return false;
     }
@@ -1422,16 +1443,17 @@ export class TelegramGateway {
 
   private readonly handleMessage = async (message: Message): Promise<void> => {
     const chatId = message.chat.id;
+    const incomingAtHr = process.hrtime.bigint();
     try {
       this.log(`incoming chat=${chatId} text=${JSON.stringify(message.text ?? "")}`);
       const text = message.text?.trim() ?? "";
       const shouldType = Boolean(text) && this.allowed(chatId);
       if (shouldType) {
         await this.withTypingStatus(chatId, async () => {
-          await this.consumeMessage(message);
+          await this.consumeMessage(message, incomingAtHr);
         });
       } else {
-        await this.consumeMessage(message);
+        await this.consumeMessage(message, incomingAtHr);
       }
     } catch (error) {
       this.log(`handler error chat=${chatId} error=${(error as Error).message}`);
@@ -1769,7 +1791,7 @@ export class TelegramGateway {
     });
   }
 
-  private async consumeMessage(message: Message): Promise<void> {
+  private async consumeMessage(message: Message, incomingAtHr?: bigint): Promise<void> {
     const chatId = message.chat.id;
     if (!this.allowed(chatId)) {
       return;
@@ -1869,6 +1891,7 @@ export class TelegramGateway {
         [
           `Project: ${this.config.projectName}`,
           `Model: ${this.config.defaultModel}`,
+          `Target: ${this.config.target.type} (${deviceTargetLabel(this.config.target.type)})`,
           `Agent busy: ${this.agent.isBusy()}`,
           `Current task: ${this.agent.getCurrentTask() ?? "(none)"}`,
           `AVD: ${status.avdName}`,
@@ -1931,7 +1954,7 @@ export class TelegramGateway {
       this.log(`manual screenshot chat=${chatId} path=${screenshotPath}`);
       try {
         await this.bot.sendPhoto(chatId, screenshotPath, {
-          caption: "Current emulator screenshot.",
+          caption: "Current device screenshot.",
         });
         this.chat.appendExternalTurn(chatId, "assistant", "[shared current emulator screenshot]");
       } catch (error) {
@@ -2113,10 +2136,18 @@ export class TelegramGateway {
       }
     }
 
+    const decisionStartedAtHr = process.hrtime.bigint();
     const decision = await this.chat.decide(chatId, text);
+    const decisionEndedAtHr = process.hrtime.bigint();
+    const decisionLatencyMs = this.durationMsBetween(decisionStartedAtHr, decisionEndedAtHr);
+    const incomingToDecisionMs = incomingAtHr
+      ? this.durationMsBetween(incomingAtHr, decisionEndedAtHr)
+      : null;
     const onboardingCompletedThisTurn = onboardingPendingBefore && !this.chat.isOnboardingPending();
     this.log(
-      `decision chat=${chatId} mode=${decision.mode} confidence=${decision.confidence.toFixed(2)} reason=${decision.reason}`,
+      `decision chat=${chatId} mode=${decision.mode} confidence=${decision.confidence.toFixed(2)} decision_ms=${decisionLatencyMs}` +
+      `${incomingToDecisionMs === null ? "" : ` incoming_to_decision_ms=${incomingToDecisionMs}`}` +
+      ` reason=${decision.reason}`,
     );
     if (decision.mode === "task") {
       const task = decision.task || text;
@@ -2206,6 +2237,7 @@ export class TelegramGateway {
     sessionKey: string;
   }): Promise<CronRunResult> {
     const { chatId, task, source, modelName, sessionKey } = params;
+    const taskAcceptedAtHr = process.hrtime.bigint();
     const agentTask = this.enrichTaskWithChatContext(task, chatId);
     const progressLocale = this.inferTaskLocale(task);
     const progressNarrationState: ProgressNarrationState = {
@@ -2416,7 +2448,10 @@ export class TelegramGateway {
           );
           await progressWork;
 
-          this.log(`task done source=${source} chat=${chatId ?? "(none)"} ok=${result.ok} session=${result.sessionPath}`);
+          this.log(
+            `task done source=${source} chat=${chatId ?? "(none)"} ok=${result.ok}` +
+            ` duration_ms=${this.durationMsSince(taskAcceptedAtHr)} session=${result.sessionPath}`,
+          );
 
           if (chatId !== null) {
             const finalMessage = await this.chat.narrateTaskOutcome({
@@ -2477,7 +2512,10 @@ export class TelegramGateway {
         } catch (error) {
           await progressWork.catch(() => { });
           const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
-          this.log(`task crash source=${source} chat=${chatId ?? "(none)"} error=${(error as Error).message}`);
+          this.log(
+            `task crash source=${source} chat=${chatId ?? "(none)"} duration_ms=${this.durationMsSince(taskAcceptedAtHr)}` +
+            ` error=${(error as Error).message}`,
+          );
           if (chatId !== null) {
             const sanitized = this.sanitizeForChat(message, 600);
             await this.bot.sendMessage(chatId, sanitized);

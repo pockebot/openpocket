@@ -2,17 +2,31 @@
 
 This page gets OpenPocket running locally with the current Node.js + TypeScript runtime.
 
-OpenPocket runs automation on a local Android emulator, so tasks do not consume resources on your physical phone.
+OpenPocket controls a configurable Agent Phone target through `adb`.
+
+- Default target: `emulator`
+- Optional target: `physical-phone` (USB/Wi-Fi ADB)
+- `android-tv` and `cloud` targets are currently in progress
+
+For target-specific setup, see [Device Targets](./device-targets.md).
 
 ## Prerequisites
 
 - Node.js 20+
-- Android SDK Emulator and platform-tools (`adb`)
-- at least one Android AVD
+- Android platform-tools (`adb`) for all targets
 - API key for your configured model profile
 - Telegram bot token (for gateway mode)
 
-You do not need to root or modify your personal phone.
+For emulator target (default):
+
+- Android SDK Emulator
+- at least one Android AVD
+
+For physical phone target:
+
+- one Android phone with Developer options + USB debugging enabled
+
+You do not need to root your personal phone.
 
 ## npm Install
 
@@ -80,18 +94,35 @@ export NGROK_AUTHTOKEN="<optional ngrok token>"
 export CODEX_HOME="$HOME/.codex"              # optional override
 ```
 
-If you use Codex subscription auth, run `codex` login and codex model profiles can use CLI credentials.
+If you use Codex subscription auth, run `codex login` and codex model profiles can use CLI credentials.
 
 ## Command Check
 
 ```bash
 openpocket config-show
+openpocket target show
 openpocket emulator status
 openpocket emulator start
 openpocket emulator screenshot --out ~/Desktop/openpocket-screen.png
 openpocket skills list
 openpocket script run --text "echo hello"
 ```
+
+## Switch Target (Optional)
+
+Keep default emulator:
+
+```bash
+openpocket target set --type emulator
+```
+
+Use a connected physical phone:
+
+```bash
+openpocket target set --type physical-phone
+```
+
+If multiple ADB devices are online, CLI will show an arrow-key selector.
 
 ## Run a Task (CLI)
 
@@ -110,6 +141,8 @@ Result includes:
 ```bash
 openpocket gateway start
 ```
+
+Gateway startup verifies the selected target device is online before task processing.
 
 Then chat with your bot:
 

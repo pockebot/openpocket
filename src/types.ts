@@ -1,3 +1,18 @@
+export type DeviceTargetType = "emulator" | "physical-phone" | "android-tv" | "cloud";
+
+export interface DeviceTargetConfig {
+  type: DeviceTargetType;
+  /**
+   * Optional adb endpoint used for network devices (for example: 192.168.1.8:5555).
+   * Leave empty for USB-connected devices.
+   */
+  adbEndpoint: string;
+  /**
+   * Reserved for cloud integrations. Current runtime still uses adb transport.
+   */
+  cloudProvider: string;
+}
+
 export interface EmulatorConfig {
   avdName: string;
   androidSdkRoot: string;
@@ -29,6 +44,18 @@ export interface AgentConfig {
   lang: "en";
   verbose: boolean;
   deviceId: string | null;
+  /**
+   * Runtime backend selector for incremental migration.
+   * - `legacy_agent_core`: current AgentRuntime execution path (default)
+   * - `pi_session_bridge`: reserved for pi-coding-agent AgentSession bridge path
+   */
+  runtimeBackend?: "legacy_agent_core" | "pi_session_bridge";
+  /**
+   * Deprecated migration toggle.
+   * When true, unsupported/erroring pi coding actions fall back to legacy CodingExecutor.
+   * Default is false and this key will be removed in a future release.
+   */
+  legacyCodingExecutor?: boolean;
 }
 
 export interface ScreenshotConfig {
@@ -210,6 +237,7 @@ export interface OpenPocketConfig {
   stateDir: string;
   sessionStorage: SessionStorageConfig;
   defaultModel: string;
+  target: DeviceTargetConfig;
   emulator: EmulatorConfig;
   telegram: TelegramConfig;
   agent: AgentConfig;
@@ -227,6 +255,7 @@ export interface OpenPocketConfig {
 }
 
 export interface EmulatorStatus {
+  targetType: DeviceTargetType;
   avdName: string;
   devices: string[];
   bootedDevices: string[];
@@ -288,7 +317,16 @@ export type AgentAction =
   | { type: "type"; text: string; reason?: string }
   | { type: "keyevent"; keycode: string; reason?: string }
   | { type: "launch_app"; packageName: string; reason?: string }
-  | { type: "shell"; command: string; reason?: string }
+  | {
+      type: "shell";
+      command: string;
+      /**
+       * When true, execute as `sh -lc <command>` on device.
+       * Use for shell operators/heredoc/redirect-heavy commands.
+       */
+      useShellWrap?: boolean;
+      reason?: string;
+    }
   | { type: "run_script"; script: string; timeoutSec?: number; reason?: string }
   | { type: "read"; path: string; from?: number; lines?: number; reason?: string }
   | { type: "write"; path: string; content: string; append?: boolean; reason?: string }

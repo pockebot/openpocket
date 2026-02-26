@@ -26,6 +26,12 @@ import { ensureAndroidPrerequisites } from "./environment/android-prerequisites.
 import { PermissionLabManager } from "./test/permission-lab.js";
 import { createCliTheme, createOpenPocketBanner, type CliStepStatus, type CliTone } from "./utils/cli-theme.js";
 import type { OpenPocketConfig } from "./types.js";
+import {
+  deviceTargetLabel,
+  isDeviceTargetType,
+  isEmulatorTarget,
+  normalizeDeviceTargetType,
+} from "./device/target-types.js";
 
 const cliTheme = createCliTheme(output);
 const DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB = 24;
@@ -73,8 +79,10 @@ function printHelp(): void {
   printRaw(`${cliTheme.emphasize("OpenPocket CLI (Node.js + TypeScript)", "accent")}\n
 Usage:
   openpocket [--config <path>] install-cli
-  openpocket [--config <path>] onboard [--force]
+  openpocket [--config <path>] onboard [--force] [--target <type>]
   openpocket [--config <path>] config-show
+  openpocket [--config <path>] target show
+  openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>]
   openpocket [--config <path>] emulator status
   openpocket [--config <path>] emulator start
   openpocket [--config <path>] emulator stop
@@ -99,7 +107,11 @@ Legacy aliases (deprecated):
 
 Examples:
   openpocket onboard
+  openpocket onboard --target physical-phone
   openpocket onboard --force
+  openpocket target set --type physical-phone
+  openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
+  openpocket target set --type physical-phone --device R5CX123456A
   openpocket emulator start
   openpocket emulator tap --x 120 --y 300
   openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
@@ -115,6 +127,48 @@ Examples:
   openpocket test permission-app task --case camera --send --chat <id>
   openpocket human-auth-relay start --port 8787
 `);
+}
+
+type CliChildProcessError = Error & {
+  stderr?: Buffer | string;
+  stdout?: Buffer | string;
+  status?: number | null;
+  signal?: NodeJS.Signals | null;
+};
+
+function formatCliError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const childError = error as CliChildProcessError;
+  const toText = (value: unknown): string => {
+    if (value === null || value === undefined) {
+      return "";
+    }
+    if (Buffer.isBuffer(value)) {
+      return value.toString("utf-8").trim().slice(0, 600);
+    }
+    if (typeof value === "string") {
+      return value.trim().slice(0, 600);
+    }
+    return "";
+  };
+  const parts = [error.message];
+  const stderr = toText(childError.stderr);
+  const stdout = toText(childError.stdout);
+  if (stderr) {
+    parts.push(`stderr: ${stderr}`);
+  }
+  if (stdout) {
+    parts.push(`stdout: ${stdout}`);
+  }
+  if (typeof childError.status === "number") {
+    parts.push(`exitCode: ${String(childError.status)}`);
+  }
+  if (childError.signal) {
+    parts.push(`signal: ${childError.signal}`);
+  }
+  return parts.join("\n");
 }
 
 function openUrlInBrowser(url: string): void {
@@ -201,7 +255,10 @@ function takeOption(args: string[], name: string): { value: string | null; rest:
 
 async function runEmulatorCommand(configPath: string | undefined, args: string[]): Promise<number> {
   const cfg = loadConfig(configPath);
-  const emulator = new EmulatorManager(cfg);
+  const emulatorConfig = JSON.parse(JSON.stringify(cfg)) as OpenPocketConfig;
+  emulatorConfig.target.type = "emulator";
+  emulatorConfig.target.adbEndpoint = "";
+  const emulator = new EmulatorManager(emulatorConfig);
   const sub = args[0];
 
   if (!sub) {
@@ -279,6 +336,218 @@ async function runEmulatorCommand(configPath: string | undefined, args: string[]
   throw new Error(`Unknown emulator subcommand: ${sub}`);
 }
 
+function normalizeAdbEndpoint(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.includes(":")) {
+    return trimmed;
+  }
+  return `${trimmed}:5555`;
+}
+
+function printTargetSummary(cfg: OpenPocketConfig): void {
+  printRaw(cliTheme.section("Deployment Target"));
+  printKeyValue("Type", `${cfg.target.type} (${deviceTargetLabel(cfg.target.type)})`, "accent");
+  printKeyValue("Preferred device", cfg.agent.deviceId?.trim() || "(auto)");
+  printKeyValue("ADB endpoint", cfg.target.adbEndpoint.trim() || "(none)");
+  printKeyValue("Cloud provider", cfg.target.cloudProvider.trim() || "(none)");
+}
+
+function ensureGatewayStoppedForTargetSwitch(): void {
+  const pids = findGatewayProcessPids();
+  if (pids.length > 0) {
+    throw new Error(
+      `Gateway is running (pid: ${pids.join(", ")}). Stop it before switching deployment target.`,
+    );
+  }
+}
+
+type ConnectedTargetDevice = {
+  deviceId: string;
+  hint: string;
+};
+
+function adbDeviceProp(
+  emulator: EmulatorManager,
+  deviceId: string,
+  prop: string,
+): string {
+  try {
+    return String(
+      emulator.runAdb(["-s", deviceId, "shell", "getprop", prop], 4_000),
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
+function discoverConnectedTargetDevices(cfg: OpenPocketConfig): ConnectedTargetDevice[] {
+  const runtimeConfig = JSON.parse(JSON.stringify(cfg)) as OpenPocketConfig;
+  const emulator = new EmulatorManager(runtimeConfig);
+  let status: { devices: string[] };
+  try {
+    status = emulator.status();
+  } catch (error) {
+    printWarn(`Unable to query adb device list: ${(error as Error).message}`);
+    return [];
+  }
+  return status.devices.map((deviceId) => {
+    const manufacturer = adbDeviceProp(emulator, deviceId, "ro.product.manufacturer");
+    const model = adbDeviceProp(emulator, deviceId, "ro.product.model");
+    const release = adbDeviceProp(emulator, deviceId, "ro.build.version.release");
+    const pieces = [manufacturer, model].map((v) => v.trim()).filter(Boolean);
+    const modelText = pieces.length > 0 ? pieces.join(" ") : "Unknown model";
+    const versionText = release ? `Android ${release}` : "Android (unknown)";
+    return {
+      deviceId,
+      hint: `${modelText} | ${versionText}`,
+    };
+  });
+}
+
+async function chooseTargetDeviceId(
+  candidates: ConnectedTargetDevice[],
+  configuredDeviceId: string | null,
+): Promise<string | null> {
+  if (candidates.length === 0) {
+    printWarn("No online adb device detected for this target. Keep preferred device as auto mode.");
+    return configuredDeviceId?.trim() ? configuredDeviceId : null;
+  }
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    printInfo(`Detected one device and selected it automatically: ${only.deviceId} (${only.hint})`);
+    return only.deviceId;
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    printWarn(
+      `Detected ${candidates.length} devices, but current shell is non-interactive; keep preferred device as auto mode.`,
+    );
+    return configuredDeviceId?.trim() ? configuredDeviceId : null;
+  }
+
+  const autoValue = "__auto__";
+  const configured = configuredDeviceId?.trim() || "";
+  const options: CliSelectOption<string>[] = [
+    {
+      value: autoValue,
+      label: "Auto-select device at runtime",
+      hint: "No fixed serial in config",
+    },
+    ...candidates.map((item) => ({
+      value: item.deviceId,
+      label: item.deviceId,
+      hint: item.hint,
+    })),
+  ];
+  const initial = candidates.some((item) => item.deviceId === configured)
+    ? configured
+    : autoValue;
+
+  const rl = createInterface({ input, output });
+  try {
+    const selected = await selectByArrowKeys(
+      rl,
+      "Choose preferred target device",
+      options,
+      initial,
+    );
+    if (selected === autoValue) {
+      return null;
+    }
+    return selected;
+  } finally {
+    if (input.setRawMode) {
+      try {
+        input.setRawMode(false);
+      } catch {
+        // Ignore raw mode reset errors.
+      }
+    }
+    input.pause();
+    rl.close();
+  }
+}
+
+async function runTargetCommand(configPath: string | undefined, args: string[]): Promise<number> {
+  const sub = (args[0] ?? "show").trim();
+  if (sub !== "show" && sub !== "set") {
+    throw new Error(`Unknown target subcommand: ${sub}. Use: target show|set`);
+  }
+
+  const cfg = loadConfig(configPath);
+  if (sub === "show") {
+    printTargetSummary(cfg);
+    return 0;
+  }
+
+  ensureGatewayStoppedForTargetSwitch();
+
+  const clearDevice = args.includes("--clear-device");
+  const clearAdbEndpoint = args.includes("--clear-adb-endpoint");
+  const withoutFlags = args.filter((item) => item !== "--clear-device" && item !== "--clear-adb-endpoint");
+
+  const { value: typeRaw, rest: afterType } = takeOption(withoutFlags.slice(1), "--type");
+  const { value: deviceIdRaw, rest: afterDevice } = takeOption(afterType, "--device");
+  const { value: adbEndpointRaw, rest: afterEndpoint } = takeOption(afterDevice, "--adb-endpoint");
+  const { value: cloudProviderRaw, rest } = takeOption(afterEndpoint, "--cloud-provider");
+  if (rest.length > 0) {
+    throw new Error(`Unexpected target arguments: ${rest.join(" ")}`);
+  }
+
+  if (!typeRaw && !deviceIdRaw && !adbEndpointRaw && !cloudProviderRaw && !clearDevice && !clearAdbEndpoint) {
+    throw new Error(
+      "No target update provided. Use --type/--device/--adb-endpoint/--cloud-provider or --clear-device/--clear-adb-endpoint.",
+    );
+  }
+
+  if (typeRaw) {
+    const raw = typeRaw.trim().toLowerCase();
+    if (!isDeviceTargetType(raw)) {
+      throw new Error(`Unknown target type: ${typeRaw}`);
+    }
+    const normalized = normalizeDeviceTargetType(raw);
+    cfg.target.type = normalized;
+  }
+  if (deviceIdRaw !== null) {
+    const normalized = deviceIdRaw.trim();
+    cfg.agent.deviceId = normalized ? normalized : null;
+  }
+  if (clearDevice) {
+    cfg.agent.deviceId = null;
+  }
+  if (adbEndpointRaw !== null) {
+    cfg.target.adbEndpoint = normalizeAdbEndpoint(adbEndpointRaw);
+  }
+  if (clearAdbEndpoint) {
+    cfg.target.adbEndpoint = "";
+  }
+  if (cloudProviderRaw !== null) {
+    cfg.target.cloudProvider = cloudProviderRaw.trim();
+  }
+
+  if (isEmulatorTarget(cfg.target.type)) {
+    cfg.target.adbEndpoint = "";
+  }
+
+  const shouldPromptDeviceSelection =
+    deviceIdRaw === null
+    && !clearDevice
+    && (cfg.target.type === "physical-phone" || cfg.target.type === "android-tv")
+    && (typeRaw !== null || adbEndpointRaw !== null || clearAdbEndpoint);
+  if (shouldPromptDeviceSelection) {
+    const candidates = discoverConnectedTargetDevices(cfg);
+    cfg.agent.deviceId = await chooseTargetDeviceId(candidates, cfg.agent.deviceId);
+  }
+
+  saveConfig(cfg);
+
+  printSuccess("Deployment target updated.");
+  printTargetSummary(cfg);
+  return 0;
+}
+
 async function runAgentCommand(configPath: string | undefined, args: string[]): Promise<number> {
   const { value: model, rest } = takeOption(args, "--model");
   const task = rest.join(" ").trim();
@@ -324,6 +593,8 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
     printKeyValue("Config", cfg.configPath);
     printKeyValue("Project", cfg.projectName, "accent");
     printKeyValue("Model", cfg.defaultModel, "accent");
+    printKeyValue("Target", `${cfg.target.type} (${deviceTargetLabel(cfg.target.type)})`, "accent");
+    printKeyValue("Device", cfg.agent.deviceId?.trim() || "(auto)");
     printKeyValue("Telegram token", tokenSource, tokenSource.startsWith("missing") ? "warn" : "success");
     printKeyValue("Human auth", cfg.humanAuth.enabled ? "enabled" : "disabled");
     printRaw("");
@@ -376,36 +647,48 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
 
       const emulator = new EmulatorManager(cfg);
       const bootstrapWindowed = process.platform === "darwin";
-      const emulatorStatus = emulator.status();
-      if (emulatorStatus.bootedDevices.length > 0) {
-        let detail = `ok (${emulatorStatus.bootedDevices.join(", ")})`;
-        if (bootstrapWindowed) {
-          const showMessage = await emulator.ensureWindowVisible();
-          const hideMessage = await emulator.hideWindowInPlace();
-          detail = `${detail}; ${showMessage}; ${hideMessage}`;
-        }
-        printStartupStep(
-          3,
-          totalSteps,
-          "Ensure emulator is running",
-          "ok",
-          detail,
-        );
-      } else {
-        printStartupStep(3, totalSteps, "Ensure emulator is running", "running", "booting emulator");
-        const startMessage = await emulator.start(bootstrapWindowed ? false : true);
-        if (bootstrapWindowed) {
-          const hideMessage = await emulator.hideWindowInPlace();
-          printStartupStep(3, totalSteps, "Ensure emulator is running", "ok", `${startMessage}; ${hideMessage}`);
+      const targetIsEmulator = isEmulatorTarget(cfg.target.type);
+
+      if (targetIsEmulator) {
+        const emulatorStatus = emulator.status();
+        if (emulatorStatus.bootedDevices.length > 0) {
+          let detail = `ok (${emulatorStatus.bootedDevices.join(", ")})`;
+          if (bootstrapWindowed) {
+            const showMessage = await emulator.ensureWindowVisible();
+            const hideMessage = await emulator.hideWindowInPlace();
+            detail = `${detail}; ${showMessage}; ${hideMessage}`;
+          }
+          printStartupStep(
+            3,
+            totalSteps,
+            "Ensure emulator is running",
+            "ok",
+            detail,
+          );
         } else {
-          printStartupStep(3, totalSteps, "Ensure emulator is running", "ok", startMessage);
+          printStartupStep(3, totalSteps, "Ensure emulator is running", "running", "booting emulator");
+          const startMessage = await emulator.start(bootstrapWindowed ? false : true);
+          if (bootstrapWindowed) {
+            const hideMessage = await emulator.hideWindowInPlace();
+            printStartupStep(3, totalSteps, "Ensure emulator is running", "ok", `${startMessage}; ${hideMessage}`);
+          } else {
+            printStartupStep(3, totalSteps, "Ensure emulator is running", "ok", startMessage);
+          }
         }
-      }
-      const readyStatus = emulator.status();
-      if (readyStatus.bootedDevices.length === 0) {
-        throw new Error(
-          "Emulator is online but not boot-complete yet. Retry after boot or increase emulator.bootTimeoutSec.",
-        );
+        const readyStatus = emulator.status();
+        if (readyStatus.bootedDevices.length === 0) {
+          throw new Error(
+            "Emulator is online but not boot-complete yet. Retry after boot or increase emulator.bootTimeoutSec.",
+          );
+        }
+      } else {
+        printStartupStep(3, totalSteps, "Ensure target device is online", "running", "probing adb target");
+        const message = await emulator.start();
+        const readyStatus = emulator.status();
+        if (readyStatus.devices.length === 0) {
+          throw new Error("No online target device found. Connect USB device or configure target.adbEndpoint.");
+        }
+        printStartupStep(3, totalSteps, "Ensure target device is online", "ok", message);
       }
 
       if (cfg.dashboard.enabled) {
@@ -501,7 +784,7 @@ async function runBootstrapCommand(
   options: { promptDataPartitionSize?: boolean } = {},
 ): Promise<ReturnType<typeof loadConfig>> {
   const cfg = loadConfig(configPath);
-  if (options.promptDataPartitionSize) {
+  if (options.promptDataPartitionSize && isEmulatorTarget(cfg.target.type)) {
     const currentSizeGb = Number(cfg.emulator.dataPartitionSizeGb);
     const targetSizeGb =
       Number.isFinite(currentSizeGb) &&
@@ -557,6 +840,29 @@ async function runBootstrapCommand(
     printInfo(`[OpenPocket][onboard] AVD data partition target: ${cfg.emulator.dataPartitionSizeGb}G`);
   }
   printRaw(cliTheme.section("Environment Bootstrap"));
+
+  if (!isEmulatorTarget(cfg.target.type)) {
+    if (process.env.OPENPOCKET_SKIP_ENV_SETUP === "1") {
+      printInfo("[OpenPocket][env] OPENPOCKET_SKIP_ENV_SETUP=1 -> skip adb prerequisite checks.");
+      saveConfig(cfg);
+      printSuccess("Environment bootstrap completed.");
+      return cfg;
+    }
+    const deviceManager = new EmulatorManager(cfg);
+    try {
+      const adb = deviceManager.adbBinary();
+      printInfo(`[OpenPocket][env] target=${cfg.target.type}; adb ready at ${adb}`);
+      printInfo("[OpenPocket][env] Skipping emulator/AVD bootstrap for non-emulator target.");
+    } catch (error) {
+      throw new Error(
+        `adb not found for target=${cfg.target.type}. Install Android platform-tools first. ${(error as Error).message}`,
+      );
+    }
+    saveConfig(cfg);
+    printSuccess("Environment bootstrap completed.");
+    return cfg;
+  }
+
   await ensureAndroidPrerequisites(cfg, {
     autoInstall: true,
     logger: (line) => {
@@ -608,17 +914,39 @@ function installCliShortcutOnFirstOnboard(cfg: ReturnType<typeof loadConfig>): v
 }
 
 async function runOnboardCommand(configPath: string | undefined, args: string[] = []): Promise<number> {
-  const hasForce = args.includes("--force");
-  const unknownArgs = args.filter((item) => item !== "--force");
+  const { value: targetTypeRaw, rest: afterTarget } = takeOption(args, "--target");
+  const hasForce = afterTarget.includes("--force");
+  const unknownArgs = afterTarget.filter((item) => item !== "--force");
   if (unknownArgs.length > 0) {
     throw new Error(`Unknown onboard option(s): ${unknownArgs.join(" ")}`);
   }
+
+  if (targetTypeRaw) {
+    const raw = targetTypeRaw.trim().toLowerCase();
+    if (!isDeviceTargetType(raw)) {
+      throw new Error(
+        `Unknown target type '${targetTypeRaw}'. Use one of: emulator, physical-phone, android-tv, cloud.`,
+      );
+    }
+  }
+
   if (hasForce) {
     const existing = loadConfig(configPath);
     fs.rmSync(existing.configPath, { force: true });
     fs.rmSync(path.join(existing.stateDir, "onboarding.json"), { force: true });
     printWarn(`[OpenPocket][onboard] --force enabled: cleared previous config at ${existing.configPath}`);
   }
+
+  if (targetTypeRaw) {
+    const cfg = loadConfig(configPath);
+    cfg.target.type = normalizeDeviceTargetType(targetTypeRaw);
+    if (isEmulatorTarget(cfg.target.type)) {
+      cfg.target.adbEndpoint = "";
+    }
+    saveConfig(cfg);
+    printInfo(`[OpenPocket][onboard] target preset: ${cfg.target.type} (${deviceTargetLabel(cfg.target.type)})`);
+  }
+
   const cfg = await runBootstrapCommand(configPath, { promptDataPartitionSize: true });
   installCliShortcutOnFirstOnboard(cfg);
   await runSetupWizard(cfg);
@@ -1721,6 +2049,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
 
+  if (command === "target") {
+    return runTargetCommand(configPath ?? undefined, rest.slice(1));
+  }
+
   if (command === "emulator") {
     return runEmulatorCommand(configPath ?? undefined, rest.slice(1));
   }
@@ -1780,7 +2112,7 @@ if (isMainEntry) {
     })
     .catch((error) => {
       // eslint-disable-next-line no-console
-      console.error(cliTheme.error(`OpenPocket error: ${(error as Error).message}`));
+      console.error(cliTheme.error(`OpenPocket error: ${formatCliError(error)}`));
       process.exitCode = 1;
     });
 }

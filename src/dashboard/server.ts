@@ -52,6 +52,9 @@ interface DashboardTraceAction {
   startedAt: string;
   endedAt: string;
   durationMs: number;
+  screenshotMs: number;
+  modelInferenceMs: number;
+  loopDelayMs: number;
   reasoning: string;
   result: string;
 }
@@ -69,6 +72,9 @@ interface DashboardTraceRun {
   finalMessage: string;
   actions: DashboardTraceAction[];
 }
+
+const TRACE_PARSE_MAX_BYTES = 10 * 1024 * 1024;
+const TRACE_PARSE_TAIL_BYTES = 2 * 1024 * 1024;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -368,26 +374,71 @@ export class DashboardServer {
       startedAt: at || nowIso(),
       endedAt: at || nowIso(),
       durationMs: 0,
+      screenshotMs: 0,
+      modelInferenceMs: 0,
+      loopDelayMs: 0,
       reasoning,
       result,
     };
   }
 
-  private parseSessionTraceFile(filePath: string): DashboardTraceRun[] {
+  private readTraceFileContent(filePath: string): { raw: string; truncated: boolean } | null {
     if (!fs.existsSync(filePath)) {
-      return [];
+      return null;
     }
+    let stat: fs.Stats;
     try {
-      const stat = fs.statSync(filePath);
-      if (stat.size > 10 * 1024 * 1024) {
-        return [];
-      }
+      stat = fs.statSync(filePath);
     } catch {
-      return [];
+      return null;
     }
-    const raw = fs.readFileSync(filePath, "utf-8");
+    if (stat.size <= 0) {
+      return { raw: "", truncated: false };
+    }
+
+    if (stat.size <= TRACE_PARSE_MAX_BYTES) {
+      try {
+        return { raw: fs.readFileSync(filePath, "utf-8"), truncated: false };
+      } catch {
+        return null;
+      }
+    }
+
+    const tailBytes = Math.max(1, Math.min(TRACE_PARSE_TAIL_BYTES, stat.size));
+    const offset = Math.max(0, stat.size - tailBytes);
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(filePath, "r");
+      const buffer = Buffer.allocUnsafe(tailBytes);
+      const bytesRead = fs.readSync(fd, buffer, 0, tailBytes, offset);
+      let raw = buffer.subarray(0, bytesRead).toString("utf-8");
+      // Drop the potentially partial first line when reading a tail chunk.
+      if (offset > 0) {
+        const firstLineBreak = raw.indexOf("\n");
+        raw = firstLineBreak >= 0 ? raw.slice(firstLineBreak + 1) : "";
+      }
+      return { raw, truncated: true };
+    } catch {
+      return null;
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // ignore close failures
+        }
+      }
+    }
+  }
+
+  private parseSessionTraceFile(filePath: string): { runs: DashboardTraceRun[]; truncated: boolean } {
+    const content = this.readTraceFileContent(filePath);
+    if (!content) {
+      return { runs: [], truncated: false };
+    }
+    const raw = content.raw;
     if (!raw.trim()) {
-      return [];
+      return { runs: [], truncated: content.truncated };
     }
 
     type RunAccumulator = {
@@ -508,6 +559,9 @@ export class DashboardServer {
         const result = typeof details.result === "string"
           ? details.result
           : "";
+        const screenshotMsRaw = Number(details.screenshotMs ?? 0);
+        const modelInferenceMsRaw = Number(details.modelInferenceMs ?? 0);
+        const loopDelayMsRaw = Number(details.loopDelayMs ?? 0);
         current.actionTraceByStep.set(stepNo, {
           stepNo,
           actionType,
@@ -516,6 +570,9 @@ export class DashboardServer {
           startedAt: startedAtTrace,
           endedAt: endedAtTrace,
           durationMs,
+          screenshotMs: Number.isFinite(screenshotMsRaw) ? Math.max(0, Math.round(screenshotMsRaw)) : 0,
+          modelInferenceMs: Number.isFinite(modelInferenceMsRaw) ? Math.max(0, Math.round(modelInferenceMsRaw)) : 0,
+          loopDelayMs: Number.isFinite(loopDelayMsRaw) ? Math.max(0, Math.round(loopDelayMsRaw)) : 0,
           reasoning,
           result,
         });
@@ -543,6 +600,18 @@ export class DashboardServer {
           const durationMsRaw = Number(trace.durationMs ?? 0);
           if (Number.isFinite(durationMsRaw)) {
             fallback.durationMs = Math.max(0, Math.round(durationMsRaw));
+          }
+          const screenshotMsFb = Number(trace.screenshotMs ?? 0);
+          if (Number.isFinite(screenshotMsFb)) {
+            fallback.screenshotMs = Math.max(0, Math.round(screenshotMsFb));
+          }
+          const modelInferenceMsFb = Number(trace.modelInferenceMs ?? 0);
+          if (Number.isFinite(modelInferenceMsFb)) {
+            fallback.modelInferenceMs = Math.max(0, Math.round(modelInferenceMsFb));
+          }
+          const loopDelayMsFb = Number(trace.loopDelayMs ?? 0);
+          if (Number.isFinite(loopDelayMsFb)) {
+            fallback.loopDelayMs = Math.max(0, Math.round(loopDelayMsFb));
           }
           fallback.status = this.parseTraceStatus(trace.status, fallback.result);
         }
@@ -605,28 +674,26 @@ export class DashboardServer {
         actions,
       });
     }
-    return results;
+    return { runs: results, truncated: content.truncated };
   }
 
-  private readTraceRuns(limitRuns = 12): { runs: DashboardTraceRun[]; skippedFiles: number } {
+  private readTraceRuns(limitRuns = 12): { runs: DashboardTraceRun[]; skippedFiles: number; truncatedFiles: number } {
     const limit = Math.max(1, Math.min(100, Math.round(limitRuns)));
     const sessionsDir = path.join(this.config.workspaceDir, "sessions");
     if (!fs.existsSync(sessionsDir)) {
-      return { runs: [], skippedFiles: 0 };
+      return { runs: [], skippedFiles: 0, truncatedFiles: 0 };
     }
     let skippedFiles = 0;
+    let truncatedFiles = 0;
     const candidates = fs.readdirSync(sessionsDir)
       .filter((name) => name.endsWith(".jsonl"))
       .map((name) => path.join(sessionsDir, name))
       .map((filePath) => {
         try {
           const stat = fs.statSync(filePath);
-          if (stat.size > 10 * 1024 * 1024) {
-            skippedFiles += 1;
-            return null;
-          }
           return { filePath, mtimeMs: stat.mtimeMs };
         } catch {
+          skippedFiles += 1;
           return null;
         }
       })
@@ -635,8 +702,11 @@ export class DashboardServer {
 
     const allRuns: DashboardTraceRun[] = [];
     for (const candidate of candidates) {
-      const fileRuns = this.parseSessionTraceFile(candidate.filePath);
-      allRuns.push(...fileRuns);
+      const parsed = this.parseSessionTraceFile(candidate.filePath);
+      if (parsed.truncated) {
+        truncatedFiles += 1;
+      }
+      allRuns.push(...parsed.runs);
       if (allRuns.length >= limit) {
         break;
       }
@@ -649,7 +719,7 @@ export class DashboardServer {
       }
       return 0;
     });
-    return { runs: allRuns.slice(0, limit), skippedFiles };
+    return { runs: allRuns.slice(0, limit), skippedFiles, truncatedFiles };
   }
 
   private async runEmulatorLifecycleExclusive<T>(action: string, fn: () => Promise<T>): Promise<T> {
@@ -697,6 +767,7 @@ export class DashboardServer {
         return this.emulator.status();
       } catch (error) {
         return {
+          targetType: this.config.target.type,
           avdName: this.config.emulator.avdName,
           devices: [],
           bootedDevices: [],
@@ -709,6 +780,7 @@ export class DashboardServer {
       mode: this.mode,
       gateway: this.gatewayStatus(),
       emulator: {
+        targetType: emulator.targetType,
         avdName: emulator.avdName,
         devices: emulator.devices,
         bootedDevices: emulator.bootedDevices,
@@ -1425,6 +1497,46 @@ export class DashboardServer {
       line-height: 1.6;
       margin-top: 2px;
     }
+    .trace-timing-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin-top: 2px;
+    }
+    .trace-timing-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      border-radius: 4px;
+      padding: 1px 7px;
+      font-size: 11px;
+      line-height: 1.6;
+    }
+    .trace-timing-chip.steps {
+      background: #f1f5f9;
+      color: #475569;
+    }
+    .trace-timing-chip.exec {
+      background: #f0fdf4;
+      color: #166534;
+    }
+    .trace-timing-chip.model {
+      background: #eff6ff;
+      color: #1e40af;
+    }
+    .trace-timing-chip.screenshot {
+      background: #fffbeb;
+      color: #92400e;
+    }
+    .trace-timing-chip.delay {
+      background: #f1f5f9;
+      color: #64748b;
+    }
+    .trace-timing-chip.overhead {
+      background: #fef3c7;
+      color: #92400e;
+    }
     .trace-pill {
       display: inline-flex;
       align-items: center;
@@ -2139,6 +2251,7 @@ export class DashboardServer {
       credentialStatus: {},
       traceRuns: [],
       traceSkippedFiles: 0,
+      traceTruncatedFiles: 0,
       tracePage: 0,
       tracePageSize: 5,
       traceStatusFilter: "all",
@@ -2193,7 +2306,8 @@ export class DashboardServer {
       gatewayBadge.textContent = "Gateway: " + (gatewayRunning ? "Running" : "Stopped/Unknown");
       gatewayBadge.classList.toggle("ok", gatewayRunning);
 
-      emulatorBadge.textContent = "Emulator: " + (runtime?.emulator?.statusText || "Unknown");
+      const targetLabel = runtime?.emulator?.targetType || "emulator";
+      emulatorBadge.textContent = "Device (" + targetLabel + "): " + (runtime?.emulator?.statusText || "Unknown");
       emulatorBadge.classList.toggle("ok", emulatorRunning);
     }
 
@@ -2205,6 +2319,7 @@ export class DashboardServer {
         "<div>Dashboard: <code>" + (runtime.dashboard?.address || location.origin) + "</code></div>";
 
       $("#emulator-kv").innerHTML =
+        "<div>Target: <code>" + (runtime.emulator?.targetType || "emulator") + "</code></div>" +
         "<div>AVD: <code>" + (runtime.emulator?.avdName || "unknown") + "</code></div>" +
         "<div>Devices: " + ((runtime.emulator?.devices || []).join(", ") || "(none)") + "</div>" +
         "<div>Booted: " + ((runtime.emulator?.bootedDevices || []).join(", ") || "(none)") + "</div>";
@@ -2585,9 +2700,16 @@ export class DashboardServer {
 
         const meta = document.createElement("div");
         meta.className = "trace-step-meta";
-        meta.textContent =
+        const metaParts = [
           formatTime(step.startedAt) +
-          (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : "");
+          (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : ""),
+        ];
+        const timingParts = [];
+        if (step.screenshotMs > 0) timingParts.push("screenshot " + formatDuration(step.screenshotMs));
+        if (step.modelInferenceMs > 0) timingParts.push("model " + formatDuration(step.modelInferenceMs));
+        if (step.loopDelayMs > 0) timingParts.push("delay " + formatDuration(step.loopDelayMs));
+        if (timingParts.length > 0) metaParts.push(timingParts.join(" · "));
+        meta.textContent = metaParts.join("  |  ");
         card.appendChild(meta);
 
         if (step.reasoning && step.reasoning !== "(empty)") {
@@ -2775,10 +2897,29 @@ export class DashboardServer {
 
           const allStepsSorted = actions.slice().sort((a, b) => Number(a.stepNo || 0) - Number(b.stepNo || 0));
           const totalStepDur = allStepsSorted.reduce((s, a) => s + Number(a.durationMs || 0), 0);
+          const totalScreenshotMs = allStepsSorted.reduce((s, a) => s + Number(a.screenshotMs || 0), 0);
+          const totalModelMs = allStepsSorted.reduce((s, a) => s + Number(a.modelInferenceMs || 0), 0);
+          const totalLoopDelayMs = allStepsSorted.reduce((s, a) => s + Number(a.loopDelayMs || 0), 0);
+          const hasTimingData = totalScreenshotMs > 0 || totalModelMs > 0;
 
           const stepsLabel = document.createElement("div");
-          stepsLabel.className = "trace-kv-line";
-          stepsLabel.textContent = allStepsSorted.length + " steps total";
+          stepsLabel.className = "trace-timing-row";
+          function addChip(cls, text) {
+            const chip = document.createElement("span");
+            chip.className = "trace-timing-chip " + cls;
+            chip.textContent = text;
+            stepsLabel.appendChild(chip);
+          }
+          addChip("steps", allStepsSorted.length + " steps");
+          addChip("exec", "exec " + formatDuration(totalStepDur));
+          if (hasTimingData) {
+            addChip("model", "model " + formatDuration(totalModelMs));
+            addChip("screenshot", "screenshot " + formatDuration(totalScreenshotMs));
+            addChip("delay", "delay " + formatDuration(totalLoopDelayMs));
+          } else if (run.durationMs != null) {
+            const overhead = Math.max(0, run.durationMs - totalStepDur);
+            addChip("overhead", "overhead " + formatDuration(overhead));
+          }
           card.appendChild(stepsLabel);
 
           const listWrap = document.createElement("div");
@@ -2889,9 +3030,23 @@ export class DashboardServer {
         ? total + " run" + (total === 1 ? "" : "s")
         : total + " of " + runs.length + " runs";
       const skipped = state.traceSkippedFiles || 0;
-      $("#timeline-meta").textContent = metaLabel + (skipped > 0
-        ? " (" + skipped + " session file" + (skipped === 1 ? "" : "s") + " skipped — over 10MB)"
-        : "");
+      const truncated = state.traceTruncatedFiles || 0;
+      const notes = [];
+      if (truncated > 0) {
+        notes.push(
+          truncated + " large session file" + (truncated === 1 ? "" : "s") +
+          " parsed from tail",
+        );
+      }
+      if (skipped > 0) {
+        notes.push(
+          skipped + " session file" + (skipped === 1 ? "" : "s") +
+          " skipped",
+        );
+      }
+      $("#timeline-meta").textContent = notes.length > 0
+        ? metaLabel + " (" + notes.join("; ") + ")"
+        : metaLabel;
     }
 
     async function loadTraces(options = {}) {
@@ -2899,8 +3054,10 @@ export class DashboardServer {
       const payload = await api("/api/traces?limit=50");
       const runs = Array.isArray(payload.runs) ? payload.runs : [];
       const skipped = Number(payload.skippedFiles || 0);
+      const truncated = Number(payload.truncatedFiles || 0);
       state.traceRuns = runs;
       state.traceSkippedFiles = skipped;
+      state.traceTruncatedFiles = truncated;
       renderTraces(runs);
       if (!silent) {
         setStatus("Action timeline refreshed.", "ok");
@@ -3248,16 +3405,31 @@ export class DashboardServer {
       if ($("#timeline-auto").checked) {
         $("#timeline-auto").dispatchEvent(new Event("change"));
       }
-      try {
-        await loadRuntime();
-        await loadConfigAndOnboarding();
-        await loadControlSettings();
-        await loadScopedFiles();
-        await loadLogs();
-        await loadTraces();
+
+      const startupTasks = [
+        { label: "runtime", run: () => loadRuntime() },
+        { label: "onboarding", run: () => loadConfigAndOnboarding() },
+        { label: "control", run: () => loadControlSettings() },
+        { label: "permissions", run: () => loadScopedFiles() },
+        { label: "logs", run: () => loadLogs() },
+        { label: "timeline", run: () => loadTraces() },
+      ];
+      const failures = [];
+
+      for (const task of startupTasks) {
+        try {
+          await task.run();
+        } catch (error) {
+          failures.push(task.label + ": " + (error?.message || "failed"));
+        }
+      }
+
+      if (failures.length === 0) {
         setStatus("Dashboard ready.", "ok");
-      } catch (error) {
-        setStatus(error.message || "Initialization failed", "error");
+      } else {
+        const preview = failures.slice(0, 2).join("; ");
+        const suffix = failures.length > 2 ? "; ..." : "";
+        setStatus("Dashboard partial init (" + failures.length + "): " + preview + suffix, "error");
       }
       state.runtimeTimer = setInterval(() => {
         loadRuntime().catch(() => {});
@@ -3304,6 +3476,7 @@ export class DashboardServer {
         sendJson(res, 200, {
           runs: traceResult.runs,
           skippedFiles: traceResult.skippedFiles,
+          truncatedFiles: traceResult.truncatedFiles,
           fetchedAt: nowIso(),
         });
         return;
