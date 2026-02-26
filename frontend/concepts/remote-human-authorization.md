@@ -20,6 +20,29 @@ Design goal:
 - real-device/sensitive checkpoints (OTP, camera capture, biometric-like approval, payment, OAuth, etc.)
 - any step where model explicitly emits `request_human_auth`
 
+## Template-Driven Human Auth Portal
+
+Human Auth pages are no longer fixed to one hardcoded layout.
+`request_human_auth` can include an optional `uiTemplate` object, and relay renders each request page from:
+
+- capability default template (for `oauth`, `payment`, `camera`, `microphone`, `location`, `files`, etc.)
+- plus sanitized per-request template override from agent
+
+Template controls can define:
+
+- dynamic title/summary/hint
+- form schema (custom fields and validation)
+- style variables (brand/background/font)
+- allowed attachment channels (text/location/photo/audio/file)
+- artifact policy (`artifactKind`, `requireArtifactOnApprove`)
+
+This supports scenario-specific auth UX, for example:
+
+- account login page with dedicated credentials form
+- payment page with card number / expiry / cvc
+- album delegation page asking user to pick media from Human Phone
+- location-only page requiring coordinates before approval
+
 ## Why This Exists
 
 Some flows cannot be completed from emulator-only UI automation:
@@ -154,6 +177,7 @@ Security boundary:
 - Relay server and artifact storage are on the user machine.
 - For strict zero-third-party network hop, use LAN mode (`humanAuth.tunnel.provider=none`).
 - In ngrok mode, ngrok is transport only; OpenPocket runtime/state/artifacts still stay local.
+- Current model is explicit approval + artifact delegation from Human Phone, not direct OS-level hardware passthrough into Agent Phone APIs.
 
 ## Delegation Artifact Types
 
@@ -161,9 +185,12 @@ Remote approval may include optional artifact payload.
 
 | Capability | Typical payload from phone | Runtime apply behavior |
 | --- | --- | --- |
-| `sms`, `2fa`, `qr`, `oauth`, `payment`, `biometric`, `notification`, `contacts`, `calendar`, `files`, `permission`, `unknown` | JSON `{ kind: "text" \| "qr_text", value }` | Auto `type` into focused input field |
+| `sms`, `2fa`, `qr`, `biometric`, `notification`, `contacts`, `calendar`, `permission`, `unknown` | JSON `{ kind: "text" \| "qr_text", value }` | Auto `type` into focused input field |
+| `oauth` | JSON `{ kind: "credentials", username, password }` or template-form JSON | Auto apply credentials / fields into current login flow |
+| `payment` | JSON `{ kind: "payment_card", fields... }` | Agent uses delegated card fields in checkout flow |
 | `location` | JSON `{ kind: "geo", lat, lon }` | `adb emu geo fix <lon> <lat>` |
-| `camera`, `microphone`, `voice`, `nfc` (or image path) | Image file (`.jpg/.png/.webp`) | Push to `/sdcard/Download/openpocket-human-auth-<ts>.<ext>` |
+| `camera`, `qr`, `files` | File artifact (typically image/media) | Push to `/sdcard/Download/openpocket-human-auth-<ts>.<ext>` then continue picker flow |
+| `microphone`, `voice`, `nfc` | Audio/file artifact | Push file to download path for next-step upload/import |
 
 After image injection, runtime may append deterministic hint in history:
 

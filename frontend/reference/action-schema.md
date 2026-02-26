@@ -92,6 +92,47 @@ type AgentAction =
       instruction: string;
       timeoutSec?: number;
       reason?: string;
+      uiTemplate?: {
+        templateId?: string;
+        title?: string;
+        summary?: string;
+        capabilityHint?: string;
+        artifactKind?: "auto" | "credentials" | "payment_card" | "form";
+        requireArtifactOnApprove?: boolean;
+        allowTextAttachment?: boolean;
+        allowLocationAttachment?: boolean;
+        allowPhotoAttachment?: boolean;
+        allowAudioAttachment?: boolean;
+        allowFileAttachment?: boolean;
+        fileAccept?: string;
+        fields?: Array<{
+          id: string;
+          label: string;
+          type:
+            | "text"
+            | "textarea"
+            | "password"
+            | "email"
+            | "number"
+            | "date"
+            | "select"
+            | "otp"
+            | "card-number"
+            | "expiry"
+            | "cvc";
+          placeholder?: string;
+          required?: boolean;
+          helperText?: string;
+          options?: Array<{ label: string; value: string }>;
+          autocomplete?: string;
+          artifactKey?: string;
+        }>;
+        style?: {
+          brandColor?: string;
+          backgroundCss?: string;
+          fontFamily?: string;
+        };
+      };
     }
   | { type: "wait"; durationMs?: number; reason?: string }
   | { type: "finish"; message: string };

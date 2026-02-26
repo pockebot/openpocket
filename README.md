@@ -653,6 +653,36 @@ When the agent emits `request_human_auth`, Telegram users can:
 - for `oauth` login walls, use dedicated credential inputs on the Human Auth page
   (or optional live remote takeover), then approve/reject
 
+### Dynamic Human Auth Portal Templates
+
+`request_human_auth` now supports an optional `uiTemplate` payload so each authorization page can be customized per request instead of using one fixed form.
+
+Supported template controls include:
+
+- title/summary/capability hint text
+- theme style (`brandColor`, `backgroundCss`, `fontFamily`)
+- structured form fields (`text`, `textarea`, `email`, `password`, `otp`, `card-number`, `expiry`, `cvc`, `select`, ...)
+- delegation toggles (text/location/photo/audio/file attachments)
+- artifact policy (`artifactKind`, `requireArtifactOnApprove`)
+
+This enables capability-specific flows such as:
+
+- OAuth login (`credentials`)
+- payment card confirmation (`payment_card`)
+- camera/photo delegation
+- microphone/audio delegation
+- location delegation
+- album/file selection delegation
+
+High-level runtime behavior:
+
+1. agent emits `request_human_auth` with `capability` and optional `uiTemplate`
+2. relay renders the page from capability defaults + sanitized template override
+3. human approves/rejects and optionally uploads/enters delegated artifact
+4. bridge returns decision/artifact to runtime and task continues
+
+Important: current implementation is **delegation-based** (explicit artifact handoff after approve), not direct remote hardware passthrough from human phone sensors into Agent Phone OS APIs.
+
 Credential security notes:
 
 - relay server and request state are hosted on the user machine
