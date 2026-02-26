@@ -583,9 +583,20 @@ export class HumanAuthRelayServer {
       return;
     }
     ensureDir(path.dirname(this.options.stateFile));
+    const serialized = [...this.records.values()].map((record) => {
+      if (record.capability !== "payment") {
+        return record;
+      }
+      // Never persist sensitive payment notes/artifacts to local relay state.
+      return {
+        ...record,
+        note: "",
+        artifact: null,
+      };
+    });
     fs.writeFileSync(
       this.options.stateFile,
-      `${JSON.stringify([...this.records.values()], null, 2)}\n`,
+      `${JSON.stringify(serialized, null, 2)}\n`,
       "utf-8",
     );
   }
@@ -1328,6 +1339,20 @@ export class HumanAuthRelayServer {
 
       <div class="section" id="delegatedDataSection">
         <h2>Optional Delegated Data</h2>
+        <div id="paymentDelegation" class="hidden">
+          <label for="payCardNumber">Card Number</label>
+          <input id="payCardNumber" type="text" inputmode="numeric" autocomplete="cc-number" placeholder="e.g., 4111111111111111" />
+          <label for="payExpiry">Expiration (MM/YY)</label>
+          <input id="payExpiry" type="text" inputmode="numeric" autocomplete="cc-exp" placeholder="e.g., 02/32" />
+          <label for="payCvc">Security Code (CVV/CVC)</label>
+          <input id="payCvc" type="text" inputmode="numeric" autocomplete="cc-csc" placeholder="e.g., 182" />
+          <label for="payZip">ZIP / Postal (Optional)</label>
+          <input id="payZip" type="text" autocomplete="postal-code" placeholder="e.g., 94105" />
+          <div class="actions">
+            <button id="attachPayment" type="button">Attach Payment Fields</button>
+          </div>
+          <div class="muted">For payment capability, data is sent as one-time structured delegation and not stored in relay state file.</div>
+        </div>
         <div id="textDelegation">
           <label for="resultText">OTP / Code / Short Text</label>
           <input id="resultText" type="text" placeholder="e.g., OTP, SMS code, QR result text" />
@@ -1445,6 +1470,10 @@ export class HumanAuthRelayServer {
     const geoLatEl = document.getElementById("geoLat");
     const geoLonEl = document.getElementById("geoLon");
     const delegatedDataSectionEl = document.getElementById("delegatedDataSection");
+    const payCardNumberEl = document.getElementById("payCardNumber");
+    const payExpiryEl = document.getElementById("payExpiry");
+    const payCvcEl = document.getElementById("payCvc");
+    const payZipEl = document.getElementById("payZip");
     const takeoverStreamEl = document.getElementById("takeoverStream");
     const takeoverEmptyEl = document.getElementById("takeoverEmpty");
     const takeoverMetaEl = document.getElementById("takeoverMeta");
@@ -1548,6 +1577,15 @@ export class HumanAuthRelayServer {
       const el = document.getElementById(id);
       if (!el) return;
       el.classList.toggle("hidden", !visible);
+    }
+
+    function capabilityHintText(cap) {
+      if (cap === "location") return "Recommended: attach location and approve.";
+      if (cap === "camera") return "Recommended: capture/upload photo and approve.";
+      if (cap === "payment") return "Recommended: fill payment fields below and approve.";
+      if (cap === "2fa" || cap === "sms") return "Recommended: attach OTP/code and approve.";
+      if (cap === "qr") return "Recommended: attach QR text or photo and approve.";
+      return "Recommended: attach needed data, then approve.";
     }
 
     function placeDecisionBlock() {
@@ -1740,37 +1778,50 @@ export class HumanAuthRelayServer {
     function configurePortalTemplate() {
       pageTitleEl.textContent = uiTemplate.title || "Authorization Required";
       pageSummaryEl.textContent = uiTemplate.summary || "";
-      capabilityHintEl.textContent = uiTemplate.capabilityHint || "";
+      const fallbackHint = capabilityHintText(String(capability || "").trim().toLowerCase());
+      const templateHint = String(uiTemplate.capabilityHint || "").trim();
+      capabilityHintEl.textContent = templateHint || fallbackHint;
       dynamicFormTitleEl.textContent = "Requested Information";
       renderDynamicFields(uiTemplate.fields || []);
       placeDecisionBlock();
-      show("capabilityHint", Boolean(uiTemplate.capabilityHint));
+      show("capabilityHint", Boolean(capabilityHintEl.textContent));
       show("agentMiddleSection", Boolean((uiTemplate.middleHtml || "").trim() || (uiTemplate.middleScript || "").trim()));
 
       if (agentMiddleMountEl) {
         agentMiddleMountEl.innerHTML = String(uiTemplate.middleHtml || "");
       }
 
+      const normalizedCapability = String(capability || "").trim().toLowerCase();
+      const isPaymentCapability = normalizedCapability === "payment";
       const useCameraPrimaryFlow = isCameraPrimaryFlowEnabled();
       const allowStandaloneFileDelegation = Boolean(uiTemplate.allowFileAttachment) && !useCameraPrimaryFlow;
+      const showPaymentDelegation = isPaymentCapability;
+      const allowTextDelegation = Boolean(uiTemplate.allowTextAttachment) && !isPaymentCapability;
       mountCameraDelegation(useCameraPrimaryFlow);
       show("cameraPrimarySection", useCameraPrimaryFlow);
       const showDelegatedData = Boolean(
-        uiTemplate.allowTextAttachment
+        showPaymentDelegation
+        || allowTextDelegation
         || uiTemplate.allowLocationAttachment
         || uiTemplate.allowAudioAttachment
         || allowStandaloneFileDelegation
         || (uiTemplate.allowPhotoAttachment && !useCameraPrimaryFlow),
       );
       show("delegatedDataSection", showDelegatedData);
-      show("textDelegation", Boolean(uiTemplate.allowTextAttachment));
+      show("paymentDelegation", showPaymentDelegation);
+      show("textDelegation", allowTextDelegation);
       show("geoDelegation", Boolean(uiTemplate.allowLocationAttachment));
       show("cameraDelegation", Boolean(uiTemplate.allowPhotoAttachment));
       show("audioDelegation", Boolean(uiTemplate.allowAudioAttachment));
       show("fileDelegation", allowStandaloneFileDelegation);
 
-      resultTextEl.placeholder = uiTemplate.allowTextAttachment
-        ? "Attach short text payload"
+      if (isPaymentCapability) {
+        noteEl.placeholder = "Do not enter card data in note. Use payment fields above.";
+      } else {
+        noteEl.placeholder = uiTemplate.notePlaceholder || "Optional message to agent";
+      }
+      resultTextEl.placeholder = allowTextDelegation
+        ? (uiTemplate.allowTextAttachment ? "Attach short text payload" : "Not required for this authorization")
         : "Not required for this authorization";
       audioInputEl.accept = uiTemplate.fileAccept || "audio/*";
       fileInputEl.accept = uiTemplate.fileAccept || "*/*";
@@ -2053,6 +2104,25 @@ export class HumanAuthRelayServer {
       };
     }
 
+    function buildPaymentArtifactPayload() {
+      const cardNumber = String(payCardNumberEl.value || "").replace(/\s+/g, "");
+      const expiry = String(payExpiryEl.value || "").trim();
+      const cvc = String(payCvcEl.value || "").trim();
+      const zip = String(payZipEl.value || "").trim();
+      if (!cardNumber && !expiry && !cvc && !zip) {
+        return null;
+      }
+      return {
+        kind: "payment_card_v1",
+        cardNumber,
+        expiry,
+        cvc,
+        zip,
+        capability,
+        capturedAt: new Date().toISOString(),
+      };
+    }
+
     function humanErrorMessage(err) {
       const name = err && err.name ? String(err.name) : "";
       const message = err && err.message ? String(err.message) : String(err || "unknown error");
@@ -2099,6 +2169,16 @@ export class HumanAuthRelayServer {
         capturedAt: new Date().toISOString(),
       });
       setStatus("Location attached.", "success");
+    }
+
+    function attachPaymentArtifact() {
+      const payload = buildPaymentArtifactPayload();
+      if (!payload) {
+        statusEl.textContent = "Payment fields are empty.";
+        return;
+      }
+      setJsonArtifact(payload);
+      statusEl.textContent = "Payment fields attached.";
     }
 
     function useCurrentLocation() {
@@ -2521,6 +2601,7 @@ export class HumanAuthRelayServer {
 
       try {
         let noteValue = String(noteEl.value || "");
+        const normalizedCapability = String(capability || "").trim().toLowerCase();
         if (approved) {
           const hasApproveScript = Boolean(String(uiTemplate.approveScript || "").trim());
           const hasDynamicFields = Array.isArray(uiTemplate.fields) && uiTemplate.fields.length > 0;
@@ -2582,6 +2663,13 @@ export class HumanAuthRelayServer {
             }
           }
 
+          if (normalizedCapability === "payment" && !artifact) {
+            const paymentPayload = buildPaymentArtifactPayload();
+            if (paymentPayload) {
+              setJsonArtifact(paymentPayload);
+            }
+          }
+
           if (uiTemplate.requireArtifactOnApprove && !artifact) {
             promptRequiredArtifactCollection();
             setStatus(
@@ -2595,6 +2683,7 @@ export class HumanAuthRelayServer {
         } else {
           artifact = null;
         }
+        const decisionNote = normalizedCapability === "payment" ? "" : noteValue;
         postClientEvent("resolve_submit", {
           approved: Boolean(approved),
           hasArtifact: Boolean(artifact),
@@ -2606,7 +2695,7 @@ export class HumanAuthRelayServer {
             body: JSON.stringify({
               token,
               approved,
-              note: noteValue,
+              note: decisionNote,
               artifact
             })
           }),
@@ -2648,6 +2737,10 @@ export class HumanAuthRelayServer {
     document.getElementById("pickAudio").addEventListener("click", pickAudio);
     document.getElementById("pickFile").addEventListener("click", pickFile);
     document.getElementById("attachText").addEventListener("click", attachTextArtifact);
+    const attachPaymentBtn = document.getElementById("attachPayment");
+    if (attachPaymentBtn) {
+      attachPaymentBtn.addEventListener("click", attachPaymentArtifact);
+    }
     document.getElementById("useGeo").addEventListener("click", useCurrentLocation);
     document.getElementById("attachGeo").addEventListener("click", attachGeoArtifact);
     photoInputEl.addEventListener("change", onPhotoChange);
@@ -2953,6 +3046,7 @@ export class HumanAuthRelayServer {
       const approved = isTruthyBoolean(body.approved);
       const portalTemplate = this.resolvePortalTemplate(record);
       let artifact: { mimeType: string; base64: string } | null = null;
+      const isPayment = String(record.capability).trim().toLowerCase() === "payment";
 
       if (
         isObject(body.artifact) &&
@@ -2976,7 +3070,7 @@ export class HumanAuthRelayServer {
       }
 
       record.status = approved ? "approved" : "rejected";
-      record.note = String(body.note ?? "").slice(0, 2000);
+      record.note = isPayment ? "" : String(body.note ?? "").slice(0, 2000);
       record.decidedAt = nowIso();
       record.openTokenHash = "";
       record.artifact = approved ? artifact : null;

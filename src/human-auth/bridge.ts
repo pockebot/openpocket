@@ -142,6 +142,48 @@ export class HumanAuthBridge {
       }));
   }
 
+  cancelPendingForChat(chatId: number, reason = "Task stopped by user."): number {
+    if (!Number.isFinite(chatId)) {
+      return 0;
+    }
+    let cancelled = 0;
+    for (const entry of [...this.pending.values()]) {
+      if (entry.chatId !== chatId) {
+        continue;
+      }
+      const ok = this.settleEntry(entry, {
+        requestId: entry.id,
+        approved: false,
+        status: "rejected",
+        message: reason,
+        decidedAt: nowIso(),
+        artifactPath: null,
+      });
+      if (ok) {
+        cancelled += 1;
+      }
+    }
+    return cancelled;
+  }
+
+  cancelAllPending(reason = "Task stopped by gateway shutdown."): number {
+    let cancelled = 0;
+    for (const entry of [...this.pending.values()]) {
+      const ok = this.settleEntry(entry, {
+        requestId: entry.id,
+        approved: false,
+        status: "rejected",
+        message: reason,
+        decidedAt: nowIso(),
+        artifactPath: null,
+      });
+      if (ok) {
+        cancelled += 1;
+      }
+    }
+    return cancelled;
+  }
+
   resolvePending(requestId: string, approved: boolean, note?: string, actor = "manual"): boolean {
     const entry = this.pending.get(requestId);
     if (!entry) {
