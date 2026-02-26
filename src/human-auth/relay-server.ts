@@ -14,7 +14,7 @@ import type {
 
 type RelayStatus = "pending" | "approved" | "rejected" | "timeout";
 
-type RelayRecord = {
+export type RelayRecord = {
   requestId: string;
   chatId: number | null;
   task: string;
@@ -38,7 +38,7 @@ type RelayRecord = {
 
 type RelayPortalArtifactKind = "auto" | "credentials" | "payment_card" | "form";
 
-type RelayPortalResolvedTemplate = {
+export type RelayPortalResolvedTemplate = {
   templateId: string;
   title: string;
   summary: string;
@@ -356,7 +356,8 @@ function mergeTemplateOverride(
     style: {
       brandColor: sanitizeCssColor(override.style?.brandColor, base.style.brandColor),
       backgroundCss: sanitizeCssBackground(override.style?.backgroundCss, base.style.backgroundCss),
-      fontFamily: sanitizeCssFontFamily(override.style?.fontFamily, base.style.fontFamily),
+      // Keep Human Auth page typography aligned with OpenPocket dashboard brand.
+      fontFamily: base.style.fontFamily,
     },
   };
 }
@@ -450,6 +451,8 @@ export class HumanAuthRelayServer {
   private readonly takeoverStreamCounts = new Map<string, number>();
   private static readonly TAKEOVER_ACTION_COOLDOWN_MS = 200;
   private static readonly TAKEOVER_MAX_CONCURRENT_STREAMS = 2;
+  /** SSE connections waiting for decision notifications per requestId. */
+  private readonly sseClients = new Map<string, Set<http.ServerResponse>>();
 
   constructor(options: HumanAuthRelayServerOptions) {
     this.options = options;
@@ -631,7 +634,31 @@ export class HumanAuthRelayServer {
       record.note = record.note || "Request timed out.";
       record.decidedAt = nowIso();
       this.persistState();
+      this.notifySseClients(record.requestId, record);
     }
+  }
+
+  private notifySseClients(requestId: string, record: RelayRecord): void {
+    const clients = this.sseClients.get(requestId);
+    if (!clients || clients.size === 0) {
+      return;
+    }
+    const payload = JSON.stringify({
+      requestId: record.requestId,
+      status: record.status,
+      note: record.note || undefined,
+      decidedAt: record.decidedAt || undefined,
+      artifact: record.artifact,
+    });
+    for (const client of clients) {
+      try {
+        client.write(`event: decision\ndata: ${payload}\n\n`);
+        client.end();
+      } catch {
+        // Client may have disconnected.
+      }
+    }
+    this.sseClients.delete(requestId);
   }
 
   private verifyOpenToken(record: RelayRecord, tokenRaw: unknown): { ok: true } | { ok: false; error: string; status: number } {
@@ -727,6 +754,12 @@ export class HumanAuthRelayServer {
     res.write("\r\n");
   }
 
+  // =========================================================================
+  // Portal Page Renderer (~1700 lines)
+  // This section generates the complete Human Auth portal page HTML.
+  // Future extraction: move to a dedicated portal-renderer.ts module.
+  // =========================================================================
+
   private renderPortalPage(record: RelayRecord, token: string): string {
     const portalTemplate = this.resolvePortalTemplate(record);
     const requestId = escapeHtml(record.requestId);
@@ -756,6 +789,7 @@ export class HumanAuthRelayServer {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src 'self'; frame-src 'none'; object-src 'none';" />
   <title>OpenPocket Human Auth</title>
   <style>
     :root {
@@ -1268,15 +1302,18 @@ export class HumanAuthRelayServer {
           <video id="video" autoplay playsinline hidden></video>
           <canvas id="canvas" hidden></canvas>
           <img id="photoPreview" alt="Captured preview" hidden />
-          <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
+          <input id="photoInput" type="file" accept="image/*" multiple hidden />
         </div>
 
         <div id="audioDelegation" class="hidden">
           <div class="actions">
-            <button id="pickAudio" type="button">Capture / Upload Audio</button>
+            <button id="startRec" type="button">Start Recording</button>
+            <button id="stopRec" type="button" disabled>Stop Recording</button>
+            <button id="pickAudio" type="button">Upload Audio File</button>
           </div>
           <div class="muted" id="audioPreview">No audio attached yet.</div>
-          <input id="audioInput" type="file" accept="audio/*" capture hidden />
+          <audio id="audioPlayback" controls hidden style="width:100%;margin-top:8px;border-radius:10px;"></audio>
+          <input id="audioInput" type="file" accept="audio/*" hidden />
         </div>
 
         <div id="fileDelegation" class="hidden">
@@ -1326,6 +1363,9 @@ export class HumanAuthRelayServer {
     const photoPreviewEl = document.getElementById("photoPreview");
     const audioInputEl = document.getElementById("audioInput");
     const audioPreviewEl = document.getElementById("audioPreview");
+    const audioPlaybackEl = document.getElementById("audioPlayback");
+    const startRecBtn = document.getElementById("startRec");
+    const stopRecBtn = document.getElementById("stopRec");
     const fileInputEl = document.getElementById("fileInput");
     const filePreviewEl = document.getElementById("filePreview");
     const resultTextEl = document.getElementById("resultText");
@@ -1962,23 +2002,113 @@ export class HumanAuthRelayServer {
     }
 
     async function onPhotoChange() {
-      const file = photoInputEl.files && photoInputEl.files[0];
-      if (!file) {
+      const files = photoInputEl.files;
+      if (!files || files.length === 0) {
         return;
       }
       try {
-        const dataUrl = await fileToDataUrl(file);
-        const base64 = dataUrl.split(",")[1] || "";
-        const mimeType = file.type || "image/jpeg";
-        artifact = { mimeType, base64 };
-        canvasEl.hidden = true;
-        videoEl.hidden = true;
-        photoPreviewEl.src = dataUrl;
-        photoPreviewEl.hidden = false;
-        setStatus("Photo attached.", "success");
+        if (files.length === 1) {
+          const dataUrl = await fileToDataUrl(files[0]);
+          const base64 = dataUrl.split(",")[1] || "";
+          const mimeType = files[0].type || "image/jpeg";
+          artifact = { mimeType, base64 };
+          canvasEl.hidden = true;
+          videoEl.hidden = true;
+          photoPreviewEl.src = dataUrl;
+          photoPreviewEl.hidden = false;
+          setStatus("Photo attached.", "success");
+        } else {
+          var photoPayloads = [];
+          for (var i = 0; i < files.length; i++) {
+            var f = files[i];
+            var du = await fileToDataUrl(f);
+            photoPayloads.push({
+              name: f.name || ("photo_" + i + ".jpg"),
+              mimeType: f.type || "image/jpeg",
+              base64: du.split(",")[1] || "",
+            });
+          }
+          setJsonArtifact({
+            kind: "photos_multi",
+            count: photoPayloads.length,
+            photos: photoPayloads,
+            capability: capability,
+            capturedAt: new Date().toISOString(),
+          });
+          canvasEl.hidden = true;
+          videoEl.hidden = true;
+          photoPreviewEl.hidden = true;
+          setStatus(photoPayloads.length + " photos attached.", "success");
+        }
       } catch (err) {
         setStatus("Failed to attach photo: " + (err && err.message ? err.message : String(err)), "error");
       }
+    }
+
+    var mediaRecorder = null;
+    var audioChunks = [];
+    var recordingStream = null;
+
+    async function startRecording() {
+      try {
+        recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        var mimeOptions = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4", ""];
+        var selectedMime = "";
+        for (var mi = 0; mi < mimeOptions.length; mi++) {
+          if (!mimeOptions[mi] || MediaRecorder.isTypeSupported(mimeOptions[mi])) {
+            selectedMime = mimeOptions[mi];
+            break;
+          }
+        }
+        var recorderOptions = selectedMime ? { mimeType: selectedMime } : {};
+        mediaRecorder = new MediaRecorder(recordingStream, recorderOptions);
+        audioChunks = [];
+        mediaRecorder.ondataavailable = function(e) {
+          if (e.data && e.data.size > 0) audioChunks.push(e.data);
+        };
+        mediaRecorder.onstop = function() {
+          var mimeType = mediaRecorder.mimeType || selectedMime || "audio/webm";
+          var blob = new Blob(audioChunks, { type: mimeType });
+          var reader = new FileReader();
+          reader.onload = function() {
+            var base64 = String(reader.result || "").split(",")[1] || "";
+            artifact = { mimeType: mimeType, base64: base64 };
+            audioPreviewEl.textContent = "Recording attached (" + (blob.size / 1024).toFixed(1) + " KB)";
+            var blobUrl = URL.createObjectURL(blob);
+            audioPlaybackEl.src = blobUrl;
+            audioPlaybackEl.hidden = false;
+            setStatus("Recording attached.", "success");
+          };
+          reader.onerror = function() {
+            setStatus("Failed to process recording.", "error");
+          };
+          reader.readAsDataURL(blob);
+          if (recordingStream) {
+            recordingStream.getTracks().forEach(function(t) { t.stop(); });
+            recordingStream = null;
+          }
+        };
+        mediaRecorder.start(250);
+        startRecBtn.disabled = true;
+        stopRecBtn.disabled = false;
+        setStatus("Recording... tap Stop when done.", "info");
+      } catch (err) {
+        var msg = err && err.message ? err.message : String(err);
+        var lowered = msg.toLowerCase();
+        if (lowered.includes("notallowed") || lowered.includes("permission")) {
+          setStatus("Microphone permission denied. Use Upload Audio File instead.", "error");
+        } else {
+          setStatus("Failed to start recording: " + msg, "error");
+        }
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+      startRecBtn.disabled = false;
+      stopRecBtn.disabled = true;
     }
 
     function pickAudio() {
@@ -1994,9 +2124,11 @@ export class HumanAuthRelayServer {
       try {
         const dataUrl = await fileToDataUrl(file);
         const base64 = dataUrl.split(",")[1] || "";
-        const mimeType = file.type || "audio/*";
+        const mimeType = file.type || "audio/webm";
         artifact = { mimeType, base64 };
         audioPreviewEl.textContent = "Audio attached: " + (file.name || "audio");
+        audioPlaybackEl.src = URL.createObjectURL(file);
+        audioPlaybackEl.hidden = false;
         setStatus("Audio attached.", "success");
       } catch (err) {
         setStatus("Failed to attach audio: " + (err && err.message ? err.message : String(err)), "error");
@@ -2034,6 +2166,53 @@ export class HumanAuthRelayServer {
       if (rejectBtn && "disabled" in rejectBtn) {
         rejectBtn.disabled = disabled;
       }
+    }
+
+    function promptRequiredArtifactCollection() {
+      focusDelegatedDataSection();
+      if (uiTemplate.allowPhotoAttachment) {
+        setStatus(
+          "This request requires a photo from your Human Phone. Use Capture / Upload Photo, then tap Approve and Continue again.",
+          "info",
+        );
+        void pickPhoto();
+        return true;
+      }
+      if (uiTemplate.allowAudioAttachment) {
+        setStatus(
+          "This request requires audio from your Human Phone. Upload an audio file (or record), then tap Approve and Continue again.",
+          "info",
+        );
+        void pickAudio();
+        return true;
+      }
+      if (uiTemplate.allowLocationAttachment) {
+        setStatus(
+          "This request requires location from your Human Phone. Approve location access and attach coordinates, then tap Approve and Continue again.",
+          "info",
+        );
+        useCurrentLocation();
+        return true;
+      }
+      if (uiTemplate.allowFileAttachment) {
+        setStatus(
+          "This request requires a delegated file. Choose a file, then tap Approve and Continue again.",
+          "info",
+        );
+        pickFile();
+        return true;
+      }
+      if (uiTemplate.allowTextAttachment) {
+        setStatus(
+          "This request requires delegated text. Fill the text field below, attach it, then tap Approve and Continue again.",
+          "info",
+        );
+        if (resultTextEl && typeof resultTextEl.focus === "function") {
+          resultTextEl.focus();
+        }
+        return true;
+      }
+      return false;
     }
 
     function autoCloseResolvedPage() {
@@ -2089,6 +2268,15 @@ export class HumanAuthRelayServer {
       try {
         let noteValue = String(noteEl.value || "");
         if (approved) {
+          const hasApproveScript = Boolean(String(uiTemplate.approveScript || "").trim());
+          const hasDynamicFields = Array.isArray(uiTemplate.fields) && uiTemplate.fields.length > 0;
+          if (uiTemplate.requireArtifactOnApprove && !artifact && !hasApproveScript && !hasDynamicFields) {
+            if (promptRequiredArtifactCollection()) {
+              unlockDecisionControls();
+              return;
+            }
+          }
+
           const dynamicPayload = buildDynamicFormArtifactPayload();
           if (!dynamicPayload.ok) {
             setStatus(dynamicPayload.error || "Invalid dynamic form values.", "error");
@@ -2140,11 +2328,11 @@ export class HumanAuthRelayServer {
           }
 
           if (uiTemplate.requireArtifactOnApprove && !artifact) {
+            promptRequiredArtifactCollection();
             setStatus(
               "This request requires delegated data before approval. Attach data below, then tap Approve and Continue again.",
               "error",
             );
-            focusDelegatedDataSection();
             unlockDecisionControls();
             return;
           }
@@ -2191,6 +2379,8 @@ export class HumanAuthRelayServer {
     document.getElementById("startCam").addEventListener("click", startCamera);
     document.getElementById("snapCam").addEventListener("click", captureSnapshot);
     document.getElementById("pickPhoto").addEventListener("click", pickPhoto);
+    document.getElementById("startRec").addEventListener("click", startRecording);
+    document.getElementById("stopRec").addEventListener("click", stopRecording);
     document.getElementById("pickAudio").addEventListener("click", pickAudio);
     document.getElementById("pickFile").addEventListener("click", pickFile);
     document.getElementById("attachText").addEventListener("click", attachTextArtifact);
@@ -2260,6 +2450,10 @@ export class HumanAuthRelayServer {
 </body>
 </html>`;
   }
+
+  // =========================================================================
+  // HTTP Request Router
+  // =========================================================================
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const method = String(req.method ?? "GET").toUpperCase();
@@ -2375,6 +2569,83 @@ export class HumanAuthRelayServer {
       return;
     }
 
+    const sseMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/events$/);
+    if (method === "GET" && sseMatch) {
+      const requestId = decodeURIComponent(sseMatch[1]);
+      const record = this.records.get(requestId);
+      if (!record) {
+        sendJson(res, 404, { error: "Request not found." });
+        return;
+      }
+      this.updateTimeoutStatus(record);
+      const pollToken = String(requestUrl.searchParams.get("pollToken") ?? "");
+      if (!pollToken || hashToken(pollToken) !== record.pollTokenHash) {
+        sendJson(res, 403, { error: "Invalid poll token." });
+        return;
+      }
+      if (record.status !== "pending") {
+        // Already resolved — send the decision immediately and close.
+        res.statusCode = 200;
+        res.setHeader("content-type", "text/event-stream");
+        res.setHeader("cache-control", "no-cache");
+        res.setHeader("connection", "keep-alive");
+        const payload = JSON.stringify({
+          requestId: record.requestId,
+          status: record.status,
+          note: record.note || undefined,
+          decidedAt: record.decidedAt || undefined,
+          artifact: record.artifact,
+        });
+        res.write(`event: decision\ndata: ${payload}\n\n`);
+        res.end();
+        return;
+      }
+
+      res.statusCode = 200;
+      res.setHeader("content-type", "text/event-stream");
+      res.setHeader("cache-control", "no-cache");
+      res.setHeader("connection", "keep-alive");
+      res.setHeader("x-accel-buffering", "no");
+      res.flushHeaders?.();
+      res.write(`: connected\n\n`);
+
+      let clientSet = this.sseClients.get(requestId);
+      if (!clientSet) {
+        clientSet = new Set();
+        this.sseClients.set(requestId, clientSet);
+      }
+      clientSet.add(res);
+
+      const keepAliveTimer = setInterval(() => {
+        try {
+          // Proactively check timeout on each keepalive tick.
+          this.updateTimeoutStatus(record);
+          if (record.status !== "pending") {
+            this.notifySseClients(requestId, record);
+            return;
+          }
+          res.write(`: keepalive\n\n`);
+        } catch {
+          clearInterval(keepAliveTimer);
+        }
+      }, 15_000);
+
+      const cleanup = (): void => {
+        clearInterval(keepAliveTimer);
+        const set = this.sseClients.get(requestId);
+        if (set) {
+          set.delete(res);
+          if (set.size === 0) {
+            this.sseClients.delete(requestId);
+          }
+        }
+      };
+      req.on("close", cleanup);
+      res.on("close", cleanup);
+      res.on("error", cleanup);
+      return;
+    }
+
     const resolveMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/resolve$/);
     if (method === "POST" && resolveMatch) {
       const requestId = decodeURIComponent(resolveMatch[1]);
@@ -2391,7 +2662,7 @@ export class HumanAuthRelayServer {
 
       let body: unknown;
       try {
-        body = await readJsonBody(req, 7_000_000);
+        body = await readJsonBody(req, 22_000_000);
       } catch (error) {
         sendJson(res, 400, { error: (error as Error).message });
         return;
@@ -2415,7 +2686,7 @@ export class HumanAuthRelayServer {
         isObject(body.artifact) &&
         typeof body.artifact.mimeType === "string" &&
         typeof body.artifact.base64 === "string" &&
-        body.artifact.base64.length <= 6_000_000
+        body.artifact.base64.length <= 20_000_000
       ) {
         artifact = {
           mimeType: body.artifact.mimeType,
@@ -2437,6 +2708,7 @@ export class HumanAuthRelayServer {
       record.artifact = approved ? artifact : null;
 
       this.persistState();
+      this.notifySseClients(record.requestId, record);
       sendJson(res, 200, {
         requestId: record.requestId,
         status: record.status,

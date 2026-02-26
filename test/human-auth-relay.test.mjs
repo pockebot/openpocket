@@ -245,6 +245,7 @@ test("HumanAuthRelayServer merges uiTemplate and enforces artifact on approve", 
           style: {
             brandColor: "#228be6",
             backgroundCss: "linear-gradient(145deg, #f7fbff 0%, #eef6ff 100%)",
+            fontFamily: "Poppins, serif",
           },
         },
       }),
@@ -266,6 +267,9 @@ test("HumanAuthRelayServer merges uiTemplate and enforces artifact on approve", 
     assert.match(portalHtml, /custom middle script loaded/);
     assert.match(portalHtml, /Approval script timed out\. Please retry\./);
     assert.match(portalHtml, /Attach data below, then tap Approve and Continue again\./);
+    assert.match(portalHtml, /This request requires a photo from your Human Phone\./);
+    assert.match(portalHtml, /font-family:\s*"Avenir Next", "Segoe UI", sans-serif;/);
+    assert.doesNotMatch(portalHtml, /Poppins, serif/);
 
     const resolveWithoutArtifact = await fetch(`${base}/v1/human-auth/requests/req-template-1/resolve`, {
       method: "POST",
