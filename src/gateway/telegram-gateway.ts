@@ -1246,6 +1246,15 @@ export class TelegramGateway {
     return before - remain.length;
   }
 
+  private clearAllQueuedTasks(): number {
+    if (this.pendingChatTasks.length === 0) {
+      return 0;
+    }
+    const count = this.pendingChatTasks.length;
+    this.pendingChatTasks.splice(0, this.pendingChatTasks.length);
+    return count;
+  }
+
   private async drainQueuedChatTasks(): Promise<void> {
     if (this.drainingChatTaskQueue) {
       return;
@@ -1406,6 +1415,12 @@ export class TelegramGateway {
       return;
     }
     this.running = false;
+    this.agent.stopCurrentTask();
+    const droppedQueued = this.clearAllQueuedTasks();
+    const cancelledWaits = this.cancelAllPendingUserWaits("Task stopped by gateway shutdown.");
+    if (droppedQueued > 0 || cancelledWaits > 0) {
+      this.log(`stop cleanup queued_cleared=${droppedQueued} pending_cancelled=${cancelledWaits}`);
+    }
     this.bot.removeListener("message", this.handleMessage);
     this.bot.removeListener("polling_error", this.handlePollingError);
     this.heartbeat.stop();
@@ -1550,6 +1565,104 @@ export class TelegramGateway {
 
   private isCodeBasedHumanAuthCapability(capability: string): boolean {
     return capability === "sms" || capability === "2fa";
+  }
+
+  private isStopIntentText(text: string): boolean {
+    const normalized = String(text || "").trim();
+    if (!normalized) {
+      return false;
+    }
+    if (/^\/stop(?:@\w+)?$/i.test(normalized)) {
+      return true;
+    }
+    if (normalized.startsWith("/")) {
+      return false;
+    }
+    if (/\b(stop|cancel|abort|terminate|halt)\b/i.test(normalized)) {
+      return true;
+    }
+    if (/(停止|终止|取消(?:当前)?任务|停一下|停下|结束当前任务)/.test(normalized)) {
+      return true;
+    }
+    return false;
+  }
+
+  private hasPendingHumanAuthForChat(chatId: number): boolean {
+    return this.humanAuth.listPending().some((item) => item.chatId === chatId);
+  }
+
+  private hasStopTargetForChat(chatId: number): boolean {
+    return this.agent.isBusy()
+      || this.pendingUserDecisions.has(chatId)
+      || this.pendingUserInputs.has(chatId)
+      || this.pendingChatTasks.some((item) => item.chatId === chatId)
+      || this.hasPendingHumanAuthForChat(chatId);
+  }
+
+  private cancelPendingUserDecisionWait(chatId: number, reason: string): boolean {
+    const pending = this.pendingUserDecisions.get(chatId);
+    if (!pending) {
+      return false;
+    }
+    clearTimeout(pending.timeout);
+    this.pendingUserDecisions.delete(chatId);
+    try {
+      pending.reject(new Error(reason));
+    } catch {
+      // Ignore rejection handler failures during forced stop.
+    }
+    return true;
+  }
+
+  private cancelPendingUserInputWait(chatId: number, reason: string): boolean {
+    const pending = this.pendingUserInputs.get(chatId);
+    if (!pending) {
+      return false;
+    }
+    clearTimeout(pending.timeout);
+    this.pendingUserInputs.delete(chatId);
+    try {
+      pending.reject(new Error(reason));
+    } catch {
+      // Ignore rejection handler failures during forced stop.
+    }
+    return true;
+  }
+
+  private requestStopForChat(
+    chatId: number,
+    options?: {
+      reason?: string;
+      clearQueue?: boolean;
+    },
+  ): { accepted: boolean; cancelledWaits: number; droppedQueued: number } {
+    const reason = options?.reason ?? "Task stopped by user.";
+    const accepted = this.agent.stopCurrentTask();
+    const droppedQueued = options?.clearQueue ? this.clearQueuedTasksForChat(chatId) : 0;
+    const cancelledDecision = this.cancelPendingUserDecisionWait(chatId, reason) ? 1 : 0;
+    const cancelledInput = this.cancelPendingUserInputWait(chatId, reason) ? 1 : 0;
+    const cancelledHumanAuth = this.humanAuth.cancelPendingForChat(chatId, reason);
+    return {
+      accepted,
+      cancelledWaits: cancelledDecision + cancelledInput + cancelledHumanAuth,
+      droppedQueued,
+    };
+  }
+
+  private cancelAllPendingUserWaits(reason: string): number {
+    let cancelled = 0;
+    for (const chatId of [...this.pendingUserDecisions.keys()]) {
+      if (this.cancelPendingUserDecisionWait(chatId, reason)) {
+        cancelled += 1;
+      }
+    }
+    for (const chatId of [...this.pendingUserInputs.keys()]) {
+      if (this.cancelPendingUserInputWait(chatId, reason)) {
+        cancelled += 1;
+      }
+    }
+    cancelled += this.humanAuth.cancelAllPending(reason);
+    return cancelled;
   }
 
   private normalizeOtpCode(text: string): string | null {
@@ -1802,6 +1915,18 @@ export class TelegramGateway {
       return;
     }
 
+    if (this.isStopIntentText(text) && this.hasStopTargetForChat(chatId)) {
+      const stop = this.requestStopForChat(chatId, {
+        reason: "Task stopped by user.",
+        clearQueue: true,
+      });
+      if (stop.droppedQueued > 0) {
+        this.log(`cleared queued tasks chat=${chatId} count=${stop.droppedQueued} reason=stop-intent`);
+      }
+      await this.bot.sendMessage(chatId, "Stop requested.");
+      return;
+    }
+
     if (!text.startsWith("/") && await this.tryResolvePendingUserInput(chatId, text)) {
       return;
     }
@@ -2035,9 +2160,14 @@ export class TelegramGateway {
       if (droppedQueued > 0) {
         this.log(`cleared queued tasks chat=${chatId} count=${droppedQueued} reason=/reset`);
       }
-      const accepted = this.agent.stopCurrentTask();
+      const stop = this.requestStopForChat(chatId, {
+        reason: "Task stopped by user.",
+      });
+      if (stop.cancelledWaits > 0) {
+        this.log(`cleared pending waits chat=${chatId} count=${stop.cancelledWaits} reason=/reset`);
+      }
       const locale = this.inferLocale(message);
-      const resetSummary = accepted
+      const resetSummary = (stop.accepted || stop.cancelledWaits > 0)
         ? "Conversation memory cleared. Stop requested for the running task."
         : "Conversation memory cleared. No running task to stop.";
       await this.bot.sendMessage(chatId, resetSummary);
@@ -2050,9 +2180,16 @@ export class TelegramGateway {
       return;
     }
 
-    if (text === "/stop") {
-      const accepted = this.agent.stopCurrentTask();
-      await this.bot.sendMessage(chatId, accepted ? "Stop requested." : "No running task.");
+    if (/^\/stop(?:@\w+)?$/i.test(text)) {
+      const stop = this.requestStopForChat(chatId, {
+        reason: "Task stopped by user.",
+        clearQueue: true,
+      });
+      if (stop.droppedQueued > 0) {
+        this.log(`cleared queued tasks chat=${chatId} count=${stop.droppedQueued} reason=/stop`);
+      }
+      const stoppedAnything = stop.accepted || stop.cancelledWaits > 0 || stop.droppedQueued > 0;
+      await this.bot.sendMessage(chatId, stoppedAnything ? "Stop requested." : "No running task.");
       return;
     }
 
