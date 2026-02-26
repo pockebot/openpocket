@@ -823,6 +823,77 @@ test("AgentRuntime escalates capability probe after tap_element action", async (
   assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
 });
 
+test("AgentRuntime reuses approved capability probe auth within one task", async () => {
+  const authRequests = [];
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-capability-probe-artifact-"));
+  const artifactPath = path.join(artifactDir, "delegated-camera.json");
+  fs.writeFileSync(artifactPath, JSON.stringify({
+    kind: "text",
+    value: "camera delegated",
+  }), "utf-8");
+
+  let runtime;
+  const scriptedSteps = [
+    { thought: "open camera entry first time", action: { type: "tap", x: 360, y: 720 } },
+    () => {
+      runtime.capabilityProbeAuthCooldownByKey.set("camera|com.slack", 0);
+      return { thought: "open camera entry second time", action: { type: "tap", x: 362, y: 722 } };
+    },
+    { thought: "done", action: { type: "finish", message: "camera probe reuse done" } },
+  ];
+  runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps,
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.Slack",
+      screenshotBase64: Buffer.from("slack-camera-repeat").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "camera",
+      phase: "requested",
+      packageName: "com.Slack",
+      source: "activity_log",
+      observedAt: new Date().toISOString(),
+      confidence: 0.95,
+      evidence: "camera intent start",
+    },
+  ]);
+
+  const result = await runtime.runTask(
+    "probe reuse test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-probe-camera-reuse",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /human_auth_probe skipped=reused capability=camera pkg=com\.Slack/i);
+});
+
 test("AgentRuntime escalates permission dialog capability via activity dump fallback", async () => {
   const authRequests = [];
   const actions = [];

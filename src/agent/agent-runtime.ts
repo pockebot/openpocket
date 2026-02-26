@@ -191,6 +191,12 @@ type DelegationApplyResult = {
   };
 };
 
+type CapabilityProbeApprovalRecord = {
+  decision: HumanAuthDecision;
+  delegationMessage: string | null;
+  templateHint: string | null;
+};
+
 type PermissionDialogNode = {
   text: string;
   contentDesc: string;
@@ -287,6 +293,7 @@ interface PhoneAgentRunContext {
   lastScreenshotStartMs: number;
   lastScreenshotEndMs: number;
   lastModelInferenceStartMs: number;
+  capabilityProbeApprovalByKey: Map<string, CapabilityProbeApprovalRecord>;
 }
 
 type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {
@@ -1985,13 +1992,20 @@ export class AgentRuntime {
         this.capabilityProbeAuthCooldownByKey.delete(key);
       }
     }
-    const key = `${capability}|${String(packageName || "").toLowerCase()}`;
+    const key = this.buildCapabilityProbeAuthKey(capability, packageName);
     const last = this.capabilityProbeAuthCooldownByKey.get(key) ?? 0;
     if (nowMs - last < CAPABILITY_PROBE_HUMAN_AUTH_COOLDOWN_MS) {
       return true;
     }
     this.capabilityProbeAuthCooldownByKey.set(key, nowMs);
     return false;
+  }
+
+  private buildCapabilityProbeAuthKey(
+    capability: HumanAuthCapability,
+    packageName: string,
+  ): string {
+    return `${capability}|${String(packageName || "").toLowerCase()}`;
   }
 
   private shouldRollbackLocalSensitiveSurface(
@@ -2036,6 +2050,34 @@ export class AgentRuntime {
     }
   }
 
+  private async prepareCapabilityProbePreGuardLines(
+    event: CapabilityProbeEvent,
+    capability: HumanAuthCapability,
+    currentApp: string,
+  ): Promise<string[]> {
+    const preGuardLines: string[] = [];
+    if (this.isPermissionDialogApp(currentApp)) {
+      const guardDecision: HumanAuthDecision = {
+        requestId: "capability-probe-local-permission-guard",
+        approved: false,
+        status: "rejected",
+        message: "Reject local permission dialog before delegated human auth.",
+        decidedAt: nowIso(),
+        artifactPath: null,
+      };
+      const localGuard = await this.applyPermissionDialogDecision(capability, guardDecision, currentApp, "human_auth");
+      if (localGuard?.message) {
+        preGuardLines.push(`local_permission_guard=${localGuard.message}`);
+      }
+      return preGuardLines;
+    }
+    const rollbackLine = await this.rollbackLocalSensitiveSurface(event, currentApp);
+    if (rollbackLine) {
+      preGuardLines.push(rollbackLine);
+    }
+    return preGuardLines;
+  }
+
   private async maybeEscalateCapabilityProbeToHumanAuth(
     events: CapabilityProbeEvent[],
     ctx: PhoneAgentRunContext,
@@ -2053,6 +2095,18 @@ export class AgentRuntime {
     if (!capability) {
       return [];
     }
+    const authKey = this.buildCapabilityProbeAuthKey(capability, event.packageName);
+    const cachedApproval = ctx.capabilityProbeApprovalByKey.get(authKey);
+    if (cachedApproval?.decision?.approved && cachedApproval.decision.artifactPath) {
+      const preGuardLines = await this.prepareCapabilityProbePreGuardLines(event, capability, currentApp);
+      return [
+        ...preGuardLines,
+        `human_auth_probe skipped=reused capability=${capability} pkg=${event.packageName}`,
+        `human_artifact=${cachedApproval.decision.artifactPath}`,
+        cachedApproval.delegationMessage ? `delegation=${cachedApproval.delegationMessage}` : "",
+        cachedApproval.templateHint ? `delegation_template=${cachedApproval.templateHint}` : "",
+      ].filter(Boolean);
+    }
 
     if (this.shouldThrottleCapabilityProbeHumanAuth(capability, event.packageName)) {
       return [
@@ -2068,26 +2122,7 @@ export class AgentRuntime {
 
     const timeoutCapSec = Math.max(30, Math.round(this.config.humanAuth.requestTimeoutSec));
     const timeoutSec = Math.min(timeoutCapSec, 180);
-    const preGuardLines: string[] = [];
-    if (this.isPermissionDialogApp(currentApp)) {
-      const guardDecision: HumanAuthDecision = {
-        requestId: "capability-probe-local-permission-guard",
-        approved: false,
-        status: "rejected",
-        message: "Reject local permission dialog before delegated human auth.",
-        decidedAt: nowIso(),
-        artifactPath: null,
-      };
-      const localGuard = await this.applyPermissionDialogDecision(capability, guardDecision, currentApp, "human_auth");
-      if (localGuard?.message) {
-        preGuardLines.push(`local_permission_guard=${localGuard.message}`);
-      }
-    } else {
-      const rollbackLine = await this.rollbackLocalSensitiveSurface(event, currentApp);
-      if (rollbackLine) {
-        preGuardLines.push(rollbackLine);
-      }
-    }
+    const preGuardLines = await this.prepareCapabilityProbePreGuardLines(event, capability, currentApp);
 
     let decision: HumanAuthDecision;
     try {
@@ -2116,6 +2151,13 @@ export class AgentRuntime {
     }
 
     const delegation = await this.applyHumanDelegation(capability, decision, currentApp);
+    if (decision.approved && decision.artifactPath) {
+      ctx.capabilityProbeApprovalByKey.set(authKey, {
+        decision,
+        delegationMessage: delegation?.message ?? null,
+        templateHint: delegation?.templateHint ?? null,
+      });
+    }
     const lines = [
       ...preGuardLines,
       `human_auth_probe capability=${capability} status=${decision.status} pkg=${event.packageName}`,
