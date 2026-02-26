@@ -53,6 +53,16 @@ test("HumanAuthRelayServer create, resolve, and poll lifecycle", async () => {
     const openToken = openUrl.searchParams.get("token");
     assert.equal(Boolean(openToken), true);
 
+    const portalRes = await fetch(
+      `${base}/human-auth/req-test-1?token=${encodeURIComponent(String(openToken || ""))}`,
+    );
+    assert.equal(portalRes.status, 200);
+    const portalHtml = await portalRes.text();
+    assert.match(portalHtml, /Camera Preview \(Human Phone\)/);
+    assert.match(portalHtml, /Take Photo & Continue/);
+    assert.match(portalHtml, /Upload From Album/);
+    assert.match(portalHtml, /Requesting camera access on your Human Phone/);
+
     const pollPending = await fetch(
       `${base}/v1/human-auth/requests/req-test-1?pollToken=${encodeURIComponent(created.pollToken)}`,
     );

@@ -961,6 +961,40 @@ export class HumanAuthRelayServer {
       color: #2d3136;
       border-color: #d9dfe8;
     }
+    .cameraPrimarySection {
+      margin-top: 12px;
+      border: 1px solid #f2c792;
+      border-radius: 14px;
+      padding: 12px;
+      background: linear-gradient(160deg, rgba(255, 138, 0, 0.08), rgba(255, 255, 255, 0.92));
+    }
+    .cameraPrimarySection h2 {
+      margin-bottom: 4px;
+    }
+    .cameraPrimaryHint {
+      margin: 0;
+      font-size: 13px;
+      color: #6a5132;
+      line-height: 1.45;
+    }
+    #cameraDelegation.cameraPrimaryMode .actions {
+      margin-top: 12px;
+    }
+    #cameraDelegation.cameraPrimaryMode #snapCam {
+      background: var(--op-brand);
+      color: #121212;
+      border-color: rgba(255, 138, 0, 0.6);
+    }
+    #cameraDelegation.cameraPrimaryMode #pickPhoto {
+      background: #fff;
+      color: #1f2937;
+      border-color: #cdd5df;
+    }
+    #cameraDelegation.cameraPrimaryMode #startCam {
+      background: #f3f4f6;
+      color: #374151;
+      border-color: #d1d5db;
+    }
     .status {
       margin-top: 10px;
       font-size: 14px;
@@ -1137,6 +1171,20 @@ export class HumanAuthRelayServer {
       margin-top: 10px;
       background: #0d1117;
     }
+    #video {
+      min-height: 220px;
+      object-fit: cover;
+    }
+    .cameraPlaceholder {
+      margin-top: 10px;
+      border: 1px dashed #d8dee7;
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 13px;
+      color: #5f6368;
+      background: #fafbfc;
+      text-align: center;
+    }
     details.context {
       margin-top: 14px;
       border-top: 1px solid var(--op-line);
@@ -1224,6 +1272,14 @@ export class HumanAuthRelayServer {
         <div id="agentMiddleMount">${middleHtmlEscaped}</div>
       </div>
 
+      <div class="cameraPrimarySection hidden" id="cameraPrimarySection">
+        <h2>Camera Preview (Human Phone)</h2>
+        <p class="cameraPrimaryHint" id="cameraPrimaryHint">
+          Allow camera access in this browser. After taking a photo, OpenPocket will continue automatically.
+        </p>
+        <div id="cameraPrimaryMount"></div>
+      </div>
+
       <div class="section" id="decisionSection">
         <div id="decisionMountDefault">
           <div id="decisionBlock">
@@ -1292,17 +1348,24 @@ export class HumanAuthRelayServer {
           </div>
         </div>
 
-        <div id="cameraDelegation">
-          <div class="actions">
-            <button id="startCam" type="button">Enable Camera</button>
-            <button id="snapCam" type="button">Capture Snapshot</button>
-            <button id="pickPhoto" type="button">Capture / Upload Photo</button>
+        <div id="cameraDelegationSlot">
+          <div id="cameraDelegation">
+            <video id="video" autoplay playsinline hidden></video>
+            <canvas id="canvas" hidden></canvas>
+            <img id="photoPreview" alt="Captured preview" hidden />
+            <div class="cameraPlaceholder" id="cameraPlaceholder">
+              Camera preview will appear here after permission is granted.
+            </div>
+            <div class="actions">
+              <button id="snapCam" type="button">Take Photo & Continue</button>
+              <button id="pickPhoto" type="button">Upload From Album</button>
+              <button id="startCam" type="button">Retry Camera</button>
+            </div>
+            <div class="muted" id="cameraHelpText">
+              Use your Human Phone camera for this step. After photo attachment, authorization can continue.
+            </div>
+            <input id="photoInput" type="file" accept="image/*" hidden />
           </div>
-          <div class="muted">Camera attachment is optional. You can approve/reject without photo.</div>
-          <video id="video" autoplay playsinline hidden></video>
-          <canvas id="canvas" hidden></canvas>
-          <img id="photoPreview" alt="Captured preview" hidden />
-          <input id="photoInput" type="file" accept="image/*" multiple hidden />
         </div>
 
         <div id="audioDelegation" class="hidden">
@@ -1357,6 +1420,16 @@ export class HumanAuthRelayServer {
     const dynamicFormEl = document.getElementById("dynamicForm");
     const agentMiddleSectionEl = document.getElementById("agentMiddleSection");
     const agentMiddleMountEl = document.getElementById("agentMiddleMount");
+    const cameraPrimarySectionEl = document.getElementById("cameraPrimarySection");
+    const cameraPrimaryHintEl = document.getElementById("cameraPrimaryHint");
+    const cameraPrimaryMountEl = document.getElementById("cameraPrimaryMount");
+    const cameraDelegationSlotEl = document.getElementById("cameraDelegationSlot");
+    const cameraDelegationEl = document.getElementById("cameraDelegation");
+    const cameraPlaceholderEl = document.getElementById("cameraPlaceholder");
+    const cameraHelpTextEl = document.getElementById("cameraHelpText");
+    const startCamBtn = document.getElementById("startCam");
+    const snapCamBtn = document.getElementById("snapCam");
+    const pickPhotoBtn = document.getElementById("pickPhoto");
     const videoEl = document.getElementById("video");
     const canvasEl = document.getElementById("canvas");
     const photoInputEl = document.getElementById("photoInput");
@@ -1382,6 +1455,7 @@ export class HumanAuthRelayServer {
     let takeoverPollingTimer = null;
     let takeoverRunning = false;
     let decisionInFlight = false;
+    let cameraAutoBootstrapTriggered = false;
     const dynamicFieldRegistry = new Map();
     const takeoverControlIds = [
       "takeoverStop",
@@ -1429,6 +1503,45 @@ export class HumanAuthRelayServer {
         behavior: "smooth",
         block: "center",
       });
+    }
+
+    function isCameraPrimaryFlowEnabled() {
+      return capability === "camera" && Boolean(uiTemplate.allowPhotoAttachment);
+    }
+
+    function focusCameraPrimarySection() {
+      if (!cameraPrimarySectionEl || typeof cameraPrimarySectionEl.scrollIntoView !== "function") {
+        return;
+      }
+      cameraPrimarySectionEl.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+
+    function mountCameraDelegation(primaryMode) {
+      if (!cameraDelegationEl) {
+        return;
+      }
+      const target = primaryMode ? cameraPrimaryMountEl : cameraDelegationSlotEl;
+      if (target && cameraDelegationEl.parentElement !== target) {
+        target.appendChild(cameraDelegationEl);
+      }
+      cameraDelegationEl.classList.toggle("cameraPrimaryMode", Boolean(primaryMode));
+    }
+
+    function setCameraPlaceholder(message) {
+      if (!cameraPlaceholderEl) {
+        return;
+      }
+      cameraPlaceholderEl.textContent = String(message || "");
+      cameraPlaceholderEl.classList.toggle("hidden", !message);
+    }
+
+    function setCameraCaptureReady(ready) {
+      if (snapCamBtn && "disabled" in snapCamBtn) {
+        snapCamBtn.disabled = !ready;
+      }
     }
 
     function show(id, visible) {
@@ -1638,25 +1751,74 @@ export class HumanAuthRelayServer {
         agentMiddleMountEl.innerHTML = String(uiTemplate.middleHtml || "");
       }
 
+      const useCameraPrimaryFlow = isCameraPrimaryFlowEnabled();
+      const allowStandaloneFileDelegation = Boolean(uiTemplate.allowFileAttachment) && !useCameraPrimaryFlow;
+      mountCameraDelegation(useCameraPrimaryFlow);
+      show("cameraPrimarySection", useCameraPrimaryFlow);
       const showDelegatedData = Boolean(
         uiTemplate.allowTextAttachment
         || uiTemplate.allowLocationAttachment
-        || uiTemplate.allowPhotoAttachment
         || uiTemplate.allowAudioAttachment
-        || uiTemplate.allowFileAttachment,
+        || allowStandaloneFileDelegation
+        || (uiTemplate.allowPhotoAttachment && !useCameraPrimaryFlow),
       );
       show("delegatedDataSection", showDelegatedData);
       show("textDelegation", Boolean(uiTemplate.allowTextAttachment));
       show("geoDelegation", Boolean(uiTemplate.allowLocationAttachment));
       show("cameraDelegation", Boolean(uiTemplate.allowPhotoAttachment));
       show("audioDelegation", Boolean(uiTemplate.allowAudioAttachment));
-      show("fileDelegation", Boolean(uiTemplate.allowFileAttachment));
+      show("fileDelegation", allowStandaloneFileDelegation);
 
       resultTextEl.placeholder = uiTemplate.allowTextAttachment
         ? "Attach short text payload"
         : "Not required for this authorization";
       audioInputEl.accept = uiTemplate.fileAccept || "audio/*";
       fileInputEl.accept = uiTemplate.fileAccept || "*/*";
+      photoInputEl.multiple = !useCameraPrimaryFlow;
+      if (snapCamBtn && "disabled" in snapCamBtn) {
+        snapCamBtn.disabled = true;
+      }
+
+      if (useCameraPrimaryFlow) {
+        if (cameraPrimaryHintEl) {
+          cameraPrimaryHintEl.textContent =
+            "Allow camera access in this browser. Tap Take Photo & Continue, or upload from album.";
+        }
+        if (cameraHelpTextEl) {
+          cameraHelpTextEl.textContent =
+            "After a photo is attached, approval will auto-submit and this page will close.";
+        }
+        if (startCamBtn) {
+          startCamBtn.textContent = "Retry Camera";
+        }
+        if (snapCamBtn) {
+          snapCamBtn.textContent = "Take Photo & Continue";
+        }
+        if (pickPhotoBtn) {
+          pickPhotoBtn.textContent = "Upload From Album";
+        }
+        if (!cameraAutoBootstrapTriggered) {
+          cameraAutoBootstrapTriggered = true;
+          setCameraPlaceholder("Requesting camera permission...");
+          setStatus("Requesting camera access on your Human Phone...", "info");
+          void startCamera();
+        }
+      } else {
+        if (cameraHelpTextEl) {
+          cameraHelpTextEl.textContent =
+            "Use your Human Phone camera for this step. After photo attachment, authorization can continue.";
+        }
+        if (startCamBtn) {
+          startCamBtn.textContent = "Enable Camera";
+        }
+        if (snapCamBtn) {
+          snapCamBtn.textContent = "Capture Snapshot";
+        }
+        if (pickPhotoBtn) {
+          pickPhotoBtn.textContent = "Capture / Upload Photo";
+        }
+        setCameraPlaceholder("Camera preview will appear here after permission is granted.");
+      }
 
       if ((uiTemplate.middleScript || "").trim()) {
         void invokeAgentScript(
@@ -1896,13 +2058,13 @@ export class HumanAuthRelayServer {
       const message = err && err.message ? String(err.message) : String(err || "unknown error");
       const lowered = (name + " " + message).toLowerCase();
       if (lowered.includes("notallowed") || lowered.includes("permission denied")) {
-        return "Camera permission denied by this browser context. In Telegram in-app browser this can happen even after Allow. Use Capture/Upload Photo or approve directly.";
+        return "Camera permission denied in this browser context. In Telegram in-app browser this can happen even after Allow. Use Upload From Album instead.";
       }
       if (lowered.includes("notfound") || lowered.includes("device not found")) {
-        return "No camera device available. Use Capture/Upload Photo or approve directly.";
+        return "No camera device available. Use Upload From Album instead.";
       }
       if (lowered.includes("notreadable") || lowered.includes("track start failed")) {
-        return "Camera is busy or blocked by another app. Close other camera apps and retry, or use Capture/Upload Photo.";
+        return "Camera is busy or blocked by another app. Close other camera apps and retry, or use Upload From Album.";
       }
       return "Failed to open camera: " + message;
     }
@@ -1967,16 +2129,57 @@ export class HumanAuthRelayServer {
       });
     }
 
+    function shouldAutoSubmitAfterPhotoAttachment() {
+      return isCameraPrimaryFlowEnabled() && Boolean(uiTemplate.requireArtifactOnApprove);
+    }
+
+    function stopCameraStream() {
+      if (!stream) {
+        return;
+      }
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+      stream = null;
+      videoEl.srcObject = null;
+    }
+
+    function queueAutoSubmitAfterPhoto() {
+      if (!shouldAutoSubmitAfterPhotoAttachment()) {
+        return;
+      }
+      setStatus("Photo attached. Continuing authorization...", "info");
+      postClientEvent("camera_auto_submit", {
+        capability,
+      });
+      setTimeout(() => {
+        void submitDecision(true);
+      }, 60);
+    }
+
     async function startCamera() {
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+        setCameraCaptureReady(false);
+        setCameraPlaceholder("Camera is not available in this browser. Use Upload From Album.");
+        setStatus("Camera is not available in this browser. Use Upload From Album.", "error");
+        return false;
+      }
       try {
+        stopCameraStream();
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
         videoEl.srcObject = stream;
+        canvasEl.hidden = true;
         videoEl.hidden = false;
         photoPreviewEl.hidden = true;
-        setStatus("Camera enabled. Capture if needed, then approve.", "info");
+        setCameraPlaceholder("");
+        setCameraCaptureReady(true);
+        setStatus("Camera is ready. Tap Take Photo & Continue.", "info");
         return true;
       } catch (err) {
-        setStatus(humanErrorMessage(err), "error");
+        const message = humanErrorMessage(err);
+        setCameraCaptureReady(false);
+        setCameraPlaceholder(message);
+        setStatus(message, "error");
         return false;
       }
     }
@@ -1993,9 +2196,15 @@ export class HumanAuthRelayServer {
       const dataUrl = canvasEl.toDataURL("image/jpeg", 0.88);
       const base64 = dataUrl.split(",")[1] || "";
       artifact = { mimeType: "image/jpeg", base64 };
-      canvasEl.hidden = false;
-      photoPreviewEl.hidden = true;
+      photoPreviewEl.src = dataUrl;
+      photoPreviewEl.hidden = false;
+      canvasEl.hidden = true;
+      videoEl.hidden = true;
+      setCameraPlaceholder("Captured preview ready.");
+      setCameraCaptureReady(false);
+      stopCameraStream();
       setStatus("Snapshot captured and attached.", "success");
+      queueAutoSubmitAfterPhoto();
     }
 
     async function pickPhoto() {
@@ -2018,7 +2227,11 @@ export class HumanAuthRelayServer {
           videoEl.hidden = true;
           photoPreviewEl.src = dataUrl;
           photoPreviewEl.hidden = false;
+          setCameraPlaceholder("Selected photo ready.");
+          setCameraCaptureReady(false);
+          stopCameraStream();
           setStatus("Photo attached.", "success");
+          queueAutoSubmitAfterPhoto();
         } else {
           var photoPayloads = [];
           for (var i = 0; i < files.length; i++) {
@@ -2040,7 +2253,11 @@ export class HumanAuthRelayServer {
           canvasEl.hidden = true;
           videoEl.hidden = true;
           photoPreviewEl.hidden = true;
+          setCameraPlaceholder(photoPayloads.length + " photos attached.");
+          setCameraCaptureReady(false);
+          stopCameraStream();
           setStatus(photoPayloads.length + " photos attached.", "success");
+          queueAutoSubmitAfterPhoto();
         }
       } catch (err) {
         setStatus("Failed to attach photo: " + (err && err.message ? err.message : String(err)), "error");
@@ -2187,8 +2404,17 @@ export class HumanAuthRelayServer {
     }
 
     function promptRequiredArtifactCollection() {
-      focusDelegatedDataSection();
       if (uiTemplate.allowPhotoAttachment) {
+        if (isCameraPrimaryFlowEnabled()) {
+          focusCameraPrimarySection();
+          setStatus(
+            "This request requires a photo from your Human Phone. Take a photo or upload from album to continue.",
+            "info",
+          );
+          void startCamera();
+          return true;
+        }
+        focusDelegatedDataSection();
         setStatus(
           "This request requires a photo from your Human Phone. Opening camera now; if unavailable, use Capture / Upload Photo and then tap Approve and Continue again.",
           "info",
@@ -2200,6 +2426,7 @@ export class HumanAuthRelayServer {
         });
         return true;
       }
+      focusDelegatedDataSection();
       if (uiTemplate.allowAudioAttachment) {
         setStatus(
           "This request requires audio from your Human Phone. Upload an audio file (or record), then tap Approve and Continue again.",
@@ -2398,11 +2625,7 @@ export class HumanAuthRelayServer {
         }
         postClientEvent("resolve_ok", { status: String(body.status || "") });
         setStatus(approved ? "Approved. Closing..." : "Rejected. Closing...", "success");
-        if (stream) {
-          for (const track of stream.getTracks()) {
-            track.stop();
-          }
-        }
+        stopCameraStream();
         stopTakeoverPolling();
         takeoverRunning = false;
         takeoverStreamEl.removeAttribute("src");
