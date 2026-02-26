@@ -1974,8 +1974,10 @@ export class HumanAuthRelayServer {
         videoEl.hidden = false;
         photoPreviewEl.hidden = true;
         setStatus("Camera enabled. Capture if needed, then approve.", "info");
+        return true;
       } catch (err) {
         setStatus(humanErrorMessage(err), "error");
+        return false;
       }
     }
 
@@ -2188,10 +2190,14 @@ export class HumanAuthRelayServer {
       focusDelegatedDataSection();
       if (uiTemplate.allowPhotoAttachment) {
         setStatus(
-          "This request requires a photo from your Human Phone. Use Capture / Upload Photo, then tap Approve and Continue again.",
+          "This request requires a photo from your Human Phone. Opening camera now; if unavailable, use Capture / Upload Photo and then tap Approve and Continue again.",
           "info",
         );
-        void pickPhoto();
+        void startCamera().then((opened) => {
+          if (!opened) {
+            void pickPhoto();
+          }
+        });
         return true;
       }
       if (uiTemplate.allowAudioAttachment) {

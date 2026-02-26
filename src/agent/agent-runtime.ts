@@ -1915,8 +1915,8 @@ export class AgentRuntime {
       title: `Human Auth Required: ${titleTarget}`,
       summary: `OpenPocket detected ${event.capability} activity from ${event.packageName}. Provide data from your Human Phone and approve to continue.`,
       capabilityHint: `detected=${event.capability}/${event.phase} source=${event.source}`,
-      requireArtifactOnApprove: false,
-      allowTextAttachment: true,
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
       approveLabel: "Approve and Continue",
       rejectLabel: "Reject",
     };

@@ -756,8 +756,9 @@ test("AgentRuntime escalates capability probe camera event to human auth", async
   assert.equal(result.ok, true);
   assert.equal(authRequests.length, 1);
   assert.equal(authRequests[0].capability, "camera");
-  assert.equal(authRequests[0].uiTemplate?.requireArtifactOnApprove, false);
+  assert.equal(authRequests[0].uiTemplate?.requireArtifactOnApprove, true);
   assert.equal(authRequests[0].uiTemplate?.allowPhotoAttachment, true);
+  assert.equal(authRequests[0].uiTemplate?.allowTextAttachment, false);
 
   const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
   assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
