@@ -158,6 +158,8 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
     assert.match(portalHtml, /Open Live Stream/);
     assert.match(portalHtml, /font-family:\s*"Avenir Next", "Segoe UI", sans-serif;/);
     assert.match(portalHtml, /<b>Template<\/b>human-auth-generic \(default-shell\)/);
+    assert.match(portalHtml, /new Function\("api",\s*"'use strict';/);
+    assert.doesNotMatch(portalHtml, /new Function\("api",\s*""use strict";/);
     assert.doesNotMatch(portalHtml, /fonts\.googleapis\.com\/css2\?family=Poppins/i);
 
     const snapshotRes = await fetch(

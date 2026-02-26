@@ -1611,7 +1611,7 @@ export class HumanAuthRelayServer {
         return undefined;
       }
       try {
-        const fn = new Function("api", "\"use strict\";\\n" + code);
+        const fn = new Function("api", "'use strict';\\n" + code);
         const output = fn(api);
         if (output && typeof output.then === "function") {
           return await output;
