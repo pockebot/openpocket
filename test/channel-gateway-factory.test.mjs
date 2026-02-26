@@ -86,7 +86,7 @@ test("createGateway: core lifecycle works", async () => {
   });
 });
 
-test("createGateway: router has no adapters for other channel types yet", () => {
+test("createGateway: router has no adapters for unconfigured channel types", () => {
   withTempHome("gwfactory-noadapters-", (home) => {
     const config = loadConfig();
     config.telegram.botToken = "";
@@ -100,6 +100,85 @@ test("createGateway: router has no adapters for other channel types yet", () => 
     assert.equal(router.getAdapter("signal"), null);
     assert.equal(router.getAdapter("wechat"), null);
     assert.equal(router.getAdapter("qq"), null);
+  });
+});
+
+test("createGateway: registers Discord adapter when discord config has token", () => {
+  withTempHome("gwfactory-discord-", (home) => {
+    const config = loadConfig();
+    config.telegram.botToken = "";
+    config.telegram.botTokenEnv = "";
+    config.channels = {
+      discord: {
+        token: "FAKE_DISCORD_TOKEN",
+        dmPolicy: "pairing",
+        allowFrom: [],
+        guilds: {},
+      },
+    };
+
+    const { router } = createGateway(config, { logger: () => {} });
+
+    const discordAdapter = router.getAdapter("discord");
+    assert.ok(discordAdapter, "discord adapter should be registered");
+    assert.equal(discordAdapter.channelType, "discord");
+  });
+});
+
+test("createGateway: no Discord adapter when channels.discord.enabled is false", () => {
+  withTempHome("gwfactory-discord-disabled-", (home) => {
+    const config = loadConfig();
+    config.telegram.botToken = "";
+    config.telegram.botTokenEnv = "";
+    config.channels = {
+      discord: {
+        enabled: false,
+        token: "FAKE_DISCORD_TOKEN",
+      },
+    };
+
+    const { router } = createGateway(config, { logger: () => {} });
+
+    const discordAdapter = router.getAdapter("discord");
+    assert.equal(discordAdapter, null, "discord adapter should NOT be registered when disabled");
+  });
+});
+
+test("createGateway: no Discord adapter when no discord config present", () => {
+  withTempHome("gwfactory-discord-noconfig-", (home) => {
+    const config = loadConfig();
+    config.telegram.botToken = "";
+    config.telegram.botTokenEnv = "";
+    config.channels = {};
+
+    const { router } = createGateway(config, { logger: () => {} });
+
+    assert.equal(router.getAdapter("discord"), null);
+  });
+});
+
+test("createGateway: Discord adapter resolves token from env", () => {
+  withTempHome("gwfactory-discord-env-", (home) => {
+    const config = loadConfig();
+    config.telegram.botToken = "";
+    config.telegram.botTokenEnv = "";
+    const prevEnv = process.env.TEST_DISCORD_FACTORY_TOKEN;
+    process.env.TEST_DISCORD_FACTORY_TOKEN = "env-discord-token";
+    try {
+      config.channels = {
+        discord: {
+          token: "",
+          tokenEnv: "TEST_DISCORD_FACTORY_TOKEN",
+        },
+      };
+
+      const { router } = createGateway(config, { logger: () => {} });
+      const discordAdapter = router.getAdapter("discord");
+      assert.ok(discordAdapter, "discord adapter should be registered via env token");
+    } finally {
+      if (prevEnv === undefined) delete process.env.TEST_DISCORD_FACTORY_TOKEN;
+      else process.env.TEST_DISCORD_FACTORY_TOKEN = prevEnv;
+    }
   });
 });
 

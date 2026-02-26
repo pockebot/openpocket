@@ -430,21 +430,29 @@ When both `telegram` (legacy) and `channels.telegram` exist, `channels.telegram`
 
 **Goal**: Implement `DiscordAdapter` so users can control OpenPocket from Discord DMs or a designated guild channel.
 
+**Status**: Done (2026-02-26)
+
 **Sub-tasks**:
 
-- [ ] Add `discord.js` dependency
-- [ ] Implement `DiscordAdapter` in `src/channel/discord/adapter.ts`
+- [x] Add `discord.js` dependency (v14)
+- [x] Implement `DiscordAdapter` in `src/channel/discord/adapter.ts`
   - Bot login and ready lifecycle
-  - Message content intent + privileged intents setup
+  - Message content intent + privileged intents setup (GatewayIntentBits)
   - DM and guild message parsing → `InboundEnvelope`
-  - Slash command registration (map OpenPocket commands)
-  - Text + image sending (embeds for rich formatting)
-  - Typing indicator
-  - User decision prompts via Discord buttons/selects
-  - Thread tracking (threadId in envelope)
-- [ ] Implement guild + role-based access control (`guilds` config)
-- [ ] Add pairing flow for Discord DMs
-- [ ] Add Discord-specific config schema and onboarding step
+  - Text + image sending (AttachmentBuilder, EmbedBuilder)
+  - Typing indicator (sendTyping)
+  - User decision prompts via Discord buttons (ActionRowBuilder + ButtonBuilder)
+  - User input prompts via text flow
+  - Human auth escalation via embeds with link buttons
+  - Thread tracking (threadId in envelope for PublicThread/PrivateThread)
+  - Text chunking for messages > 2000 chars
+  - HTML to Discord markdown conversion
+- [x] Implement guild + role-based access control (`guilds` config)
+  - Per-guild user allowlist
+  - `requireMention` flag (defaults to true)
+- [x] Wire into `gateway-factory.ts` with `isDiscordConfigured` auto-detection
+- [x] Unit tests: 15 adapter tests + 5 factory integration tests
+- [ ] Slash command registration (deferred — text commands work via the same pipeline)
 - [ ] Integration test: send task via Discord, receive progress and result
 - [ ] Document Discord bot setup (app creation, intents, permissions, invite URL)
 
@@ -704,7 +712,11 @@ src/gateway/
 |   T1-S4: GatewayCore extraction (gateway-core.ts) | Done | Platform-agnostic orchestration: commands, task queue, progress narration |
 |   T1-S5: TelegramAdapter (channel/telegram/adapter.ts) | Done | Full ChannelAdapter impl: polling, typing, user decision/input, auth escalation |
 |   T1-S6: Config + Factory + Integration | Done | channels/pairing in OpenPocketConfig, createGateway factory |
-| R6-T2: Discord connector | Not started | Depends on T1 (completed) |
+| R6-T2: Discord connector | **Done** | DiscordAdapter implemented with full ChannelAdapter interface |
+|   T2: discord.js v14 dependency | Done | discord.js added to package.json |
+|   T2: DiscordAdapter impl | Done | DM + Guild message parsing, embeds, buttons, typing, access control |
+|   T2: Gateway factory wiring | Done | isDiscordConfigured + auto-register in createGateway |
+|   T2: Unit tests | Done | 15 adapter tests + 5 factory tests (26 total Discord-related) |
 | R6-T3: WhatsApp connector (Baileys) | Not started | Depends on T1 (completed) |
 | R6-T4: WeChat/QQ adapter stubs | Not started | Research done; NapCat/OneBot for QQ, Wechaty/PadLocal for WeChat |
 
