@@ -1662,6 +1662,86 @@ test("AgentRuntime applies delegated location artifact after human auth approval
   }
 });
 
+test("AgentRuntime injects delegated location on physical target via cmd location", async () => {
+  const emulatorCommands = [];
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-geo-physical-${Date.now()}.json`);
+  fs.writeFileSync(
+    artifactFile,
+    JSON.stringify({
+      kind: "geo",
+      lat: 40.7128,
+      lon: -74.006,
+      capability: "location",
+    }),
+    "utf-8",
+  );
+
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need real location",
+        action: {
+          type: "request_human_auth",
+          capability: "location",
+          instruction: "Share current location.",
+          timeoutSec: 90,
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after delegated location" } },
+    ],
+  });
+
+  runtime.config.target.type = "physical-phone";
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "physical-serial-1",
+    executeAction: async () => "ok",
+  };
+  runtime.emulator = {
+    runAdb: (args) => {
+      emulatorCommands.push(args);
+      if (Array.isArray(args) && args.includes("emu") && args.includes("geo")) {
+        throw new Error("geo fix is not available on real devices");
+      }
+      return "ok";
+    },
+  };
+
+  try {
+    const result = await runtime.runTask(
+      "delegated geo physical test",
+      undefined,
+      undefined,
+      async () => ({
+        requestId: "req-geo-physical",
+        approved: true,
+        status: "approved",
+        message: "Location shared",
+        decidedAt: new Date().toISOString(),
+        artifactPath: artifactFile,
+      }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(
+      emulatorCommands.some(
+        (args) =>
+          Array.isArray(args)
+          && args.includes("cmd")
+          && args.includes("location")
+          && args.includes("set-test-provider-location"),
+      ),
+      true,
+    );
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /delegated location injected .*cmd_location/i);
+  } finally {
+    fs.rmSync(artifactFile, { force: true });
+  }
+});
+
 test("AgentRuntime appends gallery template hint after delegated image artifact", async () => {
   const emulatorCommands = [];
   const observedUserPrompts = [];

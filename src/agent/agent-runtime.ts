@@ -878,23 +878,234 @@ export class AgentRuntime {
     this.delegatedOauthCredentials = null;
   }
 
+  private runAdbForLocationStrategy(
+    deviceId: string,
+    args: string[],
+    timeoutMs = 12_000,
+  ): { ok: true; output: string } | { ok: false; error: string } {
+    try {
+      return {
+        ok: true,
+        output: this.emulator.runAdb(["-s", deviceId, ...args], timeoutMs),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  private extractMockLocationUid(errorText: string): string | null {
+    const match = String(errorText || "").match(/\bfrom\s+(\d+)\b/i);
+    if (!match?.[1]) {
+      return null;
+    }
+    return match[1];
+  }
+
+  private tryInjectLocationViaCmdLocation(
+    deviceId: string,
+    lat: number,
+    lon: number,
+  ): { ok: true; detail: string } | { ok: false; detail: string } {
+    this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "cmd", "location", "set-location-enabled", "true"],
+      8_000,
+    );
+    this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "appops", "set", "shell", "android:mock_location", "allow"],
+      8_000,
+    );
+
+    const locationArg = `${lat},${lon}`;
+    const providers = ["gps", "network", "fused"];
+    for (const provider of providers) {
+      const addProvider = this.runAdbForLocationStrategy(
+        deviceId,
+        ["shell", "cmd", "location", "providers", "add-test-provider", provider],
+        8_000,
+      );
+      if (!addProvider.ok) {
+        const uid = this.extractMockLocationUid(addProvider.error);
+        if (uid) {
+          this.runAdbForLocationStrategy(
+            deviceId,
+            ["shell", "appops", "set", uid, "android:mock_location", "allow"],
+            8_000,
+          );
+        }
+      }
+
+      this.runAdbForLocationStrategy(
+        deviceId,
+        ["shell", "cmd", "location", "providers", "set-test-provider-enabled", provider, "true"],
+        8_000,
+      );
+
+      const setProviderLocationArgs = [
+        "shell",
+        "cmd",
+        "location",
+        "providers",
+        "set-test-provider-location",
+        provider,
+        "--location",
+        locationArg,
+        "--accuracy",
+        "3",
+      ];
+      let setProviderLocation = this.runAdbForLocationStrategy(deviceId, setProviderLocationArgs, 12_000);
+      if (!setProviderLocation.ok) {
+        const uid = this.extractMockLocationUid(setProviderLocation.error);
+        if (uid) {
+          this.runAdbForLocationStrategy(
+            deviceId,
+            ["shell", "appops", "set", uid, "android:mock_location", "allow"],
+            8_000,
+          );
+          setProviderLocation = this.runAdbForLocationStrategy(deviceId, setProviderLocationArgs, 12_000);
+        }
+      }
+      if (setProviderLocation.ok) {
+        return {
+          ok: true,
+          detail: `cmd_location provider=${provider}`,
+        };
+      }
+    }
+
+    const directCommands: string[][] = [
+      ["shell", "cmd", "location", "set-location", String(lat), String(lon)],
+      ["shell", "cmd", "location", "set", String(lat), String(lon)],
+    ];
+    for (const command of directCommands) {
+      const directSet = this.runAdbForLocationStrategy(deviceId, command, 10_000);
+      if (directSet.ok) {
+        return {
+          ok: true,
+          detail: `cmd_location direct=${command.slice(3, 5).join("_")}`,
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      detail: "cmd_location failed to inject via providers/direct commands",
+    };
+  }
+
+  private tryInjectLocationViaAppiumSettings(
+    deviceId: string,
+    lat: number,
+    lon: number,
+  ): { ok: true; detail: string } | { ok: false; detail: string } {
+    const appiumSettingsPackage = "io.appium.settings";
+    const packagePath = this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "pm", "path", appiumSettingsPackage],
+      8_000,
+    );
+    if (!packagePath.ok || !String(packagePath.output || "").includes("package:")) {
+      return {
+        ok: false,
+        detail: "appium_settings package not installed",
+      };
+    }
+
+    this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "appops", "set", appiumSettingsPackage, "android:mock_location", "allow"],
+      8_000,
+    );
+
+    const component = `${appiumSettingsPackage}/.LocationService`;
+    const extras = [
+      "--es",
+      "longitude",
+      String(lon),
+      "--es",
+      "latitude",
+      String(lat),
+      "--es",
+      "accuracy",
+      "3.0",
+    ];
+    let startService = this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "am", "start-foreground-service", "-n", component, ...extras],
+      12_000,
+    );
+    if (!startService.ok) {
+      startService = this.runAdbForLocationStrategy(
+        deviceId,
+        ["shell", "am", "startservice", "-n", component, ...extras],
+        12_000,
+      );
+    }
+    if (!startService.ok) {
+      return {
+        ok: false,
+        detail: "appium_settings service failed to start",
+      };
+    }
+    return {
+      ok: true,
+      detail: "appium_settings location service",
+    };
+  }
+
   private async applyLocationDelegation(lat: number, lon: number): Promise<DelegationApplyResult> {
     const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
-    this.emulator.runAdb(
-      [
-        "-s",
-        deviceId,
-        "emu",
-        "geo",
-        "fix",
-        String(lon),
-        String(lat),
-      ],
-      20_000,
+    const isEmulator = this.config.target.type === "emulator";
+
+    if (isEmulator) {
+      this.emulator.runAdb(
+        ["-s", deviceId, "emu", "geo", "fix", String(lon), String(lat)],
+        20_000,
+      );
+      return {
+        message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=emulator`,
+        templateHint: "location_injected_continue_flow",
+      };
+    }
+
+    const emuGeoFix = this.runAdbForLocationStrategy(
+      deviceId,
+      ["emu", "geo", "fix", String(lon), String(lat)],
+      10_000,
     );
+    if (emuGeoFix.ok) {
+      return {
+        message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=device(emu_geo_fix)`,
+        templateHint: "location_injected_continue_flow",
+      };
+    }
+
+    const cmdLocation = this.tryInjectLocationViaCmdLocation(deviceId, lat, lon);
+    if (cmdLocation.ok) {
+      return {
+        message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=device(${cmdLocation.detail})`,
+        templateHint: "location_injected_continue_flow",
+      };
+    }
+
+    const appiumSettings = this.tryInjectLocationViaAppiumSettings(deviceId, lat, lon);
+    if (appiumSettings.ok) {
+      return {
+        message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=device(${appiumSettings.detail})`,
+        templateHint: "location_injected_continue_flow",
+      };
+    }
+
     return {
-      message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)}`,
-      templateHint: "location_injected_continue_flow",
+      message: `delegated location NOT injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=device — `
+        + `tried=emu_geo_fix,cmd_location,appium_settings. `
+        + `To enable real-device injection, install io.appium.settings and set it as the mock location app in Developer options. `
+        + `The coordinates are available in the delegation artifact for the agent to use manually.`,
+      templateHint: null,
     };
   }
 
@@ -1130,6 +1341,80 @@ export class AgentRuntime {
       message: `delegated image pushed to ${remotePath}`,
       templateHint:
         `gallery_import_template: tap app upload/attach/gallery entry, open Downloads, select ${remoteName}, then confirm.`,
+    };
+  }
+
+  private isAudioArtifactPath(artifactPath: string): boolean {
+    const ext = path.extname(artifactPath).toLowerCase();
+    return [".webm", ".ogg", ".mp3", ".wav", ".aac", ".m4a", ".opus", ".flac"].includes(ext);
+  }
+
+  private async applyMultiPhotoDelegation(
+    artifactJson: Record<string, unknown>,
+    artifactPath: string,
+  ): Promise<DelegationApplyResult> {
+    const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
+    const photos = Array.isArray(artifactJson.photos) ? artifactJson.photos : [];
+    if (photos.length === 0) {
+      return { message: "photos_multi artifact has no photos", templateHint: null };
+    }
+
+    const pushedPaths: string[] = [];
+    for (let i = 0; i < photos.length; i++) {
+      const photo = photos[i] as Record<string, unknown>;
+      if (!photo || typeof photo.base64 !== "string") {
+        continue;
+      }
+      const mimeType = String(photo.mimeType || "image/jpeg");
+      const ext = mimeType.includes("png") ? ".png" : mimeType.includes("webp") ? ".webp" : ".jpg";
+      const remoteName = `openpocket-human-auth-${Date.now()}-${i}${ext}`;
+      const remotePath = `/sdcard/Download/${remoteName}`;
+      const tmpPath = path.join(this.config.stateDir, `human-auth-artifacts`, `_tmp_photo_${i}${ext}`);
+      try {
+        fs.writeFileSync(tmpPath, Buffer.from(photo.base64 as string, "base64"));
+        this.emulator.runAdb(["-s", deviceId, "push", tmpPath, remotePath], 30_000);
+        pushedPaths.push(remotePath);
+        try { fs.unlinkSync(tmpPath); } catch { /* cleanup best-effort */ }
+        try {
+          this.emulator.runAdb([
+            "-s", deviceId, "shell", "am", "broadcast",
+            "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+            "-d", `file://${remotePath}`,
+          ], 15_000);
+        } catch { /* best-effort */ }
+      } catch {
+        try { fs.unlinkSync(tmpPath); } catch { /* cleanup */ }
+      }
+    }
+
+    try { fs.unlinkSync(artifactPath); } catch { /* cleanup source */ }
+
+    if (pushedPaths.length === 0) {
+      return { message: "photos_multi: failed to push any photos to device", templateHint: null };
+    }
+
+    return {
+      message: `delegated ${pushedPaths.length}/${photos.length} photos pushed to /sdcard/Download/`,
+      templateHint: `gallery_import_template: ${pushedPaths.length} photos in Downloads. Open file picker, navigate to Downloads, select the openpocket-human-auth files.`,
+    };
+  }
+
+  private async applyAudioDelegation(artifactPath: string): Promise<DelegationApplyResult> {
+    const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
+    const ext = path.extname(artifactPath).toLowerCase() || ".webm";
+    const remoteName = `openpocket-human-auth-${Date.now()}${ext}`;
+    const remotePath = `/sdcard/Download/${remoteName}`;
+    this.emulator.runAdb(["-s", deviceId, "push", artifactPath, remotePath], 30_000);
+    try {
+      this.emulator.runAdb([
+        "-s", deviceId, "shell", "am", "broadcast",
+        "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+        "-d", `file://${remotePath}`,
+      ], 15_000);
+    } catch { /* best-effort */ }
+    return {
+      message: `delegated audio pushed to ${remotePath}`,
+      templateHint: `audio_import_template: audio file in Downloads (${remoteName}). Open file picker, navigate to Downloads, select the file.`,
     };
   }
 
@@ -2059,6 +2344,14 @@ export class AgentRuntime {
         if (text) {
           artifactResult = await this.applyTextDelegation(text);
         }
+      }
+
+      if (!artifactResult && artifactJson?.kind === "photos_multi") {
+        artifactResult = await this.applyMultiPhotoDelegation(artifactJson, decision.artifactPath);
+      }
+
+      if (!artifactResult && this.isAudioArtifactPath(decision.artifactPath)) {
+        artifactResult = await this.applyAudioDelegation(decision.artifactPath);
       }
 
       if (!artifactResult && this.isImageArtifactPath(decision.artifactPath)) {
