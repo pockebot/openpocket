@@ -195,3 +195,109 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
     await relay.stop();
   }
 });
+
+test("HumanAuthRelayServer merges uiTemplate and enforces artifact on approve", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-auth-relay-template-"));
+  const stateFile = path.join(temp, "relay-state.json");
+
+  const relay = new HumanAuthRelayServer({
+    host: "127.0.0.1",
+    port: 0,
+    publicBaseUrl: "",
+    apiKey: "",
+    apiKeyEnv: "",
+    stateFile,
+  });
+
+  await relay.start();
+  const base = relay.address;
+
+  try {
+    const createResponse = await fetch(`${base}/v1/human-auth/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: "req-template-1",
+        task: "payment fill",
+        sessionId: "session-template",
+        step: 8,
+        capability: "payment",
+        instruction: "Complete checkout with delegated payment card info.",
+        reason: "Need secure human payment authorization.",
+        timeoutSec: 180,
+        uiTemplate: {
+          templateId: "custom-payment-template",
+          title: "Checkout Authorization",
+          summary: "Provide card details from Human Phone to continue.",
+          artifactKind: "payment_card",
+          requireArtifactOnApprove: true,
+          fields: [
+            { id: "card_number", label: "Card Number", type: "card-number", required: true },
+            { id: "expiry", label: "Expiration", type: "expiry", required: true },
+            { id: "cvc", label: "CVC", type: "cvc", required: true },
+          ],
+          style: {
+            brandColor: "#228be6",
+            backgroundCss: "linear-gradient(145deg, #f7fbff 0%, #eef6ff 100%)",
+          },
+        },
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const created = await createResponse.json();
+    const openUrl = new URL(created.openUrl);
+    const token = String(openUrl.searchParams.get("token") || "");
+    assert.equal(Boolean(token), true);
+
+    const portalRes = await fetch(`${base}/human-auth/req-template-1?token=${encodeURIComponent(token)}`);
+    assert.equal(portalRes.status, 200);
+    const portalHtml = await portalRes.text();
+    assert.match(portalHtml, /custom-payment-template/);
+    assert.match(portalHtml, /Checkout Authorization/);
+    assert.match(portalHtml, /#228be6/);
+
+    const resolveWithoutArtifact = await fetch(`${base}/v1/human-auth/requests/req-template-1/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token,
+        approved: true,
+        note: "approve without artifact should fail",
+      }),
+    });
+    assert.equal(resolveWithoutArtifact.status, 400);
+    const resolveWithoutArtifactBody = await resolveWithoutArtifact.json();
+    assert.match(String(resolveWithoutArtifactBody.error || ""), /requires delegated data artifact/i);
+
+    const pollPending = await fetch(
+      `${base}/v1/human-auth/requests/req-template-1?pollToken=${encodeURIComponent(created.pollToken)}`,
+    );
+    assert.equal(pollPending.status, 200);
+    const pendingBody = await pollPending.json();
+    assert.equal(pendingBody.status, "pending");
+
+    const resolveWithArtifact = await fetch(`${base}/v1/human-auth/requests/req-template-1/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token,
+        approved: true,
+        note: "approved with payment artifact",
+        artifact: {
+          mimeType: "application/json",
+          base64: Buffer.from(JSON.stringify({
+            kind: "payment_card",
+            card_number: "4111111111111111",
+            expiry: "12/29",
+            cvc: "123",
+          })).toString("base64"),
+        },
+      }),
+    });
+    assert.equal(resolveWithArtifact.status, 200);
+    const resolved = await resolveWithArtifact.json();
+    assert.equal(resolved.status, "approved");
+  } finally {
+    await relay.stop();
+  }
+});

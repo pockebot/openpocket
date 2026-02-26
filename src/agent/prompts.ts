@@ -44,7 +44,7 @@ const TOOL_CATALOG_LINES: Record<(typeof TOOL_CATALOG_ORDER)[number], string> = 
   process: "- process: process(action[, sessionId, input, offset, limit, timeoutMs, reason])",
   memory_search: "- memory_search: memory_search(query[, maxResults, minScore, reason])",
   memory_get: "- memory_get: memory_get(path[, from, lines, reason])",
-  request_human_auth: "- request_human_auth: request_human_auth(capability, instruction[, timeoutSec, reason])",
+  request_human_auth: "- request_human_auth: request_human_auth(capability, instruction[, timeoutSec, reason, uiTemplate])",
   request_user_decision: "- request_user_decision: request_user_decision(question, options[, timeoutSec, reason])",
   request_user_input: "- request_user_input: request_user_input(question[, placeholder, timeoutSec, reason])",
   wait: "- wait: wait([durationMs, reason])",

@@ -160,6 +160,59 @@ export type HumanAuthCapability =
   | "permission"
   | "unknown";
 
+export type HumanAuthUiFieldType =
+  | "text"
+  | "textarea"
+  | "password"
+  | "email"
+  | "number"
+  | "date"
+  | "select"
+  | "otp"
+  | "card-number"
+  | "expiry"
+  | "cvc";
+
+export interface HumanAuthUiFieldOption {
+  label: string;
+  value: string;
+}
+
+export interface HumanAuthUiField {
+  id: string;
+  label: string;
+  type: HumanAuthUiFieldType;
+  placeholder?: string;
+  required?: boolean;
+  helperText?: string;
+  options?: HumanAuthUiFieldOption[];
+  autocomplete?: string;
+  artifactKey?: string;
+}
+
+export interface HumanAuthUiStyle {
+  brandColor?: string;
+  backgroundCss?: string;
+  fontFamily?: string;
+}
+
+export interface HumanAuthUiTemplate {
+  templateId?: string;
+  title?: string;
+  summary?: string;
+  capabilityHint?: string;
+  artifactKind?: "auto" | "credentials" | "payment_card" | "form";
+  requireArtifactOnApprove?: boolean;
+  allowTextAttachment?: boolean;
+  allowLocationAttachment?: boolean;
+  allowPhotoAttachment?: boolean;
+  allowAudioAttachment?: boolean;
+  allowFileAttachment?: boolean;
+  fileAccept?: string;
+  fields?: HumanAuthUiField[];
+  style?: HumanAuthUiStyle;
+}
+
 export interface HumanAuthRequest {
   sessionId: string;
   sessionPath: string;
@@ -171,6 +224,7 @@ export interface HumanAuthRequest {
   timeoutSec: number;
   currentApp: string;
   screenshotPath: string | null;
+  uiTemplate?: HumanAuthUiTemplate;
 }
 
 export interface HumanAuthDecision {
@@ -366,6 +420,7 @@ export type AgentAction =
       instruction: string;
       timeoutSec?: number;
       reason?: string;
+      uiTemplate?: HumanAuthUiTemplate;
     }
   | {
       type: "request_user_decision";

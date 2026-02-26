@@ -40,10 +40,17 @@ test("normalizeAction supports request_human_auth with defaults", () => {
     type: "request_human_auth",
     capability: "camera",
     instruction: "Please capture a photo to continue.",
+    uiTemplate: {
+      templateId: "camera-photo",
+      title: "Camera Auth",
+      allowPhotoAttachment: true,
+    },
   });
   assert.equal(request.type, "request_human_auth");
   assert.equal(request.capability, "camera");
   assert.equal(request.timeoutSec, 300);
+  assert.equal(request.uiTemplate?.templateId, "camera-photo");
+  assert.equal(request.uiTemplate?.allowPhotoAttachment, true);
 
   const fallback = normalizeAction({
     type: "request_human_auth",

@@ -156,6 +156,10 @@ export const requestHumanAuthSchema = Type.Object({
   }),
   timeoutSec: Type.Optional(Type.Number({ description: "How long to wait for human response (default 300)." })),
   reason: ReasonParam,
+  uiTemplate: Type.Optional(Type.Any({
+    description:
+      "Optional dynamic portal template. Can define title/summary/style/form fields/artifact requirements for Human Auth page rendering.",
+  })),
 });
 
 export const requestUserDecisionSchema = Type.Object({

@@ -260,6 +260,7 @@ export class HumanAuthBridge {
         timeoutSec: entry.request.timeoutSec,
         currentApp: entry.request.currentApp,
         screenshotPath: entry.request.screenshotPath,
+        uiTemplate: entry.request.uiTemplate,
         publicBaseUrl: this.config.humanAuth.publicBaseUrl || undefined,
       }),
     });

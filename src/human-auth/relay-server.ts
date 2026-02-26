@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { ensureDir, nowIso } from "../utils/paths.js";
+import type { HumanAuthUiField, HumanAuthUiTemplate } from "../types.js";
 import type {
   HumanAuthTakeoverAction,
   HumanAuthTakeoverFrame,
@@ -30,9 +31,334 @@ type RelayRecord = {
   note: string;
   decidedAt: string | null;
   artifact: { mimeType: string; base64: string } | null;
+  uiTemplate: HumanAuthUiTemplate | null;
   openTokenHash: string;
   pollTokenHash: string;
 };
+
+type RelayPortalArtifactKind = "auto" | "credentials" | "payment_card" | "form";
+
+type RelayPortalResolvedTemplate = {
+  templateId: string;
+  title: string;
+  summary: string;
+  capabilityHint: string;
+  artifactKind: RelayPortalArtifactKind;
+  requireArtifactOnApprove: boolean;
+  allowTextAttachment: boolean;
+  allowLocationAttachment: boolean;
+  allowPhotoAttachment: boolean;
+  allowAudioAttachment: boolean;
+  allowFileAttachment: boolean;
+  fileAccept: string;
+  fields: HumanAuthUiField[];
+  style: {
+    brandColor: string;
+    backgroundCss: string;
+    fontFamily: string;
+  };
+};
+
+const RELAY_ALLOWED_FIELD_TYPES = new Set([
+  "text",
+  "textarea",
+  "password",
+  "email",
+  "number",
+  "date",
+  "select",
+  "otp",
+  "card-number",
+  "expiry",
+  "cvc",
+]);
+
+function sanitizeString(value: unknown, fallback: string, maxLen = 240): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  return trimmed.slice(0, maxLen);
+}
+
+function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value === "true" || value === "1" || value === 1) {
+    return true;
+  }
+  if (value === "false" || value === "0" || value === 0) {
+    return false;
+  }
+  return fallback;
+}
+
+function sanitizeCssColor(input: unknown, fallback: string): string {
+  if (typeof input !== "string") {
+    return fallback;
+  }
+  const value = input.trim();
+  if (!value) {
+    return fallback;
+  }
+  if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(value)) {
+    return value;
+  }
+  return fallback;
+}
+
+function sanitizeCssBackground(input: unknown, fallback: string): string {
+  if (typeof input !== "string") {
+    return fallback;
+  }
+  const value = input.trim();
+  if (!value) {
+    return fallback;
+  }
+  if (value.length > 220) {
+    return fallback;
+  }
+  if (!/^[a-z0-9#(),.%\s\-:]+$/i.test(value)) {
+    return fallback;
+  }
+  return value;
+}
+
+function sanitizeAccept(input: unknown, fallback: string): string {
+  if (typeof input !== "string") {
+    return fallback;
+  }
+  const value = input.trim();
+  if (!value) {
+    return fallback;
+  }
+  if (value.length > 120) {
+    return fallback;
+  }
+  if (!/^[a-z0-9*.,_+\-\/\s]+$/i.test(value)) {
+    return fallback;
+  }
+  return value;
+}
+
+function sanitizeUiField(input: unknown, index: number): HumanAuthUiField | null {
+  if (!isObject(input)) {
+    return null;
+  }
+  const id = sanitizeString(input.id, `field_${index + 1}`, 48).replace(/[^a-zA-Z0-9_-]/g, "_");
+  const label = sanitizeString(input.label, `Field ${index + 1}`, 120);
+  const typeRaw = sanitizeString(input.type, "text", 32).toLowerCase();
+  const type = RELAY_ALLOWED_FIELD_TYPES.has(typeRaw)
+    ? typeRaw as HumanAuthUiField["type"]
+    : "text";
+
+  let options: HumanAuthUiField["options"] = undefined;
+  if (Array.isArray(input.options) && type === "select") {
+    const normalized = input.options
+      .map((item) => {
+        if (!isObject(item)) {
+          return null;
+        }
+        const value = sanitizeString(item.value, "", 120);
+        if (!value) {
+          return null;
+        }
+        const optionLabel = sanitizeString(item.label, value, 120);
+        return { label: optionLabel, value };
+      })
+      .filter((item): item is { label: string; value: string } => Boolean(item))
+      .slice(0, 20);
+    options = normalized.length > 0 ? normalized : undefined;
+  }
+
+  return {
+    id,
+    label,
+    type,
+    placeholder: sanitizeString(input.placeholder, "", 180) || undefined,
+    required: sanitizeBoolean(input.required, false),
+    helperText: sanitizeString(input.helperText, "", 220) || undefined,
+    autocomplete: sanitizeString(input.autocomplete, "", 80) || undefined,
+    artifactKey: sanitizeString(input.artifactKey, "", 64) || undefined,
+    options,
+  };
+}
+
+function defaultTemplateForCapability(capabilityRaw: string): RelayPortalResolvedTemplate {
+  const capability = sanitizeString(capabilityRaw, "unknown", 40).toLowerCase();
+  const base: RelayPortalResolvedTemplate = {
+    templateId: capability,
+    title: "Authorization Required",
+    summary: "Review the request and approve or reject.",
+    capabilityHint: "Recommended: provide delegated data when required, then approve.",
+    artifactKind: "auto",
+    requireArtifactOnApprove: false,
+    allowTextAttachment: true,
+    allowLocationAttachment: false,
+    allowPhotoAttachment: false,
+    allowAudioAttachment: false,
+    allowFileAttachment: false,
+    fileAccept: "*/*",
+    fields: [],
+    style: {
+      brandColor: "#ff8a00",
+      backgroundCss: "linear-gradient(155deg, #fffefb 0%, #fff9f2 56%, #f4f8ff 100%)",
+      fontFamily: "\"Poppins\", \"Avenir Next\", \"Segoe UI\", Arial, sans-serif",
+    },
+  };
+
+  if (capability === "oauth") {
+    return {
+      ...base,
+      templateId: "oauth-login",
+      title: "Account Login Authorization",
+      summary: "Provide account credentials on your phone to continue login on Agent Phone.",
+      capabilityHint: "Recommended: fill credentials and approve. Remote takeover is optional.",
+      artifactKind: "credentials",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+    };
+  }
+  if (capability === "payment") {
+    return {
+      ...base,
+      templateId: "payment-card",
+      title: "Payment Authorization",
+      summary: "Provide payment details on your phone and approve to continue secure checkout.",
+      capabilityHint: "Recommended: fill required payment fields and approve.",
+      artifactKind: "payment_card",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      fields: [
+        { id: "card_number", label: "Card Number", type: "card-number", required: true, autocomplete: "cc-number" },
+        { id: "expiry", label: "Expiration Date", type: "expiry", required: true, placeholder: "MM/YY", autocomplete: "cc-exp" },
+        { id: "cvc", label: "CVC", type: "cvc", required: true, autocomplete: "cc-csc" },
+        { id: "card_name", label: "Cardholder Name", type: "text", required: false, autocomplete: "cc-name" },
+      ],
+    };
+  }
+  if (capability === "camera" || capability === "qr") {
+    return {
+      ...base,
+      templateId: "camera-capture",
+      title: capability === "qr" ? "QR Data Authorization" : "Camera Authorization",
+      summary: "Capture or upload a photo from your phone, then approve.",
+      capabilityHint: capability === "qr"
+        ? "Recommended: attach QR image or decoded text, then approve."
+        : "Recommended: attach a photo from your phone camera/album, then approve.",
+      requireArtifactOnApprove: true,
+      allowPhotoAttachment: true,
+      allowFileAttachment: true,
+      fileAccept: "image/*",
+    };
+  }
+  if (capability === "location") {
+    return {
+      ...base,
+      templateId: "location-delegation",
+      title: "Location Authorization",
+      summary: "Share your current phone location and approve.",
+      capabilityHint: "Recommended: tap \"Use Current Location\", confirm coordinates, then approve.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      allowLocationAttachment: true,
+    };
+  }
+  if (capability === "microphone" || capability === "voice") {
+    return {
+      ...base,
+      templateId: "microphone-delegation",
+      title: "Microphone Authorization",
+      summary: "Attach an audio recording from your phone and approve.",
+      capabilityHint: "Recommended: capture/upload audio, then approve.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      allowAudioAttachment: true,
+      allowFileAttachment: true,
+      fileAccept: "audio/*",
+    };
+  }
+  if (capability === "files") {
+    return {
+      ...base,
+      templateId: "album-delegation",
+      title: "Album Access Authorization",
+      summary: "Select photo/media from your phone album and approve.",
+      capabilityHint: "Recommended: choose media file(s) from your phone and approve.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      allowPhotoAttachment: true,
+      allowFileAttachment: true,
+      fileAccept: "image/*,video/*",
+    };
+  }
+  if (capability === "sms" || capability === "2fa") {
+    return {
+      ...base,
+      templateId: "otp-code",
+      title: "Verification Code Authorization",
+      summary: "Enter the verification code from your phone and approve.",
+      capabilityHint: "Recommended: attach OTP/code and approve.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: true,
+    };
+  }
+
+  return base;
+}
+
+function mergeTemplateOverride(
+  base: RelayPortalResolvedTemplate,
+  overrideRaw: unknown,
+): RelayPortalResolvedTemplate {
+  if (!isObject(overrideRaw)) {
+    return base;
+  }
+  const override = overrideRaw as HumanAuthUiTemplate;
+  let mergedFields = base.fields;
+  if (Array.isArray(override.fields)) {
+    const nextFields = override.fields
+      .map((field, index) => sanitizeUiField(field, index))
+      .filter((field): field is HumanAuthUiField => Boolean(field))
+      .slice(0, 20);
+    mergedFields = nextFields;
+  }
+  const artifactKindRaw = sanitizeString(override.artifactKind, base.artifactKind, 30).toLowerCase();
+  const artifactKind: RelayPortalArtifactKind = (
+    artifactKindRaw === "credentials"
+    || artifactKindRaw === "payment_card"
+    || artifactKindRaw === "form"
+    || artifactKindRaw === "auto"
+  )
+    ? artifactKindRaw
+    : base.artifactKind;
+
+  return {
+    ...base,
+    templateId: sanitizeString(override.templateId, base.templateId, 60),
+    title: sanitizeString(override.title, base.title, 120),
+    summary: sanitizeString(override.summary, base.summary, 300),
+    capabilityHint: sanitizeString(override.capabilityHint, base.capabilityHint, 240),
+    artifactKind,
+    requireArtifactOnApprove: sanitizeBoolean(override.requireArtifactOnApprove, base.requireArtifactOnApprove),
+    allowTextAttachment: sanitizeBoolean(override.allowTextAttachment, base.allowTextAttachment),
+    allowLocationAttachment: sanitizeBoolean(override.allowLocationAttachment, base.allowLocationAttachment),
+    allowPhotoAttachment: sanitizeBoolean(override.allowPhotoAttachment, base.allowPhotoAttachment),
+    allowAudioAttachment: sanitizeBoolean(override.allowAudioAttachment, base.allowAudioAttachment),
+    allowFileAttachment: sanitizeBoolean(override.allowFileAttachment, base.allowFileAttachment),
+    fileAccept: sanitizeAccept(override.fileAccept, base.fileAccept),
+    fields: mergedFields,
+    style: {
+      brandColor: sanitizeCssColor(override.style?.brandColor, base.style.brandColor),
+      backgroundCss: sanitizeCssBackground(override.style?.backgroundCss, base.style.backgroundCss),
+      fontFamily: sanitizeString(override.style?.fontFamily, base.style.fontFamily, 120),
+    },
+  };
+}
 
 function randomToken(bytes = 24): string {
   return crypto.randomBytes(bytes).toString("base64url");
@@ -129,6 +455,11 @@ export class HumanAuthRelayServer {
     this.loadState();
   }
 
+  private resolvePortalTemplate(record: Pick<RelayRecord, "capability" | "uiTemplate">): RelayPortalResolvedTemplate {
+    const base = defaultTemplateForCapability(record.capability);
+    return mergeTemplateOverride(base, record.uiTemplate);
+  }
+
   get address(): string {
     if (!this.server) {
       return "";
@@ -215,6 +546,7 @@ export class HumanAuthRelayServer {
             typeof item.artifact.base64 === "string"
               ? { mimeType: item.artifact.mimeType, base64: item.artifact.base64 }
               : null,
+          uiTemplate: isObject(item.uiTemplate) ? item.uiTemplate as HumanAuthUiTemplate : null,
           openTokenHash: String(item.openTokenHash ?? ""),
           pollTokenHash: String(item.pollTokenHash ?? ""),
         };
@@ -378,6 +710,7 @@ export class HumanAuthRelayServer {
   }
 
   private renderPortalPage(record: RelayRecord, token: string): string {
+    const portalTemplate = this.resolvePortalTemplate(record);
     const requestId = escapeHtml(record.requestId);
     const capability = escapeHtml(record.capability);
     const instruction = escapeHtml(record.instruction || "(no instruction)");
@@ -387,6 +720,10 @@ export class HumanAuthRelayServer {
     const task = escapeHtml(record.task || "(no task)");
     const currentApp = escapeHtml(record.currentApp || "unknown");
     const tokenEscaped = escapeHtml(token);
+    const portalTemplateJson = JSON.stringify(portalTemplate);
+    const brandColorCss = escapeHtml(portalTemplate.style.brandColor);
+    const backgroundCss = escapeHtml(portalTemplate.style.backgroundCss);
+    const fontFamilyCss = escapeHtml(portalTemplate.style.fontFamily);
 
     return `<!doctype html>
 <html lang="en">
@@ -398,7 +735,7 @@ export class HumanAuthRelayServer {
     @import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap");
     :root {
       color-scheme: light;
-      --op-brand: #ff8a00;
+      --op-brand: ${brandColorCss};
       --op-brand-dark: #d85700;
       --op-bg: #fff9f2;
       --op-ink: #131313;
@@ -408,11 +745,11 @@ export class HumanAuthRelayServer {
     }
     body {
       margin: 0;
-      font-family: "Poppins", "Avenir Next", "Segoe UI", Arial, sans-serif;
+      font-family: ${fontFamilyCss};
       color: var(--op-ink);
       background:
         radial-gradient(circle at 85% -12%, rgba(255, 138, 0, 0.2), transparent 34%),
-        linear-gradient(155deg, #fffefb 0%, var(--op-bg) 56%, #f4f8ff 100%);
+        ${backgroundCss};
       min-height: 100vh;
     }
     .wrap {
@@ -791,7 +1128,13 @@ export class HumanAuthRelayServer {
         </div>
         <div class="requestId">Request: ${requestId}</div>
       </div>
-      <h1>Authorization Required</h1>
+      <h1 id="pageTitle">Authorization Required</h1>
+      <p class="brief" id="pageSummary"></p>
+
+      <div class="section hidden" id="dynamicFormSection">
+        <h2 id="dynamicFormTitle">Requested Information</h2>
+        <div id="dynamicForm"></div>
+      </div>
 
       <div class="section hidden" id="credentialDelegation">
         <label for="credUsername">Username / Email</label>
@@ -904,6 +1247,22 @@ export class HumanAuthRelayServer {
           <img id="photoPreview" alt="Captured preview" hidden />
           <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
         </div>
+
+        <div id="audioDelegation" class="hidden">
+          <div class="actions">
+            <button id="pickAudio" type="button">Capture / Upload Audio</button>
+          </div>
+          <div class="muted" id="audioPreview">No audio attached yet.</div>
+          <input id="audioInput" type="file" accept="audio/*" capture hidden />
+        </div>
+
+        <div id="fileDelegation" class="hidden">
+          <div class="actions">
+            <button id="pickFile" type="button">Choose File</button>
+          </div>
+          <div class="muted" id="filePreview">No file attached yet.</div>
+          <input id="fileInput" type="file" accept="*/*" hidden />
+        </div>
       </div>
 
       <details class="context">
@@ -923,17 +1282,27 @@ export class HumanAuthRelayServer {
     const requestId = ${JSON.stringify(record.requestId)};
     const token = ${JSON.stringify(tokenEscaped)};
     const capability = ${JSON.stringify(record.capability)};
+    const uiTemplate = ${portalTemplateJson};
     const decisionBlockEl = document.getElementById("decisionBlock");
     const decisionMountOauthEl = document.getElementById("decisionMountOauth");
     const decisionMountDefaultEl = document.getElementById("decisionMountDefault");
     const decisionSectionEl = document.getElementById("decisionSection");
+    const pageTitleEl = document.getElementById("pageTitle");
+    const pageSummaryEl = document.getElementById("pageSummary");
     const statusEl = document.getElementById("status");
     const noteEl = document.getElementById("note");
     const capabilityHintEl = document.getElementById("capabilityHint");
+    const dynamicFormSectionEl = document.getElementById("dynamicFormSection");
+    const dynamicFormTitleEl = document.getElementById("dynamicFormTitle");
+    const dynamicFormEl = document.getElementById("dynamicForm");
     const videoEl = document.getElementById("video");
     const canvasEl = document.getElementById("canvas");
     const photoInputEl = document.getElementById("photoInput");
     const photoPreviewEl = document.getElementById("photoPreview");
+    const audioInputEl = document.getElementById("audioInput");
+    const audioPreviewEl = document.getElementById("audioPreview");
+    const fileInputEl = document.getElementById("fileInput");
+    const filePreviewEl = document.getElementById("filePreview");
     const resultTextEl = document.getElementById("resultText");
     const credUsernameEl = document.getElementById("credUsername");
     const credPasswordEl = document.getElementById("credPassword");
@@ -949,6 +1318,7 @@ export class HumanAuthRelayServer {
     let artifact = null;
     let takeoverPollingTimer = null;
     let takeoverRunning = false;
+    const dynamicFieldRegistry = new Map();
     const takeoverControlIds = [
       "takeoverStop",
       "takeoverRefresh",
@@ -966,20 +1336,11 @@ export class HumanAuthRelayServer {
       el.classList.toggle("hidden", !visible);
     }
 
-    function capabilityHintText(cap) {
-      if (cap === "location") return "Recommended: attach location and approve.";
-      if (cap === "camera") return "Recommended: capture/upload photo and approve.";
-      if (cap === "oauth") return "Recommended: fill credentials above, then approve. Remote takeover is optional.";
-      if (cap === "2fa" || cap === "sms") return "Recommended: attach OTP/code and approve.";
-      if (cap === "qr") return "Recommended: attach QR text or photo and approve.";
-      return "Recommended: attach needed data, then approve.";
-    }
-
-    function placeDecisionBlock(cap) {
+    function placeDecisionBlock(useCredentialSection) {
       if (!decisionBlockEl || !decisionMountOauthEl || !decisionMountDefaultEl || !decisionSectionEl) {
         return;
       }
-      if (cap === "oauth") {
+      if (useCredentialSection) {
         if (decisionBlockEl.parentElement !== decisionMountOauthEl) {
           decisionMountOauthEl.appendChild(decisionBlockEl);
         }
@@ -992,26 +1353,153 @@ export class HumanAuthRelayServer {
       decisionSectionEl.classList.remove("hidden");
     }
 
-    function configureByCapability() {
-      capabilityHintEl.textContent = capabilityHintText(capability);
-      placeDecisionBlock(capability);
-      show("credentialDelegation", capability === "oauth");
-      show("capabilityHint", capability !== "oauth");
-      show("delegatedDataSection", capability !== "oauth");
-      show("geoDelegation", capability === "location");
-      show("textDelegation", capability !== "location" && capability !== "oauth");
-      show("cameraDelegation", capability === "camera" || capability === "qr");
-      if (capability === "location") {
-        resultTextEl.placeholder = "Optional location note";
-      } else if (capability === "sms" || capability === "2fa") {
-        resultTextEl.placeholder = "e.g., 6-digit OTP";
-      } else if (capability === "qr") {
-        resultTextEl.placeholder = "Paste QR decoded content";
-      } else if (capability === "oauth") {
-        resultTextEl.placeholder = "Not used in oauth flow";
-      } else {
-        resultTextEl.placeholder = "Optional delegated text";
+    function clearElementChildren(el) {
+      while (el.firstChild) {
+        el.removeChild(el.firstChild);
       }
+    }
+
+    function inputTypeForField(fieldType) {
+      if (fieldType === "password" || fieldType === "cvc") return "password";
+      if (fieldType === "email") return "email";
+      if (fieldType === "number") return "number";
+      if (fieldType === "date") return "date";
+      return "text";
+    }
+
+    function renderDynamicFields(fields) {
+      dynamicFieldRegistry.clear();
+      clearElementChildren(dynamicFormEl);
+      if (!Array.isArray(fields) || fields.length === 0) {
+        show("dynamicFormSection", false);
+        return;
+      }
+
+      show("dynamicFormSection", true);
+      for (const field of fields) {
+        const wrap = document.createElement("div");
+        wrap.style.marginBottom = "10px";
+
+        const label = document.createElement("label");
+        label.textContent = field.label || field.id;
+        label.htmlFor = "dynamic_" + field.id;
+        wrap.appendChild(label);
+
+        let control = null;
+        if (field.type === "textarea") {
+          const textarea = document.createElement("textarea");
+          textarea.id = "dynamic_" + field.id;
+          textarea.placeholder = field.placeholder || "";
+          textarea.required = Boolean(field.required);
+          if (field.autocomplete) textarea.autocomplete = field.autocomplete;
+          control = textarea;
+        } else if (field.type === "select") {
+          const select = document.createElement("select");
+          select.id = "dynamic_" + field.id;
+          if (Array.isArray(field.options)) {
+            for (const option of field.options) {
+              const opt = document.createElement("option");
+              opt.value = String(option.value || "");
+              opt.textContent = String(option.label || option.value || "");
+              select.appendChild(opt);
+            }
+          }
+          control = select;
+        } else {
+          const input = document.createElement("input");
+          input.id = "dynamic_" + field.id;
+          input.type = inputTypeForField(field.type);
+          input.placeholder = field.placeholder || "";
+          input.required = Boolean(field.required);
+          if (field.autocomplete) input.autocomplete = field.autocomplete;
+          if (field.type === "otp") {
+            input.inputMode = "numeric";
+            input.pattern = "[0-9]{4,10}";
+          }
+          if (field.type === "card-number") {
+            input.inputMode = "numeric";
+            input.autocomplete = field.autocomplete || "cc-number";
+          }
+          if (field.type === "expiry") {
+            input.autocomplete = field.autocomplete || "cc-exp";
+            input.placeholder = field.placeholder || "MM/YY";
+          }
+          if (field.type === "cvc") {
+            input.inputMode = "numeric";
+            input.autocomplete = field.autocomplete || "cc-csc";
+          }
+          control = input;
+        }
+
+        if (control) {
+          wrap.appendChild(control);
+          dynamicFieldRegistry.set(field.id, { field, control });
+        }
+
+        if (field.helperText) {
+          const helper = document.createElement("div");
+          helper.className = "muted";
+          helper.textContent = field.helperText;
+          wrap.appendChild(helper);
+        }
+
+        dynamicFormEl.appendChild(wrap);
+      }
+    }
+
+    function collectDynamicFieldValues() {
+      const values = {};
+      for (const [fieldId, item] of dynamicFieldRegistry.entries()) {
+        const field = item.field;
+        const control = item.control;
+        const value = String(control.value || "").trim();
+        if (field.required && !value) {
+          return {
+            ok: false,
+            error: "Required field is missing: " + (field.label || field.id),
+          };
+        }
+        if (value) {
+          values[field.artifactKey || fieldId] = value;
+        }
+      }
+      return {
+        ok: true,
+        values,
+      };
+    }
+
+    function configurePortalTemplate() {
+      pageTitleEl.textContent = uiTemplate.title || "Authorization Required";
+      pageSummaryEl.textContent = uiTemplate.summary || "";
+      capabilityHintEl.textContent = uiTemplate.capabilityHint || "";
+      dynamicFormTitleEl.textContent = "Requested Information";
+      renderDynamicFields(uiTemplate.fields || []);
+
+      const useLegacyCredentialSection = uiTemplate.artifactKind === "credentials" && (uiTemplate.fields || []).length === 0;
+      placeDecisionBlock(useLegacyCredentialSection);
+      show("credentialDelegation", useLegacyCredentialSection);
+      show("capabilityHint", Boolean(uiTemplate.capabilityHint));
+
+      const showDelegatedData = Boolean(
+        uiTemplate.allowTextAttachment
+        || uiTemplate.allowLocationAttachment
+        || uiTemplate.allowPhotoAttachment
+        || uiTemplate.allowAudioAttachment
+        || uiTemplate.allowFileAttachment,
+      );
+      show("delegatedDataSection", showDelegatedData);
+      show("textDelegation", Boolean(uiTemplate.allowTextAttachment));
+      show("geoDelegation", Boolean(uiTemplate.allowLocationAttachment));
+      show("cameraDelegation", Boolean(uiTemplate.allowPhotoAttachment));
+      show("audioDelegation", Boolean(uiTemplate.allowAudioAttachment));
+      show("fileDelegation", Boolean(uiTemplate.allowFileAttachment));
+
+      resultTextEl.placeholder = uiTemplate.allowTextAttachment
+        ? "Attach short text payload"
+        : "Not required for this authorization";
+      audioInputEl.accept = uiTemplate.fileAccept || "audio/*";
+      fileInputEl.accept = uiTemplate.fileAccept || "*/*";
     }
 
     /** Build takeover URL. For stream (img src), token stays in query string.
@@ -1222,6 +1710,33 @@ export class HumanAuthRelayServer {
       };
     }
 
+    function buildDynamicFormArtifactPayload() {
+      const collected = collectDynamicFieldValues();
+      if (!collected.ok) {
+        return collected;
+      }
+      const values = collected.values || {};
+      if (Object.keys(values).length === 0) {
+        return {
+          ok: true,
+          payload: null,
+        };
+      }
+      const artifactKind = uiTemplate.artifactKind && uiTemplate.artifactKind !== "auto"
+        ? uiTemplate.artifactKind
+        : "form";
+      return {
+        ok: true,
+        payload: {
+          kind: artifactKind,
+          fields: values,
+          capability,
+          templateId: uiTemplate.templateId || "",
+          capturedAt: new Date().toISOString(),
+        },
+      };
+    }
+
     function clearCredentialInput(inputEl) {
       if (!inputEl) {
         return;
@@ -1366,6 +1881,50 @@ export class HumanAuthRelayServer {
       }
     }
 
+    function pickAudio() {
+      audioInputEl.value = "";
+      audioInputEl.click();
+    }
+
+    async function onAudioChange() {
+      const file = audioInputEl.files && audioInputEl.files[0];
+      if (!file) {
+        return;
+      }
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        const base64 = dataUrl.split(",")[1] || "";
+        const mimeType = file.type || "audio/*";
+        artifact = { mimeType, base64 };
+        audioPreviewEl.textContent = "Audio attached: " + (file.name || "audio");
+        statusEl.textContent = "Audio attached.";
+      } catch (err) {
+        statusEl.textContent = "Failed to attach audio: " + (err && err.message ? err.message : String(err));
+      }
+    }
+
+    function pickFile() {
+      fileInputEl.value = "";
+      fileInputEl.click();
+    }
+
+    async function onFileChange() {
+      const file = fileInputEl.files && fileInputEl.files[0];
+      if (!file) {
+        return;
+      }
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        const base64 = dataUrl.split(",")[1] || "";
+        const mimeType = file.type || "application/octet-stream";
+        artifact = { mimeType, base64 };
+        filePreviewEl.textContent = "File attached: " + (file.name || "file");
+        statusEl.textContent = "File attached.";
+      } catch (err) {
+        statusEl.textContent = "Failed to attach file: " + (err && err.message ? err.message : String(err));
+      }
+    }
+
     function setDecisionButtonsDisabled(disabled) {
       const approveBtn = document.getElementById("approve");
       const rejectBtn = document.getElementById("reject");
@@ -1418,17 +1977,33 @@ export class HumanAuthRelayServer {
       statusEl.textContent = "Submitting...";
       setDecisionButtonsDisabled(true);
       try {
-        if (capability === "oauth") {
-          if (approved) {
+        if (approved) {
+          const dynamicPayload = buildDynamicFormArtifactPayload();
+          if (!dynamicPayload.ok) {
+            statusEl.textContent = dynamicPayload.error || "Invalid dynamic form values.";
+            setDecisionButtonsDisabled(false);
+            return;
+          }
+          if (dynamicPayload.payload) {
+            setJsonArtifact(dynamicPayload.payload);
+          }
+
+          const useLegacyCredentialSection = uiTemplate.artifactKind === "credentials"
+            && (!Array.isArray(uiTemplate.fields) || uiTemplate.fields.length === 0);
+          if (useLegacyCredentialSection && !artifact) {
             const payload = buildCredentialsArtifactPayload();
             if (payload) {
               setJsonArtifact(payload);
-            } else {
-              artifact = null;
             }
-          } else {
-            artifact = null;
           }
+
+          if (uiTemplate.requireArtifactOnApprove && !artifact) {
+            statusEl.textContent = "This request requires delegated data before approval.";
+            setDecisionButtonsDisabled(false);
+            return;
+          }
+        } else {
+          artifact = null;
         }
         const response = await fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve", {
           method: "POST",
@@ -1466,6 +2041,8 @@ export class HumanAuthRelayServer {
     document.getElementById("startCam").addEventListener("click", startCamera);
     document.getElementById("snapCam").addEventListener("click", captureSnapshot);
     document.getElementById("pickPhoto").addEventListener("click", pickPhoto);
+    document.getElementById("pickAudio").addEventListener("click", pickAudio);
+    document.getElementById("pickFile").addEventListener("click", pickFile);
     document.getElementById("attachText").addEventListener("click", attachTextArtifact);
     document.getElementById("clearUsername").addEventListener("click", () => clearCredentialInput(credUsernameEl));
     document.getElementById("clearPassword").addEventListener("click", () => clearCredentialInput(credPasswordEl));
@@ -1473,6 +2050,8 @@ export class HumanAuthRelayServer {
     document.getElementById("useGeo").addEventListener("click", useCurrentLocation);
     document.getElementById("attachGeo").addEventListener("click", attachGeoArtifact);
     photoInputEl.addEventListener("change", onPhotoChange);
+    audioInputEl.addEventListener("change", onAudioChange);
+    fileInputEl.addEventListener("change", onFileChange);
     document.getElementById("approve").addEventListener("click", () => submitDecision(true));
     document.getElementById("reject").addEventListener("click", () => submitDecision(false));
     document.getElementById("takeoverStart").addEventListener("click", startTakeoverStream);
@@ -1526,7 +2105,7 @@ export class HumanAuthRelayServer {
       startTakeoverPolling();
       loadTakeoverSnapshot(true).catch(() => {});
     });
-    configureByCapability();
+    configurePortalTemplate();
     setTakeoverControlsEnabled(false);
     takeoverEmptyEl.textContent = "Remote takeover not started.";
     setTakeoverStatus("Remote takeover is optional. Open live stream only if you need direct control.");
@@ -1593,6 +2172,7 @@ export class HumanAuthRelayServer {
         note: "",
         decidedAt: null,
         artifact: null,
+        uiTemplate: isObject(body.uiTemplate) ? body.uiTemplate as HumanAuthUiTemplate : null,
         openTokenHash: hashToken(openToken),
         pollTokenHash: hashToken(pollToken),
       };
@@ -1681,10 +2261,8 @@ export class HumanAuthRelayServer {
       }
 
       const approved = isTruthyBoolean(body.approved);
-      record.status = approved ? "approved" : "rejected";
-      record.note = String(body.note ?? "").slice(0, 2000);
-      record.decidedAt = nowIso();
-      record.openTokenHash = "";
+      const portalTemplate = this.resolvePortalTemplate(record);
+      let artifact: { mimeType: string; base64: string } | null = null;
 
       if (
         isObject(body.artifact) &&
@@ -1692,13 +2270,24 @@ export class HumanAuthRelayServer {
         typeof body.artifact.base64 === "string" &&
         body.artifact.base64.length <= 6_000_000
       ) {
-        record.artifact = {
+        artifact = {
           mimeType: body.artifact.mimeType,
           base64: body.artifact.base64,
         };
-      } else {
-        record.artifact = null;
       }
+
+      if (approved && portalTemplate.requireArtifactOnApprove && !artifact) {
+        sendJson(res, 400, {
+          error: "This authorization requires delegated data artifact before approval.",
+        });
+        return;
+      }
+
+      record.status = approved ? "approved" : "rejected";
+      record.note = String(body.note ?? "").slice(0, 2000);
+      record.decidedAt = nowIso();
+      record.openTokenHash = "";
+      record.artifact = approved ? artifact : null;
 
       this.persistState();
       sendJson(res, 200, {

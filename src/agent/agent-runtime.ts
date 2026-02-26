@@ -2084,6 +2084,7 @@ export class AgentRuntime {
                 reason: action.reason ?? thought,
                 timeoutSec,
                 currentApp, screenshotPath: ctx.lastScreenshotPath,
+                uiTemplate: action.uiTemplate,
               });
             } catch (error) {
               decision = { requestId: "local-error", approved: false, status: "rejected", message: `Human auth error: ${(error as Error).message}`, decidedAt: nowIso(), artifactPath: null };
