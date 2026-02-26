@@ -932,6 +932,26 @@ export class HumanAuthRelayServer {
       font-size: 14px;
       font-weight: 600;
       color: #202124;
+      min-height: 20px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      transition: color .12s ease, border-color .12s ease, background-color .12s ease;
+    }
+    .status:not(:empty) { padding: 8px 10px; }
+    .status[data-tone="info"] {
+      color: #2d3136;
+      background: #f5f8fc;
+      border-color: #d9dfe8;
+    }
+    .status[data-tone="success"] {
+      color: #1f6f3d;
+      background: #effaf3;
+      border-color: #bfe7cd;
+    }
+    .status[data-tone="error"] {
+      color: #a63a1a;
+      background: #fff3ef;
+      border-color: #f0c2b5;
     }
     .muted {
       color: var(--op-ink-soft);
@@ -1311,6 +1331,7 @@ export class HumanAuthRelayServer {
     const resultTextEl = document.getElementById("resultText");
     const geoLatEl = document.getElementById("geoLat");
     const geoLonEl = document.getElementById("geoLon");
+    const delegatedDataSectionEl = document.getElementById("delegatedDataSection");
     const takeoverStreamEl = document.getElementById("takeoverStream");
     const takeoverEmptyEl = document.getElementById("takeoverEmpty");
     const takeoverMetaEl = document.getElementById("takeoverMeta");
@@ -1320,6 +1341,7 @@ export class HumanAuthRelayServer {
     let artifact = null;
     let takeoverPollingTimer = null;
     let takeoverRunning = false;
+    let decisionInFlight = false;
     const dynamicFieldRegistry = new Map();
     const takeoverControlIds = [
       "takeoverStop",
@@ -1331,6 +1353,43 @@ export class HumanAuthRelayServer {
       "keyEnter",
       "takeoverText",
     ];
+
+    function setStatus(text, tone) {
+      const message = String(text || "");
+      statusEl.textContent = message;
+      if (!message) {
+        statusEl.removeAttribute("data-tone");
+        return;
+      }
+      statusEl.setAttribute("data-tone", tone || "info");
+    }
+
+    function withTimeout(promise, timeoutMs, timeoutMessage) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(timeoutMessage));
+        }, timeoutMs);
+        Promise.resolve(promise)
+          .then((value) => {
+            clearTimeout(timer);
+            resolve(value);
+          })
+          .catch((error) => {
+            clearTimeout(timer);
+            reject(error);
+          });
+      });
+    }
+
+    function focusDelegatedDataSection() {
+      if (!delegatedDataSectionEl || typeof delegatedDataSectionEl.scrollIntoView !== "function") {
+        return;
+      }
+      delegatedDataSectionEl.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
 
     function show(id, visible) {
       const el = document.getElementById(id);
@@ -1471,7 +1530,7 @@ export class HumanAuthRelayServer {
           capability,
           uiTemplate,
           setStatus: (text) => {
-            statusEl.textContent = String(text || "");
+            setStatus(String(text || ""), "info");
           },
           getElement: (id) => document.getElementById(String(id || "")),
           getValue: (id) => {
@@ -1520,7 +1579,7 @@ export class HumanAuthRelayServer {
         return output;
       } catch (err) {
         const message = err && err.message ? err.message : String(err);
-        statusEl.textContent = scriptName + " failed: " + message;
+        setStatus(scriptName + " failed: " + message, "error");
         return { ok: false, error: scriptName + " failed: " + message };
       }
     }
@@ -1811,7 +1870,7 @@ export class HumanAuthRelayServer {
     function attachTextArtifact() {
       const text = String(resultTextEl.value || "").trim();
       if (!text) {
-        statusEl.textContent = "Text is empty.";
+        setStatus("Text is empty.", "error");
         return;
       }
       setJsonArtifact({
@@ -1820,14 +1879,14 @@ export class HumanAuthRelayServer {
         capability,
         capturedAt: new Date().toISOString(),
       });
-      statusEl.textContent = "Text attached.";
+      setStatus("Text attached.", "success");
     }
 
     function attachGeoArtifact() {
       const lat = Number(geoLatEl.value);
       const lon = Number(geoLonEl.value);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        statusEl.textContent = "Latitude/Longitude is invalid.";
+        setStatus("Latitude/Longitude is invalid.", "error");
         return;
       }
       setJsonArtifact({
@@ -1837,15 +1896,15 @@ export class HumanAuthRelayServer {
         capability,
         capturedAt: new Date().toISOString(),
       });
-      statusEl.textContent = "Location attached.";
+      setStatus("Location attached.", "success");
     }
 
     function useCurrentLocation() {
       if (!navigator.geolocation) {
-        statusEl.textContent = "Geolocation is not supported in this browser.";
+        setStatus("Geolocation is not supported in this browser.", "error");
         return;
       }
-      statusEl.textContent = "Fetching location...";
+      setStatus("Fetching location...", "info");
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           geoLatEl.value = String(pos.coords.latitude);
@@ -1853,7 +1912,7 @@ export class HumanAuthRelayServer {
           attachGeoArtifact();
         },
         (err) => {
-          statusEl.textContent = "Failed to read location: " + (err && err.message ? err.message : String(err));
+          setStatus("Failed to read location: " + (err && err.message ? err.message : String(err)), "error");
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
       );
@@ -1874,15 +1933,15 @@ export class HumanAuthRelayServer {
         videoEl.srcObject = stream;
         videoEl.hidden = false;
         photoPreviewEl.hidden = true;
-        statusEl.textContent = "Camera enabled. Capture if needed, then approve.";
+        setStatus("Camera enabled. Capture if needed, then approve.", "info");
       } catch (err) {
-        statusEl.textContent = humanErrorMessage(err);
+        setStatus(humanErrorMessage(err), "error");
       }
     }
 
     function captureSnapshot() {
       if (!videoEl.videoWidth || !videoEl.videoHeight) {
-        statusEl.textContent = "Camera is not ready yet.";
+        setStatus("Camera is not ready yet.", "error");
         return;
       }
       canvasEl.width = videoEl.videoWidth;
@@ -1894,7 +1953,7 @@ export class HumanAuthRelayServer {
       artifact = { mimeType: "image/jpeg", base64 };
       canvasEl.hidden = false;
       photoPreviewEl.hidden = true;
-      statusEl.textContent = "Snapshot captured and attached.";
+      setStatus("Snapshot captured and attached.", "success");
     }
 
     async function pickPhoto() {
@@ -1916,9 +1975,9 @@ export class HumanAuthRelayServer {
         videoEl.hidden = true;
         photoPreviewEl.src = dataUrl;
         photoPreviewEl.hidden = false;
-        statusEl.textContent = "Photo attached.";
+        setStatus("Photo attached.", "success");
       } catch (err) {
-        statusEl.textContent = "Failed to attach photo: " + (err && err.message ? err.message : String(err));
+        setStatus("Failed to attach photo: " + (err && err.message ? err.message : String(err)), "error");
       }
     }
 
@@ -1938,9 +1997,9 @@ export class HumanAuthRelayServer {
         const mimeType = file.type || "audio/*";
         artifact = { mimeType, base64 };
         audioPreviewEl.textContent = "Audio attached: " + (file.name || "audio");
-        statusEl.textContent = "Audio attached.";
+        setStatus("Audio attached.", "success");
       } catch (err) {
-        statusEl.textContent = "Failed to attach audio: " + (err && err.message ? err.message : String(err));
+        setStatus("Failed to attach audio: " + (err && err.message ? err.message : String(err)), "error");
       }
     }
 
@@ -1960,9 +2019,9 @@ export class HumanAuthRelayServer {
         const mimeType = file.type || "application/octet-stream";
         artifact = { mimeType, base64 };
         filePreviewEl.textContent = "File attached: " + (file.name || "file");
-        statusEl.textContent = "File attached.";
+        setStatus("File attached.", "success");
       } catch (err) {
-        statusEl.textContent = "Failed to attach file: " + (err && err.message ? err.message : String(err));
+        setStatus("Failed to attach file: " + (err && err.message ? err.message : String(err)), "error");
       }
     }
 
@@ -2015,36 +2074,50 @@ export class HumanAuthRelayServer {
     }
 
     async function submitDecision(approved) {
-      statusEl.textContent = "Submitting...";
+      if (decisionInFlight) {
+        return;
+      }
+      decisionInFlight = true;
+      setStatus("Submitting...", "info");
       setDecisionButtonsDisabled(true);
+
+      const unlockDecisionControls = () => {
+        decisionInFlight = false;
+        setDecisionButtonsDisabled(false);
+      };
+
       try {
         let noteValue = String(noteEl.value || "");
         if (approved) {
           const dynamicPayload = buildDynamicFormArtifactPayload();
           if (!dynamicPayload.ok) {
-            statusEl.textContent = dynamicPayload.error || "Invalid dynamic form values.";
-            setDecisionButtonsDisabled(false);
+            setStatus(dynamicPayload.error || "Invalid dynamic form values.", "error");
+            unlockDecisionControls();
             return;
           }
           if (dynamicPayload.payload) {
             setJsonArtifact(dynamicPayload.payload);
           }
 
-          const approveScriptOutput = await invokeAgentScript(
-            uiTemplate.approveScript,
-            buildAgentPortalApi({
-              mode: "approve",
-              approved: true,
-              note: noteValue,
-              currentArtifact: artifact,
-            }),
-            "approveScript",
+          const approveScriptOutput = await withTimeout(
+            invokeAgentScript(
+              uiTemplate.approveScript,
+              buildAgentPortalApi({
+                mode: "approve",
+                approved: true,
+                note: noteValue,
+                currentArtifact: artifact,
+              }),
+              "approveScript",
+            ),
+            15_000,
+            "Approval script timed out. Please retry.",
           );
           if (approveScriptOutput && typeof approveScriptOutput === "object") {
             const maybeOutput = approveScriptOutput;
             if (maybeOutput.ok === false) {
-              statusEl.textContent = String(maybeOutput.error || "Approval script rejected this submission.");
-              setDecisionButtonsDisabled(false);
+              setStatus(String(maybeOutput.error || "Approval script rejected this submission."), "error");
+              unlockDecisionControls();
               return;
             }
             if (typeof maybeOutput.note === "string") {
@@ -2067,30 +2140,38 @@ export class HumanAuthRelayServer {
           }
 
           if (uiTemplate.requireArtifactOnApprove && !artifact) {
-            statusEl.textContent = "This request requires delegated data before approval.";
-            setDecisionButtonsDisabled(false);
+            setStatus(
+              "This request requires delegated data before approval. Attach data below, then tap Approve and Continue again.",
+              "error",
+            );
+            focusDelegatedDataSection();
+            unlockDecisionControls();
             return;
           }
         } else {
           artifact = null;
         }
-        const response = await fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            token,
-            approved,
-            note: noteValue,
-            artifact
-          })
-        });
+        const response = await withTimeout(
+          fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              token,
+              approved,
+              note: noteValue,
+              artifact
+            })
+          }),
+          20_000,
+          "Relay resolve request timed out. Please check network and retry.",
+        );
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
-          statusEl.textContent = "Failed: " + (body.error || response.statusText);
-          setDecisionButtonsDisabled(false);
+          setStatus("Failed: " + (body.error || response.statusText), "error");
+          unlockDecisionControls();
           return;
         }
-        statusEl.textContent = approved ? "Approved. Closing..." : "Rejected. Closing...";
+        setStatus(approved ? "Approved. Closing..." : "Rejected. Closing...", "success");
         if (stream) {
           for (const track of stream.getTracks()) {
             track.stop();
@@ -2102,8 +2183,8 @@ export class HumanAuthRelayServer {
         setTakeoverControlsEnabled(false);
         setTimeout(autoCloseResolvedPage, 120);
       } catch (err) {
-        statusEl.textContent = "Request failed: " + (err && err.message ? err.message : String(err));
-        setDecisionButtonsDisabled(false);
+        setStatus("Request failed: " + (err && err.message ? err.message : String(err)), "error");
+        unlockDecisionControls();
       }
     }
 

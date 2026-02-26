@@ -264,6 +264,8 @@ test("HumanAuthRelayServer merges uiTemplate and enforces artifact on approve", 
     assert.match(portalHtml, /#228be6/);
     assert.match(portalHtml, /payment_hint/);
     assert.match(portalHtml, /custom middle script loaded/);
+    assert.match(portalHtml, /Approval script timed out\. Please retry\./);
+    assert.match(portalHtml, /Attach data below, then tap Approve and Continue again\./);
 
     const resolveWithoutArtifact = await fetch(`${base}/v1/human-auth/requests/req-template-1/resolve`, {
       method: "POST",
