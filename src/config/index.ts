@@ -883,6 +883,8 @@ export function saveConfig(config: OpenPocketConfig): void {
     dashboard: config.dashboard,
     humanAuth: config.humanAuth,
     models: config.models,
+    ...(config.channels ? { channels: config.channels } : {}),
+    ...(config.pairing ? { pairing: config.pairing } : {}),
   };
   fs.writeFileSync(config.configPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
 }

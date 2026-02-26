@@ -246,6 +246,8 @@ export interface OpenPocketConfig {
   dashboard: DashboardConfig;
   humanAuth: HumanAuthConfig;
   models: Record<string, ModelProfile>;
+  channels?: import("./channel/types.js").ChannelsConfig;
+  pairing?: import("./channel/types.js").PairingConfig;
   configPath: string;
 }
 
