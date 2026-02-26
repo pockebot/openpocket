@@ -2649,13 +2649,19 @@ export class HumanAuthRelayServer {
     const resolveMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/resolve$/);
     if (method === "POST" && resolveMatch) {
       const requestId = decodeURIComponent(resolveMatch[1]);
+      // eslint-disable-next-line no-console
+      console.log(`[OpenPocket][human-auth] resolve incoming requestId=${requestId}`);
       const record = this.records.get(requestId);
       if (!record) {
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][human-auth] resolve rejected requestId=${requestId} reason=request_not_found`);
         sendJson(res, 404, { error: "Request not found." });
         return;
       }
       this.updateTimeoutStatus(record);
       if (record.status !== "pending") {
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][human-auth] resolve rejected requestId=${requestId} reason=already_${record.status}`);
         sendJson(res, 409, { error: `Request already ${record.status}.` });
         return;
       }
@@ -2674,6 +2680,8 @@ export class HumanAuthRelayServer {
 
       const token = String(body.token ?? "");
       if (!token || hashToken(token) !== record.openTokenHash) {
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][human-auth] resolve rejected requestId=${requestId} reason=invalid_token`);
         sendJson(res, 403, { error: "Invalid token." });
         return;
       }
@@ -2695,6 +2703,8 @@ export class HumanAuthRelayServer {
       }
 
       if (approved && portalTemplate.requireArtifactOnApprove && !artifact) {
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][human-auth] resolve rejected requestId=${requestId} reason=missing_artifact capability=${record.capability}`);
         sendJson(res, 400, {
           error: "This authorization requires delegated data artifact before approval.",
         });
@@ -2709,6 +2719,10 @@ export class HumanAuthRelayServer {
 
       this.persistState();
       this.notifySseClients(record.requestId, record);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[OpenPocket][human-auth] resolve accepted requestId=${record.requestId} status=${record.status} capability=${record.capability} artifact=${record.artifact ? "yes" : "no"}`,
+      );
       sendJson(res, 200, {
         requestId: record.requestId,
         status: record.status,

@@ -824,6 +824,13 @@ test("AgentRuntime escalates capability probe after tap_element action", async (
 
 test("AgentRuntime escalates permission dialog capability via activity dump fallback", async () => {
   const authRequests = [];
+  const actions = [];
+  const uiDumpXml = [
+    "<hierarchy rotation=\"0\">",
+    "<node index=\"0\" text=\"Don't allow\" resource-id=\"com.android.permissioncontroller:id/permission_deny_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[56,2100][520,2200]\" />",
+    "<node index=\"1\" text=\"Allow\" resource-id=\"com.android.permissioncontroller:id/permission_allow_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[560,2100][1024,2200]\" />",
+    "</hierarchy>",
+  ].join("");
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
@@ -846,13 +853,19 @@ test("AgentRuntime escalates permission dialog capability via activity dump fall
       screenshotHash: "permission-dialog",
     }),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async () => "ok",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
   };
   runtime.emulator = {
     runAdb: (args) => {
       const joined = Array.isArray(args) ? args.join(" ") : "";
       if (joined.includes("dumpsys activity top")) {
         return "requestedPermissions=[android.permission.CAMERA]";
+      }
+      if (Array.isArray(args) && args.includes("cat")) {
+        return uiDumpXml;
       }
       return "";
     },
@@ -879,6 +892,16 @@ test("AgentRuntime escalates permission dialog capability via activity dump fall
   assert.equal(result.ok, true);
   assert.equal(authRequests.length, 1);
   assert.equal(authRequests[0].capability, "camera");
+  assert.equal(
+    actions.some(
+      (action) =>
+        action.type === "tap"
+        && action.reason === "human_auth_permission_reject"
+        && action.x > 0
+        && action.y > 0,
+    ),
+    true,
+  );
 
   const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
   assert.match(sessionText, /src=permission_dialog/i);
@@ -1184,7 +1207,7 @@ test("AgentRuntime auto-approves permission dialog even when model asks permissi
   );
 });
 
-test("AgentRuntime still requests human auth for camera capability after auto-allowing VM permission dialog", async () => {
+test("AgentRuntime still requests human auth for camera capability while local VM dialog is rejected", async () => {
   const actions = [];
   const authRequests = [];
   const uiDumpXml = [
@@ -1252,9 +1275,7 @@ test("AgentRuntime still requests human auth for camera capability after auto-al
     actions.some(
       (action) =>
         action.type === "tap"
-        && action.reason === "auto_vm_permission_approve"
-        && action.x >= 760
-        && action.y >= 2100,
+        && String(action.reason || "").includes("permission_reject"),
     ),
     true,
   );

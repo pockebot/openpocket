@@ -1994,6 +1994,50 @@ export class AgentRuntime {
     return false;
   }
 
+  private shouldRollbackLocalSensitiveSurface(
+    event: CapabilityProbeEvent,
+    currentApp: string,
+  ): boolean {
+    const sensitiveCapability =
+      event.capability === "camera"
+      || event.capability === "microphone"
+      || event.capability === "location"
+      || event.capability === "photos";
+    if (!sensitiveCapability) {
+      return false;
+    }
+    if (event.phase === "active") {
+      return true;
+    }
+    if (this.isPermissionDialogApp(currentApp)) {
+      return true;
+    }
+    return false;
+  }
+
+  private async rollbackLocalSensitiveSurface(
+    event: CapabilityProbeEvent,
+    currentApp: string,
+  ): Promise<string | null> {
+    if (!this.shouldRollbackLocalSensitiveSurface(event, currentApp)) {
+      return null;
+    }
+    try {
+      await this.adb.executeAction(
+        {
+          type: "keyevent",
+          keycode: "KEYCODE_BACK",
+          reason: `human_auth_probe_${event.capability}_rollback`,
+        },
+        this.config.agent.deviceId,
+      );
+      await sleep(180);
+      return `local_${event.capability}_surface_rolled_back=keyevent_back`;
+    } catch (error) {
+      return `local_${event.capability}_surface_rollback_error=${(error as Error).message}`;
+    }
+  }
+
   private async maybeEscalateCapabilityProbeToHumanAuth(
     events: CapabilityProbeEvent[],
     ctx: PhoneAgentRunContext,
@@ -2054,11 +2098,15 @@ export class AgentRuntime {
     }
 
     const delegation = await this.applyHumanDelegation(capability, decision, currentApp);
+    const rollbackLine = decision.approved
+      ? await this.rollbackLocalSensitiveSurface(event, currentApp)
+      : null;
     const lines = [
       `human_auth_probe capability=${capability} status=${decision.status} pkg=${event.packageName}`,
       decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
       delegation?.message ? `delegation=${delegation.message}` : "",
       delegation?.templateHint ? `delegation_template=${delegation.templateHint}` : "",
+      rollbackLine || "",
     ].filter(Boolean);
 
     if (!decision.approved) {
@@ -2180,11 +2228,16 @@ export class AgentRuntime {
       return null;
     }
 
+    // For delegated capabilities (camera/microphone/location/files/oauth/etc.),
+    // local VM permission dialogs must be denied to avoid consuming Agent Phone data.
+    const forceRejectForDelegation = capability !== "permission" && this.isPermissionDialogApp(currentApp);
+    const approvedForDialog = forceRejectForDelegation ? false : decision.approved;
+
     const deviceId = this.resolveDelegationDeviceId();
     const uiDumpXml = this.captureUiDumpXml(deviceId);
 
     const nodes = this.parsePermissionDialogNodes(uiDumpXml);
-    const targetNode = this.pickPermissionDialogNode(nodes, decision.approved);
+    const targetNode = this.pickPermissionDialogNode(nodes, approvedForDialog);
     if (!targetNode) {
       return {
         message: `permission dialog decision recorded (${decision.status}), but no actionable button was detected`,
@@ -2206,7 +2259,7 @@ export class AgentRuntime {
       type: "tap",
       x: tapX,
       y: tapY,
-      reason: decision.approved ? `${reasonPrefix}_approve` : `${reasonPrefix}_reject`,
+      reason: approvedForDialog ? `${reasonPrefix}_approve` : `${reasonPrefix}_reject`,
     };
     await this.adb.executeAction(
       tapAction,
@@ -2214,8 +2267,12 @@ export class AgentRuntime {
     );
     await sleep(300);
 
+    const decisionLabel = approvedForDialog ? "approve" : "reject";
+    const policySuffix = forceRejectForDelegation
+      ? ` (local permission blocked for delegated ${capability})`
+      : "";
     return {
-      message: `permission dialog ${decision.approved ? "approve" : "reject"} tapped (${tapX}, ${tapY}) label="${label}"`,
+      message: `permission dialog ${decisionLabel} tapped (${tapX}, ${tapY}) label="${label}"${policySuffix}`,
       templateHint: null,
       action: tapAction,
     };
@@ -2235,6 +2292,29 @@ export class AgentRuntime {
     };
     return this.applyPermissionDialogDecision(
       "permission",
+      decision,
+      currentApp,
+      "auto_vm",
+    );
+  }
+
+  private async autoRejectPermissionDialog(
+    currentApp: string,
+    capabilityHint: HumanAuthCapability,
+  ): Promise<DelegationApplyResult | null> {
+    if (!this.isPermissionDialogApp(currentApp)) {
+      return null;
+    }
+    const decision: HumanAuthDecision = {
+      requestId: "auto-vm-permission-reject",
+      approved: false,
+      status: "rejected",
+      message: "Local permission denied to enforce delegated human auth flow.",
+      decidedAt: nowIso(),
+      artifactPath: null,
+    };
+    return this.applyPermissionDialogDecision(
+      capabilityHint,
       decision,
       currentApp,
       "auto_vm",
@@ -2739,11 +2819,17 @@ export class AgentRuntime {
             const onVmDialog = snapshot ? runtime.isPermissionDialogApp(snapshot.currentApp) : false;
             const currentApp = snapshot?.currentApp ?? "unknown";
 
-            // Auto-approve VM permission dialogs
+            // VM permission policy:
+            // - capability=permission: auto-approve locally.
+            // - any other human-auth capability: auto-reject local permission dialog to enforce delegated flow.
             if (onVmDialog || permOnly) {
               if (onVmDialog) {
-                const auto = await runtime.autoApprovePermissionDialog(snapshot!.currentApp);
-                if (auto?.action?.type === "tap") ctx.lastAutoPermissionAllowAtMs = Date.now();
+                if (permOnly) {
+                  const auto = await runtime.autoApprovePermissionDialog(snapshot!.currentApp);
+                  if (auto?.action?.type === "tap") ctx.lastAutoPermissionAllowAtMs = Date.now();
+                } else {
+                  await runtime.autoRejectPermissionDialog(snapshot!.currentApp, action.capability);
+                }
               }
               if (permOnly) {
                 const msg = "permission auto-approved locally (VM policy)";
