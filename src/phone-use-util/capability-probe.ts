@@ -43,7 +43,7 @@ type ActivityLogParseParams = {
   observedAt: string;
 };
 
-const PACKAGE_RE = /\b([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)\b/g;
+const PACKAGE_RE = /\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)\b/g;
 const APP_OPS_TARGETS = new Set([
   "CAMERA",
   "RECORD_AUDIO",
@@ -344,7 +344,7 @@ export function parseActivityLogCapabilitySignals(
 }
 
 function isLikelyPackageName(value: string): boolean {
-  return /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(value);
+  return /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(value);
 }
 
 export class PhoneUseCapabilityProbe {
