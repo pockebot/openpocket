@@ -35,6 +35,7 @@ Template controls can define:
 - style variables (brand/background/font)
 - agent-generated middle section (`middleHtml`, `middleCss`, `middleScript`)
 - agent-generated approve hook (`approveScript`)
+- reusable template file path from Agent Loop coding flow (`templatePath`, JSON in workspace)
 - allowed attachment channels (text/location/photo/audio/file)
 - artifact policy (`artifactKind`, `requireArtifactOnApprove`)
 

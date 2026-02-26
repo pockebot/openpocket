@@ -422,13 +422,14 @@ export type AgentAction =
       lines?: number;
       reason?: string;
     }
-  | {
+    | {
       type: "request_human_auth";
       capability: HumanAuthCapability;
       instruction: string;
       timeoutSec?: number;
       reason?: string;
       uiTemplate?: HumanAuthUiTemplate;
+      templatePath?: string;
     }
   | {
       type: "request_user_decision";

@@ -141,6 +141,7 @@ type AgentAction =
           fontFamily?: string;
         };
       };
+      templatePath?: string;
     }
   | { type: "wait"; durationMs?: number; reason?: string }
   | { type: "finish"; message: string };

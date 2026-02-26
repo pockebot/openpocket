@@ -12,6 +12,7 @@ OpenPocket now supports dynamic portal rendering driven by `uiTemplate`:
 - fixed secure shell sections (remote connection controls, context, title)
 - per-request override (`title`, `summary`, `style`, `fields`, attachment toggles)
 - agent-authored middle/approve code (`middleHtml`, `middleCss`, `middleScript`, `approveScript`)
+- native Agent Loop path: coding tools can generate JSON template files and pass `templatePath`
 - artifact policy (`artifactKind`, `requireArtifactOnApprove`)
 
 This gives immediate flexibility for login, payment, media, and custom form collection without shipping a new hardcoded capability page for every case.

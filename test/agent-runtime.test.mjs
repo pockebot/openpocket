@@ -740,6 +740,72 @@ test("AgentRuntime fails when request_human_auth is rejected", async () => {
   assert.match(result.message, /Human authorization rejected/);
 });
 
+test("AgentRuntime loads human auth uiTemplate from templatePath generated in workspace", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Load reusable human auth page template from workspace file",
+        action: {
+          type: "request_human_auth",
+          capability: "unknown",
+          instruction: "Please complete custom approval form.",
+          templatePath: "human-auth/templates/custom-auth.json",
+          uiTemplate: {
+            title: "Inline Override Title",
+          },
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Template file flow complete" } },
+    ],
+  });
+
+  const templateDir = path.join(runtime.config.workspaceDir, "human-auth", "templates");
+  fs.mkdirSync(templateDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(templateDir, "custom-auth.json"),
+    JSON.stringify({
+      templateId: "custom-auth-flow",
+      summary: "Template summary from file",
+      middleHtml: "<input id=\"from_file_field\" type=\"text\" />",
+      approveScript: "return { ok: true };",
+      requireArtifactOnApprove: false,
+    }, null, 2),
+    "utf-8",
+  );
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask(
+    "human auth templatePath test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-template-path",
+        approved: true,
+        status: "approved",
+        message: "Approved in templatePath test.",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].uiTemplate?.templateId, "custom-auth-flow");
+  assert.equal(authRequests[0].uiTemplate?.summary, "Template summary from file");
+  assert.equal(authRequests[0].uiTemplate?.title, "Inline Override Title");
+  assert.equal(authRequests[0].uiTemplate?.middleHtml.includes("from_file_field"), true);
+});
+
 test("AgentRuntime auto-approves Android permission dialog app without human auth", async () => {
   const actions = [];
   const authRequests = [];

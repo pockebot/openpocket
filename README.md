@@ -664,6 +664,7 @@ Supported template controls include:
 - structured form fields (`text`, `textarea`, `email`, `password`, `otp`, `card-number`, `expiry`, `cvc`, `select`, ...)
 - agent-generated middle-section code (`middleHtml`, `middleCss`, `middleScript`)
 - agent-generated approval logic (`approveScript`)
+- reusable template file path from Agent Loop coding tools (`templatePath`, JSON in workspace)
 - delegation toggles (text/location/photo/audio/file attachments)
 - artifact policy (`artifactKind`, `requireArtifactOnApprove`)
 
@@ -686,6 +687,7 @@ This enables capability-specific flows such as:
 High-level runtime behavior:
 
 1. agent emits `request_human_auth` with `capability` and optional `uiTemplate`
+   (or `templatePath` generated via coding tools in the same Agent Loop)
 2. relay renders a fixed secure shell (remote connection, context, title) plus request-specific middle/approve content from sanitized `uiTemplate`
 3. human approves/rejects and optionally uploads/enters delegated artifact
 4. bridge returns decision/artifact to runtime and task continues

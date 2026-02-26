@@ -9,6 +9,7 @@ import type {
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
+  HumanAuthUiTemplate,
   UserDecisionRequest,
   UserDecisionResponse,
   UserInputRequest,
@@ -410,6 +411,70 @@ export class AgentRuntime {
     } catch {
       return null;
     }
+  }
+
+  private resolveWorkspaceTemplatePath(templatePathRaw: string): string | null {
+    const templatePath = String(templatePathRaw || "").trim();
+    if (!templatePath) {
+      return null;
+    }
+    const workspaceRoot = path.resolve(this.config.workspaceDir);
+    const absolutePath = path.isAbsolute(templatePath)
+      ? path.resolve(templatePath)
+      : path.resolve(workspaceRoot, templatePath);
+    if (absolutePath === workspaceRoot) {
+      return null;
+    }
+    const workspacePrefix = workspaceRoot.endsWith(path.sep) ? workspaceRoot : `${workspaceRoot}${path.sep}`;
+    if (!absolutePath.startsWith(workspacePrefix)) {
+      return null;
+    }
+    return absolutePath;
+  }
+
+  private loadHumanAuthTemplateFromPath(templatePathRaw: string): HumanAuthUiTemplate {
+    const absolutePath = this.resolveWorkspaceTemplatePath(templatePathRaw);
+    if (!absolutePath) {
+      throw new Error(`Invalid templatePath: ${templatePathRaw}`);
+    }
+    if (!absolutePath.toLowerCase().endsWith(".json")) {
+      throw new Error(`templatePath must be a .json file: ${templatePathRaw}`);
+    }
+    if (!fs.existsSync(absolutePath)) {
+      throw new Error(`Human auth template file not found: ${templatePathRaw}`);
+    }
+    const raw = fs.readFileSync(absolutePath, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`Human auth template must be a JSON object: ${templatePathRaw}`);
+    }
+    return parsed as HumanAuthUiTemplate;
+  }
+
+  private resolveHumanAuthUiTemplate(
+    inlineTemplate: HumanAuthUiTemplate | undefined,
+    templatePath: string | undefined,
+  ): HumanAuthUiTemplate | undefined {
+    const hasInline = Boolean(inlineTemplate && typeof inlineTemplate === "object");
+    const pathRaw = String(templatePath || "").trim();
+    if (!pathRaw) {
+      return hasInline ? inlineTemplate : undefined;
+    }
+    const loaded = this.loadHumanAuthTemplateFromPath(pathRaw);
+    if (!hasInline) {
+      return loaded;
+    }
+    return {
+      ...loaded,
+      ...inlineTemplate,
+      style: {
+        ...(loaded.style ?? {}),
+        ...(inlineTemplate?.style ?? {}),
+      },
+      fields: Array.isArray(inlineTemplate?.fields)
+        ? inlineTemplate?.fields
+        : loaded.fields,
+    };
   }
 
   private clipWithHeadTail(input: string, limit: number): { snippet: string; truncated: boolean } {
@@ -2070,6 +2135,10 @@ export class AgentRuntime {
 
             let decision: HumanAuthDecision;
             try {
+              const resolvedUiTemplate = runtime.resolveHumanAuthUiTemplate(
+                action.uiTemplate,
+                action.templatePath,
+              );
               const requestedTimeoutSec = Number(
                 action.timeoutSec ?? runtime.config.humanAuth.requestTimeoutSec,
               );
@@ -2084,7 +2153,7 @@ export class AgentRuntime {
                 reason: action.reason ?? thought,
                 timeoutSec,
                 currentApp, screenshotPath: ctx.lastScreenshotPath,
-                uiTemplate: action.uiTemplate,
+                uiTemplate: resolvedUiTemplate,
               });
             } catch (error) {
               decision = { requestId: "local-error", approved: false, status: "rejected", message: `Human auth error: ${(error as Error).message}`, decidedAt: nowIso(), artifactPath: null };
