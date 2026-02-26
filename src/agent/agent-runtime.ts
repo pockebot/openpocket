@@ -1594,11 +1594,8 @@ export class AgentRuntime {
 
   private pickCapabilityProbeEventForHumanAuth(
     events: CapabilityProbeEvent[],
-    observedAppAfterAction: string,
+    _observedAppAfterAction: string,
   ): CapabilityProbeEvent | null {
-    if (this.isPermissionDialogApp(observedAppAfterAction)) {
-      return null;
-    }
     const candidates = events
       .filter((event) => this.mapProbeCapabilityToHumanAuthCapability(event.capability) !== null)
       .filter((event) => !this.isPermissionDialogApp(event.packageName))
@@ -2151,6 +2148,7 @@ export class AgentRuntime {
         const events = this.capabilityProbe.poll({
           deviceId,
           foregroundPackage: observedAppAfterAction,
+          candidatePackages: [snapshot.currentApp],
         });
         if (events.length > 0) {
           const probeLine = this.formatCapabilityProbeEvents(events);

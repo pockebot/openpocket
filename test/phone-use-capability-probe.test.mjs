@@ -159,3 +159,39 @@ test("PhoneUseCapabilityProbe poll accepts mixed-case foreground package names",
   assert.equal(events[0].capability, "camera");
   assert.equal(events[0].packageName, "com.Slack");
 });
+
+test("PhoneUseCapabilityProbe poll checks candidate package when foreground switches to permission controller", () => {
+  const probe = new PhoneUseCapabilityProbe({
+    adbRunner: {
+      run: (_deviceId, args) => {
+        const joined = args.join(" ");
+        if (joined.includes("cmd appops") && joined.includes("com.google.android.permissioncontroller")) {
+          return "";
+        }
+        if (joined.includes("cmd appops") && joined.includes("com.Slack")) {
+          return "CAMERA: ignore; rejectTime=+1s0ms ago";
+        }
+        if (joined.includes("dumpsys media.camera")) {
+          return "Active Camera Clients:\n[]";
+        }
+        if (joined.includes("logcat")) {
+          return "";
+        }
+        return "";
+      },
+    },
+    nowMs: () => 2_000_000,
+    nowIso: () => "2026-02-26T00:00:00.000Z",
+    minPollIntervalMs: 300,
+  });
+
+  const events = probe.poll({
+    deviceId: "emulator-5554",
+    foregroundPackage: "com.google.android.permissioncontroller",
+    candidatePackages: ["com.Slack"],
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].capability, "camera");
+  assert.equal(events[0].phase, "requested");
+  assert.equal(events[0].packageName, "com.Slack");
+});

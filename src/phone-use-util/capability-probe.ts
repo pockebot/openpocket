@@ -16,6 +16,7 @@ export interface CapabilityProbeEvent {
 export interface CapabilityProbePollParams {
   deviceId: string;
   foregroundPackage: string;
+  candidatePackages?: string[];
 }
 
 export interface CapabilityProbeAdbRunner {
@@ -372,7 +373,17 @@ export class PhoneUseCapabilityProbe {
   poll(params: CapabilityProbePollParams): CapabilityProbeEvent[] {
     const deviceId = String(params.deviceId || "").trim();
     const foregroundPackage = String(params.foregroundPackage || "").trim();
-    if (!deviceId || !isLikelyPackageName(foregroundPackage)) {
+    const candidatePackages = Array.isArray(params.candidatePackages)
+      ? params.candidatePackages
+      : [];
+    const appPackages = [
+      foregroundPackage,
+      ...candidatePackages.map((item) => String(item || "").trim()),
+    ].filter((item, index, arr) => (
+      isLikelyPackageName(item)
+      && arr.findIndex((other) => other.toLowerCase() === item.toLowerCase()) === index
+    ));
+    if (!deviceId || appPackages.length === 0) {
       return [];
     }
 
@@ -385,11 +396,14 @@ export class PhoneUseCapabilityProbe {
     const observedAt = this.nowIsoFn();
     const events: CapabilityProbeEvent[] = [];
 
-    const appOpsOutput = this.safeRunAdb(deviceId, ["shell", "cmd", "appops", "get", foregroundPackage], 1200);
-    if (appOpsOutput) {
+    for (const packageName of appPackages) {
+      const appOpsOutput = this.safeRunAdb(deviceId, ["shell", "cmd", "appops", "get", packageName], 1200);
+      if (!appOpsOutput) {
+        continue;
+      }
       events.push(
         ...parseAppOpsCapabilitySignals(appOpsOutput, {
-          packageName: foregroundPackage,
+          packageName,
           observedAt,
           recentWindowMs: this.recentWindowMs,
         }),
@@ -400,7 +414,7 @@ export class PhoneUseCapabilityProbe {
     if (cameraOutput) {
       events.push(
         ...parseCameraDumpsysCapabilitySignals(cameraOutput, {
-          foregroundPackage,
+          foregroundPackage: appPackages[0] ?? foregroundPackage,
           observedAt,
         }),
       );
@@ -430,7 +444,7 @@ export class PhoneUseCapabilityProbe {
     if (activityLog) {
       events.push(
         ...parseActivityLogCapabilitySignals(activityLog, {
-          fallbackPackage: foregroundPackage,
+          fallbackPackage: appPackages[0] ?? foregroundPackage,
           observedAt,
         }),
       );
