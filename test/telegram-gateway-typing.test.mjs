@@ -1302,6 +1302,194 @@ test("TelegramGateway /reset routes into onboarding when onboarding is pending",
   });
 });
 
+test("TelegramGateway /stop cancels pending user decision wait immediately", async () => {
+  await withTempHome("openpocket-telegram-stop-cancel-decision-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+
+    let stopCalls = 0;
+    gateway.agent.stopCurrentTask = () => {
+      stopCalls += 1;
+      return true;
+    };
+
+    let resolved = false;
+    let rejectedMessage = "";
+    const timeout = setTimeout(() => {}, 10000);
+    timeout.unref?.();
+    gateway.pendingUserDecisions.set(91041, {
+      request: {
+        sessionId: "session-stop",
+        sessionPath: "/tmp/session-stop.jsonl",
+        task: "dummy",
+        step: 7,
+        question: "Pick one",
+        options: ["A", "B"],
+        timeoutSec: 120,
+        currentApp: "unknown",
+        screenshotPath: null,
+      },
+      resolve: () => {
+        resolved = true;
+      },
+      reject: (error) => {
+        rejectedMessage = String(error?.message ?? error);
+      },
+      timeout,
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 91041 },
+      text: "/stop",
+    });
+
+    assert.equal(stopCalls, 1);
+    assert.equal(resolved, false);
+    assert.match(rejectedMessage, /stopped by user/i);
+    assert.equal(gateway.pendingUserDecisions.has(91041), false);
+    assert.equal(sent.some((item) => /Stop requested/i.test(item.text)), true);
+  });
+});
+
+test("TelegramGateway treats plain stop intent as cancellation while waiting user decision", async () => {
+  await withTempHome("openpocket-telegram-stop-intent-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+
+    let stopCalls = 0;
+    gateway.agent.stopCurrentTask = () => {
+      stopCalls += 1;
+      return true;
+    };
+
+    let resolved = false;
+    let rejectedMessage = "";
+    const timeout = setTimeout(() => {}, 10000);
+    timeout.unref?.();
+    gateway.pendingUserDecisions.set(91042, {
+      request: {
+        sessionId: "session-stop-intent",
+        sessionPath: "/tmp/session-stop-intent.jsonl",
+        task: "dummy",
+        step: 9,
+        question: "Pick one",
+        options: ["A", "B"],
+        timeoutSec: 120,
+        currentApp: "unknown",
+        screenshotPath: null,
+      },
+      resolve: () => {
+        resolved = true;
+      },
+      reject: (error) => {
+        rejectedMessage = String(error?.message ?? error);
+      },
+      timeout,
+    });
+
+    await gateway.consumeMessage({
+      chat: { id: 91042 },
+      text: "let stop this and doing next task",
+    });
+
+    assert.equal(stopCalls, 1);
+    assert.equal(resolved, false);
+    assert.match(rejectedMessage, /stopped by user/i);
+    assert.equal(sent.some((item) => /Got it\. Continuing\./i.test(item.text)), false);
+  });
+});
+
+test("TelegramGateway.stop requests runtime stop and clears pending user waits", async () => {
+  await withTempHome("openpocket-telegram-stop-runtime-stop-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    gateway.running = true;
+
+    let stopCalls = 0;
+    gateway.agent.stopCurrentTask = () => {
+      stopCalls += 1;
+      return true;
+    };
+    gateway.bot.stopPolling = async () => {};
+
+    let decisionRejected = "";
+    let inputRejected = "";
+    const decisionTimeout = setTimeout(() => {}, 10000);
+    const inputTimeout = setTimeout(() => {}, 10000);
+    decisionTimeout.unref?.();
+    inputTimeout.unref?.();
+    gateway.pendingUserDecisions.set(91043, {
+      request: {
+        sessionId: "session-gateway-stop",
+        sessionPath: "/tmp/session-gateway-stop.jsonl",
+        task: "dummy",
+        step: 3,
+        question: "Pick one",
+        options: ["A", "B"],
+        timeoutSec: 120,
+        currentApp: "unknown",
+        screenshotPath: null,
+      },
+      resolve: () => {},
+      reject: (error) => {
+        decisionRejected = String(error?.message ?? error);
+      },
+      timeout: decisionTimeout,
+    });
+    gateway.pendingUserInputs.set(91043, {
+      request: {
+        sessionId: "session-gateway-stop",
+        sessionPath: "/tmp/session-gateway-stop.jsonl",
+        task: "dummy",
+        step: 3,
+        question: "Type value",
+        placeholder: "value",
+        timeoutSec: 120,
+        currentApp: "unknown",
+        screenshotPath: null,
+      },
+      resolve: () => {},
+      reject: (error) => {
+        inputRejected = String(error?.message ?? error);
+      },
+      timeout: inputTimeout,
+    });
+
+    await gateway.stop("test");
+
+    assert.equal(stopCalls, 1);
+    assert.match(decisionRejected, /stopped by user|gateway/i);
+    assert.match(inputRejected, /stopped by user|gateway/i);
+    assert.equal(gateway.pendingUserDecisions.size, 0);
+    assert.equal(gateway.pendingUserInputs.size, 0);
+  });
+});
+
 test("TelegramGateway /new clears chat memory and keeps using the same chat session key", async () => {
   await withTempHome("openpocket-telegram-new-session-", async () => {
     const cfg = loadConfig();
