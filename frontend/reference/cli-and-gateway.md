@@ -6,6 +6,8 @@
 openpocket [--config <path>] install-cli
 openpocket [--config <path>] onboard
 openpocket [--config <path>] config-show
+openpocket [--config <path>] target show
+openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--cloud-provider <name>] [--clear-device] [--clear-adb-endpoint]
 openpocket [--config <path>] emulator status|start|stop|hide|show|list-avds|screenshot [--out <path>] [--device <id>]
 openpocket [--config <path>] emulator tap --x <int> --y <int> [--device <id>]
 openpocket [--config <path>] emulator type --text <text> [--device <id>]
@@ -39,9 +41,12 @@ Local clone launcher:
 - ensures workspace bootstrap files/directories
 - runs Android dependency doctor (auto-install on macOS when tools are missing)
 - ensures Java 17+ for Android command line tools
+- asks for deployment target (`emulator` / `physical-phone` / `android-tv` / `cloud`)
 - reuses existing local AVD when available
 - installs CLI launcher on first onboard (`~/.local/bin/openpocket`)
 - runs interactive setup wizard (consent/model/API key/Telegram/human-auth mode)
+- when target is `emulator`, includes emulator startup + Play Store/Gmail check
+- when target is non-emulator, skips emulator onboarding and asks to verify adb connectivity
 
 Wizard persistence:
 
@@ -65,10 +70,15 @@ Startup sequence:
 
 1. load config
 2. validate Telegram token source (`config.telegram.botToken` or env)
-3. ensure emulator is booted
+3. ensure selected target device is online
 4. ensure dashboard is running
 5. initialize Telegram gateway runtime
 6. start polling + heartbeat + cron
+
+Step 3 behavior:
+
+- if target is `emulator`: boot emulator when needed and wait for boot-complete
+- if target is non-emulator: verify at least one adb device is online (USB or configured adb endpoint)
 
 When human auth is enabled, gateway can auto-start:
 

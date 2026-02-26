@@ -16,7 +16,7 @@ Status snapshot (February 2026):
 ### Implemented and usable now
 
 - Local Android emulator runtime driven by CLI + Telegram gateway + dashboard.
-- Configurable deployment target (`emulator`, `physical-phone`, `android-tv`, `cloud`) with adb transport.
+- Deployment target abstraction with `emulator` and `physical-phone` ready today (`android-tv` and `cloud` are in progress).
 - Interactive setup (`openpocket onboard`) for consent, model/API key, Telegram, emulator boot, and human-auth mode.
 - Template-driven prompt system with runtime mode control (`full|minimal|none`) and workspace context budgets.
 - Bootstrap-driven chat onboarding (`BOOTSTRAP.md`, `PROFILE_ONBOARDING.json`) with persisted workspace onboarding state.
@@ -41,9 +41,10 @@ Status snapshot (February 2026):
 ### 1. Prerequisites
 
 - Node.js 20+
-- Android SDK Emulator + platform-tools (`adb`)
-- At least one Android AVD (such as Pixel 9 Pro that contains Google Play Store)
-- API key for your selected model profile (make sure you have credit in your selecter model provider)
+- Android platform-tools (`adb`) for all target types
+- For default emulator target: Android SDK Emulator + at least one Android AVD
+- For physical-phone target: one Android phone with Developer options + USB debugging enabled
+- API key for your selected model profile (make sure you have credit with your selected model provider)
 - Telegram bot token (for gateway mode) follow this [instruction](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)
 - (Optional, recommended) ngrok authtoken for remote approval (free to obtain)
 
@@ -81,8 +82,9 @@ It walks through:
 1. User consent for local runtime and data boundaries.
 2. Model profile selection and API key source (env or local config).
 3. Telegram setup (token source and chat allowlist policy).
-4. Emulator startup and manual Play Store/Gmail verification.
-5. Human-auth bridge mode:
+4. Deployment target selection (`emulator`, `physical-phone`, `android-tv`, `cloud`).
+5. Emulator startup and manual Play Store/Gmail verification (emulator target only).
+6. Human-auth bridge mode:
    - disabled
    - local LAN relay
    - local relay + ngrok tunnel (remote approval link)
@@ -95,7 +97,44 @@ openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
 
 Or send plain text directly to your Telegram bot after `gateway start`.
 
-### 5. Persistence and storage locations
+### 5. Use a physical Android phone as Agent Phone
+
+1. Enable Developer options on your phone:
+   - `Settings -> About phone -> Build number`
+   - tap `Build number` 7 times
+   - go back to `Settings -> System -> Developer options`
+   - enable `USB debugging`
+2. Connect the phone via USB and approve the `Allow USB debugging` prompt.
+3. Set deployment target:
+
+```bash
+adb devices -l
+openpocket target set --type physical-phone
+openpocket target show
+```
+
+When multiple devices are online, `target set` shows an arrow-key selector so you can choose one.
+
+4. Start runtime:
+
+```bash
+openpocket gateway start
+```
+
+Optional Wi-Fi ADB:
+
+```bash
+adb tcpip 5555
+adb connect <phone-ip>:5555
+openpocket target set --type physical-phone --adb-endpoint <phone-ip>:5555
+```
+
+Notes:
+
+- Keep phone unlocked during first pairing/authorization.
+- `android-tv` and `cloud` targets already exist in config/CLI, and full deployment guides are still in progress.
+
+### 6. Persistence and storage locations
 
 For a full persistence map (OpenPocket runtime files + Android AVD/image storage and deletion/reset flow), see:
 

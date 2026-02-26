@@ -10,6 +10,11 @@ This page is the source-of-truth for current default config values and normaliza
   "workspaceDir": "<absolute OPENPOCKET_HOME>/workspace",
   "stateDir": "<absolute OPENPOCKET_HOME>/state",
   "defaultModel": "gpt-5.2-codex",
+  "target": {
+    "type": "emulator",
+    "adbEndpoint": "",
+    "cloudProvider": ""
+  },
   "emulator": {
     "avdName": "OpenPocket_AVD",
     "androidSdkRoot": "<ANDROID_SDK_ROOT env or empty string>",
@@ -240,6 +245,7 @@ Notes:
 ## Normalization
 
 - `defaultModel` must exist in `models`.
+- `target.type` accepts only `emulator|physical-phone|android-tv|cloud`; invalid values fall back to `emulator`.
 - `agent.lang` is normalized to `en` (runtime internal prompt language).
 - `agent.systemPromptMode` accepts only `full|minimal|none`; invalid values fall back to `full`.
 - `agent.contextBudgetChars` is clamped to at least `10000`.
