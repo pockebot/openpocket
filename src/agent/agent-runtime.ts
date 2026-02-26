@@ -52,6 +52,7 @@ import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
 import { createPiSessionBridge } from "./pi-session-bridge.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
+import { PhoneUseCapabilityProbe, type CapabilityProbeEvent } from "../phone-use-util/index.js";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
   "permissioncontroller",
@@ -308,6 +309,7 @@ export class AgentRuntime {
   private readonly piCodingToolsExecutor: PiCodingToolsExecutor;
   private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
+  private readonly capabilityProbe: PhoneUseCapabilityProbe;
   private busy = false;
   private stopRequested = false;
   private currentTask: string | null = null;
@@ -332,6 +334,13 @@ export class AgentRuntime {
       config.screenshots.directory,
       config.screenshots.maxCount,
     );
+    this.capabilityProbe = new PhoneUseCapabilityProbe({
+      adbRunner: {
+        run: (deviceId: string, args: string[], timeoutMs?: number) => {
+          return this.emulator.runAdb(["-s", deviceId, ...args], timeoutMs ?? 20_000);
+        },
+      },
+    });
     this.agentFactory = options?.agentFactory ?? ((agentOptions: AgentOptions) => new Agent(agentOptions));
   }
 
@@ -1502,6 +1511,18 @@ export class AgentRuntime {
     ].join(" ");
   }
 
+  private formatCapabilityProbeEvents(events: CapabilityProbeEvent[]): string {
+    const detail = events
+      .map((event) => {
+        const confidence = Number.isFinite(event.confidence)
+          ? event.confidence.toFixed(2)
+          : "0.00";
+        return `${event.capability}/${event.phase} pkg=${event.packageName} src=${event.source} conf=${confidence}`;
+      })
+      .join("; ");
+    return `capability_probe count=${events.length} ${detail}`;
+  }
+
   private computePostActionDelayMs(action: AgentAction, executionResult: string): number {
     const baseDelayMs = Math.max(0, Math.round(this.config.agent.loopDelayMs || 0));
     if (baseDelayMs <= 0 || action.type === "wait") {
@@ -1818,6 +1839,7 @@ export class AgentRuntime {
     ctx: PhoneAgentRunContext,
   ): Promise<string> {
     const snapshot = ctx.latestSnapshot!;
+    let observedAppAfterAction = snapshot.currentApp || "unknown";
 
     // Resolve tap_element to coordinates
     action = this.resolveTapElementAction(action, snapshot);
@@ -1920,6 +1942,7 @@ export class AgentRuntime {
             const after = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, ctx.profile.model);
             afterState = this.observeSnapshotState(after);
           }
+          observedAppAfterAction = afterState.app || observedAppAfterAction;
           stateDeltaLine = this.buildStateDeltaLine(before, afterState, action.type);
         } catch { /* best-effort */ }
       }
@@ -1933,6 +1956,27 @@ export class AgentRuntime {
     }
     if (stateDeltaLine) {
       executionResult += `\n${stateDeltaLine}`;
+    }
+    const probeActionTypes = new Set(["tap", "swipe", "type", "keyevent", "launch_app", "shell"]);
+    if (probeActionTypes.has(action.type)) {
+      try {
+        const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
+        const events = this.capabilityProbe.poll({
+          deviceId,
+          foregroundPackage: observedAppAfterAction,
+        });
+        if (events.length > 0) {
+          const probeLine = this.formatCapabilityProbeEvents(events);
+          executionResult += `\n${probeLine}`;
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][capability-probe] ${probeLine}`);
+        }
+      } catch (error) {
+        if (this.config.agent.verbose) {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][capability-probe] failed: ${(error as Error).message}`);
+        }
+      }
     }
     return executionResult;
   }
