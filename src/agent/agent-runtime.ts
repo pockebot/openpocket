@@ -1968,11 +1968,11 @@ export class AgentRuntime {
       .filter((event) => this.mapProbeCapabilityToHumanAuthCapability(event.capability) !== null)
       .filter((event) => !this.isPermissionDialogApp(event.packageName))
       .sort((a, b) => {
-        if (b.confidence !== a.confidence) {
-          return b.confidence - a.confidence;
-        }
         if (a.phase !== b.phase) {
           return a.phase === "requested" ? -1 : 1;
+        }
+        if (b.confidence !== a.confidence) {
+          return b.confidence - a.confidence;
         }
         if (a.packageName !== b.packageName) {
           return a.packageName.localeCompare(b.packageName);
@@ -2005,7 +2005,8 @@ export class AgentRuntime {
     capability: HumanAuthCapability,
     packageName: string,
   ): string {
-    return `${capability}|${String(packageName || "").toLowerCase()}`;
+    void packageName;
+    return capability;
   }
 
   private shouldRollbackLocalSensitiveSurface(

@@ -836,7 +836,7 @@ test("AgentRuntime reuses approved capability probe auth within one task", async
   const scriptedSteps = [
     { thought: "open camera entry first time", action: { type: "tap", x: 360, y: 720 } },
     () => {
-      runtime.capabilityProbeAuthCooldownByKey.set("camera|com.slack", 0);
+      runtime.capabilityProbeAuthCooldownByKey.set("camera", 0);
       return { thought: "open camera entry second time", action: { type: "tap", x: 362, y: 722 } };
     },
     { thought: "done", action: { type: "finish", message: "camera probe reuse done" } },
