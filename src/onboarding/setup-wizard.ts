@@ -60,6 +60,11 @@ interface SetupState {
   telegramConfiguredAt?: string;
   telegramTokenSource?: "env" | "config" | "skip";
   telegramAllowedChatMode?: "keep" | "open" | "set";
+  channelsConfiguredAt?: string;
+  enabledChannels?: string[];
+  discordConfiguredAt?: string;
+  discordTokenSource?: "env" | "config" | "skip";
+  whatsappConfiguredAt?: string;
   humanAuthEnabledAt?: string;
   humanAuthMode?: "disabled" | "lan" | "ngrok";
   ngrokConfiguredAt?: string;
@@ -785,7 +790,7 @@ function makeConsolePrompter(): SetupPrompter {
           "  2) Deployment target",
           "  3) Model selection",
           "  4) API key setup",
-          "  5) Telegram setup",
+          "  5) Channel setup (Telegram, Discord, WhatsApp)",
           "  6) Device onboarding checks",
         ].join("\n"),
       );
@@ -1419,6 +1424,230 @@ async function runTelegramStep(
   saveConfig(config);
 }
 
+async function runDiscordStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  state: SetupState,
+): Promise<void> {
+  const fallbackEnv = "DISCORD_BOT_TOKEN";
+
+  if (!config.channels) config.channels = {};
+  if (!config.channels.discord) config.channels.discord = {};
+  const dc = config.channels.discord;
+
+  const configuredEnv = dc.tokenEnv || fallbackEnv;
+  const envToken = process.env[configuredEnv]?.trim() ?? "";
+  const hasConfigToken = Boolean(dc.token?.trim());
+
+  await prompter.note(
+    "Discord Bot Setup",
+    [
+      "OpenPocket can receive commands from Discord DMs or a guild channel.",
+      "Create a bot at https://discord.com/developers/applications and enable:",
+      "  - MESSAGE CONTENT intent (Privileged Gateway Intents)",
+      "  - bot scope with Send Messages, Read Message History permissions",
+      `Current token env: ${configuredEnv}`,
+      `Current token in config: ${hasConfigToken ? "set" : "empty"}`,
+    ].join("\n"),
+  );
+
+  const tokenOptions: SelectOption<TokenChoice>[] = [
+    {
+      value: "env",
+      label: `Use environment variable ${configuredEnv}`,
+      hint: envToken ? `Detected (length ${envToken.length})` : "Not detected",
+    },
+    {
+      value: "config",
+      label: "Paste token and save to local config.json",
+    },
+    {
+      value: "skip",
+      label: "Skip token setup for now",
+    },
+  ];
+  if (hasConfigToken) {
+    tokenOptions.splice(1, 0, {
+      value: "config-existing",
+      label: "Use existing token from local config.json",
+      hint: `Detected (length ${dc.token!.trim().length})`,
+    });
+  }
+
+  const tokenChoice = await prompter.select<TokenChoice>(
+    "Discord bot token source",
+    tokenOptions,
+    hasConfigToken ? "config-existing" : envToken ? "env" : "config",
+  );
+
+  if (tokenChoice === "env") {
+    dc.tokenEnv = configuredEnv;
+    dc.token = "";
+    state.discordTokenSource = "env";
+    if (!envToken) {
+      await prompter.note(
+        "Discord Setup",
+        `${configuredEnv} is not set in the current shell. Discord channel will not start until it is exported.`,
+      );
+    }
+  } else if (tokenChoice === "config-existing") {
+    state.discordTokenSource = "config";
+  } else if (tokenChoice === "config") {
+    const token = await promptSecretWithRetryOrSkip(prompter, "Enter Discord bot token", "Discord bot token");
+    if (!token) {
+      state.discordTokenSource = "skip";
+    } else {
+      const confirmed = await prompter.confirm(
+        "Confirm writing Discord bot token to local config.json?",
+        true,
+      );
+      if (confirmed) {
+        dc.token = token;
+        state.discordTokenSource = "config";
+      } else {
+        state.discordTokenSource = "skip";
+      }
+    }
+  } else {
+    state.discordTokenSource = "skip";
+  }
+
+  const dmPolicy = await prompter.select(
+    "Discord DM access policy",
+    [
+      { value: "pairing", label: "Pairing (unknown senders get a code, owner approves)" },
+      { value: "allowlist", label: "Allowlist (only pre-configured user IDs)" },
+      { value: "open", label: "Open (all DMs allowed)" },
+    ],
+    (dc.dmPolicy as string) || "pairing",
+  );
+  dc.dmPolicy = dmPolicy as "pairing" | "allowlist" | "open";
+
+  state.discordConfiguredAt = nowIso();
+  saveConfig(config);
+}
+
+async function runWhatsAppStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  state: SetupState,
+): Promise<void> {
+  if (!config.channels) config.channels = {};
+  if (!config.channels.whatsapp) config.channels.whatsapp = {};
+  const wa = config.channels.whatsapp;
+
+  await prompter.note(
+    "WhatsApp Setup",
+    [
+      "OpenPocket uses Baileys (WhatsApp Web protocol) for WhatsApp integration.",
+      "On first gateway start, a QR code will be displayed in the terminal.",
+      "Scan it with your phone (WhatsApp > Settings > Linked Devices > Link a Device).",
+      "",
+      "Recommendations:",
+      "  - Use a dedicated phone number to avoid account restrictions",
+      "  - WhatsApp Web automation is unofficial; use responsibly",
+      "  - Session credentials are stored locally in your state directory",
+    ].join("\n"),
+  );
+
+  const dmPolicy = await prompter.select(
+    "WhatsApp DM access policy",
+    [
+      { value: "pairing", label: "Pairing (unknown senders get a code, owner approves)" },
+      { value: "allowlist", label: "Allowlist (only pre-configured phone numbers)" },
+      { value: "open", label: "Open (all messages allowed)" },
+    ],
+    (wa.dmPolicy as string) || "pairing",
+  );
+  wa.dmPolicy = dmPolicy as "pairing" | "allowlist" | "open";
+
+  const sendReceipts = await prompter.confirm(
+    "Send read receipts when processing messages?",
+    wa.sendReadReceipts ?? true,
+  );
+  wa.sendReadReceipts = sendReceipts;
+
+  const chunkMode = await prompter.select(
+    "Long message chunking mode",
+    [
+      { value: "newline", label: "Split at newlines (natural paragraph breaks)" },
+      { value: "length", label: "Split at character limit" },
+    ],
+    wa.chunkMode || "newline",
+  );
+  wa.chunkMode = chunkMode as "length" | "newline";
+
+  state.whatsappConfiguredAt = nowIso();
+  saveConfig(config);
+
+  await prompter.note(
+    "WhatsApp Setup",
+    [
+      "WhatsApp channel configured.",
+      "QR code for session linking will appear on next `openpocket gateway start`.",
+    ].join("\n"),
+  );
+}
+
+async function runChannelSetupStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  state: SetupState,
+): Promise<void> {
+  await prompter.note(
+    "Channel Setup",
+    [
+      "OpenPocket supports multiple messaging channels for task control.",
+      "Select which channels you want to configure.",
+      "You can always add more channels later by rerunning `openpocket onboard`.",
+    ].join("\n"),
+  );
+
+  const channelOptions: SelectOption<string>[] = [
+    { value: "telegram", label: "Telegram", hint: "Bot API polling" },
+    { value: "discord", label: "Discord", hint: "Bot with DMs and guild support" },
+    { value: "whatsapp", label: "WhatsApp", hint: "Via Baileys (WhatsApp Web)" },
+  ];
+
+  const selectedChannels: string[] = [];
+  for (const option of channelOptions) {
+    const enable = await prompter.confirm(
+      `Enable ${option.label}? (${option.hint})`,
+      option.value === "telegram",
+    );
+    if (enable) selectedChannels.push(option.value);
+  }
+
+  state.enabledChannels = selectedChannels;
+  state.channelsConfiguredAt = nowIso();
+
+  if (selectedChannels.length === 0) {
+    await prompter.note(
+      "Channel Setup",
+      "No channels selected. You can configure channels later with `openpocket onboard`.",
+    );
+    return;
+  }
+
+  if (selectedChannels.includes("telegram")) {
+    await runTelegramStep(config, prompter, state);
+  }
+
+  if (selectedChannels.includes("discord")) {
+    await runDiscordStep(config, prompter, state);
+  }
+
+  if (selectedChannels.includes("whatsapp")) {
+    await runWhatsAppStep(config, prompter, state);
+  }
+
+  const summary = selectedChannels.map((ch) => `  - ${ch}`).join("\n");
+  await prompter.note(
+    "Channel Setup Complete",
+    `Configured channels:\n${summary}`,
+  );
+}
+
 function detectCommandVersion(command: string): string {
   try {
     const result = spawnSync(command, ["version"], {
@@ -1628,19 +1857,26 @@ export async function runSetupWizard(
     await runDeploymentTargetStep(config, prompter, state);
     const selectedModel = await runModelSelectionStep(config, prompter, state);
     await runApiKeyStep(config, prompter, state, selectedModel, options);
-    await runTelegramStep(config, prompter, state);
+    await runChannelSetupStep(config, prompter, state);
     await runVmStep(config, prompter, state, emulator);
     await runHumanAuthStep(config, prompter, state);
     saveState(config, state);
+
+    const configuredChannels = state.enabledChannels ?? [];
+    const channelHint = configuredChannels.length > 0
+      ? `  2) Send a natural-language task via ${configuredChannels.join(", ")}`
+      : "  2) Configure a channel with `openpocket onboard` to start messaging";
+
     await prompter.outro(
       [
         "Setup completed.",
         `Onboarding state: ${onboardingStatePath(config)}`,
         "Next:",
         "  1) openpocket gateway start",
-        "  2) Send a natural-language task directly in Telegram",
-        "  3) If task is blocked by real-device auth, approve via Telegram link on your phone",
+        channelHint,
+        "  3) If task is blocked by real-device auth, approve via messaging channel link on your phone",
         "Tip: switch deployment target later with `openpocket target set ...` (when gateway is stopped).",
+        "Tip: add more channels later with `openpocket onboard`.",
       ].join("\n"),
     );
   } finally {

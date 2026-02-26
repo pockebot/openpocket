@@ -80,9 +80,12 @@ The onboarding wizard is interactive and persists progress to:
 It walks through:
 
 1. User consent for local runtime and data boundaries.
-2. Model profile selection and API key source (env or local config).
-3. Telegram setup (token source and chat allowlist policy).
-4. Deployment target selection (`emulator`, `physical-phone`, `android-tv`, `cloud`).
+2. Deployment target selection (`emulator`, `physical-phone`, `android-tv`, `cloud`).
+3. Model profile selection and API key source (env or local config).
+4. Channel setup — choose which messaging channels to enable:
+   - **Telegram** (bot token + chat allowlist policy)
+   - **Discord** (bot token + DM access policy + guild config)
+   - **WhatsApp** (Baileys QR session linking + DM access policy + chunking mode)
 5. Emulator startup and manual Play Store/Gmail verification (emulator target only).
 6. Human-auth bridge mode:
    - disabled
@@ -95,7 +98,7 @@ It walks through:
 openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
 ```
 
-Or send plain text directly to your Telegram bot after `gateway start`.
+Or send plain text directly to your configured messaging channel (Telegram, Discord, or WhatsApp) after `gateway start`.
 
 ### 5. Use a physical Android phone as Agent Phone
 
