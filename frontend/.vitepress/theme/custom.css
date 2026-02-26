@@ -1008,7 +1008,7 @@ h1, h2, h3, h4, h5, h6,
   .op-landing             { padding: 64px 40px; gap: 80px; }
   .op-hero                { flex-direction: column-reverse; gap: 40px; }
   .op-hero-left           { width: 100%; }
-  .op-hero-right          { width: 100%; max-width: 100%; }
+  .op-hero-right          { width: 100%; max-width: 100%; min-height: 280px; aspect-ratio: 16/10; }
   .op-hero-desc,
   .op-hero-npm            { width: 100%; }
   .op-hero-title          { font-size: 44px !important; line-height: 52px !important; }
