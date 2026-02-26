@@ -27,6 +27,8 @@ function defaultConfigObject() {
     target: {
       type: "emulator" as const,
       adbEndpoint: "",
+      virtualPhonePin: "1234",
+      physicalPhonePin: "",
       cloudProvider: "",
     },
     emulator: {
@@ -260,6 +262,14 @@ function normalizeDataPartitionSizeGb(value: unknown, fallback = 24): number {
   return Math.max(8, Math.min(512, Math.round(parsed)));
 }
 
+function normalizeFourDigitPin(value: unknown, fallback: string): string {
+  const raw = String(value ?? "").trim();
+  if (/^\d{4}$/.test(raw)) {
+    return raw;
+  }
+  return fallback;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -341,6 +351,8 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
   const targetMap: Record<string, string> = {
     target_type: "type",
     adb_endpoint: "adbEndpoint",
+    virtual_phone_pin: "virtualPhonePin",
+    physical_phone_pin: "physicalPhonePin",
     cloud_provider: "cloudProvider",
   };
   for (const [oldKey, newKey] of Object.entries(targetMap)) {
@@ -686,6 +698,8 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     target: {
       type: normalizeDeviceTargetType(target.type),
       adbEndpoint: String(target.adbEndpoint ?? "").trim(),
+      virtualPhonePin: normalizeFourDigitPin(target.virtualPhonePin, "1234"),
+      physicalPhonePin: normalizeFourDigitPin(target.physicalPhonePin, ""),
       cloudProvider: String(target.cloudProvider ?? "").trim(),
     },
     emulator: {

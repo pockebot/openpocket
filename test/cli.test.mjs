@@ -15,6 +15,7 @@ function runCli(args, env = {}) {
     env: {
       ...process.env,
       OPENPOCKET_SKIP_ENV_SETUP: "1",
+      OPENPOCKET_SKIP_GATEWAY_PID_CHECK: "1",
       ...env,
     },
     encoding: "utf-8",
@@ -37,6 +38,8 @@ test("init creates config and workspace files", () => {
   assert.equal(cfg.projectName, "OpenPocket");
   assert.equal(cfg.defaultModel, "gpt-5.2-codex");
   assert.equal(cfg.target.type, "emulator");
+  assert.equal(cfg.target.virtualPhonePin, "1234");
+  assert.equal(cfg.target.physicalPhonePin, "");
 
   const mustFiles = [
     "AGENTS.md",
@@ -393,6 +396,7 @@ test("target show prints deployment target summary", () => {
   assert.equal(run.status, 0, run.stderr || run.stdout);
   assert.match(run.stdout, /Deployment Target/i);
   assert.match(run.stdout, /emulator/i);
+  assert.match(run.stdout, /Virtual phone PIN/i);
 });
 
 test("target set updates config for physical phone deployment", () => {
@@ -410,6 +414,8 @@ test("target set updates config for physical phone deployment", () => {
       "192.168.50.10",
       "--device",
       "R5CX123456A",
+      "--physical-pin",
+      "2468",
     ],
     {
       OPENPOCKET_HOME: home,
@@ -422,7 +428,75 @@ test("target set updates config for physical phone deployment", () => {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(cfg.target.type, "physical-phone");
   assert.equal(cfg.target.adbEndpoint, "192.168.50.10:5555");
+  assert.equal(cfg.target.virtualPhonePin, "1234");
+  assert.equal(cfg.target.physicalPhonePin, "2468");
   assert.equal(cfg.agent.deviceId, "R5CX123456A");
+});
+
+test("target set supports updating virtual phone PIN", () => {
+  const home = makeHome("openpocket-ts-target-set-virtual-pin-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const setRun = runCli(
+    [
+      "target",
+      "set",
+      "--type",
+      "emulator",
+      "--virtual-pin",
+      "9876",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(setRun.status, 0, setRun.stderr || setRun.stdout);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "emulator");
+  assert.equal(cfg.target.virtualPhonePin, "9876");
+});
+
+test("target set validates physical phone PIN for physical target", () => {
+  const home = makeHome("openpocket-ts-target-set-pin-required-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "set",
+      "--type",
+      "physical-phone",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /--physical-pin/i);
+});
+
+test("target set rejects non-4-digit PIN", () => {
+  const home = makeHome("openpocket-ts-target-set-pin-invalid-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "set",
+      "--virtual-pin",
+      "12ab",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /4 digits/i);
 });
 
 test("test permission-app task prints recommended telegram flow", () => {

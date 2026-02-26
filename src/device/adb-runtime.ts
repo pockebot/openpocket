@@ -337,6 +337,22 @@ export class AdbRuntime {
     }
   }
 
+  private resolveConfiguredUnlockPin(): string | null {
+    const targetType = this.targetType();
+    if (targetType === "physical-phone" || targetType === "android-tv") {
+      const physicalPin = String(this.config.target?.physicalPhonePin ?? "").trim();
+      if (/^\d{4}$/.test(physicalPin)) {
+        return physicalPin;
+      }
+      return null;
+    }
+    const virtualPin = String(this.config.target?.virtualPhonePin ?? "").trim();
+    if (/^\d{4}$/.test(virtualPin)) {
+      return virtualPin;
+    }
+    return DEFAULT_LOCKSCREEN_PIN;
+  }
+
   private async attemptPinUnlock(deviceId: string, pin: string): Promise<void> {
     const normalized = String(pin ?? "").trim();
     if (!/^\d{4}$/.test(normalized)) {
@@ -416,7 +432,14 @@ export class AdbRuntime {
       return;
     }
 
-    await this.attemptPinUnlock(deviceId, DEFAULT_LOCKSCREEN_PIN);
+    const unlockPin = this.resolveConfiguredUnlockPin();
+    if (!unlockPin) {
+      throw new Error(
+        `Target device '${deviceId}' is locked. Configure target.physicalPhonePin first via: openpocket target set --physical-pin <4-digit-pin>.`,
+      );
+    }
+
+    await this.attemptPinUnlock(deviceId, unlockPin);
     const keyguardAfterPin = this.isKeyguardShowing(deviceId);
     if (keyguardAfterPin === false) {
       return;

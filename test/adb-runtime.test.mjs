@@ -250,7 +250,7 @@ test("AdbRuntime wakes and dismisses keyguard before interactive action on physi
   const runtime = new AdbRuntime(
     {
       agent: { deviceId: null },
-      target: { type: "physical-phone" },
+      target: { type: "physical-phone", physicalPhonePin: "1234" },
     },
     emulator,
   );
@@ -281,7 +281,7 @@ test("AdbRuntime inputs default PIN when device remains locked after dismiss att
   const runtime = new AdbRuntime(
     {
       agent: { deviceId: null },
-      target: { type: "physical-phone" },
+      target: { type: "physical-phone", physicalPhonePin: "1234" },
     },
     emulator,
   );
@@ -327,7 +327,7 @@ test("AdbRuntime fails clearly when physical phone stays locked after unlock att
   const runtime = new AdbRuntime(
     {
       agent: { deviceId: null },
-      target: { type: "physical-phone" },
+      target: { type: "physical-phone", physicalPhonePin: "1234" },
     },
     emulator,
   );
@@ -341,6 +341,28 @@ test("AdbRuntime fails clearly when physical phone stays locked after unlock att
       (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_MENU",
     ),
     true,
+  );
+});
+
+test("AdbRuntime requires configured physical PIN before auto-unlock on locked phone", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", physicalPhonePin: "" },
+    },
+    emulator,
+  );
+
+  await assert.rejects(
+    runtime.executeAction({ type: "tap", x: 90, y: 180 }),
+    /physicalPhonePin/i,
   );
 });
 

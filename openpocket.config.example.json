@@ -11,6 +11,8 @@
   "target": {
     "type": "emulator",
     "adbEndpoint": "",
+    "virtualPhonePin": "1234",
+    "physicalPhonePin": "",
     "cloudProvider": ""
   },
   "emulator": {

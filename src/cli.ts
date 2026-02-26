@@ -82,7 +82,7 @@ Usage:
   openpocket [--config <path>] onboard [--force] [--target <type>]
   openpocket [--config <path>] config-show
   openpocket [--config <path>] target show
-  openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>]
+  openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--virtual-pin <4-digit>] [--physical-pin <4-digit>]
   openpocket [--config <path>] emulator status
   openpocket [--config <path>] emulator start
   openpocket [--config <path>] emulator stop
@@ -109,9 +109,10 @@ Examples:
   openpocket onboard
   openpocket onboard --target physical-phone
   openpocket onboard --force
-  openpocket target set --type physical-phone
+  openpocket target set --type physical-phone --physical-pin 1234
+  openpocket target set --type emulator --virtual-pin 1234
   openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
-  openpocket target set --type physical-phone --device R5CX123456A
+  openpocket target set --type physical-phone --device R5CX123456A --physical-pin 1234
   openpocket emulator start
   openpocket emulator tap --x 120 --y 300
   openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
@@ -186,6 +187,10 @@ function openUrlInBrowser(url: string): void {
 }
 
 function findGatewayProcessPids(): number[] {
+  if (process.env.OPENPOCKET_SKIP_GATEWAY_PID_CHECK === "1") {
+    return [];
+  }
+
   const ps = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -347,11 +352,29 @@ function normalizeAdbEndpoint(raw: string): string {
   return `${trimmed}:5555`;
 }
 
+function normalizeFourDigitPin(raw: string, optionName: string): string {
+  const normalized = raw.trim();
+  if (!/^\d{4}$/.test(normalized)) {
+    throw new Error(`${optionName} expects exactly 4 digits.`);
+  }
+  return normalized;
+}
+
+function maskFourDigitPin(raw: string): string {
+  const normalized = raw.trim();
+  if (!/^\d{4}$/.test(normalized)) {
+    return "(unset)";
+  }
+  return "**** (configured)";
+}
+
 function printTargetSummary(cfg: OpenPocketConfig): void {
   printRaw(cliTheme.section("Deployment Target"));
   printKeyValue("Type", `${cfg.target.type} (${deviceTargetLabel(cfg.target.type)})`, "accent");
   printKeyValue("Preferred device", cfg.agent.deviceId?.trim() || "(auto)");
   printKeyValue("ADB endpoint", cfg.target.adbEndpoint.trim() || "(none)");
+  printKeyValue("Virtual phone PIN", maskFourDigitPin(cfg.target.virtualPhonePin), "warn");
+  printKeyValue("Physical phone PIN", maskFourDigitPin(cfg.target.physicalPhonePin), "warn");
   printKeyValue("Cloud provider", cfg.target.cloudProvider.trim() || "(none)");
 }
 
@@ -486,19 +509,40 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
 
   const clearDevice = args.includes("--clear-device");
   const clearAdbEndpoint = args.includes("--clear-adb-endpoint");
-  const withoutFlags = args.filter((item) => item !== "--clear-device" && item !== "--clear-adb-endpoint");
+  const clearVirtualPin = args.includes("--clear-virtual-pin");
+  const clearPhysicalPin = args.includes("--clear-physical-pin");
+  const withoutFlags = args.filter(
+    (item) =>
+      item !== "--clear-device"
+      && item !== "--clear-adb-endpoint"
+      && item !== "--clear-virtual-pin"
+      && item !== "--clear-physical-pin",
+  );
 
   const { value: typeRaw, rest: afterType } = takeOption(withoutFlags.slice(1), "--type");
   const { value: deviceIdRaw, rest: afterDevice } = takeOption(afterType, "--device");
   const { value: adbEndpointRaw, rest: afterEndpoint } = takeOption(afterDevice, "--adb-endpoint");
-  const { value: cloudProviderRaw, rest } = takeOption(afterEndpoint, "--cloud-provider");
+  const { value: cloudProviderRaw, rest: afterCloudProvider } = takeOption(afterEndpoint, "--cloud-provider");
+  const { value: virtualPinRaw, rest: afterVirtualPin } = takeOption(afterCloudProvider, "--virtual-pin");
+  const { value: physicalPinRaw, rest } = takeOption(afterVirtualPin, "--physical-pin");
   if (rest.length > 0) {
     throw new Error(`Unexpected target arguments: ${rest.join(" ")}`);
   }
 
-  if (!typeRaw && !deviceIdRaw && !adbEndpointRaw && !cloudProviderRaw && !clearDevice && !clearAdbEndpoint) {
+  if (
+    !typeRaw
+    && !deviceIdRaw
+    && !adbEndpointRaw
+    && !cloudProviderRaw
+    && !virtualPinRaw
+    && !physicalPinRaw
+    && !clearDevice
+    && !clearAdbEndpoint
+    && !clearVirtualPin
+    && !clearPhysicalPin
+  ) {
     throw new Error(
-      "No target update provided. Use --type/--device/--adb-endpoint/--cloud-provider or --clear-device/--clear-adb-endpoint.",
+      "No target update provided. Use --type/--device/--adb-endpoint/--cloud-provider/--virtual-pin/--physical-pin or --clear-device/--clear-adb-endpoint/--clear-virtual-pin/--clear-physical-pin.",
     );
   }
 
@@ -526,9 +570,24 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
   if (cloudProviderRaw !== null) {
     cfg.target.cloudProvider = cloudProviderRaw.trim();
   }
+  if (virtualPinRaw !== null) {
+    cfg.target.virtualPhonePin = normalizeFourDigitPin(virtualPinRaw, "--virtual-pin");
+  }
+  if (physicalPinRaw !== null) {
+    cfg.target.physicalPhonePin = normalizeFourDigitPin(physicalPinRaw, "--physical-pin");
+  }
+  if (clearVirtualPin) {
+    cfg.target.virtualPhonePin = "1234";
+  }
+  if (clearPhysicalPin) {
+    cfg.target.physicalPhonePin = "";
+  }
 
   if (isEmulatorTarget(cfg.target.type)) {
     cfg.target.adbEndpoint = "";
+  }
+  if (cfg.target.type === "physical-phone" && !/^\d{4}$/.test(cfg.target.physicalPhonePin.trim())) {
+    throw new Error("Physical phone target requires --physical-pin <4-digit-pin> to enable auto unlock.");
   }
 
   const shouldPromptDeviceSelection =
