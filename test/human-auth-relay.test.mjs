@@ -195,3 +195,74 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
     await relay.stop();
   }
 });
+
+test("HumanAuthRelayServer does not persist payment artifacts to state file", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-auth-relay-payment-"));
+  const stateFile = path.join(temp, "relay-state.json");
+
+  const relay = new HumanAuthRelayServer({
+    host: "127.0.0.1",
+    port: 0,
+    publicBaseUrl: "",
+    apiKey: "",
+    apiKeyEnv: "",
+    stateFile,
+  });
+
+  await relay.start();
+  const base = relay.address;
+
+  try {
+    const createResponse = await fetch(`${base}/v1/human-auth/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: "req-payment-1",
+        task: "pay parking",
+        sessionId: "session-payment",
+        step: 16,
+        capability: "payment",
+        instruction: "Enter card details",
+        reason: "Sensitive payment data required",
+        timeoutSec: 180,
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const created = await createResponse.json();
+    const openUrl = new URL(created.openUrl);
+    const token = String(openUrl.searchParams.get("token") || "");
+    assert.equal(Boolean(token), true);
+
+    const paymentArtifact = {
+      kind: "payment_card_v1",
+      cardNumber: "4111111111111111",
+      expiry: "02/32",
+      cvc: "182",
+      capability: "payment",
+    };
+    const resolveResponse = await fetch(`${base}/v1/human-auth/requests/req-payment-1/resolve`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        token,
+        approved: true,
+        note: "4111111111111111 02/32 182",
+        artifact: {
+          mimeType: "application/json",
+          base64: Buffer.from(JSON.stringify(paymentArtifact), "utf-8").toString("base64"),
+        },
+      }),
+    });
+    assert.equal(resolveResponse.status, 200);
+
+    const persisted = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+    const record = persisted.find((item) => item.requestId === "req-payment-1");
+    assert.equal(Boolean(record), true);
+    assert.equal(record.artifact, null);
+    assert.equal(record.note, "");
+  } finally {
+    await relay.stop();
+  }
+});

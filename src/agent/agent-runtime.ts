@@ -212,6 +212,19 @@ type CredentialInputNode = {
   bottom: number;
 };
 
+type PaymentInputNode = CredentialInputNode & {
+  text: string;
+  contentDesc: string;
+};
+
+type DelegatedPaymentCard = {
+  cardNumber: string;
+  expiry: string;
+  cvc: string;
+  zip: string;
+  cardholderName: string;
+};
+
 type OauthCredentialCache = {
   username: string;
   password: string;
@@ -768,6 +781,36 @@ export class AgentRuntime {
     return { username, password };
   }
 
+  private extractDelegatedPaymentCard(
+    artifactJson: Record<string, unknown> | null,
+  ): DelegatedPaymentCard | null {
+    if (!artifactJson) {
+      return null;
+    }
+    if (String(artifactJson.kind ?? "") !== "payment_card_v1") {
+      return null;
+    }
+    const cardNumber = typeof artifactJson.cardNumber === "string"
+      ? artifactJson.cardNumber.replace(/\s+/g, "")
+      : "";
+    const expiry = typeof artifactJson.expiry === "string" ? artifactJson.expiry.trim() : "";
+    const cvc = typeof artifactJson.cvc === "string" ? artifactJson.cvc.trim() : "";
+    const zip = typeof artifactJson.zip === "string" ? artifactJson.zip.trim() : "";
+    const cardholderName = typeof artifactJson.cardholderName === "string"
+      ? artifactJson.cardholderName.trim()
+      : "";
+    if (!cardNumber && !expiry && !cvc && !zip && !cardholderName) {
+      return null;
+    }
+    return {
+      cardNumber,
+      expiry,
+      cvc,
+      zip,
+      cardholderName,
+    };
+  }
+
   private getCachedOauthCredentials(maxAgeMs = 15 * 60 * 1000): { username: string; password: string } | null {
     const cache = this.delegatedOauthCredentials;
     if (!cache) {
@@ -835,6 +878,102 @@ export class AgentRuntime {
       message: `delegated text typed (${text.length} chars): ${result}`,
       templateHint: "text_typed_continue_flow",
     };
+  }
+
+  private paymentHintScore(
+    node: PaymentInputNode,
+    target: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
+  ): number {
+    const combined = this.normalizePermissionUiText(
+      `${node.resourceId} ${node.hint} ${node.text} ${node.contentDesc} ${node.className}`,
+    );
+    if (!combined) {
+      return 0;
+    }
+
+    if (target === "cardNumber") {
+      if (combined.includes("card number") || combined.includes("cc-number") || combined.includes("cardnumber")) {
+        return 240;
+      }
+      if (combined.includes("card") && combined.includes("number")) {
+        return 180;
+      }
+      if (combined.includes("pan")) {
+        return 120;
+      }
+      return 0;
+    }
+
+    if (target === "expiry") {
+      if (combined.includes("expiration") || combined.includes("expiry")) {
+        return 220;
+      }
+      if (combined.includes("exp") && (combined.includes("date") || combined.includes("month") || combined.includes("year"))) {
+        return 180;
+      }
+      if (combined.includes("mm/yy") || combined.includes("month") || combined.includes("year")) {
+        return 150;
+      }
+      return 0;
+    }
+
+    if (target === "cvc") {
+      if (combined.includes("security code")) {
+        return 240;
+      }
+      if (combined.includes("cvv") || combined.includes("cvc") || combined.includes("csc")) {
+        return 220;
+      }
+      if (combined.includes("security") && combined.includes("code")) {
+        return 180;
+      }
+      return 0;
+    }
+
+    if (target === "zip") {
+      if (combined.includes("postal") || combined.includes("zip")) {
+        return 220;
+      }
+      return 0;
+    }
+
+    if (combined.includes("cardholder") || combined.includes("holder name")) {
+      return 220;
+    }
+    if (combined.includes("name")) {
+      return 140;
+    }
+    return 0;
+  }
+
+  private pickPaymentInputNode(
+    nodes: PaymentInputNode[],
+    target: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
+    used: Set<PaymentInputNode>,
+  ): PaymentInputNode | null {
+    const available = nodes.filter((node) => !used.has(node));
+    if (available.length === 0) {
+      return null;
+    }
+    const scored = available
+      .map((node) => ({
+        node,
+        score: this.paymentHintScore(node, target),
+      }))
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        if (a.node.top !== b.node.top) {
+          return a.node.top - b.node.top;
+        }
+        return a.node.left - b.node.left;
+      });
+
+    if ((scored[0]?.score ?? 0) > 0) {
+      return scored[0]?.node ?? null;
+    }
+    return available[0] ?? null;
   }
 
   private credentialHintScore(node: CredentialInputNode, target: "username" | "password"): number {
@@ -1017,6 +1156,97 @@ export class AgentRuntime {
     };
   }
 
+  private async applyPaymentDelegation(
+    payment: DelegatedPaymentCard,
+  ): Promise<DelegationApplyResult> {
+    const deviceId = this.resolveDelegationDeviceId();
+    const uiDumpXml = this.captureUiDumpXml(deviceId);
+    const nodes = this.parsePaymentInputNodes(uiDumpXml);
+    const used = new Set<PaymentInputNode>();
+
+    const typedFields: string[] = [];
+    const deferredFields: string[] = [];
+    const maybeType = async (
+      fieldName: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
+      fieldValue: string,
+      focusReason: string,
+      typeReason: string,
+      displayName: string,
+    ) => {
+      if (!fieldValue) {
+        return;
+      }
+      const node = this.pickPaymentInputNode(nodes, fieldName, used);
+      if (!node) {
+        deferredFields.push(displayName);
+        return;
+      }
+      used.add(node);
+      await this.tapCredentialNode(node, focusReason);
+      await this.adb.executeAction(
+        {
+          type: "type",
+          text: fieldValue,
+          reason: typeReason,
+        },
+        this.config.agent.deviceId,
+      );
+      typedFields.push(displayName);
+    };
+
+    await maybeType(
+      "cardNumber",
+      payment.cardNumber,
+      "human_auth_focus_payment_card_number",
+      "human_auth_delegate_payment_card_number",
+      "card_number",
+    );
+    await maybeType(
+      "expiry",
+      payment.expiry,
+      "human_auth_focus_payment_expiry",
+      "human_auth_delegate_payment_expiry",
+      "expiry",
+    );
+    await maybeType(
+      "cvc",
+      payment.cvc,
+      "human_auth_focus_payment_cvc",
+      "human_auth_delegate_payment_cvc",
+      "cvc",
+    );
+    await maybeType(
+      "zip",
+      payment.zip,
+      "human_auth_focus_payment_zip",
+      "human_auth_delegate_payment_zip",
+      "zip",
+    );
+    await maybeType(
+      "cardholderName",
+      payment.cardholderName,
+      "human_auth_focus_payment_cardholder",
+      "human_auth_delegate_payment_cardholder",
+      "cardholder_name",
+    );
+
+    const parts: string[] = [];
+    if (typedFields.length > 0) {
+      parts.push(`delegated payment fields typed: ${typedFields.join(" + ")}`);
+    }
+    if (deferredFields.length > 0) {
+      parts.push(`payment fields not matched in current UI: ${deferredFields.join(" + ")}`);
+    }
+    if (parts.length === 0) {
+      parts.push("no payment fields provided for delegation");
+    }
+
+    return {
+      message: parts.join(" ; "),
+      templateHint: "payment_fields_typed_continue_flow",
+    };
+  }
+
   private async applyImageDelegation(artifactPath: string): Promise<DelegationApplyResult> {
     const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
     const ext = path.extname(artifactPath).toLowerCase() || ".jpg";
@@ -1151,6 +1381,53 @@ export class AgentRuntime {
         resourceId: String(attrs["resource-id"] ?? ""),
         className,
         hint: String(attrs.hint ?? attrs.text ?? attrs["content-desc"] ?? ""),
+        password: String(attrs.password ?? "").toLowerCase() === "true",
+        left: parsedBounds.left,
+        top: parsedBounds.top,
+        right: parsedBounds.right,
+        bottom: parsedBounds.bottom,
+      });
+      match = nodeRe.exec(uiDumpXml);
+    }
+    nodes.sort((a, b) => {
+      if (a.top !== b.top) {
+        return a.top - b.top;
+      }
+      return a.left - b.left;
+    });
+    return nodes;
+  }
+
+  private parsePaymentInputNodes(uiDumpXml: string): PaymentInputNode[] {
+    const nodes: PaymentInputNode[] = [];
+    const nodeRe = /<node\s+([^>]*?)\/>/g;
+    let match = nodeRe.exec(uiDumpXml);
+    while (match) {
+      const attrs = this.parseUiNodeAttributes(match[1] ?? "");
+      const className = String(attrs.class ?? "");
+      const classNormalized = this.normalizePermissionUiText(className);
+      const parsedBounds = this.parseBounds(String(attrs.bounds ?? "").trim());
+      const isTextInputClass =
+        classNormalized.includes("edittext")
+        || classNormalized.includes("autocompletetextview")
+        || classNormalized.includes("textinput");
+      if (!parsedBounds || !isTextInputClass) {
+        match = nodeRe.exec(uiDumpXml);
+        continue;
+      }
+      const enabled = String(attrs.enabled ?? "").toLowerCase() !== "false";
+      if (!enabled) {
+        match = nodeRe.exec(uiDumpXml);
+        continue;
+      }
+      const text = String(attrs.text ?? "");
+      const contentDesc = String(attrs["content-desc"] ?? "");
+      nodes.push({
+        resourceId: String(attrs["resource-id"] ?? ""),
+        className,
+        hint: String(attrs.hint ?? text ?? contentDesc ?? ""),
+        text,
+        contentDesc,
         password: String(attrs.password ?? "").toLowerCase() === "true",
         left: parsedBounds.left,
         top: parsedBounds.top,
@@ -1676,8 +1953,8 @@ export class AgentRuntime {
 
     try {
       const artifactJson = this.readJsonArtifact(decision.artifactPath);
-      // Immediately delete credential artifacts from disk to avoid plaintext password lingering.
-      if (artifactJson?.kind === "credentials") {
+      // Immediately delete sensitive artifacts from disk to avoid plaintext lingering.
+      if (artifactJson?.kind === "credentials" || artifactJson?.kind === "payment_card_v1") {
         try {
           fs.unlinkSync(decision.artifactPath);
         } catch {
@@ -1698,6 +1975,13 @@ export class AgentRuntime {
         const credentials = this.extractDelegatedCredentials(artifactJson);
         if (credentials) {
           artifactResult = await this.applyCredentialDelegation(credentials.username, credentials.password);
+        }
+      }
+
+      if (!artifactResult && (capability === "payment" || artifactJson?.kind === "payment_card_v1")) {
+        const payment = this.extractDelegatedPaymentCard(artifactJson);
+        if (payment) {
+          artifactResult = await this.applyPaymentDelegation(payment);
         }
       }
 

@@ -1195,6 +1195,84 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
   }
 });
 
+test("AgentRuntime applies delegated payment artifact after human auth approval", async () => {
+  const actions = [];
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-payment-${Date.now()}.json`);
+  fs.writeFileSync(
+    artifactFile,
+    JSON.stringify({
+      kind: "payment_card_v1",
+      cardNumber: "4111111111111111",
+      expiry: "02/32",
+      cvc: "182",
+      capability: "payment",
+    }),
+    "utf-8",
+  );
+
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need payment details",
+        action: {
+          type: "request_human_auth",
+          capability: "payment",
+          instruction: "Provide payment card data.",
+          timeoutSec: 120,
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Completed after delegated payment fields" } },
+    ],
+  });
+
+  runtime.adb = {
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
+  };
+  runtime.emulator = {
+    runAdb: (args) => {
+      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
+        return [
+          "<hierarchy>",
+          '<node index="0" text="Card number" resource-id="com.demo:id/card_number" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,320][1020,430]" />',
+          '<node index="1" text="Expiration date, 2 digit month, 2 digit year" resource-id="com.demo:id/expiry" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,460][520,570]" />',
+          '<node index="2" text="Security code" resource-id="com.demo:id/cvc" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[560,460][1020,570]" />',
+          "</hierarchy>",
+        ].join("");
+      }
+      return "ok";
+    },
+  };
+
+  try {
+    const result = await runtime.runTask(
+      "delegated payment test",
+      undefined,
+      undefined,
+      async () => ({
+        requestId: "req-payment",
+        approved: true,
+        status: "approved",
+        message: "Payment details shared",
+        decidedAt: new Date().toISOString(),
+        artifactPath: artifactFile,
+      }),
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "4111111111111111"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "02/32"), true);
+    assert.equal(actions.some((action) => action.type === "type" && action.text === "182"), true);
+  } finally {
+    fs.rmSync(artifactFile, { force: true });
+  }
+});
+
 test("AgentRuntime supports split oauth screens with cached credentials reuse", async () => {
   const actions = [];
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-split-${Date.now()}.json`);
