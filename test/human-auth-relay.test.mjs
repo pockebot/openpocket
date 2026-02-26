@@ -156,6 +156,9 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
     assert.match(portalHtml, /Agent-Generated Authorization Form/);
     assert.match(portalHtml, /Optional Remote Takeover \(Live\)/);
     assert.match(portalHtml, /Open Live Stream/);
+    assert.match(portalHtml, /font-family:\s*"Avenir Next", "Segoe UI", sans-serif;/);
+    assert.match(portalHtml, /<b>Template<\/b>human-auth-generic \(default-shell\)/);
+    assert.doesNotMatch(portalHtml, /fonts\.googleapis\.com\/css2\?family=Poppins/i);
 
     const snapshotRes = await fetch(
       `${base}/v1/human-auth/requests/req-takeover-1/takeover/snapshot?token=${encodeURIComponent(token)}`,
@@ -257,6 +260,7 @@ test("HumanAuthRelayServer merges uiTemplate and enforces artifact on approve", 
     const portalHtml = await portalRes.text();
     assert.match(portalHtml, /custom-payment-template/);
     assert.match(portalHtml, /Checkout Authorization/);
+    assert.match(portalHtml, /<b>Template<\/b>custom-payment-template \(agent-generated-ui-template\)/);
     assert.match(portalHtml, /#228be6/);
     assert.match(portalHtml, /payment_hint/);
     assert.match(portalHtml, /custom middle script loaded/);

@@ -67,6 +67,8 @@ type RelayPortalResolvedTemplate = {
   };
 };
 
+const DEFAULT_PORTAL_FONT_FAMILY = "\"Avenir Next\", \"Segoe UI\", sans-serif";
+
 const RELAY_ALLOWED_FIELD_TYPES = new Set([
   "text",
   "textarea",
@@ -136,6 +138,39 @@ function sanitizeCssBackground(input: unknown, fallback: string): string {
   return value;
 }
 
+function sanitizeCssFontFamily(input: unknown, fallback: string): string {
+  if (typeof input !== "string") {
+    return fallback;
+  }
+  const parts = input
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  if (parts.length === 0) {
+    return fallback;
+  }
+
+  const normalized: string[] = [];
+  for (const part of parts) {
+    const unquoted = part.replace(/^["']+|["']+$/g, "").trim();
+    if (!unquoted) {
+      continue;
+    }
+    if (unquoted.length > 48) {
+      continue;
+    }
+    if (!/^[a-z0-9 ._-]+$/i.test(unquoted)) {
+      continue;
+    }
+    normalized.push(unquoted.includes(" ") ? `"${unquoted}"` : unquoted);
+  }
+  if (normalized.length === 0) {
+    return fallback;
+  }
+  return normalized.join(", ");
+}
+
 function sanitizeAccept(input: unknown, fallback: string): string {
   if (typeof input !== "string") {
     return fallback;
@@ -182,6 +217,13 @@ function sanitizeScriptSnippet(input: unknown, fallback = "", maxLen = 24_000): 
     return fallback;
   }
   return raw.slice(0, maxLen);
+}
+
+function sanitizeInlineStyleBlock(input: string): string {
+  return String(input || "")
+    .replace(/<\/style/gi, "<\\/style")
+    .replace(/<!--/g, "")
+    .replace(/-->/g, "");
 }
 
 function sanitizeButtonLabel(input: unknown, fallback: string): string {
@@ -257,7 +299,7 @@ function defaultPortalTemplate(): RelayPortalResolvedTemplate {
     style: {
       brandColor: "#ff8a00",
       backgroundCss: "linear-gradient(155deg, #fffefb 0%, #fff9f2 56%, #f4f8ff 100%)",
-      fontFamily: "\"Poppins\", \"Avenir Next\", \"Segoe UI\", Arial, sans-serif",
+      fontFamily: DEFAULT_PORTAL_FONT_FAMILY,
     },
   };
 }
@@ -314,7 +356,7 @@ function mergeTemplateOverride(
     style: {
       brandColor: sanitizeCssColor(override.style?.brandColor, base.style.brandColor),
       backgroundCss: sanitizeCssBackground(override.style?.backgroundCss, base.style.backgroundCss),
-      fontFamily: sanitizeString(override.style?.fontFamily, base.style.fontFamily, 120),
+      fontFamily: sanitizeCssFontFamily(override.style?.fontFamily, base.style.fontFamily),
     },
   };
 }
@@ -416,6 +458,24 @@ export class HumanAuthRelayServer {
 
   private resolvePortalTemplate(record: Pick<RelayRecord, "capability" | "uiTemplate">): RelayPortalResolvedTemplate {
     return mergeTemplateOverride(record.uiTemplate);
+  }
+
+  private describePortalTemplateSource(
+    record: Pick<RelayRecord, "uiTemplate">,
+    template: RelayPortalResolvedTemplate,
+  ): string {
+    if (!record.uiTemplate) {
+      return "default-shell";
+    }
+    if ((template.templateId || "").startsWith("capability-probe-")) {
+      return "runtime-capability-probe";
+    }
+    const hasDynamicMarkup = Boolean((template.middleHtml || "").trim() || (template.middleCss || "").trim());
+    const hasDynamicLogic = Boolean((template.middleScript || "").trim() || (template.approveScript || "").trim());
+    if (hasDynamicMarkup || hasDynamicLogic) {
+      return "agent-generated-ui-template";
+    }
+    return "agent-ui-template";
   }
 
   get address(): string {
@@ -679,10 +739,12 @@ export class HumanAuthRelayServer {
     const currentApp = escapeHtml(record.currentApp || "unknown");
     const tokenEscaped = escapeHtml(token);
     const portalTemplateJson = JSON.stringify(portalTemplate);
-    const brandColorCss = escapeHtml(portalTemplate.style.brandColor);
-    const backgroundCss = escapeHtml(portalTemplate.style.backgroundCss);
-    const fontFamilyCss = escapeHtml(portalTemplate.style.fontFamily);
-    const middleCssEscaped = escapeHtml(portalTemplate.middleCss || "");
+    const templateIdEscaped = escapeHtml(portalTemplate.templateId || "human-auth-generic");
+    const templateSourceEscaped = escapeHtml(this.describePortalTemplateSource(record, portalTemplate));
+    const brandColorCss = portalTemplate.style.brandColor;
+    const backgroundCss = portalTemplate.style.backgroundCss;
+    const fontFamilyCss = portalTemplate.style.fontFamily;
+    const middleCssEscaped = sanitizeInlineStyleBlock(portalTemplate.middleCss || "");
     const middleHtmlEscaped = portalTemplate.middleHtml || "";
     const approveLabelEscaped = escapeHtml(portalTemplate.approveLabel || "Approve");
     const rejectLabelEscaped = escapeHtml(portalTemplate.rejectLabel || "Reject");
@@ -696,7 +758,6 @@ export class HumanAuthRelayServer {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenPocket Human Auth</title>
   <style>
-    @import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap");
     :root {
       color-scheme: light;
       --op-brand: ${brandColorCss};
@@ -1212,6 +1273,7 @@ export class HumanAuthRelayServer {
         <div class="meta">
           <div class="metaItem"><b>Task</b>${task}</div>
           <div class="metaItem"><b>Capability</b>${capability}</div>
+          <div class="metaItem"><b>Template</b>${templateIdEscaped} (${templateSourceEscaped})</div>
           <div class="metaItem"><b>Instruction</b>${instruction}</div>
           <div class="metaItem"><b>Reason</b>${reason}</div>
           <div class="metaItem"><b>Current App</b>${currentApp}</div>
