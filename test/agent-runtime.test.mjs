@@ -763,6 +763,65 @@ test("AgentRuntime escalates capability probe camera event to human auth", async
   assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
 });
 
+test("AgentRuntime escalates capability probe after tap_element action", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "open camera entry", action: { type: "tap_element", elementId: 11 } },
+      { thought: "done", action: { type: "finish", message: "camera entry opened" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.Slack",
+      screenshotBase64: Buffer.from("slack-camera").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "camera",
+      phase: "requested",
+      packageName: "com.Slack",
+      source: "activity_log",
+      observedAt: new Date().toISOString(),
+      confidence: 0.95,
+      evidence: "camera intent start",
+    },
+  ]);
+
+  const result = await runtime.runTask(
+    "probe after tap_element test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-probe-camera-tap-element",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "camera");
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
+});
+
 test("AgentRuntime escalates permission dialog capability via activity dump fallback", async () => {
   const authRequests = [];
   const runtime = setupRuntime({
@@ -1740,6 +1799,60 @@ test("AgentRuntime injects delegated location on physical target via cmd locatio
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
+});
+
+test("AgentRuntime pre-finish capability probe escalates human auth on sensitive active app", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "done", action: { type: "finish", message: "camera opened" } },
+    ],
+  });
+  runtime.config.humanAuth.enabled = true;
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.google.android.GoogleCamera",
+    }),
+    resolveDeviceId: () => "physical-serial-1",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "camera",
+      phase: "active",
+      packageName: "com.google.android.GoogleCamera",
+      source: "camera_service",
+      observedAt: new Date().toISOString(),
+      confidence: 0.99,
+      evidence: "camera_active",
+    },
+  ]);
+
+  let authCalls = 0;
+  const result = await runtime.runTask(
+    "finish pre-check human auth test",
+    undefined,
+    undefined,
+    async (request) => {
+      authCalls += 1;
+      assert.equal(request.capability, "camera");
+      return {
+        requestId: "req-finish-camera",
+        approved: true,
+        status: "approved",
+        message: "approved by test",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authCalls, 1);
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
 });
 
 test("AgentRuntime appends gallery template hint after delegated image artifact", async () => {

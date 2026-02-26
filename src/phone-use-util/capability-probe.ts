@@ -397,7 +397,7 @@ export class PhoneUseCapabilityProbe {
     const events: CapabilityProbeEvent[] = [];
 
     for (const packageName of appPackages) {
-      const appOpsOutput = this.safeRunAdb(deviceId, ["shell", "cmd", "appops", "get", packageName], 1200);
+      const appOpsOutput = this.safeRunAdb(deviceId, ["shell", "cmd", "appops", "get", packageName], 2800);
       if (!appOpsOutput) {
         continue;
       }
@@ -410,7 +410,7 @@ export class PhoneUseCapabilityProbe {
       );
     }
 
-    const cameraOutput = this.safeRunAdb(deviceId, ["shell", "dumpsys", "media.camera"], 1200);
+    const cameraOutput = this.safeRunAdb(deviceId, ["shell", "dumpsys", "media.camera"], 2800);
     if (cameraOutput) {
       events.push(
         ...parseCameraDumpsysCapabilitySignals(cameraOutput, {
@@ -438,7 +438,7 @@ export class PhoneUseCapabilityProbe {
         "ActivityManager:I",
         "*:S",
       ],
-      1600,
+      3200,
     );
     this.lastLogcatSinceEpochSec = nowEpochSec;
     if (activityLog) {

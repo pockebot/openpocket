@@ -1866,7 +1866,7 @@ export class AgentRuntime {
     try {
       const dump = this.emulator.runAdb(
         ["-s", deviceId, "shell", "dumpsys", "activity", "top"],
-        2_000,
+        6_000,
       );
       const capability = this.detectPermissionDialogCapabilityFromDump(dump);
       if (!capability) {
@@ -2510,7 +2510,7 @@ export class AgentRuntime {
     if (stateDeltaLine) {
       executionResult += `\n${stateDeltaLine}`;
     }
-    const probeActionTypes = new Set(["tap", "swipe", "type", "keyevent", "launch_app", "shell"]);
+    const probeActionTypes = new Set(["tap", "tap_element", "swipe", "type", "keyevent", "launch_app", "shell"]);
     if (probeActionTypes.has(action.type)) {
       try {
         const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
@@ -2655,17 +2655,80 @@ export class AgentRuntime {
 
           // ---- finish ----
           if (action.type === "finish") {
+            const preFinishLines: string[] = [];
+            const finishApp = snapshot?.currentApp ?? "unknown";
+            try {
+              const canProbe =
+                this.config.humanAuth.enabled
+                && Boolean(snapshot)
+                && finishApp !== "unknown";
+              if (canProbe) {
+                const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
+                const events = this.capabilityProbe.poll({
+                  deviceId,
+                  foregroundPackage: finishApp,
+                  candidatePackages: [finishApp],
+                });
+                if (events.length > 0) {
+                  const probeLine = this.formatCapabilityProbeEvents(events);
+                  preFinishLines.push(probeLine);
+                  // eslint-disable-next-line no-console
+                  console.log(`[OpenPocket][capability-probe] ${probeLine}`);
+                }
+                const escalationLines = await this.maybeEscalateCapabilityProbeToHumanAuth(
+                  events,
+                  ctx,
+                  finishApp,
+                );
+                if (escalationLines.length > 0) {
+                  preFinishLines.push(...escalationLines);
+                  // eslint-disable-next-line no-console
+                  console.log(`[OpenPocket][capability-probe] ${escalationLines.join("\n")}`);
+                }
+              }
+            } catch (error) {
+              if (this.config.agent.verbose) {
+                // eslint-disable-next-line no-console
+                console.log(`[OpenPocket][capability-probe] pre-finish check failed: ${(error as Error).message}`);
+              }
+            }
+
+            if (ctx.failMessage) {
+              const resultText = [
+                `FINISH_BLOCKED: ${ctx.failMessage}`,
+                ...preFinishLines,
+              ]
+                .filter(Boolean)
+                .join("\n");
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                resultText,
+                buildStepTrace(finishApp, "error"),
+              );
+              ctx.traces.push({ step, action, result: resultText, thought, currentApp: finishApp });
+              ctx.history.push(`step ${step}: action=finish blocked=${ctx.failMessage}`);
+              return { content: [{ type: "text" as const, text: resultText }], details: {} };
+            }
+
             ctx.finishMessage = action.message || "Task completed.";
-            const resultText = `FINISH: ${ctx.finishMessage}`;
+            const resultText = [
+              `FINISH: ${ctx.finishMessage}`,
+              ...preFinishLines,
+            ]
+              .filter(Boolean)
+              .join("\n");
             runtime.workspace.appendStep(
               ctx.session,
               step,
               thought,
               JSON.stringify(action, null, 2),
               resultText,
-              buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+              buildStepTrace(finishApp, "ok"),
             );
-            ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.traces.push({ step, action, result: resultText, thought, currentApp: finishApp });
             ctx.history.push(`step ${step}: action=finish message=${ctx.finishMessage}`);
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
           }
