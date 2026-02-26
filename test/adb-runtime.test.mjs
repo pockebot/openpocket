@@ -269,10 +269,56 @@ test("AdbRuntime wakes and dismisses keyguard before interactive action on physi
   );
 });
 
+test("AdbRuntime inputs default PIN when device remains locked after dismiss attempt", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 100, y: 220 });
+  assert.match(result, /Tapped at/i);
+  assert.equal(
+    emulator.calls.some(
+      (args) =>
+        args[0] === "-s"
+        && args[2] === "shell"
+        && args[3] === "input"
+        && args[4] === "swipe",
+    ),
+    true,
+  );
+  for (const keycode of ["8", "9", "10", "11", "66"]) {
+    assert.equal(
+      emulator.calls.some(
+        (args) =>
+          args[0] === "-s"
+          && args[2] === "shell"
+          && args[3] === "input"
+          && args[4] === "keyevent"
+          && args[5] === keycode,
+      ),
+      true,
+      `missing keyevent ${keycode}`,
+    );
+  }
+});
+
 test("AdbRuntime fails clearly when physical phone stays locked after unlock attempts", async () => {
   const emulator = new FakeEmulator({
     powerDumps: ["mInteractive=true"],
     policyDumps: [
+      "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",

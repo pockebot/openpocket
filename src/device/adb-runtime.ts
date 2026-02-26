@@ -270,6 +270,8 @@ function errorMessage(error: unknown): string {
   return String(error || "unknown error");
 }
 
+const DEFAULT_LOCKSCREEN_PIN = "1234";
+
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
@@ -335,6 +337,53 @@ export class AdbRuntime {
     }
   }
 
+  private async attemptPinUnlock(deviceId: string, pin: string): Promise<void> {
+    const normalized = String(pin ?? "").trim();
+    if (!/^\d{4}$/.test(normalized)) {
+      return;
+    }
+
+    const { width, height } = this.resolveScreenSize(deviceId);
+    const x = Math.max(1, Math.round(width / 2));
+    const startY = Math.max(1, Math.round(height * 0.82));
+    const endY = Math.max(1, Math.round(height * 0.25));
+
+    try {
+      this.emulator.runAdb([
+        "-s",
+        deviceId,
+        "shell",
+        "input",
+        "swipe",
+        String(x),
+        String(startY),
+        String(x),
+        String(endY),
+        "220",
+      ]);
+    } catch {
+      // Best effort pull-up gesture to show PIN pad.
+    }
+    await sleep(140);
+
+    for (const digit of normalized) {
+      const keycode = String(Number(digit) + 7);
+      try {
+        this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", keycode]);
+      } catch {
+        // Best effort digit entry.
+      }
+      await sleep(60);
+    }
+
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "66"]);
+    } catch {
+      // Best effort confirm.
+    }
+    await sleep(220);
+  }
+
   private async ensureInteractiveTargetReady(deviceId: string): Promise<void> {
     if (!this.shouldPrepareInteractiveTarget()) {
       return;
@@ -364,6 +413,12 @@ export class AdbRuntime {
 
     const keyguardAfterDismiss = this.isKeyguardShowing(deviceId);
     if (keyguardAfterDismiss === false) {
+      return;
+    }
+
+    await this.attemptPinUnlock(deviceId, DEFAULT_LOCKSCREEN_PIN);
+    const keyguardAfterPin = this.isKeyguardShowing(deviceId);
+    if (keyguardAfterPin === false) {
       return;
     }
 
