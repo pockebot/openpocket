@@ -230,9 +230,20 @@ export class HumanAuthRelayServer {
       return;
     }
     ensureDir(path.dirname(this.options.stateFile));
+    const serialized = [...this.records.values()].map((record) => {
+      if (record.capability !== "payment") {
+        return record;
+      }
+      // Never persist sensitive payment notes/artifacts to local relay state.
+      return {
+        ...record,
+        note: "",
+        artifact: null,
+      };
+    });
     fs.writeFileSync(
       this.options.stateFile,
-      `${JSON.stringify([...this.records.values()], null, 2)}\n`,
+      `${JSON.stringify(serialized, null, 2)}\n`,
       "utf-8",
     );
   }
@@ -872,6 +883,20 @@ export class HumanAuthRelayServer {
 
       <div class="section" id="delegatedDataSection">
         <h2>Optional Delegated Data</h2>
+        <div id="paymentDelegation" class="hidden">
+          <label for="payCardNumber">Card Number</label>
+          <input id="payCardNumber" type="text" inputmode="numeric" autocomplete="cc-number" placeholder="e.g., 4111111111111111" />
+          <label for="payExpiry">Expiration (MM/YY)</label>
+          <input id="payExpiry" type="text" inputmode="numeric" autocomplete="cc-exp" placeholder="e.g., 02/32" />
+          <label for="payCvc">Security Code (CVV/CVC)</label>
+          <input id="payCvc" type="text" inputmode="numeric" autocomplete="cc-csc" placeholder="e.g., 182" />
+          <label for="payZip">ZIP / Postal (Optional)</label>
+          <input id="payZip" type="text" autocomplete="postal-code" placeholder="e.g., 94105" />
+          <div class="actions">
+            <button id="attachPayment" type="button">Attach Payment Fields</button>
+          </div>
+          <div class="muted">For payment capability, data is sent as one-time structured delegation and not stored in relay state file.</div>
+        </div>
         <div id="textDelegation">
           <label for="resultText">OTP / Code / Short Text</label>
           <input id="resultText" type="text" placeholder="e.g., OTP, SMS code, QR result text" />
@@ -940,6 +965,10 @@ export class HumanAuthRelayServer {
     const togglePasswordEl = document.getElementById("togglePassword");
     const geoLatEl = document.getElementById("geoLat");
     const geoLonEl = document.getElementById("geoLon");
+    const payCardNumberEl = document.getElementById("payCardNumber");
+    const payExpiryEl = document.getElementById("payExpiry");
+    const payCvcEl = document.getElementById("payCvc");
+    const payZipEl = document.getElementById("payZip");
     const takeoverStreamEl = document.getElementById("takeoverStream");
     const takeoverEmptyEl = document.getElementById("takeoverEmpty");
     const takeoverMetaEl = document.getElementById("takeoverMeta");
@@ -970,6 +999,7 @@ export class HumanAuthRelayServer {
       if (cap === "location") return "Recommended: attach location and approve.";
       if (cap === "camera") return "Recommended: capture/upload photo and approve.";
       if (cap === "oauth") return "Recommended: fill credentials above, then approve. Remote takeover is optional.";
+      if (cap === "payment") return "Recommended: fill payment fields below and approve.";
       if (cap === "2fa" || cap === "sms") return "Recommended: attach OTP/code and approve.";
       if (cap === "qr") return "Recommended: attach QR text or photo and approve.";
       return "Recommended: attach needed data, then approve.";
@@ -998,9 +1028,15 @@ export class HumanAuthRelayServer {
       show("credentialDelegation", capability === "oauth");
       show("capabilityHint", capability !== "oauth");
       show("delegatedDataSection", capability !== "oauth");
+      show("paymentDelegation", capability === "payment");
       show("geoDelegation", capability === "location");
-      show("textDelegation", capability !== "location" && capability !== "oauth");
+      show("textDelegation", capability !== "location" && capability !== "oauth" && capability !== "payment");
       show("cameraDelegation", capability === "camera" || capability === "qr");
+      if (capability === "payment") {
+        noteEl.placeholder = "Do not enter card data in note. Use payment fields above.";
+      } else {
+        noteEl.placeholder = "Optional message to agent";
+      }
       if (capability === "location") {
         resultTextEl.placeholder = "Optional location note";
       } else if (capability === "sms" || capability === "2fa") {
@@ -1009,6 +1045,8 @@ export class HumanAuthRelayServer {
         resultTextEl.placeholder = "Paste QR decoded content";
       } else if (capability === "oauth") {
         resultTextEl.placeholder = "Not used in oauth flow";
+      } else if (capability === "payment") {
+        resultTextEl.placeholder = "Not used in payment flow";
       } else {
         resultTextEl.placeholder = "Optional delegated text";
       }
@@ -1222,6 +1260,25 @@ export class HumanAuthRelayServer {
       };
     }
 
+    function buildPaymentArtifactPayload() {
+      const cardNumber = String(payCardNumberEl.value || "").replace(/\s+/g, "");
+      const expiry = String(payExpiryEl.value || "").trim();
+      const cvc = String(payCvcEl.value || "").trim();
+      const zip = String(payZipEl.value || "").trim();
+      if (!cardNumber && !expiry && !cvc && !zip) {
+        return null;
+      }
+      return {
+        kind: "payment_card_v1",
+        cardNumber,
+        expiry,
+        cvc,
+        zip,
+        capability,
+        capturedAt: new Date().toISOString(),
+      };
+    }
+
     function clearCredentialInput(inputEl) {
       if (!inputEl) {
         return;
@@ -1282,6 +1339,16 @@ export class HumanAuthRelayServer {
         capturedAt: new Date().toISOString(),
       });
       statusEl.textContent = "Location attached.";
+    }
+
+    function attachPaymentArtifact() {
+      const payload = buildPaymentArtifactPayload();
+      if (!payload) {
+        statusEl.textContent = "Payment fields are empty.";
+        return;
+      }
+      setJsonArtifact(payload);
+      statusEl.textContent = "Payment fields attached.";
     }
 
     function useCurrentLocation() {
@@ -1429,14 +1496,27 @@ export class HumanAuthRelayServer {
           } else {
             artifact = null;
           }
+        } else if (capability === "payment") {
+          if (approved) {
+            const payload = buildPaymentArtifactPayload();
+            artifact = payload
+              ? {
+                mimeType: "application/json",
+                base64: toBase64Utf8(JSON.stringify(payload)),
+              }
+              : null;
+          } else {
+            artifact = null;
+          }
         }
+        const decisionNote = capability === "payment" ? "" : (noteEl.value || "");
         const response = await fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             token,
             approved,
-            note: noteEl.value || "",
+            note: decisionNote,
             artifact
           })
         });
@@ -1467,6 +1547,7 @@ export class HumanAuthRelayServer {
     document.getElementById("snapCam").addEventListener("click", captureSnapshot);
     document.getElementById("pickPhoto").addEventListener("click", pickPhoto);
     document.getElementById("attachText").addEventListener("click", attachTextArtifact);
+    document.getElementById("attachPayment").addEventListener("click", attachPaymentArtifact);
     document.getElementById("clearUsername").addEventListener("click", () => clearCredentialInput(credUsernameEl));
     document.getElementById("clearPassword").addEventListener("click", () => clearCredentialInput(credPasswordEl));
     document.getElementById("togglePassword").addEventListener("click", togglePasswordVisibility);
@@ -1681,8 +1762,9 @@ export class HumanAuthRelayServer {
       }
 
       const approved = isTruthyBoolean(body.approved);
+      const isPayment = String(record.capability).trim().toLowerCase() === "payment";
       record.status = approved ? "approved" : "rejected";
-      record.note = String(body.note ?? "").slice(0, 2000);
+      record.note = isPayment ? "" : String(body.note ?? "").slice(0, 2000);
       record.decidedAt = nowIso();
       record.openTokenHash = "";
 
