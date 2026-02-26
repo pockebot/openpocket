@@ -44,6 +44,7 @@
     "@mariozechner/pi-coding-agent": "^0.54.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@sinclair/typebox": "^0.34.48",
+    "baileys": "^7.0.0-rc.9",
     "discord.js": "^14.25.1",
     "node-telegram-bot-api": "^0.66.0",
     "openai": "^6.10.0",

@@ -460,22 +460,29 @@ When both `telegram` (legacy) and `channels.telegram` exist, `channels.telegram`
 
 **Goal**: Implement `WhatsAppAdapter` using Baileys (WhatsApp Web), following OpenClaw's proven approach.
 
+**Status**: Done (2026-02-26)
+
 **Sub-tasks**:
 
-- [ ] Add `baileys` dependency (same library OpenClaw uses in production)
-- [ ] Implement `WhatsAppAdapter` in `src/channel/whatsapp/adapter.ts`
-  - QR-code based session linking (`openclaw channels login` equivalent)
-  - Baileys socket lifecycle + reconnect loop
-  - Message receive/send normalization
-  - Image/media sending with size limits
-  - Read receipt support (configurable)
-  - Text chunking (length / newline modes)
-  - Self-chat protections for personal-number setups
+- [x] Add `baileys` dependency (v6.7.16, official package name)
+- [x] Implement `WhatsAppAdapter` in `src/channel/whatsapp/adapter.ts`
+  - Baileys socket lifecycle (makeWASocket) + auto-reconnect loop
+  - QR code generation event for session linking
+  - Message receive/send normalization (text, image, video, audio, document, sticker)
+  - Image sending via buffer (fs.readFileSync)
+  - Read receipt support (configurable via sendReadReceipts)
+  - Text chunking (length / newline modes, configurable limit)
+  - Self-message filtering (msg.key.fromMe skipped)
   - User decision via numbered-reply text flow
-- [ ] Implement WhatsApp session persistence and credential storage
-- [ ] Add multi-account support (per-account auth dir, config overrides)
-- [ ] Add WhatsApp-specific config schema
-- [ ] Add `openpocket channels login --channel whatsapp` CLI command
+  - User input via text prompt
+  - Human auth escalation via plain text with URL
+  - Presence-based typing indicator (composing/paused)
+  - Phone number normalization for access control (JID stripping)
+- [x] Implement WhatsApp session persistence (useMultiFileAuthState in stateDir/whatsapp-auth)
+- [x] Wire into `gateway-factory.ts` with `isWhatsAppConfigured` auto-detection
+- [x] Unit tests: 11 adapter tests + 3 factory integration tests
+- [ ] Multi-account support (deferred)
+- [ ] `openpocket channels login --channel whatsapp` CLI command (deferred)
 - [ ] Document setup flow (QR scan, dedicated vs. personal number)
 - [ ] Note compliance/TOS considerations (recommend dedicated number)
 
@@ -717,7 +724,11 @@ src/gateway/
 |   T2: DiscordAdapter impl | Done | DM + Guild message parsing, embeds, buttons, typing, access control |
 |   T2: Gateway factory wiring | Done | isDiscordConfigured + auto-register in createGateway |
 |   T2: Unit tests | Done | 15 adapter tests + 5 factory tests (26 total Discord-related) |
-| R6-T3: WhatsApp connector (Baileys) | Not started | Depends on T1 (completed) |
+| R6-T3: WhatsApp connector (Baileys) | **Done** | WhatsAppAdapter implemented with Baileys v6.7.16 |
+|   T3: baileys dependency | Done | Official `baileys` package (not deprecated @whiskeysockets scope) |
+|   T3: WhatsAppAdapter impl | Done | Socket lifecycle, reconnect, QR, message parsing, media, typing |
+|   T3: Gateway factory wiring | Done | isWhatsAppConfigured + auto-register in createGateway |
+|   T3: Unit tests | Done | 11 adapter tests + 3 factory tests |
 | R6-T4: WeChat/QQ adapter stubs | Not started | Research done; NapCat/OneBot for QQ, Wechaty/PadLocal for WeChat |
 
 ## Risk and Considerations

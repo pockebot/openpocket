@@ -182,6 +182,58 @@ test("createGateway: Discord adapter resolves token from env", () => {
   });
 });
 
+test("createGateway: registers WhatsApp adapter when whatsapp config exists", () => {
+  withTempHome("gwfactory-whatsapp-", (home) => {
+    const config = loadConfig();
+    config.telegram.botToken = "";
+    config.telegram.botTokenEnv = "";
+    config.channels = {
+      whatsapp: {
+        dmPolicy: "pairing",
+        allowFrom: [],
+        sendReadReceipts: true,
+      },
+    };
+
+    const { router } = createGateway(config, { logger: () => {} });
+
+    const whatsappAdapter = router.getAdapter("whatsapp");
+    assert.ok(whatsappAdapter, "whatsapp adapter should be registered");
+    assert.equal(whatsappAdapter.channelType, "whatsapp");
+  });
+});
+
+test("createGateway: no WhatsApp adapter when channels.whatsapp.enabled is false", () => {
+  withTempHome("gwfactory-whatsapp-disabled-", (home) => {
+    const config = loadConfig();
+    config.telegram.botToken = "";
+    config.telegram.botTokenEnv = "";
+    config.channels = {
+      whatsapp: {
+        enabled: false,
+        dmPolicy: "pairing",
+      },
+    };
+
+    const { router } = createGateway(config, { logger: () => {} });
+
+    assert.equal(router.getAdapter("whatsapp"), null, "whatsapp adapter should NOT be registered when disabled");
+  });
+});
+
+test("createGateway: no WhatsApp adapter when no whatsapp config", () => {
+  withTempHome("gwfactory-whatsapp-noconfig-", (home) => {
+    const config = loadConfig();
+    config.telegram.botToken = "";
+    config.telegram.botTokenEnv = "";
+    config.channels = {};
+
+    const { router } = createGateway(config, { logger: () => {} });
+
+    assert.equal(router.getAdapter("whatsapp"), null);
+  });
+});
+
 test("createGateway: pairing config is passed through", () => {
   withTempHome("gwfactory-pairing-", (home) => {
     const config = loadConfig();

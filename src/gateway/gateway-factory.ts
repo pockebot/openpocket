@@ -6,6 +6,7 @@ import { DefaultSessionKeyResolver } from "../channel/session-keys.js";
 import { FilePairingStore } from "../channel/pairing.js";
 import { TelegramAdapter } from "../channel/telegram/adapter.js";
 import { DiscordAdapter } from "../channel/discord/adapter.js";
+import { WhatsAppAdapter } from "../channel/whatsapp/adapter.js";
 import { GatewayCore } from "./gateway-core.js";
 
 export interface GatewayFactoryResult {
@@ -61,6 +62,14 @@ export function createGateway(
     router.register(discordAdapter);
   }
 
+  if (isWhatsAppConfigured(config)) {
+    const waConfig = config.channels!.whatsapp!;
+    const whatsappAdapter = new WhatsAppAdapter(config, waConfig, {
+      logger: log,
+    });
+    router.register(whatsappAdapter);
+  }
+
   const core = new GatewayCore(config, router, sessionKeyResolver, pairingStore, {
     logger: log,
   });
@@ -85,4 +94,11 @@ function isDiscordConfigured(config: OpenPocketConfig): boolean {
 
   const token = dc.token?.trim() || (dc.tokenEnv ? process.env[dc.tokenEnv]?.trim() : "") || "";
   return token.length > 0;
+}
+
+function isWhatsAppConfigured(config: OpenPocketConfig): boolean {
+  const wa = config.channels?.whatsapp;
+  if (!wa) return false;
+  if (wa.enabled === false) return false;
+  return true;
 }
