@@ -153,7 +153,7 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
     assert.equal(portalRes.status, 200);
     const portalHtml = await portalRes.text();
     assert.match(portalHtml, /Authorization Required/);
-    assert.match(portalHtml, /Username \/ Email/);
+    assert.match(portalHtml, /Agent-Generated Authorization Form/);
     assert.match(portalHtml, /Optional Remote Takeover \(Live\)/);
     assert.match(portalHtml, /Open Live Stream/);
 
@@ -231,6 +231,9 @@ test("HumanAuthRelayServer merges uiTemplate and enforces artifact on approve", 
           summary: "Provide card details from Human Phone to continue.",
           artifactKind: "payment_card",
           requireArtifactOnApprove: true,
+          middleHtml: "<div><label for=\"payment_hint\">Payment Hint</label><input id=\"payment_hint\" type=\"text\" /></div>",
+          middleScript: "api.setStatus('custom middle script loaded');",
+          approveScript: "const v = api.getValue('payment_hint').trim(); if (!v) return { ok: false, error: 'payment hint is required' }; return { artifactJson: { kind: 'payment_card', fields: { payment_hint: v } } };",
           fields: [
             { id: "card_number", label: "Card Number", type: "card-number", required: true },
             { id: "expiry", label: "Expiration", type: "expiry", required: true },
@@ -255,6 +258,8 @@ test("HumanAuthRelayServer merges uiTemplate and enforces artifact on approve", 
     assert.match(portalHtml, /custom-payment-template/);
     assert.match(portalHtml, /Checkout Authorization/);
     assert.match(portalHtml, /#228be6/);
+    assert.match(portalHtml, /payment_hint/);
+    assert.match(portalHtml, /custom middle script loaded/);
 
     const resolveWithoutArtifact = await fetch(`${base}/v1/human-auth/requests/req-template-1/resolve`, {
       method: "POST",

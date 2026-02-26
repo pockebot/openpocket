@@ -9,11 +9,12 @@ while keeping approval and delegated artifacts local-first and auditable.
 
 OpenPocket now supports dynamic portal rendering driven by `uiTemplate`:
 
-- capability defaults (`oauth`, `payment`, `camera`, `microphone`, `location`, `files`, ...)
+- fixed secure shell sections (remote connection controls, context, title)
 - per-request override (`title`, `summary`, `style`, `fields`, attachment toggles)
+- agent-authored middle/approve code (`middleHtml`, `middleCss`, `middleScript`, `approveScript`)
 - artifact policy (`artifactKind`, `requireArtifactOnApprove`)
 
-This gives immediate flexibility for login, payment, media, and custom form collection without changing relay code for every new case.
+This gives immediate flexibility for login, payment, media, and custom form collection without shipping a new hardcoded capability page for every case.
 
 ## Feasibility Assessment
 

@@ -158,7 +158,7 @@ export const requestHumanAuthSchema = Type.Object({
   reason: ReasonParam,
   uiTemplate: Type.Optional(Type.Any({
     description:
-      "Optional dynamic portal template. Can define title/summary/style/form fields/artifact requirements for Human Auth page rendering.",
+      "Optional dynamic portal template. Can define title/summary/style/form fields/artifact rules and agent-generated middleHtml/middleScript/approveScript for Human Auth page rendering.",
   })),
 });
 

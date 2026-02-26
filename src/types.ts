@@ -210,6 +210,14 @@ export interface HumanAuthUiTemplate {
   allowFileAttachment?: boolean;
   fileAccept?: string;
   fields?: HumanAuthUiField[];
+  middleHtml?: string;
+  middleCss?: string;
+  middleScript?: string;
+  approveScript?: string;
+  approveLabel?: string;
+  rejectLabel?: string;
+  noteLabel?: string;
+  notePlaceholder?: string;
   style?: HumanAuthUiStyle;
 }
 

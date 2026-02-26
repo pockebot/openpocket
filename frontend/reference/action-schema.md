@@ -105,6 +105,14 @@ type AgentAction =
         allowAudioAttachment?: boolean;
         allowFileAttachment?: boolean;
         fileAccept?: string;
+        middleHtml?: string;
+        middleCss?: string;
+        middleScript?: string;
+        approveScript?: string;
+        approveLabel?: string;
+        rejectLabel?: string;
+        noteLabel?: string;
+        notePlaceholder?: string;
         fields?: Array<{
           id: string;
           label: string;

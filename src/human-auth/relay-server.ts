@@ -52,6 +52,14 @@ type RelayPortalResolvedTemplate = {
   allowFileAttachment: boolean;
   fileAccept: string;
   fields: HumanAuthUiField[];
+  middleHtml: string;
+  middleCss: string;
+  middleScript: string;
+  approveScript: string;
+  approveLabel: string;
+  rejectLabel: string;
+  noteLabel: string;
+  notePlaceholder: string;
   style: {
     brandColor: string;
     backgroundCss: string;
@@ -145,6 +153,41 @@ function sanitizeAccept(input: unknown, fallback: string): string {
   return value;
 }
 
+function sanitizeTemplateMarkup(input: unknown, fallback = "", maxLen = 18_000): string {
+  if (typeof input !== "string") {
+    return fallback;
+  }
+  const raw = input.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const clipped = raw.slice(0, maxLen);
+  // Keep markup channel strictly HTML-only. Script goes through middleScript.
+  return clipped
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*(["']).*?\1/gi, "")
+    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, "");
+}
+
+function sanitizeScriptSnippet(input: unknown, fallback = "", maxLen = 24_000): string {
+  if (typeof input !== "string") {
+    return fallback;
+  }
+  const raw = input.trim();
+  if (!raw) {
+    return fallback;
+  }
+  // Prevent breaking out of inline <script> tag.
+  if (/<\/script/i.test(raw)) {
+    return fallback;
+  }
+  return raw.slice(0, maxLen);
+}
+
+function sanitizeButtonLabel(input: unknown, fallback: string): string {
+  return sanitizeString(input, fallback, 40);
+}
+
 function sanitizeUiField(input: unknown, index: number): HumanAuthUiField | null {
   if (!isObject(input)) {
     return null;
@@ -188,13 +231,12 @@ function sanitizeUiField(input: unknown, index: number): HumanAuthUiField | null
   };
 }
 
-function defaultTemplateForCapability(capabilityRaw: string): RelayPortalResolvedTemplate {
-  const capability = sanitizeString(capabilityRaw, "unknown", 40).toLowerCase();
-  const base: RelayPortalResolvedTemplate = {
-    templateId: capability,
+function defaultPortalTemplate(): RelayPortalResolvedTemplate {
+  return {
+    templateId: "human-auth-generic",
     title: "Authorization Required",
     summary: "Review the request and approve or reject.",
-    capabilityHint: "Recommended: provide delegated data when required, then approve.",
+    capabilityHint: "",
     artifactKind: "auto",
     requireArtifactOnApprove: false,
     allowTextAttachment: true,
@@ -204,117 +246,26 @@ function defaultTemplateForCapability(capabilityRaw: string): RelayPortalResolve
     allowFileAttachment: false,
     fileAccept: "*/*",
     fields: [],
+    middleHtml: "",
+    middleCss: "",
+    middleScript: "",
+    approveScript: "",
+    approveLabel: "Approve",
+    rejectLabel: "Reject",
+    noteLabel: "Decision Note (Optional)",
+    notePlaceholder: "Optional message to agent",
     style: {
       brandColor: "#ff8a00",
       backgroundCss: "linear-gradient(155deg, #fffefb 0%, #fff9f2 56%, #f4f8ff 100%)",
       fontFamily: "\"Poppins\", \"Avenir Next\", \"Segoe UI\", Arial, sans-serif",
     },
   };
-
-  if (capability === "oauth") {
-    return {
-      ...base,
-      templateId: "oauth-login",
-      title: "Account Login Authorization",
-      summary: "Provide account credentials on your phone to continue login on Agent Phone.",
-      capabilityHint: "Recommended: fill credentials and approve. Remote takeover is optional.",
-      artifactKind: "credentials",
-      requireArtifactOnApprove: true,
-      allowTextAttachment: false,
-    };
-  }
-  if (capability === "payment") {
-    return {
-      ...base,
-      templateId: "payment-card",
-      title: "Payment Authorization",
-      summary: "Provide payment details on your phone and approve to continue secure checkout.",
-      capabilityHint: "Recommended: fill required payment fields and approve.",
-      artifactKind: "payment_card",
-      requireArtifactOnApprove: true,
-      allowTextAttachment: false,
-      fields: [
-        { id: "card_number", label: "Card Number", type: "card-number", required: true, autocomplete: "cc-number" },
-        { id: "expiry", label: "Expiration Date", type: "expiry", required: true, placeholder: "MM/YY", autocomplete: "cc-exp" },
-        { id: "cvc", label: "CVC", type: "cvc", required: true, autocomplete: "cc-csc" },
-        { id: "card_name", label: "Cardholder Name", type: "text", required: false, autocomplete: "cc-name" },
-      ],
-    };
-  }
-  if (capability === "camera" || capability === "qr") {
-    return {
-      ...base,
-      templateId: "camera-capture",
-      title: capability === "qr" ? "QR Data Authorization" : "Camera Authorization",
-      summary: "Capture or upload a photo from your phone, then approve.",
-      capabilityHint: capability === "qr"
-        ? "Recommended: attach QR image or decoded text, then approve."
-        : "Recommended: attach a photo from your phone camera/album, then approve.",
-      requireArtifactOnApprove: true,
-      allowPhotoAttachment: true,
-      allowFileAttachment: true,
-      fileAccept: "image/*",
-    };
-  }
-  if (capability === "location") {
-    return {
-      ...base,
-      templateId: "location-delegation",
-      title: "Location Authorization",
-      summary: "Share your current phone location and approve.",
-      capabilityHint: "Recommended: tap \"Use Current Location\", confirm coordinates, then approve.",
-      requireArtifactOnApprove: true,
-      allowTextAttachment: false,
-      allowLocationAttachment: true,
-    };
-  }
-  if (capability === "microphone" || capability === "voice") {
-    return {
-      ...base,
-      templateId: "microphone-delegation",
-      title: "Microphone Authorization",
-      summary: "Attach an audio recording from your phone and approve.",
-      capabilityHint: "Recommended: capture/upload audio, then approve.",
-      requireArtifactOnApprove: true,
-      allowTextAttachment: false,
-      allowAudioAttachment: true,
-      allowFileAttachment: true,
-      fileAccept: "audio/*",
-    };
-  }
-  if (capability === "files") {
-    return {
-      ...base,
-      templateId: "album-delegation",
-      title: "Album Access Authorization",
-      summary: "Select photo/media from your phone album and approve.",
-      capabilityHint: "Recommended: choose media file(s) from your phone and approve.",
-      requireArtifactOnApprove: true,
-      allowTextAttachment: false,
-      allowPhotoAttachment: true,
-      allowFileAttachment: true,
-      fileAccept: "image/*,video/*",
-    };
-  }
-  if (capability === "sms" || capability === "2fa") {
-    return {
-      ...base,
-      templateId: "otp-code",
-      title: "Verification Code Authorization",
-      summary: "Enter the verification code from your phone and approve.",
-      capabilityHint: "Recommended: attach OTP/code and approve.",
-      requireArtifactOnApprove: true,
-      allowTextAttachment: true,
-    };
-  }
-
-  return base;
 }
 
 function mergeTemplateOverride(
-  base: RelayPortalResolvedTemplate,
   overrideRaw: unknown,
 ): RelayPortalResolvedTemplate {
+  const base = defaultPortalTemplate();
   if (!isObject(overrideRaw)) {
     return base;
   }
@@ -352,6 +303,14 @@ function mergeTemplateOverride(
     allowFileAttachment: sanitizeBoolean(override.allowFileAttachment, base.allowFileAttachment),
     fileAccept: sanitizeAccept(override.fileAccept, base.fileAccept),
     fields: mergedFields,
+    middleHtml: sanitizeTemplateMarkup((override as Record<string, unknown>).middleHtml, base.middleHtml),
+    middleCss: sanitizeTemplateMarkup((override as Record<string, unknown>).middleCss, base.middleCss, 8000),
+    middleScript: sanitizeScriptSnippet((override as Record<string, unknown>).middleScript, base.middleScript),
+    approveScript: sanitizeScriptSnippet((override as Record<string, unknown>).approveScript, base.approveScript),
+    approveLabel: sanitizeButtonLabel((override as Record<string, unknown>).approveLabel, base.approveLabel),
+    rejectLabel: sanitizeButtonLabel((override as Record<string, unknown>).rejectLabel, base.rejectLabel),
+    noteLabel: sanitizeString((override as Record<string, unknown>).noteLabel, base.noteLabel, 80),
+    notePlaceholder: sanitizeString((override as Record<string, unknown>).notePlaceholder, base.notePlaceholder, 180),
     style: {
       brandColor: sanitizeCssColor(override.style?.brandColor, base.style.brandColor),
       backgroundCss: sanitizeCssBackground(override.style?.backgroundCss, base.style.backgroundCss),
@@ -456,8 +415,7 @@ export class HumanAuthRelayServer {
   }
 
   private resolvePortalTemplate(record: Pick<RelayRecord, "capability" | "uiTemplate">): RelayPortalResolvedTemplate {
-    const base = defaultTemplateForCapability(record.capability);
-    return mergeTemplateOverride(base, record.uiTemplate);
+    return mergeTemplateOverride(record.uiTemplate);
   }
 
   get address(): string {
@@ -724,6 +682,12 @@ export class HumanAuthRelayServer {
     const brandColorCss = escapeHtml(portalTemplate.style.brandColor);
     const backgroundCss = escapeHtml(portalTemplate.style.backgroundCss);
     const fontFamilyCss = escapeHtml(portalTemplate.style.fontFamily);
+    const middleCssEscaped = escapeHtml(portalTemplate.middleCss || "");
+    const middleHtmlEscaped = portalTemplate.middleHtml || "";
+    const approveLabelEscaped = escapeHtml(portalTemplate.approveLabel || "Approve");
+    const rejectLabelEscaped = escapeHtml(portalTemplate.rejectLabel || "Reject");
+    const noteLabelEscaped = escapeHtml(portalTemplate.noteLabel || "Decision Note (Optional)");
+    const notePlaceholderEscaped = escapeHtml(portalTemplate.notePlaceholder || "Optional message to agent");
 
     return `<!doctype html>
 <html lang="en">
@@ -1113,6 +1077,10 @@ export class HumanAuthRelayServer {
         align-items: stretch;
       }
     }
+    ${middleCssEscaped ? `
+    /* Agent-generated middle section styles */
+    ${middleCssEscaped}
+    ` : ""}
   </style>
 </head>
 <body>
@@ -1136,49 +1104,23 @@ export class HumanAuthRelayServer {
         <div id="dynamicForm"></div>
       </div>
 
-      <div class="section hidden" id="credentialDelegation">
-        <label for="credUsername">Username / Email</label>
-        <div class="inputWrap">
-          <input
-            id="credUsername"
-            type="text"
-            placeholder="Enter username, email, or phone"
-            autocomplete="username"
-            autocapitalize="off"
-            spellcheck="false"
-          />
-          <button id="clearUsername" class="clearInputBtn" type="button" aria-label="Clear username">×</button>
-        </div>
-        <label for="credPassword">Password</label>
-        <div class="passwordRow">
-          <div class="inputWrap">
-            <input
-              id="credPassword"
-              type="password"
-              placeholder="Enter password"
-              autocomplete="current-password"
-              autocapitalize="off"
-              spellcheck="false"
-            />
-            <button id="clearPassword" class="clearInputBtn" type="button" aria-label="Clear password">×</button>
-          </div>
-          <button id="togglePassword" type="button">Show</button>
-        </div>
-        <div id="decisionMountOauth"></div>
+      <div class="section hidden" id="agentMiddleSection">
+        <h2>Agent-Generated Authorization Form</h2>
+        <div id="agentMiddleMount">${middleHtmlEscaped}</div>
       </div>
 
       <div class="section" id="decisionSection">
         <div id="decisionMountDefault">
           <div id="decisionBlock">
             <div class="actions decisionActions">
-              <button id="approve" type="button">Approve</button>
-              <button id="reject" type="button">Reject</button>
+              <button id="approve" type="button">${approveLabelEscaped}</button>
+              <button id="reject" type="button">${rejectLabelEscaped}</button>
             </div>
             <div class="muted securityTrust">
               Security: this is a one-time authorization link. All transmissions are encrypted. Relay and credential handling run only on your own computer.
             </div>
-            <label for="note">Decision Note (Optional)</label>
-            <textarea id="note" placeholder="Optional message to agent"></textarea>
+            <label for="note">${noteLabelEscaped}</label>
+            <textarea id="note" placeholder="${notePlaceholderEscaped}"></textarea>
             <div class="status" id="status"></div>
           </div>
         </div>
@@ -1284,7 +1226,6 @@ export class HumanAuthRelayServer {
     const capability = ${JSON.stringify(record.capability)};
     const uiTemplate = ${portalTemplateJson};
     const decisionBlockEl = document.getElementById("decisionBlock");
-    const decisionMountOauthEl = document.getElementById("decisionMountOauth");
     const decisionMountDefaultEl = document.getElementById("decisionMountDefault");
     const decisionSectionEl = document.getElementById("decisionSection");
     const pageTitleEl = document.getElementById("pageTitle");
@@ -1295,6 +1236,8 @@ export class HumanAuthRelayServer {
     const dynamicFormSectionEl = document.getElementById("dynamicFormSection");
     const dynamicFormTitleEl = document.getElementById("dynamicFormTitle");
     const dynamicFormEl = document.getElementById("dynamicForm");
+    const agentMiddleSectionEl = document.getElementById("agentMiddleSection");
+    const agentMiddleMountEl = document.getElementById("agentMiddleMount");
     const videoEl = document.getElementById("video");
     const canvasEl = document.getElementById("canvas");
     const photoInputEl = document.getElementById("photoInput");
@@ -1304,9 +1247,6 @@ export class HumanAuthRelayServer {
     const fileInputEl = document.getElementById("fileInput");
     const filePreviewEl = document.getElementById("filePreview");
     const resultTextEl = document.getElementById("resultText");
-    const credUsernameEl = document.getElementById("credUsername");
-    const credPasswordEl = document.getElementById("credPassword");
-    const togglePasswordEl = document.getElementById("togglePassword");
     const geoLatEl = document.getElementById("geoLat");
     const geoLonEl = document.getElementById("geoLon");
     const takeoverStreamEl = document.getElementById("takeoverStream");
@@ -1336,15 +1276,8 @@ export class HumanAuthRelayServer {
       el.classList.toggle("hidden", !visible);
     }
 
-    function placeDecisionBlock(useCredentialSection) {
-      if (!decisionBlockEl || !decisionMountOauthEl || !decisionMountDefaultEl || !decisionSectionEl) {
-        return;
-      }
-      if (useCredentialSection) {
-        if (decisionBlockEl.parentElement !== decisionMountOauthEl) {
-          decisionMountOauthEl.appendChild(decisionBlockEl);
-        }
-        decisionSectionEl.classList.add("hidden");
+    function placeDecisionBlock() {
+      if (!decisionBlockEl || !decisionMountDefaultEl || !decisionSectionEl) {
         return;
       }
       if (decisionBlockEl.parentElement !== decisionMountDefaultEl) {
@@ -1469,17 +1402,80 @@ export class HumanAuthRelayServer {
       };
     }
 
+    function buildAgentPortalApi(extra = {}) {
+      return Object.assign(
+        {
+          requestId,
+          capability,
+          uiTemplate,
+          setStatus: (text) => {
+            statusEl.textContent = String(text || "");
+          },
+          getElement: (id) => document.getElementById(String(id || "")),
+          getValue: (id) => {
+            const el = document.getElementById(String(id || ""));
+            if (!el || !("value" in el)) {
+              return "";
+            }
+            return String(el.value || "");
+          },
+          setValue: (id, value) => {
+            const el = document.getElementById(String(id || ""));
+            if (!el || !("value" in el)) {
+              return;
+            }
+            el.value = String(value ?? "");
+          },
+          setArtifactJson: (payload) => {
+            setJsonArtifact(payload);
+          },
+          setArtifactRaw: (mimeType, base64) => {
+            artifact = {
+              mimeType: String(mimeType || "application/octet-stream"),
+              base64: String(base64 || ""),
+            };
+          },
+          clearArtifact: () => {
+            artifact = null;
+          },
+          toBase64Utf8,
+        },
+        extra,
+      );
+    }
+
+    async function invokeAgentScript(scriptText, api, scriptName) {
+      const code = String(scriptText || "").trim();
+      if (!code) {
+        return undefined;
+      }
+      try {
+        const fn = new Function("api", "\"use strict\";\\n" + code);
+        const output = fn(api);
+        if (output && typeof output.then === "function") {
+          return await output;
+        }
+        return output;
+      } catch (err) {
+        const message = err && err.message ? err.message : String(err);
+        statusEl.textContent = scriptName + " failed: " + message;
+        return { ok: false, error: scriptName + " failed: " + message };
+      }
+    }
+
     function configurePortalTemplate() {
       pageTitleEl.textContent = uiTemplate.title || "Authorization Required";
       pageSummaryEl.textContent = uiTemplate.summary || "";
       capabilityHintEl.textContent = uiTemplate.capabilityHint || "";
       dynamicFormTitleEl.textContent = "Requested Information";
       renderDynamicFields(uiTemplate.fields || []);
-
-      const useLegacyCredentialSection = uiTemplate.artifactKind === "credentials" && (uiTemplate.fields || []).length === 0;
-      placeDecisionBlock(useLegacyCredentialSection);
-      show("credentialDelegation", useLegacyCredentialSection);
+      placeDecisionBlock();
       show("capabilityHint", Boolean(uiTemplate.capabilityHint));
+      show("agentMiddleSection", Boolean((uiTemplate.middleHtml || "").trim() || (uiTemplate.middleScript || "").trim()));
+
+      if (agentMiddleMountEl) {
+        agentMiddleMountEl.innerHTML = String(uiTemplate.middleHtml || "");
+      }
 
       const showDelegatedData = Boolean(
         uiTemplate.allowTextAttachment
@@ -1500,6 +1496,17 @@ export class HumanAuthRelayServer {
         : "Not required for this authorization";
       audioInputEl.accept = uiTemplate.fileAccept || "audio/*";
       fileInputEl.accept = uiTemplate.fileAccept || "*/*";
+
+      if ((uiTemplate.middleScript || "").trim()) {
+        void invokeAgentScript(
+          uiTemplate.middleScript,
+          buildAgentPortalApi({
+            mode: "mount",
+            mountId: "agentMiddleMount",
+          }),
+          "middleScript",
+        );
+      }
     }
 
     /** Build takeover URL. For stream (img src), token stays in query string.
@@ -1695,21 +1702,6 @@ export class HumanAuthRelayServer {
       };
     }
 
-    function buildCredentialsArtifactPayload() {
-      const username = String(credUsernameEl.value || "").trim();
-      const password = String(credPasswordEl.value || "");
-      if (!username && !password) {
-        return null;
-      }
-      return {
-        kind: "credentials",
-        username,
-        password,
-        capability,
-        capturedAt: new Date().toISOString(),
-      };
-    }
-
     function buildDynamicFormArtifactPayload() {
       const collected = collectDynamicFieldValues();
       if (!collected.ok) {
@@ -1730,25 +1722,12 @@ export class HumanAuthRelayServer {
         payload: {
           kind: artifactKind,
           fields: values,
+          form_data: values,
           capability,
           templateId: uiTemplate.templateId || "",
           capturedAt: new Date().toISOString(),
         },
       };
-    }
-
-    function clearCredentialInput(inputEl) {
-      if (!inputEl) {
-        return;
-      }
-      inputEl.value = "";
-      inputEl.focus();
-    }
-
-    function togglePasswordVisibility() {
-      const asText = credPasswordEl.type === "password";
-      credPasswordEl.type = asText ? "text" : "password";
-      togglePasswordEl.textContent = asText ? "Hide" : "Show";
     }
 
     function humanErrorMessage(err) {
@@ -1774,7 +1753,7 @@ export class HumanAuthRelayServer {
         return;
       }
       setJsonArtifact({
-        kind: capability === "qr" ? "qr_text" : "text",
+        kind: "text",
         value: text,
         capability,
         capturedAt: new Date().toISOString(),
@@ -1977,6 +1956,7 @@ export class HumanAuthRelayServer {
       statusEl.textContent = "Submitting...";
       setDecisionButtonsDisabled(true);
       try {
+        let noteValue = String(noteEl.value || "");
         if (approved) {
           const dynamicPayload = buildDynamicFormArtifactPayload();
           if (!dynamicPayload.ok) {
@@ -1988,12 +1968,39 @@ export class HumanAuthRelayServer {
             setJsonArtifact(dynamicPayload.payload);
           }
 
-          const useLegacyCredentialSection = uiTemplate.artifactKind === "credentials"
-            && (!Array.isArray(uiTemplate.fields) || uiTemplate.fields.length === 0);
-          if (useLegacyCredentialSection && !artifact) {
-            const payload = buildCredentialsArtifactPayload();
-            if (payload) {
-              setJsonArtifact(payload);
+          const approveScriptOutput = await invokeAgentScript(
+            uiTemplate.approveScript,
+            buildAgentPortalApi({
+              mode: "approve",
+              approved: true,
+              note: noteValue,
+              currentArtifact: artifact,
+            }),
+            "approveScript",
+          );
+          if (approveScriptOutput && typeof approveScriptOutput === "object") {
+            const maybeOutput = approveScriptOutput;
+            if (maybeOutput.ok === false) {
+              statusEl.textContent = String(maybeOutput.error || "Approval script rejected this submission.");
+              setDecisionButtonsDisabled(false);
+              return;
+            }
+            if (typeof maybeOutput.note === "string") {
+              noteValue = maybeOutput.note.slice(0, 2000);
+            }
+            if (maybeOutput.artifactJson && typeof maybeOutput.artifactJson === "object") {
+              setJsonArtifact(maybeOutput.artifactJson);
+            }
+            if (
+              maybeOutput.artifact &&
+              typeof maybeOutput.artifact === "object" &&
+              typeof maybeOutput.artifact.mimeType === "string" &&
+              typeof maybeOutput.artifact.base64 === "string"
+            ) {
+              artifact = {
+                mimeType: maybeOutput.artifact.mimeType,
+                base64: maybeOutput.artifact.base64,
+              };
             }
           }
 
@@ -2011,7 +2018,7 @@ export class HumanAuthRelayServer {
           body: JSON.stringify({
             token,
             approved,
-            note: noteEl.value || "",
+            note: noteValue,
             artifact
           })
         });
@@ -2044,9 +2051,6 @@ export class HumanAuthRelayServer {
     document.getElementById("pickAudio").addEventListener("click", pickAudio);
     document.getElementById("pickFile").addEventListener("click", pickFile);
     document.getElementById("attachText").addEventListener("click", attachTextArtifact);
-    document.getElementById("clearUsername").addEventListener("click", () => clearCredentialInput(credUsernameEl));
-    document.getElementById("clearPassword").addEventListener("click", () => clearCredentialInput(credPasswordEl));
-    document.getElementById("togglePassword").addEventListener("click", togglePasswordVisibility);
     document.getElementById("useGeo").addEventListener("click", useCurrentLocation);
     document.getElementById("attachGeo").addEventListener("click", attachGeoArtifact);
     photoInputEl.addEventListener("change", onPhotoChange);

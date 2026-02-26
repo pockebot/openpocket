@@ -25,16 +25,25 @@ Design goal:
 Human Auth pages are no longer fixed to one hardcoded layout.
 `request_human_auth` can include an optional `uiTemplate` object, and relay renders each request page from:
 
-- capability default template (for `oauth`, `payment`, `camera`, `microphone`, `location`, `files`, etc.)
-- plus sanitized per-request template override from agent
+- a fixed secure shell (top title, remote takeover section, full context section)
+- plus sanitized per-request middle/approve customization from agent
 
 Template controls can define:
 
 - dynamic title/summary/hint
 - form schema (custom fields and validation)
 - style variables (brand/background/font)
+- agent-generated middle section (`middleHtml`, `middleCss`, `middleScript`)
+- agent-generated approve hook (`approveScript`)
 - allowed attachment channels (text/location/photo/audio/file)
 - artifact policy (`artifactKind`, `requireArtifactOnApprove`)
+
+Shell invariants (always rendered by relay, not delegated to custom template code):
+
+- remote connection section (live takeover)
+- full context section
+- top title section
+- customizable middle input/approve section
 
 This supports scenario-specific auth UX, for example:
 
