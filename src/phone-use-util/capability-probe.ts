@@ -7,7 +7,7 @@ export interface CapabilityProbeEvent {
   capability: PhoneUseCapability;
   phase: PhoneUseCapabilityPhase;
   packageName: string;
-  source: "appops" | "camera_service" | "activity_log";
+  source: "appops" | "camera_service" | "activity_log" | "permission_dialog";
   observedAt: string;
   confidence: number;
   evidence: string;

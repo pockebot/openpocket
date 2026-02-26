@@ -1525,6 +1525,82 @@ export class AgentRuntime {
     return `capability_probe count=${events.length} ${detail}`;
   }
 
+  private dedupeCapabilityProbeEvents(events: CapabilityProbeEvent[]): CapabilityProbeEvent[] {
+    const map = new Map<string, CapabilityProbeEvent>();
+    for (const event of events) {
+      const key = `${event.capability}|${event.phase}|${event.packageName.toLowerCase()}|${event.source}`;
+      const existing = map.get(key);
+      if (!existing || event.confidence > existing.confidence) {
+        map.set(key, event);
+      }
+    }
+    return [...map.values()];
+  }
+
+  private detectPermissionDialogCapabilityFromDump(
+    dumpText: string,
+  ): CapabilityProbeEvent["capability"] | null {
+    const upper = String(dumpText || "").toUpperCase();
+    if (!upper) {
+      return null;
+    }
+    if (upper.includes("ANDROID.PERMISSION.CAMERA")) {
+      return "camera";
+    }
+    if (upper.includes("ANDROID.PERMISSION.RECORD_AUDIO")) {
+      return "microphone";
+    }
+    if (
+      upper.includes("ANDROID.PERMISSION.ACCESS_FINE_LOCATION")
+      || upper.includes("ANDROID.PERMISSION.ACCESS_COARSE_LOCATION")
+    ) {
+      return "location";
+    }
+    if (
+      upper.includes("ANDROID.PERMISSION.READ_MEDIA_IMAGES")
+      || upper.includes("ANDROID.PERMISSION.READ_EXTERNAL_STORAGE")
+      || upper.includes("ANDROID.PERMISSION.WRITE_EXTERNAL_STORAGE")
+    ) {
+      return "photos";
+    }
+    return null;
+  }
+
+  private buildPermissionDialogCapabilityEvent(
+    deviceId: string,
+    foregroundPackage: string,
+    previousPackage: string,
+  ): CapabilityProbeEvent | null {
+    if (!this.isPermissionDialogApp(foregroundPackage)) {
+      return null;
+    }
+    const previous = String(previousPackage || "").trim();
+    if (!previous || this.isPermissionDialogApp(previous)) {
+      return null;
+    }
+    try {
+      const dump = this.emulator.runAdb(
+        ["-s", deviceId, "shell", "dumpsys", "activity", "top"],
+        2_000,
+      );
+      const capability = this.detectPermissionDialogCapabilityFromDump(dump);
+      if (!capability) {
+        return null;
+      }
+      return {
+        capability,
+        phase: "requested",
+        packageName: previous,
+        source: "permission_dialog",
+        observedAt: nowIso(),
+        confidence: 0.96,
+        evidence: `activity_top:${capability}`,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private mapProbeCapabilityToHumanAuthCapability(
     capability: CapabilityProbeEvent["capability"],
   ): HumanAuthCapability | null {
@@ -2150,14 +2226,22 @@ export class AgentRuntime {
           foregroundPackage: observedAppAfterAction,
           candidatePackages: [snapshot.currentApp],
         });
-        if (events.length > 0) {
-          const probeLine = this.formatCapabilityProbeEvents(events);
+        const permissionDialogEvent = this.buildPermissionDialogCapabilityEvent(
+          deviceId,
+          observedAppAfterAction,
+          snapshot.currentApp,
+        );
+        const combinedEvents = permissionDialogEvent
+          ? this.dedupeCapabilityProbeEvents([...events, permissionDialogEvent])
+          : events;
+        if (combinedEvents.length > 0) {
+          const probeLine = this.formatCapabilityProbeEvents(combinedEvents);
           executionResult += `\n${probeLine}`;
           // eslint-disable-next-line no-console
           console.log(`[OpenPocket][capability-probe] ${probeLine}`);
         }
         const escalationLines = await this.maybeEscalateCapabilityProbeToHumanAuth(
-          events,
+          combinedEvents,
           ctx,
           observedAppAfterAction,
         );

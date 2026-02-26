@@ -763,6 +763,69 @@ test("AgentRuntime escalates capability probe camera event to human auth", async
   assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
 });
 
+test("AgentRuntime escalates permission dialog capability via activity dump fallback", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "open camera entry", action: { type: "tap", x: 360, y: 720 } },
+      { thought: "done", action: { type: "finish", message: "camera entry opened" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.Slack",
+      screenshotBase64: Buffer.from("slack-camera").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    captureQuickObservation: async () => ({
+      currentApp: "com.google.android.permissioncontroller",
+      screenshotHash: "permission-dialog",
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.emulator = {
+    runAdb: (args) => {
+      const joined = Array.isArray(args) ? args.join(" ") : "";
+      if (joined.includes("dumpsys activity top")) {
+        return "requestedPermissions=[android.permission.CAMERA]";
+      }
+      return "";
+    },
+  };
+  runtime.capabilityProbe.poll = () => ([]);
+
+  const result = await runtime.runTask(
+    "permission dialog fallback to human auth test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-perm-dialog-camera",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "camera");
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /src=permission_dialog/i);
+  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
+});
+
 test("AgentRuntime fails when request_human_auth is rejected", async () => {
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
