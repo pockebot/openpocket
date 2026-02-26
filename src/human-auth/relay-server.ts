@@ -2168,6 +2168,22 @@ export class HumanAuthRelayServer {
       }
     }
 
+    function postClientEvent(eventName, detail) {
+      try {
+        void fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/client-event", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            token,
+            event: String(eventName || ""),
+            detail: detail || null,
+          }),
+        });
+      } catch {
+        // best-effort debug signal only
+      }
+    }
+
     function promptRequiredArtifactCollection() {
       focusDelegatedDataSection();
       if (uiTemplate.allowPhotoAttachment) {
@@ -2259,6 +2275,11 @@ export class HumanAuthRelayServer {
       decisionInFlight = true;
       setStatus("Submitting...", "info");
       setDecisionButtonsDisabled(true);
+      postClientEvent("decision_click", {
+        approved: Boolean(approved),
+        hasArtifact: Boolean(artifact),
+        requireArtifactOnApprove: Boolean(uiTemplate && uiTemplate.requireArtifactOnApprove),
+      });
 
       const unlockDecisionControls = () => {
         decisionInFlight = false;
@@ -2272,6 +2293,7 @@ export class HumanAuthRelayServer {
           const hasDynamicFields = Array.isArray(uiTemplate.fields) && uiTemplate.fields.length > 0;
           if (uiTemplate.requireArtifactOnApprove && !artifact && !hasApproveScript && !hasDynamicFields) {
             if (promptRequiredArtifactCollection()) {
+              postClientEvent("decision_blocked_missing_artifact", { stage: "pre_dynamic" });
               unlockDecisionControls();
               return;
             }
@@ -2333,12 +2355,17 @@ export class HumanAuthRelayServer {
               "This request requires delegated data before approval. Attach data below, then tap Approve and Continue again.",
               "error",
             );
+            postClientEvent("decision_blocked_missing_artifact", { stage: "pre_resolve" });
             unlockDecisionControls();
             return;
           }
         } else {
           artifact = null;
         }
+        postClientEvent("resolve_submit", {
+          approved: Boolean(approved),
+          hasArtifact: Boolean(artifact),
+        });
         const response = await withTimeout(
           fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve", {
             method: "POST",
@@ -2355,10 +2382,15 @@ export class HumanAuthRelayServer {
         );
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
+          postClientEvent("resolve_error", {
+            status: Number(response.status || 0),
+            error: String(body.error || response.statusText || "unknown"),
+          });
           setStatus("Failed: " + (body.error || response.statusText), "error");
           unlockDecisionControls();
           return;
         }
+        postClientEvent("resolve_ok", { status: String(body.status || "") });
         setStatus(approved ? "Approved. Closing..." : "Rejected. Closing...", "success");
         if (stream) {
           for (const track of stream.getTracks()) {
@@ -2371,6 +2403,9 @@ export class HumanAuthRelayServer {
         setTakeoverControlsEnabled(false);
         setTimeout(autoCloseResolvedPage, 120);
       } catch (err) {
+        postClientEvent("resolve_exception", {
+          error: String(err && err.message ? err.message : err || "unknown"),
+        });
         setStatus("Request failed: " + (err && err.message ? err.message : String(err)), "error");
         unlockDecisionControls();
       }
@@ -2728,6 +2763,40 @@ export class HumanAuthRelayServer {
         status: record.status,
         decidedAt: record.decidedAt,
       });
+      return;
+    }
+
+    const clientEventMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/client-event$/);
+    if (method === "POST" && clientEventMatch) {
+      const requestId = decodeURIComponent(clientEventMatch[1]);
+      const record = this.records.get(requestId);
+      if (!record) {
+        sendJson(res, 404, { error: "Request not found." });
+        return;
+      }
+      let body: unknown;
+      try {
+        body = await readJsonBody(req, 256_000);
+      } catch (error) {
+        sendJson(res, 400, { error: (error as Error).message });
+        return;
+      }
+      if (!isObject(body)) {
+        sendJson(res, 400, { error: "Invalid body." });
+        return;
+      }
+      const token = String(body.token ?? "");
+      if (!token || hashToken(token) !== record.openTokenHash) {
+        sendJson(res, 403, { error: "Invalid token." });
+        return;
+      }
+      const eventName = sanitizeString(body.event, "unknown", 80);
+      const detail = isObject(body.detail) ? JSON.stringify(body.detail).slice(0, 400) : "";
+      // eslint-disable-next-line no-console
+      console.log(
+        `[OpenPocket][human-auth] client_event requestId=${requestId} event=${eventName}${detail ? ` detail=${detail}` : ""}`,
+      );
+      sendJson(res, 200, { ok: true });
       return;
     }
 

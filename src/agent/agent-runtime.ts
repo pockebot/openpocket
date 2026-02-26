@@ -1915,7 +1915,7 @@ export class AgentRuntime {
       title: `Human Auth Required: ${titleTarget}`,
       summary: `OpenPocket detected ${event.capability} activity from ${event.packageName}. Provide data from your Human Phone and approve to continue.`,
       capabilityHint: `detected=${event.capability}/${event.phase} source=${event.source}`,
-      requireArtifactOnApprove: true,
+      requireArtifactOnApprove: false,
       allowTextAttachment: true,
       approveLabel: "Approve and Continue",
       rejectLabel: "Reject",
@@ -2009,9 +2009,7 @@ export class AgentRuntime {
     if (event.phase === "active") {
       return true;
     }
-    if (this.isPermissionDialogApp(currentApp)) {
-      return true;
-    }
+    void currentApp;
     return false;
   }
 
@@ -2070,6 +2068,26 @@ export class AgentRuntime {
 
     const timeoutCapSec = Math.max(30, Math.round(this.config.humanAuth.requestTimeoutSec));
     const timeoutSec = Math.min(timeoutCapSec, 180);
+    const preGuardLines: string[] = [];
+    if (this.isPermissionDialogApp(currentApp)) {
+      const guardDecision: HumanAuthDecision = {
+        requestId: "capability-probe-local-permission-guard",
+        approved: false,
+        status: "rejected",
+        message: "Reject local permission dialog before delegated human auth.",
+        decidedAt: nowIso(),
+        artifactPath: null,
+      };
+      const localGuard = await this.applyPermissionDialogDecision(capability, guardDecision, currentApp, "human_auth");
+      if (localGuard?.message) {
+        preGuardLines.push(`local_permission_guard=${localGuard.message}`);
+      }
+    } else {
+      const rollbackLine = await this.rollbackLocalSensitiveSurface(event, currentApp);
+      if (rollbackLine) {
+        preGuardLines.push(rollbackLine);
+      }
+    }
 
     let decision: HumanAuthDecision;
     try {
@@ -2098,15 +2116,12 @@ export class AgentRuntime {
     }
 
     const delegation = await this.applyHumanDelegation(capability, decision, currentApp);
-    const rollbackLine = decision.approved
-      ? await this.rollbackLocalSensitiveSurface(event, currentApp)
-      : null;
     const lines = [
+      ...preGuardLines,
       `human_auth_probe capability=${capability} status=${decision.status} pkg=${event.packageName}`,
       decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
       delegation?.message ? `delegation=${delegation.message}` : "",
       delegation?.templateHint ? `delegation_template=${delegation.templateHint}` : "",
-      rollbackLine || "",
     ].filter(Boolean);
 
     if (!decision.approved) {
