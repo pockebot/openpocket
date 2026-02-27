@@ -53,6 +53,16 @@ test("HumanAuthRelayServer create, resolve, and poll lifecycle", async () => {
     const openToken = openUrl.searchParams.get("token");
     assert.equal(Boolean(openToken), true);
 
+    const portalRes = await fetch(
+      `${base}/human-auth/req-test-1?token=${encodeURIComponent(String(openToken || ""))}`,
+    );
+    assert.equal(portalRes.status, 200);
+    const portalHtml = await portalRes.text();
+    assert.match(portalHtml, /Camera Preview \(Human Phone\)/);
+    assert.match(portalHtml, /Take Photo & Continue/);
+    assert.match(portalHtml, /Upload From Album/);
+    assert.match(portalHtml, /Requesting camera access on your Human Phone/);
+
     const pollPending = await fetch(
       `${base}/v1/human-auth/requests/req-test-1?pollToken=${encodeURIComponent(created.pollToken)}`,
     );
@@ -153,9 +163,14 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
     assert.equal(portalRes.status, 200);
     const portalHtml = await portalRes.text();
     assert.match(portalHtml, /Authorization Required/);
-    assert.match(portalHtml, /Username \/ Email/);
+    assert.match(portalHtml, /Agent-Generated Authorization Form/);
     assert.match(portalHtml, /Optional Remote Takeover \(Live\)/);
     assert.match(portalHtml, /Open Live Stream/);
+    assert.match(portalHtml, /font-family:\s*"Avenir Next", "Segoe UI", sans-serif;/);
+    assert.match(portalHtml, /<b>Template<\/b>human-auth-generic \(default-shell\)/);
+    assert.match(portalHtml, /new Function\("api",\s*"'use strict';/);
+    assert.doesNotMatch(portalHtml, /new Function\("api",\s*""use strict";/);
+    assert.doesNotMatch(portalHtml, /fonts\.googleapis\.com\/css2\?family=Poppins/i);
 
     const snapshotRes = await fetch(
       `${base}/v1/human-auth/requests/req-takeover-1/takeover/snapshot?token=${encodeURIComponent(token)}`,
@@ -191,6 +206,124 @@ test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token
       await reader.read();
       await reader.cancel();
     }
+  } finally {
+    await relay.stop();
+  }
+});
+
+test("HumanAuthRelayServer merges uiTemplate and enforces artifact on approve", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-auth-relay-template-"));
+  const stateFile = path.join(temp, "relay-state.json");
+
+  const relay = new HumanAuthRelayServer({
+    host: "127.0.0.1",
+    port: 0,
+    publicBaseUrl: "",
+    apiKey: "",
+    apiKeyEnv: "",
+    stateFile,
+  });
+
+  await relay.start();
+  const base = relay.address;
+
+  try {
+    const createResponse = await fetch(`${base}/v1/human-auth/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: "req-template-1",
+        task: "payment fill",
+        sessionId: "session-template",
+        step: 8,
+        capability: "payment",
+        instruction: "Complete checkout with delegated payment card info.",
+        reason: "Need secure human payment authorization.",
+        timeoutSec: 180,
+        uiTemplate: {
+          templateId: "custom-payment-template",
+          title: "Checkout Authorization",
+          summary: "Provide card details from Human Phone to continue.",
+          artifactKind: "payment_card",
+          requireArtifactOnApprove: true,
+          middleHtml: "<div><label for=\"payment_hint\">Payment Hint</label><input id=\"payment_hint\" type=\"text\" /></div>",
+          middleScript: "api.setStatus('custom middle script loaded');",
+          approveScript: "const v = api.getValue('payment_hint').trim(); if (!v) return { ok: false, error: 'payment hint is required' }; return { artifactJson: { kind: 'payment_card', fields: { payment_hint: v } } };",
+          fields: [
+            { id: "card_number", label: "Card Number", type: "card-number", required: true },
+            { id: "expiry", label: "Expiration", type: "expiry", required: true },
+            { id: "cvc", label: "CVC", type: "cvc", required: true },
+          ],
+          style: {
+            brandColor: "#228be6",
+            backgroundCss: "linear-gradient(145deg, #f7fbff 0%, #eef6ff 100%)",
+            fontFamily: "Poppins, serif",
+          },
+        },
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const created = await createResponse.json();
+    const openUrl = new URL(created.openUrl);
+    const token = String(openUrl.searchParams.get("token") || "");
+    assert.equal(Boolean(token), true);
+
+    const portalRes = await fetch(`${base}/human-auth/req-template-1?token=${encodeURIComponent(token)}`);
+    assert.equal(portalRes.status, 200);
+    const portalHtml = await portalRes.text();
+    assert.match(portalHtml, /custom-payment-template/);
+    assert.match(portalHtml, /Checkout Authorization/);
+    assert.match(portalHtml, /<b>Template<\/b>custom-payment-template \(agent-generated-ui-template\)/);
+    assert.match(portalHtml, /#228be6/);
+    assert.match(portalHtml, /payment_hint/);
+    assert.match(portalHtml, /custom middle script loaded/);
+    assert.match(portalHtml, /Approval script timed out\. Please retry\./);
+    assert.match(portalHtml, /Attach data below, then tap Approve and Continue again\./);
+    assert.match(portalHtml, /This request requires a photo from your Human Phone\./);
+    assert.match(portalHtml, /font-family:\s*"Avenir Next", "Segoe UI", sans-serif;/);
+    assert.doesNotMatch(portalHtml, /Poppins, serif/);
+
+    const resolveWithoutArtifact = await fetch(`${base}/v1/human-auth/requests/req-template-1/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token,
+        approved: true,
+        note: "approve without artifact should fail",
+      }),
+    });
+    assert.equal(resolveWithoutArtifact.status, 400);
+    const resolveWithoutArtifactBody = await resolveWithoutArtifact.json();
+    assert.match(String(resolveWithoutArtifactBody.error || ""), /requires delegated data artifact/i);
+
+    const pollPending = await fetch(
+      `${base}/v1/human-auth/requests/req-template-1?pollToken=${encodeURIComponent(created.pollToken)}`,
+    );
+    assert.equal(pollPending.status, 200);
+    const pendingBody = await pollPending.json();
+    assert.equal(pendingBody.status, "pending");
+
+    const resolveWithArtifact = await fetch(`${base}/v1/human-auth/requests/req-template-1/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token,
+        approved: true,
+        note: "approved with payment artifact",
+        artifact: {
+          mimeType: "application/json",
+          base64: Buffer.from(JSON.stringify({
+            kind: "payment_card",
+            card_number: "4111111111111111",
+            expiry: "12/29",
+            cvc: "123",
+          })).toString("base64"),
+        },
+      }),
+    });
+    assert.equal(resolveWithArtifact.status, 200);
+    const resolved = await resolveWithArtifact.json();
+    assert.equal(resolved.status, "approved");
   } finally {
     await relay.stop();
   }

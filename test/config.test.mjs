@@ -50,6 +50,8 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(cfg.target.type, "emulator");
     assert.equal(cfg.target.adbEndpoint, "");
+    assert.equal(cfg.target.pin, "1234");
+    assert.equal(cfg.target.wakeupIntervalSec, 3);
     assert.equal(cfg.target.cloudProvider, "");
     assert.equal(cfg.agent.returnHomeOnTaskEnd, true);
     assert.equal(cfg.agent.autoArtifactsEnabled, true);
@@ -98,6 +100,9 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
           deployment_target: {
             target_type: "physical-phone",
             adb_endpoint: "192.168.10.9",
+            wakeup_interval_sec: 9,
+            virtual_phone_pin: "2468",
+            physical_phone_pin: "1357",
             cloud_provider: "mock-cloud",
           },
           emulator: {
@@ -166,6 +171,8 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     assert.match(cfg.sessionStorage.storePath, /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(cfg.target.type, "physical-phone");
     assert.equal(cfg.target.adbEndpoint, "192.168.10.9");
+    assert.equal(cfg.target.pin, "1357");
+    assert.equal(cfg.target.wakeupIntervalSec, 9);
     assert.equal(cfg.target.cloudProvider, "mock-cloud");
     assert.equal(cfg.agent.returnHomeOnTaskEnd, false);
     assert.equal(cfg.agent.autoArtifactsEnabled, false);
@@ -197,6 +204,10 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     assert.match(String(saved.sessionStorage.storePath ?? ""), /workspace[\\/]+sessions[\\/]sessions\.json$/);
     assert.equal(saved.target.type, "physical-phone");
     assert.equal(saved.target.adbEndpoint, "192.168.10.9");
+    assert.equal(saved.target.pin, "1357");
+    assert.equal(saved.target.wakeupIntervalSec, 9);
+    assert.equal(saved.target.virtualPhonePin, undefined);
+    assert.equal(saved.target.physicalPhonePin, undefined);
     assert.equal(saved.target.cloudProvider, "mock-cloud");
     assert.equal(saved.session_storage, undefined);
     assert.equal(saved.agent.returnHomeOnTaskEnd, false);

@@ -225,6 +225,8 @@ export function normalizeAction(input: unknown): AgentAction {
 
   if (type === "request_human_auth") {
     const capabilityRaw = String(input.capability ?? "unknown").trim().toLowerCase();
+    const uiTemplate = isObject(input.uiTemplate) ? input.uiTemplate : undefined;
+    const templatePath = toOptionalTrimmedString(input.templatePath ?? input.templateFile);
     return {
       type,
       capability: HUMAN_AUTH_CAPABILITIES.has(capabilityRaw)
@@ -235,6 +237,8 @@ export function normalizeAction(input: unknown): AgentAction {
       ),
       timeoutSec: toNumber(input.timeoutSec, 300),
       reason: input.reason ? String(input.reason) : undefined,
+      uiTemplate,
+      templatePath,
     };
   }
 

@@ -1,5 +1,8 @@
 import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types.js";
 import { createHash } from "node:crypto";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { nowIso } from "../utils/paths.js";
 import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
 import { sleep } from "../utils/time.js";
@@ -270,14 +273,37 @@ function errorMessage(error: unknown): string {
   return String(error || "unknown error");
 }
 
+const DEFAULT_LOCKSCREEN_PIN = "1234";
+const SCREEN_AWAKE_HEARTBEAT_MS = 3_000;
+
+type ScreenAwakeWorkerParams = {
+  adbPath: string;
+  preferredDeviceId: string | null;
+  adbEndpoint: string | null;
+  targetType: string;
+  intervalMs: number;
+};
+
+type ScreenAwakeWorkerHandle = {
+  stop: () => void;
+};
+
+type AdbRuntimeOptions = {
+  createScreenAwakeWorker?: (params: ScreenAwakeWorkerParams) => ScreenAwakeWorkerHandle;
+};
+
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
   private readonly screenSizeCache = new Map<string, { width: number; height: number; updatedAtMs: number }>();
+  private readonly createScreenAwakeWorker: (params: ScreenAwakeWorkerParams) => ScreenAwakeWorkerHandle;
+  private screenAwakeWorker: ScreenAwakeWorkerHandle | null = null;
+  private screenAwakeWorkerKey = "";
 
-  constructor(config: OpenPocketConfig, emulator: EmulatorManager) {
+  constructor(config: OpenPocketConfig, emulator: EmulatorManager, options?: AdbRuntimeOptions) {
     this.config = config;
     this.emulator = emulator;
+    this.createScreenAwakeWorker = options?.createScreenAwakeWorker ?? ((params) => this.spawnScreenAwakeWorker(params));
   }
 
   private targetType() {
@@ -287,6 +313,90 @@ export class AdbRuntime {
   private shouldPrepareInteractiveTarget(): boolean {
     const targetType = this.targetType();
     return targetType === "physical-phone" || targetType === "android-tv";
+  }
+
+  private normalizeTargetAdbEndpoint(): string | null {
+    const raw = String(this.config.target?.adbEndpoint ?? "").trim();
+    if (!raw) {
+      return null;
+    }
+    if (raw.includes(":")) {
+      return raw;
+    }
+    return `${raw}:5555`;
+  }
+
+  private buildScreenAwakeWorkerParams(
+    preferred?: string | null,
+    intervalMs = SCREEN_AWAKE_HEARTBEAT_MS,
+  ): ScreenAwakeWorkerParams {
+    const normalizedInterval = Math.max(1_000, Math.round(intervalMs));
+    const targetType = this.targetType();
+    return {
+      adbPath: this.emulator.adbBinary(),
+      preferredDeviceId:
+        preferred !== undefined
+          ? preferred
+          : (this.config.agent.deviceId ?? null),
+      adbEndpoint: targetType === "emulator" ? null : this.normalizeTargetAdbEndpoint(),
+      targetType,
+      intervalMs: normalizedInterval,
+    };
+  }
+
+  private spawnScreenAwakeWorker(params: ScreenAwakeWorkerParams): ScreenAwakeWorkerHandle {
+    const workerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "screen-awake-worker.js");
+    const child = spawn(process.execPath, [workerPath, JSON.stringify(params)], {
+      stdio: "ignore",
+      detached: false,
+    });
+    child.unref();
+    return {
+      stop: () => {
+        if (child.killed) {
+          return;
+        }
+        try {
+          child.kill();
+        } catch {
+          // best effort kill
+        }
+      },
+    };
+  }
+
+  startScreenAwakeHeartbeat(preferred?: string | null, intervalMs = SCREEN_AWAKE_HEARTBEAT_MS): void {
+    let params: ScreenAwakeWorkerParams;
+    try {
+      params = this.buildScreenAwakeWorkerParams(preferred, intervalMs);
+    } catch {
+      // Keep-awake worker is best effort and must not break runtime startup.
+      return;
+    }
+
+    const key = JSON.stringify(params);
+    if (this.screenAwakeWorker && this.screenAwakeWorkerKey === key) {
+      return;
+    }
+    this.stopScreenAwakeHeartbeat();
+
+    try {
+      this.screenAwakeWorker = this.createScreenAwakeWorker(params);
+      this.screenAwakeWorkerKey = key;
+    } catch {
+      // Keep-awake worker is best effort.
+      this.screenAwakeWorker = null;
+      this.screenAwakeWorkerKey = "";
+    }
+  }
+
+  stopScreenAwakeHeartbeat(): void {
+    if (!this.screenAwakeWorker) {
+      return;
+    }
+    this.screenAwakeWorker.stop();
+    this.screenAwakeWorker = null;
+    this.screenAwakeWorkerKey = "";
   }
 
   private isDisplayInteractive(deviceId: string): boolean | null {
@@ -335,6 +445,61 @@ export class AdbRuntime {
     }
   }
 
+  private resolveConfiguredUnlockPin(): string {
+    const configured = String(this.config.target?.pin ?? "").trim();
+    if (/^\d{4}$/.test(configured)) {
+      return configured;
+    }
+    return DEFAULT_LOCKSCREEN_PIN;
+  }
+
+  private async attemptPinUnlock(deviceId: string, pin: string): Promise<void> {
+    const normalized = String(pin ?? "").trim();
+    if (!/^\d{4}$/.test(normalized)) {
+      return;
+    }
+
+    const { width, height } = this.resolveScreenSize(deviceId);
+    const x = Math.max(1, Math.round(width / 2));
+    const startY = Math.max(1, Math.round(height * 0.82));
+    const endY = Math.max(1, Math.round(height * 0.25));
+
+    try {
+      this.emulator.runAdb([
+        "-s",
+        deviceId,
+        "shell",
+        "input",
+        "swipe",
+        String(x),
+        String(startY),
+        String(x),
+        String(endY),
+        "220",
+      ]);
+    } catch {
+      // Best effort pull-up gesture to show PIN pad.
+    }
+    await sleep(140);
+
+    for (const digit of normalized) {
+      const keycode = String(Number(digit) + 7);
+      try {
+        this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", keycode]);
+      } catch {
+        // Best effort digit entry.
+      }
+      await sleep(60);
+    }
+
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "66"]);
+    } catch {
+      // Best effort confirm.
+    }
+    await sleep(220);
+  }
+
   private async ensureInteractiveTargetReady(deviceId: string): Promise<void> {
     if (!this.shouldPrepareInteractiveTarget()) {
       return;
@@ -367,15 +532,12 @@ export class AdbRuntime {
       return;
     }
 
-    try {
-      this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_MENU"]);
-    } catch {
-      // Best effort unlock gesture surrogate.
+    await this.attemptPinUnlock(deviceId, this.resolveConfiguredUnlockPin());
+    const keyguardAfterPin = this.isKeyguardShowing(deviceId);
+    if (keyguardAfterPin === false) {
+      return;
     }
-    await sleep(180);
-
-    const keyguardAfterMenu = this.isKeyguardShowing(deviceId);
-    if (keyguardAfterMenu === true) {
+    if (keyguardAfterPin === true) {
       throw new Error(
         `Target device '${deviceId}' is locked. Please unlock and keep the screen on, then retry.`,
       );

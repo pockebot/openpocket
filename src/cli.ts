@@ -32,6 +32,12 @@ import {
   isEmulatorTarget,
   normalizeDeviceTargetType,
 } from "./device/target-types.js";
+import {
+  adbConnectionLabel,
+  filterOnlineTargetAdbDevices,
+  type AdbConnectionType,
+  parseAdbDevicesLongOutput,
+} from "./device/adb-device-discovery.js";
 
 const cliTheme = createCliTheme(output);
 const DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB = 24;
@@ -82,7 +88,8 @@ Usage:
   openpocket [--config <path>] onboard [--force] [--target <type>]
   openpocket [--config <path>] config-show
   openpocket [--config <path>] target show
-  openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>]
+  openpocket [--config <path>] target set|set-target|config --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
+  openpocket [--config <path>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
   openpocket [--config <path>] emulator status
   openpocket [--config <path>] emulator start
   openpocket [--config <path>] emulator stop
@@ -109,9 +116,13 @@ Examples:
   openpocket onboard
   openpocket onboard --target physical-phone
   openpocket onboard --force
-  openpocket target set --type physical-phone
+  openpocket target set --type physical-phone --pin 1234
+  openpocket target set-target --type physical-phone
+  openpocket target set --type emulator --pin 1234
+  openpocket target set --wakeup-interval 3
   openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
-  openpocket target set --type physical-phone --device R5CX123456A
+  openpocket target set --type physical-phone --device R5CX123456A --pin 1234
+  openpocket target pair --host 192.168.1.66 --pair-port 37099 --code 123456 --type android-tv
   openpocket emulator start
   openpocket emulator tap --x 120 --y 300
   openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
@@ -186,6 +197,10 @@ function openUrlInBrowser(url: string): void {
 }
 
 function findGatewayProcessPids(): number[] {
+  if (process.env.OPENPOCKET_SKIP_GATEWAY_PID_CHECK === "1") {
+    return [];
+  }
+
   const ps = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -347,11 +362,41 @@ function normalizeAdbEndpoint(raw: string): string {
   return `${trimmed}:5555`;
 }
 
+function normalizeFourDigitPin(raw: string, optionName: string): string {
+  const normalized = raw.trim();
+  if (!/^\d{4}$/.test(normalized)) {
+    throw new Error(`${optionName} expects exactly 4 digits.`);
+  }
+  return normalized;
+}
+
+function normalizeWakeupIntervalSec(raw: string, optionName: string): number {
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${optionName} expects a number in seconds.`);
+  }
+  const normalized = Math.round(parsed);
+  if (normalized < 1 || normalized > 3600) {
+    throw new Error(`${optionName} must be within 1-3600 seconds.`);
+  }
+  return normalized;
+}
+
+function maskFourDigitPin(raw: string): string {
+  const normalized = raw.trim();
+  if (!/^\d{4}$/.test(normalized)) {
+    return "(unset)";
+  }
+  return "**** (configured)";
+}
+
 function printTargetSummary(cfg: OpenPocketConfig): void {
   printRaw(cliTheme.section("Deployment Target"));
   printKeyValue("Type", `${cfg.target.type} (${deviceTargetLabel(cfg.target.type)})`, "accent");
   printKeyValue("Preferred device", cfg.agent.deviceId?.trim() || "(auto)");
   printKeyValue("ADB endpoint", cfg.target.adbEndpoint.trim() || "(none)");
+  printKeyValue("Phone PIN", maskFourDigitPin(cfg.target.pin), "warn");
+  printKeyValue("Wakeup interval", `${Math.max(1, Math.round(cfg.target.wakeupIntervalSec))}s`);
   printKeyValue("Cloud provider", cfg.target.cloudProvider.trim() || "(none)");
 }
 
@@ -367,6 +412,13 @@ function ensureGatewayStoppedForTargetSwitch(): void {
 type ConnectedTargetDevice = {
   deviceId: string;
   hint: string;
+  connectionType: AdbConnectionType;
+  endpoint: string | null;
+};
+
+type HostAndPort = {
+  host: string;
+  port: number;
 };
 
 function adbDeviceProp(
@@ -386,49 +438,79 @@ function adbDeviceProp(
 function discoverConnectedTargetDevices(cfg: OpenPocketConfig): ConnectedTargetDevice[] {
   const runtimeConfig = JSON.parse(JSON.stringify(cfg)) as OpenPocketConfig;
   const emulator = new EmulatorManager(runtimeConfig);
-  let status: { devices: string[] };
+  let rawDevices = "";
   try {
-    status = emulator.status();
+    rawDevices = emulator.runAdb(["devices", "-l"], 10_000);
   } catch (error) {
     printWarn(`Unable to query adb device list: ${(error as Error).message}`);
     return [];
   }
-  return status.devices.map((deviceId) => {
-    const manufacturer = adbDeviceProp(emulator, deviceId, "ro.product.manufacturer");
-    const model = adbDeviceProp(emulator, deviceId, "ro.product.model");
-    const release = adbDeviceProp(emulator, deviceId, "ro.build.version.release");
-    const pieces = [manufacturer, model].map((v) => v.trim()).filter(Boolean);
-    const modelText = pieces.length > 0 ? pieces.join(" ") : "Unknown model";
-    const versionText = release ? `Android ${release}` : "Android (unknown)";
-    return {
-      deviceId,
-      hint: `${modelText} | ${versionText}`,
-    };
-  });
+  const targetType = normalizeDeviceTargetType(cfg.target.type);
+  const descriptors = filterOnlineTargetAdbDevices(
+    parseAdbDevicesLongOutput(rawDevices),
+    targetType,
+  );
+  const toOrder = (connectionType: AdbConnectionType): number => {
+    if (connectionType === "usb") return 0;
+    if (connectionType === "wifi") return 1;
+    if (connectionType === "unknown") return 2;
+    return 3;
+  };
+  return descriptors
+    .map((descriptor) => {
+      const deviceId = descriptor.deviceId;
+      const manufacturer = adbDeviceProp(emulator, deviceId, "ro.product.manufacturer");
+      const model = adbDeviceProp(emulator, deviceId, "ro.product.model") || descriptor.model;
+      const release = adbDeviceProp(emulator, deviceId, "ro.build.version.release");
+      const pieces = [manufacturer, model].map((v) => v.trim()).filter(Boolean);
+      const modelText = pieces.length > 0 ? pieces.join(" ") : "Unknown model";
+      const versionText = release ? `Android ${release}` : "Android (unknown)";
+      return {
+        deviceId,
+        hint: `${adbConnectionLabel(descriptor.connectionType)} | ${modelText} | ${versionText}`,
+        connectionType: descriptor.connectionType,
+        endpoint: descriptor.endpoint,
+      };
+    })
+    .sort((a, b) => {
+      const byTransport = toOrder(a.connectionType) - toOrder(b.connectionType);
+      if (byTransport !== 0) {
+        return byTransport;
+      }
+      return a.deviceId.localeCompare(b.deviceId);
+    });
 }
 
 async function chooseTargetDeviceId(
   candidates: ConnectedTargetDevice[],
   configuredDeviceId: string | null,
-): Promise<string | null> {
+): Promise<ConnectedTargetDevice | null> {
+  const configured = configuredDeviceId?.trim() || "";
+  const configuredFallback = configured
+    ? {
+      deviceId: configured,
+      hint: "Configured serial (not currently online)",
+      connectionType: "unknown" as AdbConnectionType,
+      endpoint: null,
+    }
+    : null;
   if (candidates.length === 0) {
     printWarn("No online adb device detected for this target. Keep preferred device as auto mode.");
-    return configuredDeviceId?.trim() ? configuredDeviceId : null;
+    return configuredFallback;
   }
   if (candidates.length === 1) {
     const only = candidates[0];
     printInfo(`Detected one device and selected it automatically: ${only.deviceId} (${only.hint})`);
-    return only.deviceId;
+    return only;
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     printWarn(
       `Detected ${candidates.length} devices, but current shell is non-interactive; keep preferred device as auto mode.`,
     );
-    return configuredDeviceId?.trim() ? configuredDeviceId : null;
+    return candidates.find((item) => item.deviceId === configured) ?? configuredFallback;
   }
 
   const autoValue = "__auto__";
-  const configured = configuredDeviceId?.trim() || "";
   const options: CliSelectOption<string>[] = [
     {
       value: autoValue,
@@ -437,7 +519,7 @@ async function chooseTargetDeviceId(
     },
     ...candidates.map((item) => ({
       value: item.deviceId,
-      label: item.deviceId,
+      label: `[${adbConnectionLabel(item.connectionType)}] ${item.deviceId}`,
       hint: item.hint,
     })),
   ];
@@ -456,7 +538,7 @@ async function chooseTargetDeviceId(
     if (selected === autoValue) {
       return null;
     }
-    return selected;
+    return candidates.find((item) => item.deviceId === selected) ?? null;
   } finally {
     if (input.setRawMode) {
       try {
@@ -470,10 +552,204 @@ async function chooseTargetDeviceId(
   }
 }
 
+function normalizePort(raw: string, optionName: string): number {
+  const value = Number(raw.trim());
+  if (!Number.isFinite(value)) {
+    throw new Error(`${optionName} expects a numeric TCP port.`);
+  }
+  const port = Math.round(value);
+  if (port < 1 || port > 65535) {
+    throw new Error(`${optionName} must be between 1 and 65535.`);
+  }
+  return port;
+}
+
+function parseHostAndPort(raw: string, optionName: string): HostAndPort {
+  const value = String(raw ?? "").trim();
+  if (!value) {
+    throw new Error(`${optionName} cannot be empty.`);
+  }
+
+  const ipv6 = value.match(/^\[([^\]]+)\]:(\d+)$/);
+  if (ipv6?.[1] && ipv6[2]) {
+    return {
+      host: ipv6[1],
+      port: normalizePort(ipv6[2], optionName),
+    };
+  }
+
+  const index = value.lastIndexOf(":");
+  if (index <= 0 || index === value.length - 1) {
+    throw new Error(`${optionName} must be in host:port format.`);
+  }
+  const host = value.slice(0, index).trim();
+  const portRaw = value.slice(index + 1).trim();
+  if (!host) {
+    throw new Error(`${optionName} host is empty.`);
+  }
+  return {
+    host,
+    port: normalizePort(portRaw, optionName),
+  };
+}
+
+function normalizeHost(raw: string, optionName: string): string {
+  const host = raw.trim();
+  if (!host) {
+    throw new Error(`${optionName} cannot be empty.`);
+  }
+  if (/\s/.test(host)) {
+    throw new Error(`${optionName} cannot include spaces.`);
+  }
+  return host;
+}
+
+async function promptTextInput(
+  rl: Interface,
+  message: string,
+  initialValue = "",
+  required = false,
+): Promise<string> {
+  while (true) {
+    const suffix = initialValue.trim() ? ` [${initialValue.trim()}]` : "";
+    const answer = String(
+      await rl.question(
+        `${cliTheme.paint("[INPUT]", "warn")} ${message}${suffix}: `,
+      ),
+    ).trim();
+    const value = answer || initialValue.trim();
+    if (!required || value) {
+      return value;
+    }
+    printWarn("Input cannot be empty.");
+  }
+}
+
+async function runTargetPairCommand(configPath: string | undefined, args: string[]): Promise<number> {
+  ensureGatewayStoppedForTargetSwitch();
+
+  const dryRun = args.includes("--dry-run");
+  const withoutDryRun = args.filter((item) => item !== "--dry-run");
+  const { value: pairEndpointRaw, rest: afterPairEndpoint } = takeOption(withoutDryRun, "--pair-endpoint");
+  const { value: connectEndpointRaw, rest: afterConnectEndpoint } = takeOption(afterPairEndpoint, "--connect-endpoint");
+  const { value: hostRaw, rest: afterHost } = takeOption(afterConnectEndpoint, "--host");
+  const { value: pairPortRaw, rest: afterPairPort } = takeOption(afterHost, "--pair-port");
+  const { value: connectPortRaw, rest: afterConnectPort } = takeOption(afterPairPort, "--connect-port");
+  const { value: codeRaw, rest: afterCode } = takeOption(afterConnectPort, "--code");
+  const { value: typeRaw, rest: afterType } = takeOption(afterCode, "--type");
+  const { value: deviceRaw, rest } = takeOption(afterType, "--device");
+  if (rest.length > 0) {
+    throw new Error(`Unexpected target pair arguments: ${rest.join(" ")}`);
+  }
+
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  let host = hostRaw ? normalizeHost(hostRaw, "--host") : "";
+  let pairingPort = pairPortRaw ? normalizePort(pairPortRaw, "--pair-port") : 0;
+  let connectPort = connectPortRaw ? normalizePort(connectPortRaw, "--connect-port") : 5555;
+  let code = String(codeRaw ?? "").trim();
+
+  if (pairEndpointRaw !== null) {
+    const parsed = parseHostAndPort(pairEndpointRaw, "--pair-endpoint");
+    host = parsed.host;
+    pairingPort = parsed.port;
+  }
+  if (connectEndpointRaw !== null) {
+    const parsed = parseHostAndPort(connectEndpointRaw, "--connect-endpoint");
+    host = parsed.host;
+    connectPort = parsed.port;
+  }
+
+  if ((!host || !pairingPort || !code) && interactive) {
+    const rl = createInterface({ input, output });
+    try {
+      if (!host) {
+        host = normalizeHost(
+          await promptTextInput(rl, "ADB host/IP (for example 192.168.1.25)", "", true),
+          "--host",
+        );
+      }
+      if (!pairingPort) {
+        pairingPort = normalizePort(
+          await promptTextInput(rl, "ADB pairing port from TV/phone (for example 37099)", "", true),
+          "--pair-port",
+        );
+      }
+      connectPort = normalizePort(
+        await promptTextInput(rl, "ADB connect port", String(connectPort || 5555), true),
+        "--connect-port",
+      );
+      if (!code) {
+        code = await promptTextInput(rl, "Pairing code", "", true);
+      }
+    } finally {
+      rl.close();
+    }
+  }
+
+  if (!host) {
+    throw new Error("Missing host. Use --host <ip> or --pair-endpoint <host:port>.");
+  }
+  if (!pairingPort) {
+    throw new Error("Missing pairing port. Use --pair-port <port> or --pair-endpoint <host:port>.");
+  }
+  if (!code) {
+    throw new Error("Missing pairing code. Use --code <code>.");
+  }
+
+  const cfg = loadConfig(configPath);
+  if (typeRaw !== null) {
+    const normalized = normalizeDeviceTargetType(typeRaw);
+    if (normalized !== "physical-phone" && normalized !== "android-tv") {
+      throw new Error("target pair --type only supports: physical-phone | android-tv");
+    }
+    cfg.target.type = normalized;
+  } else if (cfg.target.type !== "physical-phone" && cfg.target.type !== "android-tv") {
+    cfg.target.type = "physical-phone";
+  }
+
+  const pairEndpoint = `${host}:${pairingPort}`;
+  const connectEndpoint = `${host}:${connectPort}`;
+  const runtimeConfig = JSON.parse(JSON.stringify(cfg)) as OpenPocketConfig;
+  const emulator = new EmulatorManager(runtimeConfig);
+
+  if (dryRun) {
+    printWarn(`[dry-run] skip: adb pair ${pairEndpoint} <code>`);
+    printWarn(`[dry-run] skip: adb connect ${connectEndpoint}`);
+  } else {
+    printInfo(`Pairing with ${pairEndpoint}...`);
+    const pairOutput = emulator.runAdb(["pair", pairEndpoint, code], 20_000).trim();
+    printInfo(pairOutput || "adb pair completed.");
+    printInfo(`Connecting to ${connectEndpoint}...`);
+    const connectOutput = emulator.runAdb(["connect", connectEndpoint], 20_000).trim();
+    printInfo(connectOutput || "adb connect completed.");
+  }
+
+  cfg.target.adbEndpoint = connectEndpoint;
+  if (deviceRaw !== null) {
+    const normalized = deviceRaw.trim().toLowerCase();
+    if (!normalized || normalized === "auto") {
+      cfg.agent.deviceId = null;
+    } else {
+      cfg.agent.deviceId = deviceRaw.trim();
+    }
+  } else {
+    cfg.agent.deviceId = connectEndpoint;
+  }
+  saveConfig(cfg);
+
+  printSuccess("ADB pairing flow completed.");
+  printTargetSummary(cfg);
+  return 0;
+}
+
 async function runTargetCommand(configPath: string | undefined, args: string[]): Promise<number> {
-  const sub = (args[0] ?? "show").trim();
+  const rawSub = (args[0] ?? "show").trim();
+  const sub = rawSub === "set-target" || rawSub === "config" ? "set" : rawSub;
+  if (rawSub === "pair") {
+    return runTargetPairCommand(configPath, args.slice(1));
+  }
   if (sub !== "show" && sub !== "set") {
-    throw new Error(`Unknown target subcommand: ${sub}. Use: target show|set`);
+    throw new Error(`Unknown target subcommand: ${rawSub}. Use: target show|set|set-target|config|pair`);
   }
 
   const cfg = loadConfig(configPath);
@@ -486,19 +762,55 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
 
   const clearDevice = args.includes("--clear-device");
   const clearAdbEndpoint = args.includes("--clear-adb-endpoint");
-  const withoutFlags = args.filter((item) => item !== "--clear-device" && item !== "--clear-adb-endpoint");
+  const clearPin = args.includes("--clear-pin");
+  const clearWakeupInterval = args.includes("--clear-wakeup-interval");
+  // Backward-compatible aliases for older CLI flags.
+  const clearVirtualPin = args.includes("--clear-virtual-pin");
+  const clearPhysicalPin = args.includes("--clear-physical-pin");
+  const withoutFlags = args.filter(
+    (item) =>
+      item !== "--clear-device"
+      && item !== "--clear-adb-endpoint"
+      && item !== "--clear-pin"
+      && item !== "--clear-wakeup-interval"
+      && item !== "--clear-virtual-pin"
+      && item !== "--clear-physical-pin",
+  );
 
   const { value: typeRaw, rest: afterType } = takeOption(withoutFlags.slice(1), "--type");
   const { value: deviceIdRaw, rest: afterDevice } = takeOption(afterType, "--device");
   const { value: adbEndpointRaw, rest: afterEndpoint } = takeOption(afterDevice, "--adb-endpoint");
-  const { value: cloudProviderRaw, rest } = takeOption(afterEndpoint, "--cloud-provider");
+  const { value: cloudProviderRaw, rest: afterCloudProvider } = takeOption(afterEndpoint, "--cloud-provider");
+  const { value: pinRaw, rest: afterPin } = takeOption(afterCloudProvider, "--pin");
+  const { value: wakeupIntervalRaw, rest: afterWakeupInterval } = takeOption(afterPin, "--wakeup-interval");
+  // Backward-compatible aliases for older CLI flags.
+  const { value: virtualPinRaw, rest: afterVirtualPin } = takeOption(afterWakeupInterval, "--virtual-pin");
+  const { value: physicalPinRaw, rest } = takeOption(afterVirtualPin, "--physical-pin");
   if (rest.length > 0) {
     throw new Error(`Unexpected target arguments: ${rest.join(" ")}`);
   }
+  const aliasPinRaw = physicalPinRaw ?? virtualPinRaw;
+  if (pinRaw !== null && aliasPinRaw !== null && pinRaw.trim() !== aliasPinRaw.trim()) {
+    throw new Error("Conflicting PIN flags: use only one of --pin/--virtual-pin/--physical-pin.");
+  }
+  const effectivePinRaw = pinRaw ?? aliasPinRaw;
 
-  if (!typeRaw && !deviceIdRaw && !adbEndpointRaw && !cloudProviderRaw && !clearDevice && !clearAdbEndpoint) {
+  if (
+    !typeRaw
+    && !deviceIdRaw
+    && !adbEndpointRaw
+    && !cloudProviderRaw
+    && !effectivePinRaw
+    && !wakeupIntervalRaw
+    && !clearDevice
+    && !clearAdbEndpoint
+    && !clearPin
+    && !clearWakeupInterval
+    && !clearVirtualPin
+    && !clearPhysicalPin
+  ) {
     throw new Error(
-      "No target update provided. Use --type/--device/--adb-endpoint/--cloud-provider or --clear-device/--clear-adb-endpoint.",
+      "No target update provided. Use --type/--device/--adb-endpoint/--cloud-provider/--pin/--wakeup-interval or --clear-device/--clear-adb-endpoint/--clear-pin/--clear-wakeup-interval.",
     );
   }
 
@@ -526,6 +838,18 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
   if (cloudProviderRaw !== null) {
     cfg.target.cloudProvider = cloudProviderRaw.trim();
   }
+  if (effectivePinRaw !== null) {
+    cfg.target.pin = normalizeFourDigitPin(effectivePinRaw, "--pin");
+  }
+  if (clearPin || clearVirtualPin || clearPhysicalPin) {
+    cfg.target.pin = "1234";
+  }
+  if (wakeupIntervalRaw !== null) {
+    cfg.target.wakeupIntervalSec = normalizeWakeupIntervalSec(wakeupIntervalRaw, "--wakeup-interval");
+  }
+  if (clearWakeupInterval) {
+    cfg.target.wakeupIntervalSec = 3;
+  }
 
   if (isEmulatorTarget(cfg.target.type)) {
     cfg.target.adbEndpoint = "";
@@ -538,7 +862,17 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
     && (typeRaw !== null || adbEndpointRaw !== null || clearAdbEndpoint);
   if (shouldPromptDeviceSelection) {
     const candidates = discoverConnectedTargetDevices(cfg);
-    cfg.agent.deviceId = await chooseTargetDeviceId(candidates, cfg.agent.deviceId);
+    const selected = await chooseTargetDeviceId(candidates, cfg.agent.deviceId);
+    cfg.agent.deviceId = selected?.deviceId ?? null;
+    if (adbEndpointRaw === null && !clearAdbEndpoint && selected) {
+      if (selected.connectionType === "wifi" && selected.endpoint) {
+        cfg.target.adbEndpoint = normalizeAdbEndpoint(selected.endpoint);
+        printInfo(`Selected WiFi device; updated adb endpoint: ${cfg.target.adbEndpoint}`);
+      } else if (selected.connectionType === "usb" && cfg.target.adbEndpoint.trim()) {
+        cfg.target.adbEndpoint = "";
+        printInfo("Selected USB device; cleared adb endpoint.");
+      }
+    }
   }
 
   saveConfig(cfg);
@@ -557,7 +891,13 @@ async function runAgentCommand(configPath: string | undefined, args: string[]): 
 
   const cfg = loadConfig(configPath);
   const agent = new AgentRuntime(cfg);
-  const result = await agent.runTask(task, model ?? undefined);
+  agent.startScreenAwakeHeartbeat(Math.max(1, Math.round(cfg.target.wakeupIntervalSec)) * 1000);
+  let result: Awaited<ReturnType<AgentRuntime["runTask"]>>;
+  try {
+    result = await agent.runTask(task, model ?? undefined);
+  } finally {
+    agent.stopScreenAwakeHeartbeat();
+  }
   if (result.ok) {
     printSuccess(result.message);
   } else {

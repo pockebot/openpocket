@@ -1285,9 +1285,10 @@ export class ChatAssistant {
       "2) notify=true when meaningful progress happened (page transition, key checkpoint, auth blocker, error, or completion signal).",
       "3) If notify=true, message must be concise, natural language, and in locale hint.",
       "4) Do not include step counters (8/50, step 8, progress 8) unless user explicitly asked for it.",
-      "5) Use conversational tone. Avoid repeating the same opening pattern across updates.",
-      "6) Do not expose internal mechanics (model, filters, callbacks, tools).",
-      "7) If notify=false, message must be empty string.",
+      "5) Talk like a helpful friend, not a robot. Vary your phrasing naturally.",
+      "6) Never expose internal mechanics: no tool names, action types, model names, JSON, log lines, file paths, or debug output.",
+      "7) Never echo back raw 'thought' or 'observation' text from the progress context. Rephrase in your own words.",
+      "8) If notify=false, message must be empty string.",
       "",
       "TASK_PROGRESS_REPORTER.md:",
       this.readTaskProgressReporterGuide(),
@@ -2067,8 +2068,9 @@ export class ChatAssistant {
       "Keep answers concise and practical.",
       "Users can talk naturally without command syntax.",
       "Assume operation requests are phone actions by default unless the user clearly asks for advice-only chat.",
+      "Treat questions about current runtime/device/app/environment/version/status as state-dependent and require executable verification.",
       "Do not expose internal file paths, session files, skills, or scripts in user-facing replies.",
-      "For requests that are not device automation tasks, answer directly in chat.",
+      "Only answer directly in chat when no external observation or execution is needed.",
     ].join("\n");
   }
 
@@ -2105,12 +2107,14 @@ export class ChatAssistant {
       "1.1) Treat operation as happening on phone by default.",
       "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
       "1.3) Question-like phrasing (e.g., 'can you ...? / 可以...吗？') must still be mode=task when it asks for executable outputs (create/write/build/run/install/open).",
-      "2) requiresExternalObservation=true when answering requires checking real-world/device/runtime/tool state.",
-      "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and general reasoning alone.",
+      "2) requiresExternalObservation=true when correctness depends on current real-world/device/runtime/tool state.",
+      "2.1) This includes requests about what is currently running, which device/environment/version/status is active, what is installed/connected/open right now, or any runtime fact that must be verified.",
+      "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and stable general knowledge alone.",
       "4) mode=chat only when canAnswerDirectly=true and no phone/tool execution is needed.",
       "5) If uncertain between chat and task, set confidence lower and prefer task semantics.",
       "6) task should be executable imperative sentence.",
       "7) for chat mode, reply should be concise.",
+      "8) If requiresExternalObservation=true, prefer mode=task.",
       `User message: ${inputText}`,
     ].join("\n");
 
@@ -2164,8 +2168,13 @@ export class ChatAssistant {
       "Rules:",
       "1) requiresExternalObservation=true when correctness depends on current real-world/device/runtime/tool state.",
       "2) requiresExternalObservation=true for requests that need phone actions, app inspection, script execution, log checking, or any state verification.",
+      "2.1) requiresExternalObservation=true for state-dependent factual questions about the current assistant instance (runtime environment, active device, app state, versions, connectivity, installed packages, process/log state).",
       "3) canAnswerDirectly=true only when answer is reliable from conversation context and stable general knowledge alone.",
       "4) If uncertain, choose requiresExternalObservation=true and lower confidence.",
+      "5) Examples:",
+      "- 'What Android version is the connected phone currently running?' => requiresExternalObservation=true",
+      "- 'Which app is open right now?' => requiresExternalObservation=true",
+      "- 'Explain what ADB is.' => requiresExternalObservation=false",
       "",
       "First-pass decision JSON:",
       JSON.stringify({
@@ -2245,15 +2254,6 @@ export class ChatAssistant {
         reason: `${reasonPrefix}executable_intent_task_bias`,
       };
     }
-    if (this.looksLikeCapabilityQuestionOnly(normalizedInput)) {
-      return {
-        mode: "chat",
-        task: "",
-        reply: decided.reply || "",
-        confidence: Math.max(0.75, decided.confidence),
-        reason: `${reasonPrefix}capability_only_chat`,
-      };
-    }
 
     const requiresExternalObservation =
       decided.requiresExternalObservation === true || decided.canAnswerDirectly === false;
@@ -2264,6 +2264,16 @@ export class ChatAssistant {
         reply: "",
         confidence: Math.max(0.8, decided.confidence),
         reason: `${reasonPrefix}requires_external_observation`,
+      };
+    }
+
+    if (this.looksLikeCapabilityQuestionOnly(normalizedInput)) {
+      return {
+        mode: "chat",
+        task: "",
+        reply: decided.reply || "",
+        confidence: Math.max(0.75, decided.confidence),
+        reason: `${reasonPrefix}capability_only_chat`,
       };
     }
 
@@ -2379,6 +2389,19 @@ export class ChatAssistant {
     return text;
   }
 
+  private cleanProgressSummaryForUser(raw: string, maxChars = 160): string {
+    const oneLine = this.normalizeOneLine(raw);
+    if (!oneLine) {
+      return "";
+    }
+    // Take the first meaningful clause as a concise summary.
+    // No content-based keyword stripping — the narration model handles tone;
+    // this fallback path only needs to truncate safely.
+    const firstClause = oneLine.split(/(?:\s*[;；]\s*|\s+\|\s+|\s+[.。]\s+)/)[0]?.trim() ?? "";
+    const normalized = firstClause || oneLine;
+    return this.trimForPrompt(normalized, maxChars);
+  }
+
   fallbackTaskProgressNarration(input: TaskProgressNarrationInput): TaskProgressNarrationDecision {
     const action = String(input.progress.actionType || "").toLowerCase();
     const message = String(input.progress.message || "");
@@ -2401,7 +2424,10 @@ export class ChatAssistant {
     }
 
     const app = this.trimForPrompt(input.progress.currentApp || "unknown", 120);
-    const summary = this.trimForPrompt(input.progress.thought || input.progress.message || "", 180);
+    const summary = this.cleanProgressSummaryForUser(
+      input.progress.thought || input.progress.message || "",
+      140,
+    );
     const messageText = input.locale === "zh"
       ? `小更新：我还在 ${app}，刚做了 ${input.progress.actionType}${summary ? `，${summary}` : ""}。`
       : `Quick update: still on ${app}, I just ran ${input.progress.actionType}${summary ? `, ${summary}` : ""}.`;

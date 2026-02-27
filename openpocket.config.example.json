@@ -11,6 +11,8 @@
   "target": {
     "type": "emulator",
     "adbEndpoint": "",
+    "pin": "1234",
+    "wakeupIntervalSec": 3,
     "cloudProvider": ""
   },
   "emulator": {

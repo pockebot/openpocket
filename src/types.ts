@@ -8,6 +8,15 @@ export interface DeviceTargetConfig {
    */
   adbEndpoint: string;
   /**
+   * Lock-screen PIN used for target auto-unlock.
+   * Must be 4 digits when set.
+   */
+  pin: string;
+  /**
+   * Screen keep-awake heartbeat interval in seconds.
+   */
+  wakeupIntervalSec: number;
+  /**
    * Reserved for cloud integrations. Current runtime still uses adb transport.
    */
   cloudProvider: string;
@@ -160,6 +169,67 @@ export type HumanAuthCapability =
   | "permission"
   | "unknown";
 
+export type HumanAuthUiFieldType =
+  | "text"
+  | "textarea"
+  | "password"
+  | "email"
+  | "number"
+  | "date"
+  | "select"
+  | "otp"
+  | "card-number"
+  | "expiry"
+  | "cvc";
+
+export interface HumanAuthUiFieldOption {
+  label: string;
+  value: string;
+}
+
+export interface HumanAuthUiField {
+  id: string;
+  label: string;
+  type: HumanAuthUiFieldType;
+  placeholder?: string;
+  required?: boolean;
+  helperText?: string;
+  options?: HumanAuthUiFieldOption[];
+  autocomplete?: string;
+  artifactKey?: string;
+}
+
+export interface HumanAuthUiStyle {
+  brandColor?: string;
+  backgroundCss?: string;
+  fontFamily?: string;
+}
+
+export interface HumanAuthUiTemplate {
+  templateId?: string;
+  title?: string;
+  summary?: string;
+  capabilityHint?: string;
+  artifactKind?: "auto" | "credentials" | "payment_card" | "form";
+  requireArtifactOnApprove?: boolean;
+  allowTextAttachment?: boolean;
+  allowLocationAttachment?: boolean;
+  allowPhotoAttachment?: boolean;
+  allowAudioAttachment?: boolean;
+  allowFileAttachment?: boolean;
+  fileAccept?: string;
+  fields?: HumanAuthUiField[];
+  middleHtml?: string;
+  middleCss?: string;
+  middleScript?: string;
+  approveScript?: string;
+  approveLabel?: string;
+  rejectLabel?: string;
+  noteLabel?: string;
+  notePlaceholder?: string;
+  style?: HumanAuthUiStyle;
+}
+
 export interface HumanAuthRequest {
   sessionId: string;
   sessionPath: string;
@@ -171,6 +241,7 @@ export interface HumanAuthRequest {
   timeoutSec: number;
   currentApp: string;
   screenshotPath: string | null;
+  uiTemplate?: HumanAuthUiTemplate;
 }
 
 export interface HumanAuthDecision {
@@ -360,12 +431,14 @@ export type AgentAction =
       lines?: number;
       reason?: string;
     }
-  | {
+    | {
       type: "request_human_auth";
       capability: HumanAuthCapability;
       instruction: string;
       timeoutSec?: number;
       reason?: string;
+      uiTemplate?: HumanAuthUiTemplate;
+      templatePath?: string;
     }
   | {
       type: "request_user_decision";

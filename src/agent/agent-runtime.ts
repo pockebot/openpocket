@@ -9,6 +9,8 @@ import type {
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
+  HumanAuthUiField,
+  HumanAuthUiTemplate,
   UserDecisionRequest,
   UserDecisionResponse,
   UserInputRequest,
@@ -51,11 +53,19 @@ import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
 import { createPiSessionBridge } from "./pi-session-bridge.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
+import {
+  PhoneUseCapabilityProbe,
+  inferPaymentFieldSemantic,
+  parsePaymentArtifactKey,
+  type CapabilityProbeEvent,
+  type PaymentFieldSemantic,
+} from "../phone-use-util/index.js";
 
 const AUTO_PERMISSION_DIALOG_PACKAGES = [
   "permissioncontroller",
   "packageinstaller",
 ];
+const CAPABILITY_PROBE_HUMAN_AUTH_COOLDOWN_MS = 90_000;
 
 const PERMISSION_APPROVE_TEXT_HINTS = [
   "while using",
@@ -188,6 +198,12 @@ type DelegationApplyResult = {
   };
 };
 
+type CapabilityProbeApprovalRecord = {
+  decision: HumanAuthDecision;
+  delegationMessage: string | null;
+  templateHint: string | null;
+};
+
 type PermissionDialogNode = {
   text: string;
   contentDesc: string;
@@ -217,18 +233,12 @@ type PaymentInputNode = CredentialInputNode & {
   contentDesc: string;
 };
 
-type DelegatedPaymentCard = {
-  cardNumber: string;
-  expiry: string;
-  cvc: string;
-  zip: string;
-  cardholderName: string;
-};
-
-type OauthCredentialCache = {
-  username: string;
-  password: string;
-  updatedAtMs: number;
+type DelegatedPaymentField = {
+  semantic: PaymentFieldSemantic;
+  value: string;
+  label: string;
+  artifactKey: string;
+  resourceIdHint: string;
 };
 
 type ResolvedTapElementContext = {
@@ -297,6 +307,7 @@ interface PhoneAgentRunContext {
   lastScreenshotStartMs: number;
   lastScreenshotEndMs: number;
   lastModelInferenceStartMs: number;
+  capabilityProbeApprovalByKey: Map<string, CapabilityProbeApprovalRecord>;
 }
 
 type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {
@@ -320,13 +331,14 @@ export class AgentRuntime {
   private readonly piCodingToolsExecutor: PiCodingToolsExecutor;
   private readonly memoryExecutor: MemoryExecutor;
   private readonly screenshotStore: ScreenshotStore;
+  private readonly capabilityProbe: PhoneUseCapabilityProbe;
+  private readonly capabilityProbeAuthCooldownByKey = new Map<string, number>();
   private busy = false;
   private stopRequested = false;
   private currentTask: string | null = null;
   private currentTaskStartedAtMs: number | null = null;
   private lastSystemPromptReport: WorkspacePromptContextReport | null = null;
   private lastResolvedTapElementContext: ResolvedTapElementContext | null = null;
-  private delegatedOauthCredentials: OauthCredentialCache | null = null;
   private readonly agentFactory: AgentFactory;
 
   constructor(config: OpenPocketConfig, options?: AgentRuntimeOptions) {
@@ -344,6 +356,13 @@ export class AgentRuntime {
       config.screenshots.directory,
       config.screenshots.maxCount,
     );
+    this.capabilityProbe = new PhoneUseCapabilityProbe({
+      adbRunner: {
+        run: (deviceId: string, args: string[], timeoutMs?: number) => {
+          return this.emulator.runAdb(["-s", deviceId, ...args], timeoutMs ?? 20_000);
+        },
+      },
+    });
     this.agentFactory = options?.agentFactory ?? ((agentOptions: AgentOptions) => new Agent(agentOptions));
   }
 
@@ -376,6 +395,18 @@ export class AgentRuntime {
         currentApp: snapshot.currentApp,
       },
     );
+  }
+
+  startScreenAwakeHeartbeat(intervalMs?: number): void {
+    const resolvedMs =
+      intervalMs === undefined
+        ? Math.max(1, Math.round(this.config.target.wakeupIntervalSec)) * 1000
+        : intervalMs;
+    this.adb.startScreenAwakeHeartbeat(this.config.agent.deviceId, resolvedMs);
+  }
+
+  stopScreenAwakeHeartbeat(): void {
+    this.adb.stopScreenAwakeHeartbeat();
   }
 
   stopCurrentTask(): boolean {
@@ -423,6 +454,70 @@ export class AgentRuntime {
     } catch {
       return null;
     }
+  }
+
+  private resolveWorkspaceTemplatePath(templatePathRaw: string): string | null {
+    const templatePath = String(templatePathRaw || "").trim();
+    if (!templatePath) {
+      return null;
+    }
+    const workspaceRoot = path.resolve(this.config.workspaceDir);
+    const absolutePath = path.isAbsolute(templatePath)
+      ? path.resolve(templatePath)
+      : path.resolve(workspaceRoot, templatePath);
+    if (absolutePath === workspaceRoot) {
+      return null;
+    }
+    const workspacePrefix = workspaceRoot.endsWith(path.sep) ? workspaceRoot : `${workspaceRoot}${path.sep}`;
+    if (!absolutePath.startsWith(workspacePrefix)) {
+      return null;
+    }
+    return absolutePath;
+  }
+
+  private loadHumanAuthTemplateFromPath(templatePathRaw: string): HumanAuthUiTemplate {
+    const absolutePath = this.resolveWorkspaceTemplatePath(templatePathRaw);
+    if (!absolutePath) {
+      throw new Error(`Invalid templatePath: ${templatePathRaw}`);
+    }
+    if (!absolutePath.toLowerCase().endsWith(".json")) {
+      throw new Error(`templatePath must be a .json file: ${templatePathRaw}`);
+    }
+    if (!fs.existsSync(absolutePath)) {
+      throw new Error(`Human auth template file not found: ${templatePathRaw}`);
+    }
+    const raw = fs.readFileSync(absolutePath, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`Human auth template must be a JSON object: ${templatePathRaw}`);
+    }
+    return parsed as HumanAuthUiTemplate;
+  }
+
+  private resolveHumanAuthUiTemplate(
+    inlineTemplate: HumanAuthUiTemplate | undefined,
+    templatePath: string | undefined,
+  ): HumanAuthUiTemplate | undefined {
+    const hasInline = Boolean(inlineTemplate && typeof inlineTemplate === "object");
+    const pathRaw = String(templatePath || "").trim();
+    if (!pathRaw) {
+      return hasInline ? inlineTemplate : undefined;
+    }
+    const loaded = this.loadHumanAuthTemplateFromPath(pathRaw);
+    if (!hasInline) {
+      return loaded;
+    }
+    return {
+      ...loaded,
+      ...inlineTemplate,
+      style: {
+        ...(loaded.style ?? {}),
+        ...(inlineTemplate?.style ?? {}),
+      },
+      fields: Array.isArray(inlineTemplate?.fields)
+        ? inlineTemplate?.fields
+        : loaded.fields,
+    };
   }
 
   private clipWithHeadTail(input: string, limit: number): { snippet: string; truncated: boolean } {
@@ -705,585 +800,182 @@ export class AgentRuntime {
     });
   }
 
-  private isImageArtifactPath(artifactPath: string): boolean {
-    const ext = path.extname(artifactPath).toLowerCase();
-    return [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".gif"].includes(ext);
-  }
-
-  private extractDelegatedText(artifactJson: Record<string, unknown> | null): string | null {
-    if (!artifactJson) {
-      return null;
-    }
-    const value = artifactJson.value;
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-    return null;
-  }
-
-  private extractDelegatedTextFromDecisionMessage(message: string): string | null {
-    const raw = String(message || "").trim();
-    if (!raw) {
-      return null;
-    }
-
-    const normalized = raw.toLowerCase();
-    if (
-      normalized.startsWith("approved by ") ||
-      normalized.startsWith("rejected by ") ||
-      normalized === "approved from web link." ||
-      normalized === "rejected from web link."
-    ) {
-      return null;
-    }
-
-    const explicitCode = raw.match(/\b\d{4,10}\b/);
-    if (explicitCode?.[0]) {
-      return explicitCode[0];
-    }
-
-    if (/^[A-Za-z0-9._-]{4,32}$/.test(raw)) {
-      return raw;
-    }
-    return null;
-  }
-
-  private extractDelegatedGeo(
-    artifactJson: Record<string, unknown> | null,
-  ): { lat: number; lon: number } | null {
-    if (!artifactJson) {
-      return null;
-    }
-    const lat = Number(artifactJson.lat);
-    const lon = Number(artifactJson.lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      return null;
-    }
-    return { lat, lon };
-  }
-
-  private extractDelegatedCredentials(
-    artifactJson: Record<string, unknown> | null,
-  ): { username: string; password: string } | null {
-    if (!artifactJson) {
-      return null;
-    }
-    if (String(artifactJson.kind ?? "") !== "credentials") {
-      return null;
-    }
-    const usernameRaw = artifactJson.username;
-    const passwordRaw = artifactJson.password;
-    const username = typeof usernameRaw === "string" ? usernameRaw.trim() : "";
-    const password = typeof passwordRaw === "string" ? passwordRaw : "";
-    if (!username && !password) {
-      return null;
-    }
-    return { username, password };
-  }
-
-  private extractDelegatedPaymentCard(
-    artifactJson: Record<string, unknown> | null,
-  ): DelegatedPaymentCard | null {
-    if (!artifactJson) {
-      return null;
-    }
-    if (String(artifactJson.kind ?? "") !== "payment_card_v1") {
-      return null;
-    }
-    const cardNumber = typeof artifactJson.cardNumber === "string"
-      ? artifactJson.cardNumber.replace(/\s+/g, "")
-      : "";
-    const expiry = typeof artifactJson.expiry === "string" ? artifactJson.expiry.trim() : "";
-    const cvc = typeof artifactJson.cvc === "string" ? artifactJson.cvc.trim() : "";
-    const zip = typeof artifactJson.zip === "string" ? artifactJson.zip.trim() : "";
-    const cardholderName = typeof artifactJson.cardholderName === "string"
-      ? artifactJson.cardholderName.trim()
-      : "";
-    if (!cardNumber && !expiry && !cvc && !zip && !cardholderName) {
-      return null;
-    }
-    return {
-      cardNumber,
-      expiry,
-      cvc,
-      zip,
-      cardholderName,
-    };
-  }
-
-  private getCachedOauthCredentials(maxAgeMs = 15 * 60 * 1000): { username: string; password: string } | null {
-    const cache = this.delegatedOauthCredentials;
-    if (!cache) {
-      return null;
-    }
-    if (Date.now() - cache.updatedAtMs > maxAgeMs) {
-      this.delegatedOauthCredentials = null;
-      return null;
-    }
-    return {
-      username: cache.username,
-      password: cache.password,
-    };
-  }
-
-  private putCachedOauthCredentials(username: string, password: string): void {
-    const current = this.delegatedOauthCredentials;
-    const mergedUsername = username || current?.username || "";
-    const mergedPassword = password || current?.password || "";
-    if (!mergedUsername && !mergedPassword) {
-      this.delegatedOauthCredentials = null;
-      return;
-    }
-    this.delegatedOauthCredentials = {
-      username: mergedUsername,
-      password: mergedPassword,
-      updatedAtMs: Date.now(),
-    };
-  }
-
-  private clearCachedOauthCredentials(): void {
-    this.delegatedOauthCredentials = null;
-  }
-
-  private async applyLocationDelegation(lat: number, lon: number): Promise<DelegationApplyResult> {
-    const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
-    this.emulator.runAdb(
-      [
-        "-s",
-        deviceId,
-        "emu",
-        "geo",
-        "fix",
-        String(lon),
-        String(lat),
-      ],
-      20_000,
-    );
-    return {
-      message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)}`,
-      templateHint: "location_injected_continue_flow",
-    };
-  }
-
-  private async applyTextDelegation(text: string): Promise<DelegationApplyResult> {
-    const result = await this.adb.executeAction(
-      {
-        type: "type",
-        text,
-        reason: "human_auth_delegate_text",
-      },
-      this.config.agent.deviceId,
-    );
-    return {
-      message: `delegated text typed (${text.length} chars): ${result}`,
-      templateHint: "text_typed_continue_flow",
-    };
-  }
-
-  private paymentHintScore(
-    node: PaymentInputNode,
-    target: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
-  ): number {
-    const combined = this.normalizePermissionUiText(
-      `${node.resourceId} ${node.hint} ${node.text} ${node.contentDesc} ${node.className}`,
-    );
-    if (!combined) {
-      return 0;
-    }
-
-    if (target === "cardNumber") {
-      if (combined.includes("card number") || combined.includes("cc-number") || combined.includes("cardnumber")) {
-        return 240;
-      }
-      if (combined.includes("card") && combined.includes("number")) {
-        return 180;
-      }
-      if (combined.includes("pan")) {
-        return 120;
-      }
-      return 0;
-    }
-
-    if (target === "expiry") {
-      if (combined.includes("expiration") || combined.includes("expiry")) {
-        return 220;
-      }
-      if (combined.includes("exp") && (combined.includes("date") || combined.includes("month") || combined.includes("year"))) {
-        return 180;
-      }
-      if (combined.includes("mm/yy") || combined.includes("month") || combined.includes("year")) {
-        return 150;
-      }
-      return 0;
-    }
-
-    if (target === "cvc") {
-      if (combined.includes("security code")) {
-        return 240;
-      }
-      if (combined.includes("cvv") || combined.includes("cvc") || combined.includes("csc")) {
-        return 220;
-      }
-      if (combined.includes("security") && combined.includes("code")) {
-        return 180;
-      }
-      return 0;
-    }
-
-    if (target === "zip") {
-      if (combined.includes("postal") || combined.includes("zip")) {
-        return 220;
-      }
-      return 0;
-    }
-
-    if (combined.includes("cardholder") || combined.includes("holder name")) {
-      return 220;
-    }
-    if (combined.includes("name")) {
-      return 140;
-    }
-    return 0;
-  }
-
-  private pickPaymentInputNode(
-    nodes: PaymentInputNode[],
-    target: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
-    used: Set<PaymentInputNode>,
-  ): PaymentInputNode | null {
-    const available = nodes.filter((node) => !used.has(node));
-    if (available.length === 0) {
-      return null;
-    }
-    const scored = available
-      .map((node) => ({
-        node,
-        score: this.paymentHintScore(node, target),
-      }))
-      .sort((a, b) => {
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        if (a.node.top !== b.node.top) {
-          return a.node.top - b.node.top;
-        }
-        return a.node.left - b.node.left;
-      });
-
-    if ((scored[0]?.score ?? 0) > 0) {
-      return scored[0]?.node ?? null;
-    }
-    return available[0] ?? null;
-  }
-
-  private credentialHintScore(node: CredentialInputNode, target: "username" | "password"): number {
-    const resource = this.normalizePermissionUiText(node.resourceId);
-    const hint = this.normalizePermissionUiText(node.hint);
-    const className = this.normalizePermissionUiText(node.className);
-    const combined = `${resource} ${hint} ${className}`;
-
-    if (target === "password") {
-      let score = 0;
-      if (node.password) {
-        score += 140;
-      }
-      if (combined.includes("password") || combined.includes("passcode") || combined.includes("pwd")) {
-        score += 110;
-      }
-      return score;
-    }
-
-    let score = 0;
-    if (!node.password) {
-      score += 20;
-    }
-    if (
-      combined.includes("username") ||
-      combined.includes("user name") ||
-      combined.includes("email") ||
-      combined.includes("account") ||
-      combined.includes("phone")
-    ) {
-      score += 120;
-    }
-    return score;
-  }
-
-  private pickCredentialInputNode(
-    nodes: CredentialInputNode[],
-    target: "username" | "password",
-    exclude: CredentialInputNode | null,
-  ): CredentialInputNode | null {
-    const filtered = nodes.filter((node) => node !== exclude);
-    if (filtered.length === 0) {
-      return null;
-    }
-    const scored = filtered
-      .map((node) => ({
-        node,
-        score: this.credentialHintScore(node, target),
-      }))
-      .sort((a, b) => {
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        if (a.node.top !== b.node.top) {
-          return a.node.top - b.node.top;
-        }
-        return a.node.left - b.node.left;
-      });
-    if ((scored[0]?.score ?? 0) > 0) {
-      return scored[0]?.node ?? null;
-    }
-    if (target === "password") {
-      const passwordNode = filtered.find((node) => node.password);
-      if (passwordNode) {
-        return passwordNode;
-      }
-      return filtered[filtered.length - 1] ?? null;
-    }
-    const textNode = filtered.find((node) => !node.password);
-    if (textNode) {
-      return textNode;
-    }
-    return null;
-  }
-
-  private async tapCredentialNode(
-    node: CredentialInputNode,
-    reason: string,
-  ): Promise<void> {
-    const tapX = Math.max(0, Math.round((node.left + node.right) / 2));
-    const tapY = Math.max(0, Math.round((node.top + node.bottom) / 2));
-    await this.adb.executeAction(
-      {
-        type: "tap",
-        x: tapX,
-        y: tapY,
-        reason,
-      },
-      this.config.agent.deviceId,
-    );
-    await sleep(120);
-  }
-
-  private async applyCredentialDelegation(
-    username: string,
-    password: string,
-  ): Promise<DelegationApplyResult> {
-    const deviceId = this.resolveDelegationDeviceId();
-    const uiDumpXml = this.captureUiDumpXml(deviceId);
-    const nodes = this.parseCredentialInputNodes(uiDumpXml);
-    let focusedUsernameNode: CredentialInputNode | null = null;
-
-    let typedUsername = false;
-    let typedPassword = false;
-
-    if (username) {
-      focusedUsernameNode = this.pickCredentialInputNode(nodes, "username", null);
-      if (focusedUsernameNode) {
-        await this.tapCredentialNode(focusedUsernameNode, "human_auth_focus_username");
-        await this.adb.executeAction(
-          {
-            type: "type",
-            text: username,
-            reason: "human_auth_delegate_username",
-          },
-          this.config.agent.deviceId,
-        );
-        typedUsername = true;
-      }
-    }
-
-    if (password) {
-      const passwordNode = this.pickCredentialInputNode(nodes, "password", focusedUsernameNode);
-      if (passwordNode) {
-        await this.tapCredentialNode(passwordNode, "human_auth_focus_password");
-        await this.adb.executeAction(
-          {
-            type: "type",
-            text: password,
-            reason: "human_auth_delegate_password",
-          },
-          this.config.agent.deviceId,
-        );
-        typedPassword = true;
-      }
-    }
-
-    // Keep oauth credentials cached for split-screen sign-in (username -> next -> password).
-    this.putCachedOauthCredentials(username, password);
-    if (typedPassword) {
-      // Once password has been typed on-device, clear cache to reduce credential lifetime.
-      this.clearCachedOauthCredentials();
-    }
-
-    // Redact credential details from logs — only report typed/deferred fields.
-    const typed: string[] = [];
-    const deferred: string[] = [];
-    if (username) {
-      if (typedUsername) {
-        typed.push("username");
-      } else {
-        deferred.push("username");
-      }
-    }
-    if (password) {
-      if (typedPassword) {
-        typed.push("password");
-      } else {
-        deferred.push("password");
-      }
-    }
-    const messageParts: string[] = [];
-    if (typed.length > 0) {
-      messageParts.push(`delegated credentials typed: ${typed.join(" + ")}`);
-    }
-    if (deferred.length > 0) {
-      messageParts.push(`deferred for next oauth step: ${deferred.join(" + ")}`);
-    }
-    if (messageParts.length === 0) {
-      messageParts.push("no credential input fields detected for delegation");
-    }
-
-    return {
-      message: messageParts.join(" ; "),
-      templateHint: "oauth_credentials_typed_continue_flow",
-      oauthTyped: {
-        username: typedUsername,
-        password: typedPassword,
-      },
-    };
-  }
-
-  private async applyPaymentDelegation(
-    payment: DelegatedPaymentCard,
-  ): Promise<DelegationApplyResult> {
-    const deviceId = this.resolveDelegationDeviceId();
-    const uiDumpXml = this.captureUiDumpXml(deviceId);
-    const nodes = this.parsePaymentInputNodes(uiDumpXml);
-    const used = new Set<PaymentInputNode>();
-
-    const typedFields: string[] = [];
-    const deferredFields: string[] = [];
-    const maybeType = async (
-      fieldName: "cardNumber" | "expiry" | "cvc" | "zip" | "cardholderName",
-      fieldValue: string,
-      focusReason: string,
-      typeReason: string,
-      displayName: string,
-    ) => {
-      if (!fieldValue) {
-        return;
-      }
-      const node = this.pickPaymentInputNode(nodes, fieldName, used);
-      if (!node) {
-        deferredFields.push(displayName);
-        return;
-      }
-      used.add(node);
-      await this.tapCredentialNode(node, focusReason);
-      await this.adb.executeAction(
-        {
-          type: "type",
-          text: fieldValue,
-          reason: typeReason,
-        },
-        this.config.agent.deviceId,
-      );
-      typedFields.push(displayName);
-    };
-
-    await maybeType(
-      "cardNumber",
-      payment.cardNumber,
-      "human_auth_focus_payment_card_number",
-      "human_auth_delegate_payment_card_number",
-      "card_number",
-    );
-    await maybeType(
-      "expiry",
-      payment.expiry,
-      "human_auth_focus_payment_expiry",
-      "human_auth_delegate_payment_expiry",
-      "expiry",
-    );
-    await maybeType(
-      "cvc",
-      payment.cvc,
-      "human_auth_focus_payment_cvc",
-      "human_auth_delegate_payment_cvc",
-      "cvc",
-    );
-    await maybeType(
-      "zip",
-      payment.zip,
-      "human_auth_focus_payment_zip",
-      "human_auth_delegate_payment_zip",
-      "zip",
-    );
-    await maybeType(
-      "cardholderName",
-      payment.cardholderName,
-      "human_auth_focus_payment_cardholder",
-      "human_auth_delegate_payment_cardholder",
-      "cardholder_name",
-    );
-
-    const parts: string[] = [];
-    if (typedFields.length > 0) {
-      parts.push(`delegated payment fields typed: ${typedFields.join(" + ")}`);
-    }
-    if (deferredFields.length > 0) {
-      parts.push(`payment fields not matched in current UI: ${deferredFields.join(" + ")}`);
-    }
-    if (parts.length === 0) {
-      parts.push("no payment fields provided for delegation");
-    }
-
-    return {
-      message: parts.join(" ; "),
-      templateHint: "payment_fields_typed_continue_flow",
-    };
-  }
-
-  private async applyImageDelegation(artifactPath: string): Promise<DelegationApplyResult> {
-    const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
-    const ext = path.extname(artifactPath).toLowerCase() || ".jpg";
-    const remoteName = `openpocket-human-auth-${Date.now()}${ext}`;
-    const remotePath = `/sdcard/Download/${remoteName}`;
-    this.emulator.runAdb(
-      [
-        "-s",
-        deviceId,
-        "push",
-        artifactPath,
-        remotePath,
-      ],
-      30_000,
-    );
+  private runAdbForLocationStrategy(
+    deviceId: string,
+    args: string[],
+    timeoutMs = 12_000,
+  ): { ok: true; output: string } | { ok: false; error: string } {
     try {
-      this.emulator.runAdb(
-        [
-          "-s",
-          deviceId,
-          "shell",
-          "am",
-          "broadcast",
-          "-a",
-          "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
-          "-d",
-          `file://${remotePath}`,
-        ],
-        15_000,
+      return {
+        ok: true,
+        output: this.emulator.runAdb(["-s", deviceId, ...args], timeoutMs),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  private extractMockLocationUid(errorText: string): string | null {
+    const match = String(errorText || "").match(/\bfrom\s+(\d+)\b/i);
+    if (!match?.[1]) {
+      return null;
+    }
+    return match[1];
+  }
+
+  private tryInjectLocationViaCmdLocation(
+    deviceId: string,
+    lat: number,
+    lon: number,
+  ): { ok: true; detail: string } | { ok: false; detail: string } {
+    this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "cmd", "location", "set-location-enabled", "true"],
+      8_000,
+    );
+    this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "appops", "set", "shell", "android:mock_location", "allow"],
+      8_000,
+    );
+
+    const locationArg = `${lat},${lon}`;
+    const providers = ["gps", "network", "fused"];
+    for (const provider of providers) {
+      const addProvider = this.runAdbForLocationStrategy(
+        deviceId,
+        ["shell", "cmd", "location", "providers", "add-test-provider", provider],
+        8_000,
       );
-    } catch {
-      // Media scan broadcast is best-effort.
+      if (!addProvider.ok) {
+        const uid = this.extractMockLocationUid(addProvider.error);
+        if (uid) {
+          this.runAdbForLocationStrategy(
+            deviceId,
+            ["shell", "appops", "set", uid, "android:mock_location", "allow"],
+            8_000,
+          );
+        }
+      }
+
+      this.runAdbForLocationStrategy(
+        deviceId,
+        ["shell", "cmd", "location", "providers", "set-test-provider-enabled", provider, "true"],
+        8_000,
+      );
+
+      const setProviderLocationArgs = [
+        "shell",
+        "cmd",
+        "location",
+        "providers",
+        "set-test-provider-location",
+        provider,
+        "--location",
+        locationArg,
+        "--accuracy",
+        "3",
+      ];
+      let setProviderLocation = this.runAdbForLocationStrategy(deviceId, setProviderLocationArgs, 12_000);
+      if (!setProviderLocation.ok) {
+        const uid = this.extractMockLocationUid(setProviderLocation.error);
+        if (uid) {
+          this.runAdbForLocationStrategy(
+            deviceId,
+            ["shell", "appops", "set", uid, "android:mock_location", "allow"],
+            8_000,
+          );
+          setProviderLocation = this.runAdbForLocationStrategy(deviceId, setProviderLocationArgs, 12_000);
+        }
+      }
+      if (setProviderLocation.ok) {
+        return {
+          ok: true,
+          detail: `cmd_location provider=${provider}`,
+        };
+      }
+    }
+
+    const directCommands: string[][] = [
+      ["shell", "cmd", "location", "set-location", String(lat), String(lon)],
+      ["shell", "cmd", "location", "set", String(lat), String(lon)],
+    ];
+    for (const command of directCommands) {
+      const directSet = this.runAdbForLocationStrategy(deviceId, command, 10_000);
+      if (directSet.ok) {
+        return {
+          ok: true,
+          detail: `cmd_location direct=${command.slice(3, 5).join("_")}`,
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      detail: "cmd_location failed to inject via providers/direct commands",
+    };
+  }
+
+  private tryInjectLocationViaAppiumSettings(
+    deviceId: string,
+    lat: number,
+    lon: number,
+  ): { ok: true; detail: string } | { ok: false; detail: string } {
+    const appiumSettingsPackage = "io.appium.settings";
+    const packagePath = this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "pm", "path", appiumSettingsPackage],
+      8_000,
+    );
+    if (!packagePath.ok || !String(packagePath.output || "").includes("package:")) {
+      return {
+        ok: false,
+        detail: "appium_settings package not installed",
+      };
+    }
+
+    this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "appops", "set", appiumSettingsPackage, "android:mock_location", "allow"],
+      8_000,
+    );
+
+    const component = `${appiumSettingsPackage}/.LocationService`;
+    const extras = [
+      "--es",
+      "longitude",
+      String(lon),
+      "--es",
+      "latitude",
+      String(lat),
+      "--es",
+      "accuracy",
+      "3.0",
+    ];
+    let startService = this.runAdbForLocationStrategy(
+      deviceId,
+      ["shell", "am", "start-foreground-service", "-n", component, ...extras],
+      12_000,
+    );
+    if (!startService.ok) {
+      startService = this.runAdbForLocationStrategy(
+        deviceId,
+        ["shell", "am", "startservice", "-n", component, ...extras],
+        12_000,
+      );
+    }
+    if (!startService.ok) {
+      return {
+        ok: false,
+        detail: "appium_settings service failed to start",
+      };
     }
     return {
-      message: `delegated image pushed to ${remotePath}`,
-      templateHint:
-        `gallery_import_template: tap app upload/attach/gallery entry, open Downloads, select ${remoteName}, then confirm.`,
+      ok: true,
+      detail: "appium_settings location service",
     };
   }
 
@@ -1356,92 +1048,6 @@ export class AgentRuntime {
       });
       match = nodeRe.exec(uiDumpXml);
     }
-    return nodes;
-  }
-
-  private parseCredentialInputNodes(uiDumpXml: string): CredentialInputNode[] {
-    const nodes: CredentialInputNode[] = [];
-    const nodeRe = /<node\s+([^>]*?)\/>/g;
-    let match = nodeRe.exec(uiDumpXml);
-    while (match) {
-      const attrs = this.parseUiNodeAttributes(match[1] ?? "");
-      const className = String(attrs.class ?? "");
-      const classNormalized = this.normalizePermissionUiText(className);
-      const parsedBounds = this.parseBounds(String(attrs.bounds ?? "").trim());
-      if (!parsedBounds || !classNormalized.includes("edittext")) {
-        match = nodeRe.exec(uiDumpXml);
-        continue;
-      }
-      const enabled = String(attrs.enabled ?? "").toLowerCase() !== "false";
-      if (!enabled) {
-        match = nodeRe.exec(uiDumpXml);
-        continue;
-      }
-      nodes.push({
-        resourceId: String(attrs["resource-id"] ?? ""),
-        className,
-        hint: String(attrs.hint ?? attrs.text ?? attrs["content-desc"] ?? ""),
-        password: String(attrs.password ?? "").toLowerCase() === "true",
-        left: parsedBounds.left,
-        top: parsedBounds.top,
-        right: parsedBounds.right,
-        bottom: parsedBounds.bottom,
-      });
-      match = nodeRe.exec(uiDumpXml);
-    }
-    nodes.sort((a, b) => {
-      if (a.top !== b.top) {
-        return a.top - b.top;
-      }
-      return a.left - b.left;
-    });
-    return nodes;
-  }
-
-  private parsePaymentInputNodes(uiDumpXml: string): PaymentInputNode[] {
-    const nodes: PaymentInputNode[] = [];
-    const nodeRe = /<node\s+([^>]*?)\/>/g;
-    let match = nodeRe.exec(uiDumpXml);
-    while (match) {
-      const attrs = this.parseUiNodeAttributes(match[1] ?? "");
-      const className = String(attrs.class ?? "");
-      const classNormalized = this.normalizePermissionUiText(className);
-      const parsedBounds = this.parseBounds(String(attrs.bounds ?? "").trim());
-      const isTextInputClass =
-        classNormalized.includes("edittext")
-        || classNormalized.includes("autocompletetextview")
-        || classNormalized.includes("textinput");
-      if (!parsedBounds || !isTextInputClass) {
-        match = nodeRe.exec(uiDumpXml);
-        continue;
-      }
-      const enabled = String(attrs.enabled ?? "").toLowerCase() !== "false";
-      if (!enabled) {
-        match = nodeRe.exec(uiDumpXml);
-        continue;
-      }
-      const text = String(attrs.text ?? "");
-      const contentDesc = String(attrs["content-desc"] ?? "");
-      nodes.push({
-        resourceId: String(attrs["resource-id"] ?? ""),
-        className,
-        hint: String(attrs.hint ?? text ?? contentDesc ?? ""),
-        text,
-        contentDesc,
-        password: String(attrs.password ?? "").toLowerCase() === "true",
-        left: parsedBounds.left,
-        top: parsedBounds.top,
-        right: parsedBounds.right,
-        bottom: parsedBounds.bottom,
-      });
-      match = nodeRe.exec(uiDumpXml);
-    }
-    nodes.sort((a, b) => {
-      if (a.top !== b.top) {
-        return a.top - b.top;
-      }
-      return a.left - b.left;
-    });
     return nodes;
   }
 
@@ -1714,6 +1320,509 @@ export class AgentRuntime {
     ].join(" ");
   }
 
+  private formatCapabilityProbeEvents(events: CapabilityProbeEvent[]): string {
+    const detail = events
+      .map((event) => {
+        const confidence = Number.isFinite(event.confidence)
+          ? event.confidence.toFixed(2)
+          : "0.00";
+        if (event.capability === "payment") {
+          const fieldCount = event.paymentContext?.fieldCandidates?.length ?? 0;
+          return `${event.capability}/${event.phase} pkg=${event.packageName} src=${event.source} fields=${fieldCount} conf=${confidence}`;
+        }
+        return `${event.capability}/${event.phase} pkg=${event.packageName} src=${event.source} conf=${confidence}`;
+      })
+      .join("; ");
+    return `capability_probe count=${events.length} ${detail}`;
+  }
+
+  private dedupeCapabilityProbeEvents(events: CapabilityProbeEvent[]): CapabilityProbeEvent[] {
+    const map = new Map<string, CapabilityProbeEvent>();
+    for (const event of events) {
+      const key = `${event.capability}|${event.phase}|${event.packageName.toLowerCase()}|${event.source}`;
+      const existing = map.get(key);
+      if (!existing || event.confidence > existing.confidence) {
+        map.set(key, event);
+      }
+    }
+    return [...map.values()];
+  }
+
+  private detectPermissionDialogCapabilityFromDump(
+    dumpText: string,
+  ): CapabilityProbeEvent["capability"] | null {
+    const upper = String(dumpText || "").toUpperCase();
+    if (!upper) {
+      return null;
+    }
+    if (upper.includes("ANDROID.PERMISSION.CAMERA")) {
+      return "camera";
+    }
+    if (upper.includes("ANDROID.PERMISSION.RECORD_AUDIO")) {
+      return "microphone";
+    }
+    if (
+      upper.includes("ANDROID.PERMISSION.ACCESS_FINE_LOCATION")
+      || upper.includes("ANDROID.PERMISSION.ACCESS_COARSE_LOCATION")
+    ) {
+      return "location";
+    }
+    if (
+      upper.includes("ANDROID.PERMISSION.READ_MEDIA_IMAGES")
+      || upper.includes("ANDROID.PERMISSION.READ_EXTERNAL_STORAGE")
+      || upper.includes("ANDROID.PERMISSION.WRITE_EXTERNAL_STORAGE")
+    ) {
+      return "photos";
+    }
+    return null;
+  }
+
+  private buildPermissionDialogCapabilityEvent(
+    deviceId: string,
+    foregroundPackage: string,
+    previousPackage: string,
+  ): CapabilityProbeEvent | null {
+    if (!this.isPermissionDialogApp(foregroundPackage)) {
+      return null;
+    }
+    const previous = String(previousPackage || "").trim();
+    if (!previous || this.isPermissionDialogApp(previous)) {
+      return null;
+    }
+    try {
+      const dump = this.emulator.runAdb(
+        ["-s", deviceId, "shell", "dumpsys", "activity", "top"],
+        6_000,
+      );
+      const capability = this.detectPermissionDialogCapabilityFromDump(dump);
+      if (!capability) {
+        return null;
+      }
+      return {
+        capability,
+        phase: "requested",
+        packageName: previous,
+        source: "permission_dialog",
+        observedAt: nowIso(),
+        confidence: 0.96,
+        evidence: `activity_top:${capability}`,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private mapProbeCapabilityToHumanAuthCapability(
+    capability: CapabilityProbeEvent["capability"],
+  ): HumanAuthCapability | null {
+    switch (capability) {
+      case "camera":
+        return "camera";
+      case "microphone":
+        return "microphone";
+      case "location":
+        return "location";
+      case "photos":
+        return "files";
+      case "payment":
+        return "payment";
+      default:
+        return null;
+    }
+  }
+
+  private buildCapabilityProbeInstruction(event: CapabilityProbeEvent): string {
+    if (event.capability === "payment") {
+      return `Secure payment input was detected in ${event.packageName}. Fill required payment/billing fields from your Human Phone and approve to delegate them to Agent Phone.`;
+    }
+    const target = event.capability === "photos" ? "photos" : event.capability;
+    return `App ${event.packageName} requested ${target} access. Approve only if you want to delegate ${target} data from your Human Phone for this task step.`;
+  }
+
+  private paymentSemanticToUiFieldType(semantic: PaymentFieldSemantic): HumanAuthUiField["type"] {
+    switch (semantic) {
+      case "card_number":
+        return "card-number";
+      case "expiry":
+        return "expiry";
+      case "cvc":
+        return "cvc";
+      case "billing_email":
+        return "email";
+      default:
+        return "text";
+    }
+  }
+
+  private paymentFieldPlaceholder(semantic: PaymentFieldSemantic): string {
+    switch (semantic) {
+      case "card_number":
+        return "e.g., 4111111111111111";
+      case "expiry":
+        return "e.g., 02/32";
+      case "cvc":
+        return "e.g., 182";
+      case "postal_code":
+        return "e.g., 94105";
+      case "billing_email":
+        return "e.g., name@example.com";
+      case "billing_phone":
+        return "e.g., +1 415 555 0123";
+      default:
+        return "";
+    }
+  }
+
+  private buildPaymentProbeFields(event: CapabilityProbeEvent): HumanAuthUiField[] {
+    const candidates = Array.isArray(event.paymentContext?.fieldCandidates)
+      ? event.paymentContext?.fieldCandidates ?? []
+      : [];
+    if (candidates.length > 0) {
+      return candidates.map((candidate) => ({
+        id: candidate.artifactKey,
+        artifactKey: candidate.artifactKey,
+        label: candidate.label,
+        type: this.paymentSemanticToUiFieldType(candidate.semantic),
+        required: candidate.required,
+        placeholder: this.paymentFieldPlaceholder(candidate.semantic),
+        autocomplete: candidate.semantic === "card_number"
+          ? "cc-number"
+          : candidate.semantic === "expiry"
+            ? "cc-exp"
+            : candidate.semantic === "cvc"
+              ? "cc-csc"
+              : candidate.semantic === "billing_name" || candidate.semantic === "cardholder_name"
+                ? "name"
+                : candidate.semantic === "billing_email"
+                  ? "email"
+                  : candidate.semantic === "postal_code"
+                    ? "postal-code"
+                    : candidate.semantic === "billing_phone"
+                      ? "tel"
+                      : undefined,
+      }));
+    }
+    return [
+      {
+        id: "payment_field__card_number__na__0",
+        artifactKey: "payment_field__card_number__na__0",
+        label: "Card Number",
+        type: "card-number",
+        required: true,
+        autocomplete: "cc-number",
+      },
+      {
+        id: "payment_field__expiry__na__0",
+        artifactKey: "payment_field__expiry__na__0",
+        label: "Expiration (MM/YY)",
+        type: "expiry",
+        required: true,
+        autocomplete: "cc-exp",
+      },
+      {
+        id: "payment_field__cvc__na__0",
+        artifactKey: "payment_field__cvc__na__0",
+        label: "Security Code (CVC/CVV)",
+        type: "cvc",
+        required: true,
+        autocomplete: "cc-csc",
+      },
+    ];
+  }
+
+  private buildCapabilityProbeUiTemplate(event: CapabilityProbeEvent): HumanAuthUiTemplate {
+    if (event.capability === "payment") {
+      const fields = this.buildPaymentProbeFields(event);
+      return {
+        templateId: "capability-probe-payment-v1",
+        title: "Human Auth Required: Secure Payment",
+        summary: `OpenPocket detected a secure payment surface in ${event.packageName}. Fill the requested fields from your Human Phone to continue.`,
+        capabilityHint: `detected=payment/${event.phase} source=${event.source} secure=true fields=${fields.length}`,
+        artifactKind: "form",
+        requireArtifactOnApprove: true,
+        allowTextAttachment: false,
+        allowLocationAttachment: false,
+        allowPhotoAttachment: false,
+        allowAudioAttachment: false,
+        allowFileAttachment: false,
+        approveLabel: "Approve and Continue",
+        rejectLabel: "Reject",
+        notePlaceholder: "Optional context (never paste card data here)",
+        fields,
+      };
+    }
+    const titleTarget = event.capability === "photos" ? "Photo Library" : event.capability;
+    const base: HumanAuthUiTemplate = {
+      templateId: `capability-probe-${event.capability}-v1`,
+      title: `Human Auth Required: ${titleTarget}`,
+      summary: `OpenPocket detected ${event.capability} activity from ${event.packageName}. Provide data from your Human Phone and approve to continue.`,
+      capabilityHint: `detected=${event.capability}/${event.phase} source=${event.source}`,
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      approveLabel: "Approve and Continue",
+      rejectLabel: "Reject",
+    };
+    if (event.capability === "camera") {
+      return {
+        ...base,
+        allowPhotoAttachment: true,
+        allowFileAttachment: true,
+        fileAccept: "image/*",
+      };
+    }
+    if (event.capability === "photos") {
+      return {
+        ...base,
+        allowPhotoAttachment: true,
+        allowFileAttachment: true,
+        fileAccept: "image/*",
+      };
+    }
+    if (event.capability === "microphone") {
+      return {
+        ...base,
+        allowAudioAttachment: true,
+        allowFileAttachment: true,
+        fileAccept: "audio/*",
+      };
+    }
+    if (event.capability === "location") {
+      return {
+        ...base,
+        allowLocationAttachment: true,
+      };
+    }
+    return base;
+  }
+
+  private pickCapabilityProbeEventForHumanAuth(
+    events: CapabilityProbeEvent[],
+    observedAppAfterAction: string,
+  ): CapabilityProbeEvent | null {
+    const observedApp = String(observedAppAfterAction || "").trim().toLowerCase();
+    const candidates = events
+      .filter((event) => this.mapProbeCapabilityToHumanAuthCapability(event.capability) !== null)
+      .filter((event) => !this.isPermissionDialogApp(event.packageName))
+      .sort((a, b) => {
+        if (observedApp) {
+          const aCurrent = a.packageName.toLowerCase() === observedApp ? 1 : 0;
+          const bCurrent = b.packageName.toLowerCase() === observedApp ? 1 : 0;
+          if (aCurrent !== bCurrent) {
+            return bCurrent - aCurrent;
+          }
+        }
+        if (a.phase !== b.phase) {
+          return a.phase === "requested" ? -1 : 1;
+        }
+        if (b.confidence !== a.confidence) {
+          return b.confidence - a.confidence;
+        }
+        const aTs = Date.parse(a.observedAt || "");
+        const bTs = Date.parse(b.observedAt || "");
+        if (Number.isFinite(aTs) && Number.isFinite(bTs) && bTs !== aTs) {
+          return bTs - aTs;
+        }
+        if (a.packageName !== b.packageName) {
+          return a.packageName.localeCompare(b.packageName);
+        }
+        return a.source.localeCompare(b.source);
+      });
+    return candidates[0] ?? null;
+  }
+
+  private shouldThrottleCapabilityProbeHumanAuth(
+    capability: HumanAuthCapability,
+    packageName: string,
+  ): boolean {
+    const nowMs = Date.now();
+    for (const [key, ts] of this.capabilityProbeAuthCooldownByKey.entries()) {
+      if (nowMs - ts > CAPABILITY_PROBE_HUMAN_AUTH_COOLDOWN_MS * 2) {
+        this.capabilityProbeAuthCooldownByKey.delete(key);
+      }
+    }
+    const key = this.buildCapabilityProbeAuthKey(capability, packageName);
+    const last = this.capabilityProbeAuthCooldownByKey.get(key) ?? 0;
+    if (nowMs - last < CAPABILITY_PROBE_HUMAN_AUTH_COOLDOWN_MS) {
+      return true;
+    }
+    this.capabilityProbeAuthCooldownByKey.set(key, nowMs);
+    return false;
+  }
+
+  private buildCapabilityProbeAuthKey(
+    capability: HumanAuthCapability,
+    packageName: string,
+  ): string {
+    if (capability === "payment") {
+      return `${capability}:${String(packageName || "").toLowerCase()}`;
+    }
+    void packageName;
+    return capability;
+  }
+
+  private shouldRollbackLocalSensitiveSurface(
+    event: CapabilityProbeEvent,
+    currentApp: string,
+  ): boolean {
+    const sensitiveCapability =
+      event.capability === "camera"
+      || event.capability === "microphone"
+      || event.capability === "location"
+      || event.capability === "photos";
+    if (!sensitiveCapability) {
+      return false;
+    }
+    if (event.phase === "active") {
+      return true;
+    }
+    void currentApp;
+    return false;
+  }
+
+  private async rollbackLocalSensitiveSurface(
+    event: CapabilityProbeEvent,
+    currentApp: string,
+  ): Promise<string | null> {
+    if (!this.shouldRollbackLocalSensitiveSurface(event, currentApp)) {
+      return null;
+    }
+    try {
+      await this.adb.executeAction(
+        {
+          type: "keyevent",
+          keycode: "KEYCODE_BACK",
+          reason: `human_auth_probe_${event.capability}_rollback`,
+        },
+        this.config.agent.deviceId,
+      );
+      await sleep(180);
+      return `local_${event.capability}_surface_rolled_back=keyevent_back`;
+    } catch (error) {
+      return `local_${event.capability}_surface_rollback_error=${(error as Error).message}`;
+    }
+  }
+
+  private async prepareCapabilityProbePreGuardLines(
+    event: CapabilityProbeEvent,
+    capability: HumanAuthCapability,
+    currentApp: string,
+  ): Promise<string[]> {
+    const preGuardLines: string[] = [];
+    if (this.isPermissionDialogApp(currentApp)) {
+      const guardDecision: HumanAuthDecision = {
+        requestId: "capability-probe-local-permission-guard",
+        approved: false,
+        status: "rejected",
+        message: "Reject local permission dialog before delegated human auth.",
+        decidedAt: nowIso(),
+        artifactPath: null,
+      };
+      const localGuard = await this.applyPermissionDialogDecision(capability, guardDecision, currentApp, "human_auth");
+      if (localGuard?.message) {
+        preGuardLines.push(`local_permission_guard=${localGuard.message}`);
+      }
+      return preGuardLines;
+    }
+    const rollbackLine = await this.rollbackLocalSensitiveSurface(event, currentApp);
+    if (rollbackLine) {
+      preGuardLines.push(rollbackLine);
+    }
+    return preGuardLines;
+  }
+
+  private async maybeEscalateCapabilityProbeToHumanAuth(
+    events: CapabilityProbeEvent[],
+    ctx: PhoneAgentRunContext,
+    currentApp: string,
+  ): Promise<string[]> {
+    if (events.length === 0 || !this.config.humanAuth.enabled) {
+      return [];
+    }
+
+    const event = this.pickCapabilityProbeEventForHumanAuth(events, currentApp);
+    if (!event) {
+      return [];
+    }
+    const capability = this.mapProbeCapabilityToHumanAuthCapability(event.capability);
+    if (!capability) {
+      return [];
+    }
+    const authKey = this.buildCapabilityProbeAuthKey(capability, event.packageName);
+    const cachedApproval = ctx.capabilityProbeApprovalByKey.get(authKey);
+    if (cachedApproval?.decision?.approved && cachedApproval.decision.artifactPath) {
+      const preGuardLines = await this.prepareCapabilityProbePreGuardLines(event, capability, currentApp);
+      return [
+        ...preGuardLines,
+        `human_auth_probe skipped=reused capability=${capability} pkg=${event.packageName}`,
+        `human_artifact=${cachedApproval.decision.artifactPath}`,
+        cachedApproval.delegationMessage ? `delegation=${cachedApproval.delegationMessage}` : "",
+      ].filter(Boolean);
+    }
+
+    if (this.shouldThrottleCapabilityProbeHumanAuth(capability, event.packageName)) {
+      return [
+        `human_auth_probe skipped=throttled capability=${capability} pkg=${event.packageName}`,
+      ];
+    }
+
+    if (!ctx.onHumanAuth) {
+      const msg = `Human authorization required (${capability}) but no handler configured for capability probe.`;
+      ctx.failMessage = msg;
+      return [`human_auth_probe error=${JSON.stringify(msg)}`];
+    }
+
+    const timeoutCapSec = Math.max(30, Math.round(this.config.humanAuth.requestTimeoutSec));
+    const timeoutSec = Math.min(timeoutCapSec, 180);
+    const preGuardLines = await this.prepareCapabilityProbePreGuardLines(event, capability, currentApp);
+
+    let decision: HumanAuthDecision;
+    try {
+      decision = await ctx.onHumanAuth({
+        sessionId: ctx.session.id,
+        sessionPath: ctx.session.path,
+        task: ctx.task,
+        step: ctx.stepCount,
+        capability,
+        instruction: this.buildCapabilityProbeInstruction(event),
+        reason: `capability_probe:${event.capability}:${event.phase}:${event.source}`,
+        timeoutSec,
+        currentApp,
+        screenshotPath: ctx.lastScreenshotPath,
+        uiTemplate: this.buildCapabilityProbeUiTemplate(event),
+      });
+    } catch (error) {
+      decision = {
+        requestId: "capability-probe-local-error",
+        approved: false,
+        status: "rejected",
+        message: `Human auth error: ${(error as Error).message}`,
+        decidedAt: nowIso(),
+        artifactPath: null,
+      };
+    }
+
+    const delegation = await this.applyHumanDelegation(capability, decision, currentApp);
+    if (decision.approved && decision.artifactPath) {
+      ctx.capabilityProbeApprovalByKey.set(authKey, {
+        decision,
+        delegationMessage: delegation?.message ?? null,
+        templateHint: delegation?.templateHint ?? null,
+      });
+    }
+    const lines = [
+      ...preGuardLines,
+      `human_auth_probe capability=${capability} status=${decision.status} pkg=${event.packageName}`,
+      decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
+      delegation?.message ? `delegation=${delegation.message}` : "",
+    ].filter(Boolean);
+
+    if (!decision.approved) {
+      ctx.failMessage = `Human authorization ${decision.status}: ${decision.message}`;
+    }
+
+    return lines;
+  }
+
   private computePostActionDelayMs(action: AgentAction, executionResult: string): number {
     const baseDelayMs = Math.max(0, Math.round(this.config.agent.loopDelayMs || 0));
     if (baseDelayMs <= 0 || action.type === "wait") {
@@ -1826,11 +1935,16 @@ export class AgentRuntime {
       return null;
     }
 
+    // For delegated capabilities (camera/microphone/location/files/oauth/etc.),
+    // local VM permission dialogs must be denied to avoid consuming Agent Phone data.
+    const forceRejectForDelegation = capability !== "permission" && this.isPermissionDialogApp(currentApp);
+    const approvedForDialog = forceRejectForDelegation ? false : decision.approved;
+
     const deviceId = this.resolveDelegationDeviceId();
     const uiDumpXml = this.captureUiDumpXml(deviceId);
 
     const nodes = this.parsePermissionDialogNodes(uiDumpXml);
-    const targetNode = this.pickPermissionDialogNode(nodes, decision.approved);
+    const targetNode = this.pickPermissionDialogNode(nodes, approvedForDialog);
     if (!targetNode) {
       return {
         message: `permission dialog decision recorded (${decision.status}), but no actionable button was detected`,
@@ -1852,7 +1966,7 @@ export class AgentRuntime {
       type: "tap",
       x: tapX,
       y: tapY,
-      reason: decision.approved ? `${reasonPrefix}_approve` : `${reasonPrefix}_reject`,
+      reason: approvedForDialog ? `${reasonPrefix}_approve` : `${reasonPrefix}_reject`,
     };
     await this.adb.executeAction(
       tapAction,
@@ -1860,8 +1974,12 @@ export class AgentRuntime {
     );
     await sleep(300);
 
+    const decisionLabel = approvedForDialog ? "approve" : "reject";
+    const policySuffix = forceRejectForDelegation
+      ? ` (local permission blocked for delegated ${capability})`
+      : "";
     return {
-      message: `permission dialog ${decision.approved ? "approve" : "reject"} tapped (${tapX}, ${tapY}) label="${label}"`,
+      message: `permission dialog ${decisionLabel} tapped (${tapX}, ${tapY}) label="${label}"${policySuffix}`,
       templateHint: null,
       action: tapAction,
     };
@@ -1887,143 +2005,154 @@ export class AgentRuntime {
     );
   }
 
+  private async autoRejectPermissionDialog(
+    currentApp: string,
+    capabilityHint: HumanAuthCapability,
+  ): Promise<DelegationApplyResult | null> {
+    if (!this.isPermissionDialogApp(currentApp)) {
+      return null;
+    }
+    const decision: HumanAuthDecision = {
+      requestId: "auto-vm-permission-reject",
+      approved: false,
+      status: "rejected",
+      message: "Local permission denied to enforce delegated human auth flow.",
+      decidedAt: nowIso(),
+      artifactPath: null,
+    };
+    return this.applyPermissionDialogDecision(
+      capabilityHint,
+      decision,
+      currentApp,
+      "auto_vm",
+    );
+  }
+
   private async applyHumanDelegation(
     capability: HumanAuthCapability,
     decision: HumanAuthDecision,
     currentApp: string,
   ): Promise<DelegationApplyResult | null> {
+    // Agentic delegation: we only describe the artifact to the Agent.
+    // The Agent decides how to use it (push files, type text, inject location, etc.)
+    // guided by the "Human Auth Delegation" skill.
+
     const messages: string[] = [];
-    let templateHint: string | null = null;
 
     const permissionDecision = await this.applyPermissionDialogDecision(capability, decision, currentApp);
     if (permissionDecision) {
       messages.push(permissionDecision.message);
-      if (permissionDecision.templateHint) {
-        templateHint = permissionDecision.templateHint;
-      }
     }
 
     if (!decision.approved || !decision.artifactPath) {
-      if (
-        decision.approved &&
-        !decision.artifactPath &&
-        capability === "oauth"
-      ) {
-        const cachedCredentials = this.getCachedOauthCredentials();
-        if (cachedCredentials) {
-          const reused = await this.applyCredentialDelegation(
-            cachedCredentials.username,
-            cachedCredentials.password,
-          );
-          messages.push(reused.message);
-          if (reused.templateHint) {
-            templateHint = reused.templateHint;
-          }
-        }
-      }
-      if (
-        decision.approved &&
-        !decision.artifactPath &&
-        (capability === "sms" || capability === "2fa" || capability === "qr" || capability === "voice")
-      ) {
-        const fallbackText = this.extractDelegatedTextFromDecisionMessage(decision.message);
-        if (fallbackText) {
-          const typed = await this.applyTextDelegation(fallbackText);
-          messages.push(typed.message);
-          if (typed.templateHint) {
-            templateHint = typed.templateHint;
-          }
-        }
-      }
       if (messages.length === 0) {
         return null;
       }
-      return {
-        message: messages.join(" ; "),
-        templateHint,
-      };
+      return { message: messages.join(" ; "), templateHint: null };
     }
+
     if (!fs.existsSync(decision.artifactPath)) {
       messages.push(`delegation artifact not found: ${decision.artifactPath}`);
-      return {
-        message: messages.join(" ; "),
-        templateHint,
-      };
+      return { message: messages.join(" ; "), templateHint: null };
     }
 
+    const summary = this.describeArtifact(decision.artifactPath, capability);
+    messages.push(summary);
+
+    return { message: messages.join(" ; "), templateHint: null };
+  }
+
+  private isFileArtifact(artifactPath: string): boolean {
+    const ext = path.extname(artifactPath).toLowerCase();
+    const fileExts = new Set([
+      ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".gif",
+      ".webm", ".ogg", ".mp3", ".wav", ".aac", ".m4a", ".opus", ".flac",
+      ".mp4", ".3gp", ".pdf", ".vcf", ".ics", ".csv",
+    ]);
+    return fileExts.has(ext);
+  }
+
+  private pushArtifactToDevice(artifactPath: string): string | null {
     try {
-      const artifactJson = this.readJsonArtifact(decision.artifactPath);
-      // Immediately delete sensitive artifacts from disk to avoid plaintext lingering.
-      if (artifactJson?.kind === "credentials" || artifactJson?.kind === "payment_card_v1") {
-        try {
-          fs.unlinkSync(decision.artifactPath);
-        } catch {
-          // Best-effort cleanup; file may already be removed.
-        }
+      const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
+      const ext = path.extname(artifactPath).toLowerCase() || ".bin";
+      const remoteName = `openpocket-human-auth-${Date.now()}${ext}`;
+      const remotePath = `/sdcard/Download/${remoteName}`;
+      this.emulator.runAdb(["-s", deviceId, "push", artifactPath, remotePath], 30_000);
+      try {
+        this.emulator.runAdb([
+          "-s", deviceId, "shell", "am", "broadcast",
+          "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+          "-d", `file://${remotePath}`,
+        ], 15_000);
+      } catch {
+        // best-effort media scan
       }
-      let artifactResult: DelegationApplyResult | null = null;
-
-      if (capability === "location") {
-        const geo = this.extractDelegatedGeo(artifactJson);
-        if (geo) {
-          artifactResult = await this.applyLocationDelegation(geo.lat, geo.lon);
-        }
-      }
-
-      // Credential delegation: match by oauth capability OR by artifact kind=credentials.
-      if (!artifactResult && (capability === "oauth" || artifactJson?.kind === "credentials")) {
-        const credentials = this.extractDelegatedCredentials(artifactJson);
-        if (credentials) {
-          artifactResult = await this.applyCredentialDelegation(credentials.username, credentials.password);
-        }
-      }
-
-      if (!artifactResult && (capability === "payment" || artifactJson?.kind === "payment_card_v1")) {
-        const payment = this.extractDelegatedPaymentCard(artifactJson);
-        if (payment) {
-          artifactResult = await this.applyPaymentDelegation(payment);
-        }
-      }
-
-      if (!artifactResult && (capability === "sms" || capability === "2fa" || capability === "qr" || capability === "voice")) {
-        const text = this.extractDelegatedText(artifactJson);
-        if (text) {
-          artifactResult = await this.applyTextDelegation(text);
-        }
-      }
-
-      if (!artifactResult && (artifactJson?.kind === "text" || artifactJson?.kind === "qr_text")) {
-        const text = this.extractDelegatedText(artifactJson);
-        if (text) {
-          artifactResult = await this.applyTextDelegation(text);
-        }
-      }
-
-      if (!artifactResult && this.isImageArtifactPath(decision.artifactPath)) {
-        artifactResult = await this.applyImageDelegation(decision.artifactPath);
-      }
-
-      if (!artifactResult) {
-        artifactResult = {
-          message: `delegation artifact stored at ${decision.artifactPath}`,
-          templateHint: null,
-        };
-      }
-      messages.push(artifactResult.message);
-      if (artifactResult.templateHint) {
-        templateHint = artifactResult.templateHint;
-      }
-      return {
-        message: messages.join(" ; "),
-        templateHint,
-      };
-    } catch (error) {
-      messages.push(`delegation apply failed: ${(error as Error).message}`);
-      return {
-        message: messages.join(" ; "),
-        templateHint,
-      };
+      return remotePath;
+    } catch {
+      return null;
     }
+  }
+
+  private describeArtifact(artifactPath: string, capability: HumanAuthCapability): string {
+    const ext = path.extname(artifactPath).toLowerCase();
+    const stats = fs.statSync(artifactPath);
+    const sizeKb = (stats.size / 1024).toFixed(1);
+    const lines: string[] = [];
+
+    lines.push(`artifact_path=${artifactPath}`);
+    lines.push(`artifact_size=${sizeKb}KB`);
+    lines.push(`capability=${capability}`);
+
+    const artifactJson = this.readJsonArtifact(artifactPath);
+    if (artifactJson) {
+      const kind = String(artifactJson.kind ?? "unknown");
+      lines.push(`artifact_kind=${kind}`);
+
+      if (kind === "geo" && typeof artifactJson.lat === "number" && typeof artifactJson.lon === "number") {
+        lines.push(`lat=${(artifactJson.lat as number).toFixed(6)} lon=${(artifactJson.lon as number).toFixed(6)}`);
+      } else if (kind === "text" || kind === "qr_text") {
+        const rawValue = String(artifactJson.value ?? "");
+        lines.push(`value_length=${rawValue.length}`);
+        lines.push("Read the artifact file to get the actual value.");
+      } else if (kind === "credentials") {
+        lines.push(`has_username=${Boolean(artifactJson.username)} has_password=${Boolean(artifactJson.password)}`);
+        lines.push("SENSITIVE: delete artifact after use with exec(\"rm <path>\")");
+      } else if (kind.startsWith("payment_card") || kind === "payment") {
+        const fieldKeys = Object.keys(artifactJson.fields ?? artifactJson.form_data ?? artifactJson).filter(
+          (k) => !["kind", "capability", "templateId", "capturedAt"].includes(k),
+        );
+        lines.push(`payment_fields=[${fieldKeys.join(",")}]`);
+        lines.push("SENSITIVE: delete artifact after use with exec(\"rm <path>\")");
+      } else if (kind === "photos_multi") {
+        const count = Array.isArray(artifactJson.photos) ? artifactJson.photos.length : 0;
+        lines.push(`photo_count=${count}`);
+      } else if (kind === "form") {
+        const fieldKeys = Object.keys(artifactJson.fields ?? artifactJson.form_data ?? {});
+        lines.push(`form_fields=[${fieldKeys.join(",")}]`);
+      }
+    }
+
+    // For file-type artifacts (images, audio, etc.), auto-push to Agent Phone
+    // so the Agent can access them via file pickers and app UIs.
+    if (this.isFileArtifact(artifactPath)) {
+      const devicePath = this.pushArtifactToDevice(artifactPath);
+      if (devicePath) {
+        lines.push(`device_path=${devicePath}`);
+        lines.push("File has been pushed to Agent Phone Downloads and is ready for selection in any file picker.");
+      } else {
+        lines.push("WARNING: failed to push file to Agent Phone. Use shell(\"adb push ...\") manually.");
+      }
+    } else if (!artifactJson) {
+      lines.push("artifact_type=binary");
+      const devicePath = this.pushArtifactToDevice(artifactPath);
+      if (devicePath) {
+        lines.push(`device_path=${devicePath}`);
+      }
+    }
+
+    lines.push("Use the Human Auth Delegation skill to decide how to apply this artifact.");
+    return lines.join(" | ");
   }
 
   // =========================================================================
@@ -2037,6 +2166,7 @@ export class AgentRuntime {
     ctx: PhoneAgentRunContext,
   ): Promise<string> {
     const snapshot = ctx.latestSnapshot!;
+    let observedAppAfterAction = snapshot.currentApp || "unknown";
 
     // Resolve tap_element to coordinates
     action = this.resolveTapElementAction(action, snapshot);
@@ -2139,6 +2269,7 @@ export class AgentRuntime {
             const after = await this.adb.captureScreenSnapshot(this.config.agent.deviceId, ctx.profile.model);
             afterState = this.observeSnapshotState(after);
           }
+          observedAppAfterAction = afterState.app || observedAppAfterAction;
           stateDeltaLine = this.buildStateDeltaLine(before, afterState, action.type);
         } catch { /* best-effort */ }
       }
@@ -2152,6 +2283,47 @@ export class AgentRuntime {
     }
     if (stateDeltaLine) {
       executionResult += `\n${stateDeltaLine}`;
+    }
+    const probeActionTypes = new Set(["tap", "tap_element", "swipe", "type", "keyevent", "launch_app", "shell"]);
+    if (probeActionTypes.has(action.type)) {
+      try {
+        const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
+        const events = this.capabilityProbe.poll({
+          deviceId,
+          foregroundPackage: observedAppAfterAction,
+          candidatePackages: [snapshot.currentApp],
+        });
+        const permissionDialogEvent = this.buildPermissionDialogCapabilityEvent(
+          deviceId,
+          observedAppAfterAction,
+          snapshot.currentApp,
+        );
+        const combinedEvents = permissionDialogEvent
+          ? this.dedupeCapabilityProbeEvents([...events, permissionDialogEvent])
+          : events;
+        if (combinedEvents.length > 0) {
+          const probeLine = this.formatCapabilityProbeEvents(combinedEvents);
+          executionResult += `\n${probeLine}`;
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][capability-probe] ${probeLine}`);
+        }
+        const escalationLines = await this.maybeEscalateCapabilityProbeToHumanAuth(
+          combinedEvents,
+          ctx,
+          observedAppAfterAction,
+        );
+        if (escalationLines.length > 0) {
+          const escalationText = escalationLines.join("\n");
+          executionResult += `\n${escalationText}`;
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][capability-probe] ${escalationText}`);
+        }
+      } catch (error) {
+        if (this.config.agent.verbose) {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][capability-probe] failed: ${(error as Error).message}`);
+        }
+      }
     }
     return executionResult;
   }
@@ -2257,17 +2429,80 @@ export class AgentRuntime {
 
           // ---- finish ----
           if (action.type === "finish") {
+            const preFinishLines: string[] = [];
+            const finishApp = snapshot?.currentApp ?? "unknown";
+            try {
+              const canProbe =
+                this.config.humanAuth.enabled
+                && Boolean(snapshot)
+                && finishApp !== "unknown";
+              if (canProbe) {
+                const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
+                const events = this.capabilityProbe.poll({
+                  deviceId,
+                  foregroundPackage: finishApp,
+                  candidatePackages: [finishApp],
+                });
+                if (events.length > 0) {
+                  const probeLine = this.formatCapabilityProbeEvents(events);
+                  preFinishLines.push(probeLine);
+                  // eslint-disable-next-line no-console
+                  console.log(`[OpenPocket][capability-probe] ${probeLine}`);
+                }
+                const escalationLines = await this.maybeEscalateCapabilityProbeToHumanAuth(
+                  events,
+                  ctx,
+                  finishApp,
+                );
+                if (escalationLines.length > 0) {
+                  preFinishLines.push(...escalationLines);
+                  // eslint-disable-next-line no-console
+                  console.log(`[OpenPocket][capability-probe] ${escalationLines.join("\n")}`);
+                }
+              }
+            } catch (error) {
+              if (this.config.agent.verbose) {
+                // eslint-disable-next-line no-console
+                console.log(`[OpenPocket][capability-probe] pre-finish check failed: ${(error as Error).message}`);
+              }
+            }
+
+            if (ctx.failMessage) {
+              const resultText = [
+                `FINISH_BLOCKED: ${ctx.failMessage}`,
+                ...preFinishLines,
+              ]
+                .filter(Boolean)
+                .join("\n");
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                resultText,
+                buildStepTrace(finishApp, "error"),
+              );
+              ctx.traces.push({ step, action, result: resultText, thought, currentApp: finishApp });
+              ctx.history.push(`step ${step}: action=finish blocked=${ctx.failMessage}`);
+              return { content: [{ type: "text" as const, text: resultText }], details: {} };
+            }
+
             ctx.finishMessage = action.message || "Task completed.";
-            const resultText = `FINISH: ${ctx.finishMessage}`;
+            const resultText = [
+              `FINISH: ${ctx.finishMessage}`,
+              ...preFinishLines,
+            ]
+              .filter(Boolean)
+              .join("\n");
             runtime.workspace.appendStep(
               ctx.session,
               step,
               thought,
               JSON.stringify(action, null, 2),
               resultText,
-              buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+              buildStepTrace(finishApp, "ok"),
             );
-            ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.traces.push({ step, action, result: resultText, thought, currentApp: finishApp });
             ctx.history.push(`step ${step}: action=finish message=${ctx.finishMessage}`);
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
           }
@@ -2278,11 +2513,17 @@ export class AgentRuntime {
             const onVmDialog = snapshot ? runtime.isPermissionDialogApp(snapshot.currentApp) : false;
             const currentApp = snapshot?.currentApp ?? "unknown";
 
-            // Auto-approve VM permission dialogs
+            // VM permission policy:
+            // - capability=permission: auto-approve locally.
+            // - any other human-auth capability: auto-reject local permission dialog to enforce delegated flow.
             if (onVmDialog || permOnly) {
               if (onVmDialog) {
-                const auto = await runtime.autoApprovePermissionDialog(snapshot!.currentApp);
-                if (auto?.action?.type === "tap") ctx.lastAutoPermissionAllowAtMs = Date.now();
+                if (permOnly) {
+                  const auto = await runtime.autoApprovePermissionDialog(snapshot!.currentApp);
+                  if (auto?.action?.type === "tap") ctx.lastAutoPermissionAllowAtMs = Date.now();
+                } else {
+                  await runtime.autoRejectPermissionDialog(snapshot!.currentApp, action.capability);
+                }
               }
               if (permOnly) {
                 const msg = "permission auto-approved locally (VM policy)";
@@ -2297,43 +2538,6 @@ export class AgentRuntime {
                 ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
                 ctx.history.push(`step ${step}: action=request_human_auth(permission) auto_approved`);
                 return { content: [{ type: "text" as const, text: msg }], details: {} };
-              }
-            }
-
-            // Reuse cached oauth credentials on split Google sign-in pages.
-            // If password is already cached from previous step, skip a second human-auth prompt.
-            if (action.capability === "oauth") {
-              const cachedOauth = runtime.getCachedOauthCredentials();
-              if (cachedOauth?.password) {
-                const syntheticDecision: HumanAuthDecision = {
-                  requestId: "oauth-cached",
-                  approved: true,
-                  status: "approved",
-                  message: "Approved using cached oauth credentials from prior step.",
-                  decidedAt: nowIso(),
-                  artifactPath: null,
-                };
-                const delegation = await runtime.applyHumanDelegation("oauth", syntheticDecision, currentApp);
-                const delegationTemplate = delegation?.templateHint ?? null;
-                const resultText = [
-                  `Human auth ${syntheticDecision.status}: ${syntheticDecision.message}`,
-                  delegation?.message ? `delegation=${delegation.message}` : "",
-                  delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
-                ].filter(Boolean).join("\n");
-                runtime.workspace.appendStep(
-                  ctx.session,
-                  step,
-                  thought,
-                  JSON.stringify(action, null, 2),
-                  resultText,
-                  buildStepTrace(currentApp, "ok"),
-                );
-                ctx.traces.push({ step, action, result: resultText, thought, currentApp });
-                ctx.history.push("step " + step + ": action=request_human_auth decision=approved(cached_oauth)");
-                if (delegationTemplate) {
-                  ctx.history.push(`delegation_template ${delegationTemplate}`);
-                }
-                return { content: [{ type: "text" as const, text: resultText }], details: {} };
               }
             }
 
@@ -2354,6 +2558,10 @@ export class AgentRuntime {
 
             let decision: HumanAuthDecision;
             try {
+              const resolvedUiTemplate = runtime.resolveHumanAuthUiTemplate(
+                action.uiTemplate,
+                action.templatePath,
+              );
               const requestedTimeoutSec = Number(
                 action.timeoutSec ?? runtime.config.humanAuth.requestTimeoutSec,
               );
@@ -2368,18 +2576,17 @@ export class AgentRuntime {
                 reason: action.reason ?? thought,
                 timeoutSec,
                 currentApp, screenshotPath: ctx.lastScreenshotPath,
+                uiTemplate: resolvedUiTemplate,
               });
             } catch (error) {
               decision = { requestId: "local-error", approved: false, status: "rejected", message: `Human auth error: ${(error as Error).message}`, decidedAt: nowIso(), artifactPath: null };
             }
 
             const delegation = await runtime.applyHumanDelegation(action.capability, decision, currentApp);
-            const delegationTemplate = delegation?.templateHint ?? null;
             const resultText = [
               `Human auth ${decision.status}: ${decision.message}`,
               decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
               delegation?.message ? `delegation=${delegation.message}` : "",
-              delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
             ].filter(Boolean).join("\n");
             runtime.workspace.appendStep(
               ctx.session,
@@ -2391,9 +2598,6 @@ export class AgentRuntime {
             );
             ctx.traces.push({ step, action, result: resultText, thought, currentApp });
             ctx.history.push(`step ${step}: action=request_human_auth decision=${decision.status}`);
-            if (delegationTemplate) {
-              ctx.history.push(`delegation_template ${delegationTemplate}`);
-            }
 
             if (!decision.approved) {
               ctx.failMessage = `Human authorization ${decision.status}: ${decision.message}`;
@@ -2589,72 +2793,14 @@ export class AgentRuntime {
   }
 
   private shouldEnableWorkspaceToolsForTask(task: string): boolean {
-    const normalized = String(task || "").toLowerCase();
-    if (!normalized.trim()) {
+    const normalized = String(task || "").trim();
+    if (!normalized) {
       return false;
     }
-    const keywordHints = [
-      "code",
-      "coding",
-      "repo",
-      "repository",
-      "git",
-      "commit",
-      "branch",
-      "pull request",
-      "pr ",
-      "file",
-      "files",
-      "folder",
-      "directory",
-      "workspace",
-      "patch",
-      "apply_patch",
-      "read ",
-      "write ",
-      "edit ",
-      "grep",
-      "sed",
-      "awk",
-      "npm",
-      "pnpm",
-      "yarn",
-      "tsc",
-      "eslint",
-      "prettier",
-      "test",
-      "lint",
-      "build",
-      "script",
-      "shell command",
-      "terminal",
-      "agents.md",
-      "identity.md",
-      "user.md",
-      "tools.md",
-      "memory.md",
-      "代码",
-      "仓库",
-      "分支",
-      "提交",
-      "文件",
-      "目录",
-      "工作区",
-      "补丁",
-      "脚本",
-      "终端",
-      "命令行",
-      "读取",
-      "写入",
-      "编辑",
-      "搜索文件",
-      "构建",
-      "测试",
-      "格式化",
-      "记忆",
-      "历史记录",
-    ];
-    return keywordHints.some((hint) => normalized.includes(hint));
+    // Keep coding/workspace/memory tools available for all real tasks so
+    // the agent can decide autonomously whether it needs runtime probing,
+    // local scripting, or file-based tool composition.
+    return true;
   }
 
   private resolveToolMetasForTask(task: string, allowSkillRead = false): ToolMeta[] {
@@ -2930,6 +3076,7 @@ export class AgentRuntime {
           this.stopRequested = false;
           this.currentTask = activeTask;
           this.currentTaskStartedAtMs = Date.now();
+          this.capabilityProbeAuthCooldownByKey.clear();
         },
         executeAttempt: async (attemptRequest) => runRuntimeAttempt(
           {
@@ -2980,11 +3127,11 @@ export class AgentRuntime {
           if (shouldReturnHome) {
             await this.safeReturnToHome();
           }
-          this.clearCachedOauthCredentials();
           this.busy = false;
           this.currentTask = null;
           this.currentTaskStartedAtMs = null;
           this.stopRequested = false;
+          this.capabilityProbeAuthCooldownByKey.clear();
         },
       },
       request,

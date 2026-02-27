@@ -13,6 +13,8 @@ import { ensureWorkspaceBootstrap } from "../memory/workspace.js";
 import { CODEX_CLI_BASE_URL, readCodexCliCredential } from "./codex-cli.js";
 import { normalizeDeviceTargetType } from "../device/target-types.js";
 
+const DEFAULT_SCREEN_WAKEUP_INTERVAL_SEC = 3;
+
 function defaultConfigObject() {
   return {
     projectName: "OpenPocket",
@@ -27,6 +29,8 @@ function defaultConfigObject() {
     target: {
       type: "emulator" as const,
       adbEndpoint: "",
+      pin: "1234",
+      wakeupIntervalSec: DEFAULT_SCREEN_WAKEUP_INTERVAL_SEC,
       cloudProvider: "",
     },
     emulator: {
@@ -260,6 +264,22 @@ function normalizeDataPartitionSizeGb(value: unknown, fallback = 24): number {
   return Math.max(8, Math.min(512, Math.round(parsed)));
 }
 
+function normalizeWakeupIntervalSec(value: unknown, fallback = DEFAULT_SCREEN_WAKEUP_INTERVAL_SEC): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(3600, Math.round(parsed)));
+}
+
+function normalizeFourDigitPin(value: unknown, fallback: string): string {
+  const raw = String(value ?? "").trim();
+  if (/^\d{4}$/.test(raw)) {
+    return raw;
+  }
+  return fallback;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -341,11 +361,22 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
   const targetMap: Record<string, string> = {
     target_type: "type",
     adb_endpoint: "adbEndpoint",
+    target_pin: "pin",
+    wakeup_interval_sec: "wakeupIntervalSec",
+    virtual_phone_pin: "virtualPhonePin",
+    physical_phone_pin: "physicalPhonePin",
     cloud_provider: "cloudProvider",
   };
   for (const [oldKey, newKey] of Object.entries(targetMap)) {
     if (oldKey in target && !(newKey in target)) {
       target[newKey] = target[oldKey];
+    }
+  }
+  if (!("pin" in target)) {
+    if ("physicalPhonePin" in target) {
+      target.pin = target.physicalPhonePin;
+    } else if ("virtualPhonePin" in target) {
+      target.pin = target.virtualPhonePin;
     }
   }
   if (Object.keys(target).length > 0) {
@@ -686,6 +717,8 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     target: {
       type: normalizeDeviceTargetType(target.type),
       adbEndpoint: String(target.adbEndpoint ?? "").trim(),
+      pin: normalizeFourDigitPin(target.pin, "1234"),
+      wakeupIntervalSec: normalizeWakeupIntervalSec(target.wakeupIntervalSec, DEFAULT_SCREEN_WAKEUP_INTERVAL_SEC),
       cloudProvider: String(target.cloudProvider ?? "").trim(),
     },
     emulator: {

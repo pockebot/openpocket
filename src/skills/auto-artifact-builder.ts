@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -110,14 +111,72 @@ export class AutoArtifactBuilder {
 
     const stamp = nowForFilename();
     const slug = slugify(params.task);
-    const skillPath = this.writeSkill(stamp, slug, params);
+    const fingerprint = AutoArtifactBuilder.behaviorFingerprint(params.traces);
+    this.removeExistingAutoArtifacts(slug, fingerprint);
+    const skillPath = this.writeSkill(stamp, slug, fingerprint, params);
     const scriptPath = this.writeScript(stamp, slug, params.traces);
     return { skillPath, scriptPath };
+  }
+
+  private static behaviorFingerprint(traces: StepTrace[]): string {
+    const steps = traces.slice(0, 25).map((t) => {
+      const action = t.action;
+      let detail: string = action.type;
+      if (action.type === "launch_app") {
+        detail = `launch_app:${action.packageName}`;
+      } else if (action.type === "request_human_auth") {
+        detail = `request_human_auth:${action.capability}`;
+      }
+      return `${t.currentApp || "?"}:${detail}`;
+    });
+    return crypto.createHash("sha256").update(steps.join("|")).digest("hex").slice(0, 12);
+  }
+
+  private removeExistingAutoArtifacts(slug: string, fingerprint: string): void {
+    const skillDir = path.join(this.config.workspaceDir, "skills", "auto");
+    const scriptDir = path.join(this.config.workspaceDir, "scripts", "auto");
+
+    const removeByBasename = (basename: string): void => {
+      try { fs.unlinkSync(path.join(skillDir, `${basename}.md`)); } catch { /* may not exist */ }
+      try { fs.unlinkSync(path.join(scriptDir, `${basename}.sh`)); } catch { /* may not exist */ }
+    };
+
+    if (!fs.existsSync(skillDir)) {
+      return;
+    }
+
+    try {
+      for (const file of fs.readdirSync(skillDir)) {
+        if (!file.endsWith(".md")) {
+          continue;
+        }
+        const basename = file.replace(/\.md$/, "");
+        const fileSuffix = basename.replace(/^\d{8}-\d{6}-/, "");
+
+        if (fileSuffix === slug) {
+          removeByBasename(basename);
+          continue;
+        }
+
+        try {
+          const content = fs.readFileSync(path.join(skillDir, file), "utf-8");
+          const fpMatch = content.match(/behavior_fingerprint:\s*([a-f0-9]+)/);
+          if (fpMatch && fpMatch[1] === fingerprint) {
+            removeByBasename(basename);
+          }
+        } catch {
+          // Skip unreadable files.
+        }
+      }
+    } catch {
+      // Best-effort cleanup.
+    }
   }
 
   private writeSkill(
     stamp: string,
     slug: string,
+    fingerprint: string,
     params: {
       task: string;
       sessionPath: string;
@@ -145,6 +204,13 @@ export class AutoArtifactBuilder {
       })
       .join("\n");
 
+    const usedHumanAuth = traceSlice.some((trace) => trace.action.type === "request_human_auth");
+    const hadCapabilityProbe = traceSlice.some((trace) => {
+      const result = String(trace.result || "");
+      return result.includes("capability_probe") || result.includes("human_auth_probe");
+    });
+    const missingHumanAuthWarning = !usedHumanAuth && hadCapabilityProbe;
+
     const content = [
       `# Skill Draft: ${shortTask}`,
       "",
@@ -152,6 +218,13 @@ export class AutoArtifactBuilder {
       `- Confidence: ${confidence}`,
       `- Generated: ${new Date().toISOString()}`,
       `- Source session: ${params.sessionPath}`,
+      `- behavior_fingerprint: ${fingerprint}`,
+      ...(missingHumanAuthWarning ? [
+        "",
+        "⚠️ **WARNING: This skill accessed media/photos on Agent Phone without Human Auth.**",
+        "If the task involves the user's personal photos/files/contacts, the procedure below is WRONG.",
+        "The correct flow should call `request_human_auth` first to obtain data from Human Phone.",
+      ] : []),
       "",
       "## When To Use",
       "",
@@ -162,6 +235,7 @@ export class AutoArtifactBuilder {
       "",
       "- Emulator/device is online and controllable.",
       "- Required account/login state from source session is still valid.",
+      "- If the task involves user's personal data (photos, contacts, files, location), call `request_human_auth` FIRST — Agent Phone has no user personal data.",
       "- If sensitive data/auth is needed, call `request_human_auth` instead of guessing.",
       "",
       "## Procedure (Draft)",

@@ -7,6 +7,7 @@ Design goal:
 - keep long-running automation inside local emulator task loop
 - ask user on phone only when true real-world authorization/data is required
 - resume VM flow with auditable, scoped delegation
+- **Agent-driven artifact usage**: runtime only saves and describes artifacts; the Agent decides how to apply them
 
 ## Boundary Policy
 
@@ -19,6 +20,41 @@ Design goal:
 
 - real-device/sensitive checkpoints (OTP, camera capture, biometric-like approval, payment, OAuth, etc.)
 - any step where model explicitly emits `request_human_auth`
+- Capability Probe detects hardware access (camera, microphone, location, photos) from foreground app
+
+## Template-Driven Human Auth Portal
+
+Human Auth pages are no longer fixed to one hardcoded layout.
+`request_human_auth` can include an optional `uiTemplate` object, and relay renders each request page from:
+
+- a fixed secure shell (top title, remote takeover section, full context section)
+- plus sanitized per-request middle/approve customization from agent
+
+Template controls can define:
+
+- dynamic title/summary/hint
+- form schema (custom fields and validation)
+- style variables (brand/background/font)
+- agent-generated middle section (`middleHtml`, `middleCss`, `middleScript`)
+- agent-generated approve hook (`approveScript`)
+- reusable template file path from Agent Loop coding flow (`templatePath`, JSON in workspace)
+- allowed attachment channels (text/location/photo/audio/file)
+- artifact policy (`artifactKind`, `requireArtifactOnApprove`)
+
+Portal security:
+
+- CSP meta tag restricts network to same-origin (`connect-src 'self'`)
+- one-time token model for open/poll channels
+- `middleScript`/`approveScript` execute via `new Function()` with CSP network isolation
+
+Portal capabilities:
+
+- Camera: `getUserMedia` live preview + canvas capture, or file input with `capture` attribute
+- Microphone: `MediaRecorder` browser recording with playback preview, or file upload
+- Photo album: multi-select file input (single or batch)
+- Location: `navigator.geolocation` + manual lat/lon input
+- File: generic file upload
+- Audio: recording + file upload with playback
 
 ## Why This Exists
 
@@ -47,10 +83,10 @@ flowchart LR
   PHONE --> RELAY
   RELAY --> HAB
   HAB --> AR
-  AR --> ADB
+  AR -->|"Agent reads artifact + decides next steps"| ADB
 ```
 
-## End-to-End Sequence
+## End-to-End Sequence (Agentic Delegation)
 
 ```mermaid
 sequenceDiagram
@@ -59,8 +95,8 @@ sequenceDiagram
   participant A as AgentRuntime
   participant B as HumanAuthBridge
   participant R as Local Relay
-  participant N as ngrok (optional)
   participant P as Phone Browser
+  participant SK as Skills
 
   U->>G: /run <task>
   G->>A: runTask(...)
@@ -72,12 +108,13 @@ sequenceDiagram
   B-->>G: open context
   G-->>U: Telegram message with auth link
   U->>P: tap link
-  P->>R: GET /human-auth/<id>?token=...
   P->>R: POST /resolve (approve/reject + optional artifact)
-  B->>R: poll decision with pollToken
+  B->>R: SSE /events or poll decision
   R-->>B: approved/rejected/timeout (+ artifact)
-  B-->>A: HumanAuthDecision
-  A->>A: apply delegation artifact (if present)
+  B-->>A: HumanAuthDecision + artifactPath
+  A->>A: describeArtifact() → structured summary
+  A->>SK: Agent reads relevant Human Auth Skill
+  A->>A: Agent decides: shell push / type_text / tap / etc.
   A-->>G: continue steps and finish
   G-->>U: final result
 ```
@@ -99,77 +136,62 @@ Security characteristics:
 - timeout auto-resolution (`pending -> timeout`)
 - optional relay API bearer auth (`humanAuth.apiKey` / `humanAuth.apiKeyEnv`)
 
-## Credential Login Flow (OAuth / Username+Password)
+## Decision Notification
 
-This is the critical privacy path for account login walls.
+The Bridge supports two notification mechanisms:
 
-### User Experience (what user sees)
+1. **SSE (preferred)**: `GET /v1/human-auth/requests/:id/events?pollToken=...` — instant push when decision is made. Server sends keepalive every 15 seconds with proactive timeout checks.
+2. **Polling (fallback)**: `GET /v1/human-auth/requests/:id?pollToken=...` — traditional interval-based polling.
 
-1. Agent reaches login wall in emulator app and emits `request_human_auth` with `capability=oauth`.
-2. Telegram receives a one-tap auth link.
-3. Phone opens Human Auth page with:
-   - dedicated `Username / Email` and `Password` inputs
-   - `Approve` / `Reject`
-   - optional `Decision Note`
-   - optional live `Remote Takeover` (stream + control) if user wants direct emulator control
-4. User can either:
-   - enter credentials in the dedicated form and tap `Approve` (recommended), or
-   - use remote takeover to type directly inside emulator, then approve/reject.
-5. Agent resumes and continues login flow in emulator.
+Bridge tries SSE first; if the connection fails, it falls back to polling automatically.
 
-### Credential Data Path (exact channels)
+## Agentic Delegation Model
 
-```mermaid
-sequenceDiagram
-  participant Agent as "AgentRuntime (local)"
-  participant Bridge as "HumanAuthBridge (local)"
-  participant Relay as "HumanAuthRelayServer (local)"
-  participant TG as "Telegram"
-  participant Phone as "Phone Browser"
-  participant VM as "Emulator (local)"
+**The runtime does NOT auto-apply delegation artifacts.** After human auth approval:
 
-  Agent->>Bridge: request_human_auth(capability=oauth)
-  Bridge->>Relay: create request (local)
-  Bridge-->>TG: send message + auth link (no password payload)
-  Phone->>Relay: open one-time token page
-  Phone->>Relay: submit credentials artifact on Approve
-  Bridge->>Relay: poll decision (local)
-  Relay-->>Bridge: approved + artifact
-  Bridge-->>Agent: HumanAuthDecision + artifactPath
-  Agent->>VM: auto-apply credentials (type/fill) and continue
-```
+1. Runtime saves the artifact file to `state/human-auth-artifacts/`.
+2. Runtime calls `describeArtifact()` to generate a structured summary (kind, size, fields, etc.).
+3. The summary is returned to the Agent as part of the tool result.
+4. **The Agent decides what to do** based on the artifact description and the current screen state.
 
-### Hosting, Transport, and Storage Guarantees
+This is guided by **Human Auth Skills** — markdown files in `skills/` that teach the Agent how to handle each capability type.
 
-| Stage | Where it runs | Transport channel | Persistent storage |
-| --- | --- | --- | --- |
-| Request creation/polling | User local machine (`Gateway` + `HumanAuthBridge` + `Relay`) | Loopback/local network | `state/human-auth-relay/requests.json` (local) |
-| Credential form handling | User local relay server | Browser -> local relay (LAN mode), or browser -> TLS ngrok tunnel -> local relay (ngrok mode) | same local state file |
-| Credential artifact bytes | User local relay + bridge | same channel as above | `state/human-auth-artifacts/<requestId>.json` (local) |
-| Runtime apply to app | User local machine (`AgentRuntime` + `adb`) | local process + adb | session trace under `workspace/sessions/` |
+### Available Skills
 
-Security boundary:
+| Skill | Capability | What it teaches |
+|-------|-----------|----------------|
+| `human-auth-delegation` | Overview | General flow and artifact types |
+| `human-auth-camera` | `camera` | Push photo, navigate picker |
+| `human-auth-photos` | `photos` | Single/multi photo, gallery import |
+| `human-auth-microphone` | `microphone` | Push audio, file upload |
+| `human-auth-location` | `location` | GPS injection (emulator) / manual input (device) |
+| `human-auth-oauth` | `oauth` | Read credentials, type into login fields |
+| `human-auth-payment` | `payment` | Read card fields, fill checkout form |
+| `human-auth-sms-2fa` | `sms` / `2fa` | Read code, type into verification field |
+| `human-auth-qr` | `qr` | QR scan result, manual entry |
+| `human-auth-nfc` | `nfc` | NFC/RFID data handling |
+| `human-auth-biometric` | `biometric` | Biometric fallback to PIN |
+| `human-auth-contacts-data` | `contacts` / `calendar` / `files` | File import flows |
 
-- OpenPocket does **not** use a centralized OpenPocket credential relay service.
-- Relay server and artifact storage are on the user machine.
-- For strict zero-third-party network hop, use LAN mode (`humanAuth.tunnel.provider=none`).
-- In ngrok mode, ngrok is transport only; OpenPocket runtime/state/artifacts still stay local.
+Contributors can add new capabilities by creating a new `skills/human-auth-<name>/SKILL.md` file — no TypeScript code changes required.
 
 ## Delegation Artifact Types
 
 Remote approval may include optional artifact payload.
 
-| Capability | Typical payload from phone | Runtime apply behavior |
+| Capability | Typical payload from phone | Agent handling (skill-guided) |
 | --- | --- | --- |
-| `sms`, `2fa`, `qr`, `oauth`, `payment`, `biometric`, `notification`, `contacts`, `calendar`, `files`, `permission`, `unknown` | JSON `{ kind: "text" \| "qr_text", value }` | Auto `type` into focused input field |
-| `location` | JSON `{ kind: "geo", lat, lon }` | `adb emu geo fix <lon> <lat>` |
-| `camera`, `microphone`, `voice`, `nfc` (or image path) | Image file (`.jpg/.png/.webp`) | Push to `/sdcard/Download/openpocket-human-auth-<ts>.<ext>` |
+| `sms`, `2fa`, `qr` | JSON `{ kind: "text" \| "qr_text", value }` | Agent reads artifact, types code into focused field |
+| `oauth` | JSON `{ kind: "credentials", username, password }` | Agent reads artifact, taps login fields, types values, deletes artifact |
+| `payment` | JSON `{ kind: "payment_card", fields... }` | Agent reads artifact, fills card fields, deletes artifact |
+| `location` | JSON `{ kind: "geo", lat, lon }` | Agent runs `shell("adb emu geo fix ...")` or types coordinates |
+| `camera`, `photos` | Image file (JPEG/PNG) or JSON `{ kind: "photos_multi" }` | Agent runs `shell("adb push ...")`, triggers media scan, navigates picker |
+| `microphone` | Audio file (WebM/OGG) | Agent pushes audio file, navigates app file picker |
+| `nfc`, `biometric`, `voice` | JSON or approval signal | Agent reads data and applies per skill guidance |
 
-After image injection, runtime may append deterministic hint in history:
+**Sensitive artifact cleanup:** Skills instruct the Agent to delete credential and payment artifacts after use via `exec("rm <path>")`.
 
-- `delegation_template=gallery_import_template: ...`
-
-So the next model step can follow stable upload flow (open picker -> Downloads -> select file -> confirm).
+**Sensitive data in logs:** OTP/verification code values are NOT written to session logs. Only `value_length=N` is logged. The Agent reads the actual value from the artifact file.
 
 ## Scenario-by-Scenario Behavior
 
@@ -177,31 +199,29 @@ So the next model step can follow stable upload flow (open picker -> Downloads -
 
 - Trigger: app login wall requires sensitive credentials.
 - User action: fill credentials on Human Auth page (or use Remote Takeover), then `Approve`.
-- Runtime effect: credentials artifact is applied inside emulator login form; agent continues.
-- Privacy focus: credentials are handled by user-local relay and local artifact storage.
+- Agent receives: artifact description with `artifact_kind=credentials`, `has_username=true`, `has_password=true`.
+- Agent reads the `human-auth-oauth` skill, reads the artifact file, taps username field, types username, taps password field, types password, taps sign-in button, then deletes the artifact.
 
 ### 2) Permission authorization
 
-- Android runtime permission dialogs inside emulator are handled locally by policy (no remote interrupt for those dialogs).
-- Real-device capability needs (camera capture, real location, NFC-like data, etc.) are escalated to Human Auth.
-- User action: provide delegated data (photo/location/text) and approve/reject.
-- Runtime effect: delegated payload is injected/applied in emulator flow and task resumes.
+- Android runtime permission dialogs inside emulator are handled locally by policy (no remote interrupt).
+- Real-device capability needs (camera, microphone, location, photos) detected by Capability Probe trigger Human Auth automatically.
+- User action: provide delegated data (photo/audio/location/text) and approve/reject.
+- Agent receives: artifact description. Agent reads the relevant skill and decides how to use the data.
 
 ### 3) SMS verification code (`sms`)
 
 - Trigger: task needs a one-time SMS code.
-- User action:
-  - fastest: reply plain 4-10 digit code directly in Telegram, or
-  - use Human Auth web page text attachment and approve.
-- Runtime effect: code is typed into focused input field and flow continues.
+- User action: enter code via Human Auth web page text attachment.
+- Agent receives: `artifact_kind=text`, `value_length=6`.
+- Agent reads artifact to get code, types it into verification field.
 
-### 4) 2FA/TOTP (`2fa`)
+### 4) Camera photo (`camera`)
 
-- Trigger: app/site asks for authenticator 2FA code.
-- User action:
-  - reply code directly in Telegram, or
-  - submit code via Human Auth web page and approve.
-- Runtime effect: code is applied as text artifact; agent continues immediately.
+- Trigger: app needs camera photo (detected by Capability Probe or Agent).
+- User action: take photo on Human Auth page.
+- Agent receives: `artifact_type=image/jpeg`.
+- Agent pushes file to `/sdcard/Download/`, triggers media scan, navigates app picker to select file.
 
 ## Relay Modes
 
@@ -244,59 +264,24 @@ openpocket emulator status
 openpocket gateway start
 ```
 
-Checkpoints:
-
-- Telegram token valid and target chat allowed
-- emulator booted device exists
-- gateway logs show relay/tunnel readiness (if enabled)
-
-### 2) List PermissionLab scenarios
-
-```bash
-openpocket test permission-app cases
-```
-
-Expected IDs:
-
-- `camera`, `microphone`, `location`, `contacts`, `sms`, `calendar`, `photos`, `notification`, `2fa`
-
-### 3) Run full E2E scenario
+### 2) Run full E2E scenario
 
 ```bash
 openpocket test permission-app run --case camera --chat <telegram_chat_id>
 ```
 
-Expected:
+### 3) Validate agentic delegation
 
-1. PermissionLab deploy/install/reset/launch
-2. agent taps scenario button
-3. if scenario requires remote authorization, agent calls `request_human_auth`
-4. Telegram receives auth request/link
-5. user approves/rejects
-6. agent resumes and reports outcome
+Inspect latest session file and verify:
 
-### 4) Validate delegation application
+- `Human auth approved|rejected|timeout`
+- `artifact_path=...`
+- `artifact_kind=...`
+- Agent's subsequent steps show it reading the artifact and applying it (e.g., `shell adb push ...` or `type_text ...`)
 
-Inspect latest session file and verify lines:
+### 4) Failure drills
 
-- `Human auth approved|rejected|timeout request_id=...`
-- optional `human_artifact=...`
-- optional `delegation_result=...`
-- optional `delegation_template=...`
-
-### 5) Failure drills
-
-Simulate faults:
-
-- stop ngrok tunnel
-- reject request
-- let request timeout
-
-Expected:
-
-- task does not hang forever
-- decision appears in session + Telegram
-- manual `/auth` commands still work
+Simulate faults: stop tunnel, reject request, let request timeout. Verify task does not hang.
 
 ## Operational Observability
 
@@ -304,11 +289,13 @@ Primary artifacts:
 
 - relay request state: `state/human-auth-relay/requests.json`
 - uploaded artifacts: `state/human-auth-artifacts/`
-- task trace: `workspace/sessions/session-*.md`
+- task trace: `workspace/sessions/`
 - gateway logs containing `[OpenPocket][human-auth]`
+- Human Auth skills: `skills/human-auth-*/SKILL.md`
 
 ## Current Limits
 
 - browser permission behavior differs by Telegram in-app browser and mobile OS
-- some app-specific post-delegation flows still require stronger skill guidance
+- real-device GPS injection not supported on non-rooted devices (Agent falls back to manual coordinate input)
 - ngrok free tier allows only one active session; duplicates can break link generation
+- live camera/microphone streaming (WebRTC) is not implemented; current model is capture-then-upload

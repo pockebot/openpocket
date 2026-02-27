@@ -191,6 +191,7 @@ export async function runRuntimeAttempt(
       lastScreenshotStartMs: 0,
       lastScreenshotEndMs: 0,
       lastModelInferenceStartMs: 0,
+      capabilityProbeApprovalByKey: new Map(),
       launchablePackages,
       effectivePromptMode,
       systemPrompt,

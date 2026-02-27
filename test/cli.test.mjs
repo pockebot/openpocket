@@ -15,6 +15,7 @@ function runCli(args, env = {}) {
     env: {
       ...process.env,
       OPENPOCKET_SKIP_ENV_SETUP: "1",
+      OPENPOCKET_SKIP_GATEWAY_PID_CHECK: "1",
       ...env,
     },
     encoding: "utf-8",
@@ -37,6 +38,8 @@ test("init creates config and workspace files", () => {
   assert.equal(cfg.projectName, "OpenPocket");
   assert.equal(cfg.defaultModel, "gpt-5.2-codex");
   assert.equal(cfg.target.type, "emulator");
+  assert.equal(cfg.target.pin, "1234");
+  assert.equal(cfg.target.wakeupIntervalSec, 3);
 
   const mustFiles = [
     "AGENTS.md",
@@ -393,6 +396,8 @@ test("target show prints deployment target summary", () => {
   assert.equal(run.status, 0, run.stderr || run.stdout);
   assert.match(run.stdout, /Deployment Target/i);
   assert.match(run.stdout, /emulator/i);
+  assert.match(run.stdout, /Phone PIN/i);
+  assert.match(run.stdout, /Wakeup interval/i);
 });
 
 test("target set updates config for physical phone deployment", () => {
@@ -410,6 +415,8 @@ test("target set updates config for physical phone deployment", () => {
       "192.168.50.10",
       "--device",
       "R5CX123456A",
+      "--pin",
+      "2468",
     ],
     {
       OPENPOCKET_HOME: home,
@@ -422,7 +429,231 @@ test("target set updates config for physical phone deployment", () => {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(cfg.target.type, "physical-phone");
   assert.equal(cfg.target.adbEndpoint, "192.168.50.10:5555");
+  assert.equal(cfg.target.pin, "2468");
+  assert.equal(cfg.target.wakeupIntervalSec, 3);
   assert.equal(cfg.agent.deviceId, "R5CX123456A");
+});
+
+test("target set-target alias updates config for Android TV deployment", () => {
+  const home = makeHome("openpocket-ts-target-set-target-alias-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const setRun = runCli(
+    [
+      "target",
+      "set-target",
+      "--type",
+      "android-tv",
+      "--adb-endpoint",
+      "192.168.10.50:5555",
+      "--device",
+      "192.168.10.50:5555",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(setRun.status, 0, setRun.stderr || setRun.stdout);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "android-tv");
+  assert.equal(cfg.target.adbEndpoint, "192.168.10.50:5555");
+  assert.equal(cfg.agent.deviceId, "192.168.10.50:5555");
+});
+
+test("target set supports updating target PIN", () => {
+  const home = makeHome("openpocket-ts-target-set-virtual-pin-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const setRun = runCli(
+    [
+      "target",
+      "set",
+      "--type",
+      "emulator",
+      "--pin",
+      "9876",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(setRun.status, 0, setRun.stderr || setRun.stdout);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "emulator");
+  assert.equal(cfg.target.pin, "9876");
+});
+
+test("target set supports updating wakeup interval", () => {
+  const home = makeHome("openpocket-ts-target-set-wakeup-interval-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const setRun = runCli(
+    [
+      "target",
+      "set",
+      "--wakeup-interval",
+      "7",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(setRun.status, 0, setRun.stderr || setRun.stdout);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.wakeupIntervalSec, 7);
+});
+
+test("target set uses default physical phone PIN for physical target", () => {
+  const home = makeHome("openpocket-ts-target-set-pin-required-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "set",
+      "--type",
+      "physical-phone",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "physical-phone");
+  assert.equal(cfg.target.pin, "1234");
+});
+
+test("target set rejects non-4-digit PIN", () => {
+  const home = makeHome("openpocket-ts-target-set-pin-invalid-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "set",
+      "--pin",
+      "12ab",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /4 digits/i);
+});
+
+test("target set rejects invalid wakeup interval", () => {
+  const home = makeHome("openpocket-ts-target-set-wakeup-invalid-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "set",
+      "--wakeup-interval",
+      "0",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /1-3600/i);
+});
+
+test("target pair validates required host/port/code in non-interactive mode", () => {
+  const home = makeHome("openpocket-ts-target-pair-required-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "pair",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /Missing host|pair-endpoint/i);
+});
+
+test("target pair dry-run updates target adb endpoint and preferred device", () => {
+  const home = makeHome("openpocket-ts-target-pair-dry-run-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "pair",
+      "--host",
+      "192.168.10.88",
+      "--pair-port",
+      "37099",
+      "--connect-port",
+      "5555",
+      "--code",
+      "123456",
+      "--type",
+      "android-tv",
+      "--dry-run",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.match(run.stdout, /ADB pairing flow completed/i);
+  assert.match(run.stdout, /dry-run/i);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "android-tv");
+  assert.equal(cfg.target.adbEndpoint, "192.168.10.88:5555");
+  assert.equal(cfg.agent.deviceId, "192.168.10.88:5555");
+});
+
+test("target pair rejects unsupported target type", () => {
+  const home = makeHome("openpocket-ts-target-pair-type-invalid-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "pair",
+      "--host",
+      "192.168.10.88",
+      "--pair-port",
+      "37099",
+      "--code",
+      "123456",
+      "--type",
+      "emulator",
+      "--dry-run",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /physical-phone \| android-tv/i);
 });
 
 test("test permission-app task prints recommended telegram flow", () => {

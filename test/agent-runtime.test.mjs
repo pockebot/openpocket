@@ -6,6 +6,7 @@ import test from "node:test";
 
 const { loadConfig } = await import("../dist/config/index.js");
 const { AgentRuntime } = await import("../dist/agent/agent-runtime.js");
+const { buildPaymentArtifactKey } = await import("../dist/phone-use-util/index.js");
 
 function makeSnapshot(overrides = {}) {
   return {
@@ -377,7 +378,7 @@ test("AgentRuntime prefers quick observation for post-action state delta when av
   assert.equal(screenCaptureCalls, 2);
 });
 
-test("AgentRuntime hides workspace tools for phone-style tasks", async () => {
+test("AgentRuntime keeps workspace tools available for phone-style tasks", async () => {
   let capturedToolNames = [];
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
@@ -397,9 +398,9 @@ test("AgentRuntime hides workspace tools for phone-style tasks", async () => {
 
   const result = await runtime.runTask("查询旧金山的天气");
   assert.equal(result.ok, true);
-  assert.equal(capturedToolNames.includes("read"), false);
-  assert.equal(capturedToolNames.includes("exec"), false);
-  assert.equal(capturedToolNames.includes("memory_search"), false);
+  assert.equal(capturedToolNames.includes("read"), true);
+  assert.equal(capturedToolNames.includes("exec"), true);
+  assert.equal(capturedToolNames.includes("memory_search"), true);
   assert.equal(capturedToolNames.includes("tap"), true);
   assert.equal(capturedToolNames.includes("finish"), true);
 });
@@ -478,7 +479,7 @@ test("AgentRuntime caps human-auth timeout to configured limit", async () => {
   assert.equal(observedTimeoutSec, runtime.config.humanAuth.requestTimeoutSec);
 });
 
-test("AgentRuntime exposes read tool for phone tasks when a matching skill exists", async () => {
+test("AgentRuntime still exposes workspace tools when a matching skill exists", async () => {
   let capturedToolNames = [];
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
@@ -507,7 +508,8 @@ test("AgentRuntime exposes read tool for phone tasks when a matching skill exist
   const result = await runtime.runTask("Open PayByPhone and continue nearest location flow");
   assert.equal(result.ok, true);
   assert.equal(capturedToolNames.includes("read"), true);
-  assert.equal(capturedToolNames.includes("exec"), false);
+  assert.equal(capturedToolNames.includes("exec"), true);
+  assert.equal(capturedToolNames.includes("memory_search"), true);
 });
 
 test("AgentRuntime supports none system prompt mode for constrained runs", async () => {
@@ -702,6 +704,377 @@ test("AgentRuntime pauses for request_human_auth and resumes after approval", as
   assert.equal(actions.some((item) => item.type === "request_human_auth"), false);
 });
 
+test("AgentRuntime escalates capability probe camera event to human auth", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "open camera entry", action: { type: "tap", x: 360, y: 720 } },
+      { thought: "done", action: { type: "finish", message: "camera entry opened" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.Slack",
+      screenshotBase64: Buffer.from("slack-camera").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "camera",
+      phase: "requested",
+      packageName: "com.Slack",
+      source: "activity_log",
+      observedAt: new Date().toISOString(),
+      confidence: 0.95,
+      evidence: "camera intent start",
+    },
+  ]);
+
+  const result = await runtime.runTask(
+    "probe to human auth test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-probe-camera",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "camera");
+  assert.equal(authRequests[0].uiTemplate?.requireArtifactOnApprove, true);
+  assert.equal(authRequests[0].uiTemplate?.allowPhotoAttachment, true);
+  assert.equal(authRequests[0].uiTemplate?.allowTextAttachment, false);
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
+});
+
+test("AgentRuntime escalates capability probe after tap_element action", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "open camera entry", action: { type: "tap_element", elementId: 11 } },
+      { thought: "done", action: { type: "finish", message: "camera entry opened" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.Slack",
+      screenshotBase64: Buffer.from("slack-camera").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "camera",
+      phase: "requested",
+      packageName: "com.Slack",
+      source: "activity_log",
+      observedAt: new Date().toISOString(),
+      confidence: 0.95,
+      evidence: "camera intent start",
+    },
+  ]);
+
+  const result = await runtime.runTask(
+    "probe after tap_element test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-probe-camera-tap-element",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "camera");
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
+});
+
+test("AgentRuntime escalates payment capability probe with dynamic fields from ui tree context", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "open checkout", action: { type: "tap", x: 480, y: 2060 } },
+      { thought: "done", action: { type: "finish", message: "checkout ready" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.shop.app",
+      screenshotBase64: Buffer.from("secure-checkout").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "payment",
+      phase: "requested",
+      packageName: "com.shop.app",
+      source: "window_secure",
+      observedAt: new Date().toISOString(),
+      confidence: 0.97,
+      evidence: "FLAG_SECURE payment checkout",
+      paymentContext: {
+        secureWindow: true,
+        secureEvidence: "FLAG_SECURE payment checkout",
+        fieldCandidates: [
+          {
+            semantic: "card_number",
+            label: "Card Number",
+            resourceIdHint: "card_number",
+            artifactKey: buildPaymentArtifactKey("card_number", "card_number", 0),
+            required: true,
+            confidence: 0.96,
+            inputType: "card-number",
+          },
+          {
+            semantic: "expiry",
+            label: "Expiration (MM/YY)",
+            resourceIdHint: "expiry",
+            artifactKey: buildPaymentArtifactKey("expiry", "expiry", 0),
+            required: true,
+            confidence: 0.92,
+            inputType: "expiry",
+          },
+          {
+            semantic: "cvc",
+            label: "Security Code (CVC/CVV)",
+            resourceIdHint: "cvc",
+            artifactKey: buildPaymentArtifactKey("cvc", "cvc", 0),
+            required: true,
+            confidence: 0.91,
+            inputType: "cvc",
+          },
+        ],
+      },
+    },
+  ]);
+
+  const result = await runtime.runTask(
+    "payment probe to human auth",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-probe-payment",
+        approved: true,
+        status: "approved",
+        message: "Payment delegated",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "payment");
+  assert.equal(authRequests[0].uiTemplate?.artifactKind, "form");
+  assert.equal(authRequests[0].uiTemplate?.requireArtifactOnApprove, true);
+  assert.equal(authRequests[0].uiTemplate?.fields?.length, 3);
+  assert.equal(authRequests[0].uiTemplate?.allowPhotoAttachment, false);
+});
+
+test("AgentRuntime reuses approved capability probe auth within one task", async () => {
+  const authRequests = [];
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-capability-probe-artifact-"));
+  const artifactPath = path.join(artifactDir, "delegated-camera.json");
+  fs.writeFileSync(artifactPath, JSON.stringify({
+    kind: "text",
+    value: "camera delegated",
+  }), "utf-8");
+
+  let runtime;
+  const scriptedSteps = [
+    { thought: "open camera entry first time", action: { type: "tap", x: 360, y: 720 } },
+    () => {
+      runtime.capabilityProbeAuthCooldownByKey.set("camera", 0);
+      return { thought: "open camera entry second time", action: { type: "tap", x: 362, y: 722 } };
+    },
+    { thought: "done", action: { type: "finish", message: "camera probe reuse done" } },
+  ];
+  runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps,
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.Slack",
+      screenshotBase64: Buffer.from("slack-camera-repeat").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "camera",
+      phase: "requested",
+      packageName: "com.Slack",
+      source: "activity_log",
+      observedAt: new Date().toISOString(),
+      confidence: 0.95,
+      evidence: "camera intent start",
+    },
+  ]);
+
+  const result = await runtime.runTask(
+    "probe reuse test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-probe-camera-reuse",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /human_auth_probe skipped=reused capability=camera pkg=com\.Slack/i);
+});
+
+test("AgentRuntime escalates permission dialog capability via activity dump fallback", async () => {
+  const authRequests = [];
+  const actions = [];
+  const uiDumpXml = [
+    "<hierarchy rotation=\"0\">",
+    "<node index=\"0\" text=\"Don't allow\" resource-id=\"com.android.permissioncontroller:id/permission_deny_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[56,2100][520,2200]\" />",
+    "<node index=\"1\" text=\"Allow\" resource-id=\"com.android.permissioncontroller:id/permission_allow_button\" class=\"android.widget.Button\" package=\"com.android.permissioncontroller\" clickable=\"true\" enabled=\"true\" bounds=\"[560,2100][1024,2200]\" />",
+    "</hierarchy>",
+  ].join("");
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "open camera entry", action: { type: "tap", x: 360, y: 720 } },
+      { thought: "done", action: { type: "finish", message: "camera entry opened" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.Slack",
+      screenshotBase64: Buffer.from("slack-camera").toString("base64"),
+      somScreenshotBase64: null,
+      uiElements: [],
+    }),
+    captureQuickObservation: async () => ({
+      currentApp: "com.google.android.permissioncontroller",
+      screenshotHash: "permission-dialog",
+    }),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async (action) => {
+      actions.push(action);
+      return "ok";
+    },
+  };
+  runtime.emulator = {
+    runAdb: (args) => {
+      const joined = Array.isArray(args) ? args.join(" ") : "";
+      if (joined.includes("dumpsys activity top")) {
+        return "requestedPermissions=[android.permission.CAMERA]";
+      }
+      if (Array.isArray(args) && args.includes("cat")) {
+        return uiDumpXml;
+      }
+      return "";
+    },
+  };
+  runtime.capabilityProbe.poll = () => ([]);
+
+  const result = await runtime.runTask(
+    "permission dialog fallback to human auth test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-perm-dialog-camera",
+        approved: true,
+        status: "approved",
+        message: "Approved from phone",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "camera");
+  assert.equal(
+    actions.some(
+      (action) =>
+        action.type === "tap"
+        && action.reason === "human_auth_permission_reject"
+        && action.x > 0
+        && action.y > 0,
+    ),
+    true,
+  );
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /src=permission_dialog/i);
+  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
+});
+
 test("AgentRuntime fails when request_human_auth is rejected", async () => {
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
@@ -738,6 +1111,72 @@ test("AgentRuntime fails when request_human_auth is rejected", async () => {
 
   assert.equal(result.ok, false);
   assert.match(result.message, /Human authorization rejected/);
+});
+
+test("AgentRuntime loads human auth uiTemplate from templatePath generated in workspace", async () => {
+  const authRequests = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Load reusable human auth page template from workspace file",
+        action: {
+          type: "request_human_auth",
+          capability: "unknown",
+          instruction: "Please complete custom approval form.",
+          templatePath: "human-auth/templates/custom-auth.json",
+          uiTemplate: {
+            title: "Inline Override Title",
+          },
+        },
+      },
+      { thought: "Done", action: { type: "finish", message: "Template file flow complete" } },
+    ],
+  });
+
+  const templateDir = path.join(runtime.config.workspaceDir, "human-auth", "templates");
+  fs.mkdirSync(templateDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(templateDir, "custom-auth.json"),
+    JSON.stringify({
+      templateId: "custom-auth-flow",
+      summary: "Template summary from file",
+      middleHtml: "<input id=\"from_file_field\" type=\"text\" />",
+      approveScript: "return { ok: true };",
+      requireArtifactOnApprove: false,
+    }, null, 2),
+    "utf-8",
+  );
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask(
+    "human auth templatePath test",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-template-path",
+        approved: true,
+        status: "approved",
+        message: "Approved in templatePath test.",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].uiTemplate?.templateId, "custom-auth-flow");
+  assert.equal(authRequests[0].uiTemplate?.summary, "Template summary from file");
+  assert.equal(authRequests[0].uiTemplate?.title, "Inline Override Title");
+  assert.equal(authRequests[0].uiTemplate?.middleHtml.includes("from_file_field"), true);
 });
 
 test("AgentRuntime auto-approves Android permission dialog app without human auth", async () => {
@@ -935,7 +1374,7 @@ test("AgentRuntime auto-approves permission dialog even when model asks permissi
   );
 });
 
-test("AgentRuntime still requests human auth for camera capability after auto-allowing VM permission dialog", async () => {
+test("AgentRuntime still requests human auth for camera capability while local VM dialog is rejected", async () => {
   const actions = [];
   const authRequests = [];
   const uiDumpXml = [
@@ -1003,16 +1442,13 @@ test("AgentRuntime still requests human auth for camera capability after auto-al
     actions.some(
       (action) =>
         action.type === "tap"
-        && action.reason === "auto_vm_permission_approve"
-        && action.x >= 760
-        && action.y >= 2100,
+        && String(action.reason || "").includes("permission_reject"),
     ),
     true,
   );
 });
 
-test("AgentRuntime applies OTP code from manual approval note when no artifact is provided", async () => {
-  const actions = [];
+test("AgentRuntime returns approval message to agent when no artifact is provided (agentic delegation)", async () => {
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
@@ -1033,10 +1469,7 @@ test("AgentRuntime applies OTP code from manual approval note when no artifact i
     queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
+    executeAction: async () => "ok",
   };
 
   const result = await runtime.runTask(
@@ -1054,19 +1487,15 @@ test("AgentRuntime applies OTP code from manual approval note when no artifact i
   );
 
   assert.equal(result.ok, true);
-  assert.equal(actions.some((action) => action.type === "type" && action.text === "123456"), true);
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /Human auth approved/i);
 });
 
-test("AgentRuntime applies delegated text artifact after human auth approval", async () => {
-  const actions = [];
+test("AgentRuntime describes text artifact to agent after human auth approval (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-text-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "text",
-      value: "123456",
-      capability: "2fa",
-    }),
+    JSON.stringify({ kind: "text", value: "123456", capability: "2fa" }),
     "utf-8",
   );
 
@@ -1075,12 +1504,7 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
     scriptedSteps: [
       {
         thought: "Need OTP from phone",
-        action: {
-          type: "request_human_auth",
-          capability: "2fa",
-          instruction: "Input OTP code.",
-          timeoutSec: 90,
-        },
+        action: { type: "request_human_auth", capability: "2fa", instruction: "Input OTP code.", timeoutSec: 90 },
       },
       { thought: "Done", action: { type: "finish", message: "Completed after OTP delegation" } },
     ],
@@ -1090,45 +1514,34 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
     queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
+    executeAction: async () => "ok",
   };
 
   try {
     const result = await runtime.runTask(
       "delegated text test",
-      undefined,
-      undefined,
+      undefined, undefined,
       async () => ({
-        requestId: "req-text",
-        approved: true,
-        status: "approved",
-        message: "Code confirmed",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
+        requestId: "req-text", approved: true, status: "approved",
+        message: "Code confirmed", decidedAt: new Date().toISOString(), artifactPath: artifactFile,
       }),
     );
 
     assert.equal(result.ok, true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "123456"), true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=text/);
+    assert.match(sessionText, /value_length=6/);
+    assert.doesNotMatch(sessionText, /value=123456/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime applies delegated oauth credentials artifact after human auth approval", async () => {
-  const actions = [];
+test("AgentRuntime describes credentials artifact to agent after human auth approval (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "credentials",
-      username: "alice@example.com",
-      password: "S3cret-987",
-      capability: "oauth",
-    }),
+    JSON.stringify({ kind: "credentials", username: "alice@example.com", password: "S3cret-987", capability: "oauth" }),
     "utf-8",
   );
 
@@ -1137,12 +1550,7 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
     scriptedSteps: [
       {
         thought: "Need account login",
-        action: {
-          type: "request_human_auth",
-          capability: "oauth",
-          instruction: "Provide account credentials.",
-          timeoutSec: 120,
-        },
+        action: { type: "request_human_auth", capability: "oauth", instruction: "Provide account credentials.", timeoutSec: 120 },
       },
       { thought: "Done", action: { type: "finish", message: "Completed after credential delegation" } },
     ],
@@ -1151,62 +1559,35 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
   runtime.adb = {
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
-        return [
-          "<hierarchy>",
-          '<node index="0" text="" resource-id="com.demo:id/username" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[60,320][1020,430]" />',
-          '<node index="1" text="" resource-id="com.demo:id/password" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="true" selected="false" bounds="[60,460][1020,570]" />',
-          "</hierarchy>",
-        ].join("");
-      }
-      return "ok";
-    },
+    executeAction: async () => "ok",
   };
 
   try {
     const result = await runtime.runTask(
       "delegated oauth credentials test",
-      undefined,
-      undefined,
+      undefined, undefined,
       async () => ({
-        requestId: "req-oauth",
-        approved: true,
-        status: "approved",
-        message: "Credentials shared",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
+        requestId: "req-oauth", approved: true, status: "approved",
+        message: "Credentials shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile,
       }),
     );
 
     assert.equal(result.ok, true);
-    assert.equal(actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_username"), true);
-    assert.equal(actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_password"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "alice@example.com"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "S3cret-987"), true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=credentials/);
+    assert.match(sessionText, /has_username=true/);
+    assert.match(sessionText, /has_password=true/);
+    assert.match(sessionText, /SENSITIVE/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime applies delegated payment artifact after human auth approval", async () => {
-  const actions = [];
+test("AgentRuntime describes payment artifact to agent after human auth approval (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-payment-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "payment_card_v1",
-      cardNumber: "4111111111111111",
-      expiry: "02/32",
-      cvc: "182",
-      capability: "payment",
-    }),
+    JSON.stringify({ kind: "payment_card_v1", cardNumber: "4111111111111111", expiry: "02/32", cvc: "182", capability: "payment" }),
     "utf-8",
   );
 
@@ -1215,12 +1596,7 @@ test("AgentRuntime applies delegated payment artifact after human auth approval"
     scriptedSteps: [
       {
         thought: "Need payment details",
-        action: {
-          type: "request_human_auth",
-          capability: "payment",
-          instruction: "Provide payment card data.",
-          timeoutSec: 120,
-        },
+        action: { type: "request_human_auth", capability: "payment", instruction: "Provide payment card data.", timeoutSec: 120 },
       },
       { thought: "Done", action: { type: "finish", message: "Completed after delegated payment fields" } },
     ],
@@ -1229,152 +1605,95 @@ test("AgentRuntime applies delegated payment artifact after human auth approval"
   runtime.adb = {
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
-        return [
-          "<hierarchy>",
-          '<node index="0" text="Card number" resource-id="com.demo:id/card_number" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,320][1020,430]" />',
-          '<node index="1" text="Expiration date, 2 digit month, 2 digit year" resource-id="com.demo:id/expiry" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,460][520,570]" />',
-          '<node index="2" text="Security code" resource-id="com.demo:id/cvc" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[560,460][1020,570]" />',
-          "</hierarchy>",
-        ].join("");
-      }
-      return "ok";
-    },
+    executeAction: async () => "ok",
   };
 
   try {
     const result = await runtime.runTask(
       "delegated payment test",
-      undefined,
-      undefined,
+      undefined, undefined,
       async () => ({
-        requestId: "req-payment",
-        approved: true,
-        status: "approved",
-        message: "Payment details shared",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
+        requestId: "req-payment", approved: true, status: "approved",
+        message: "Payment details shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile,
       }),
     );
 
     assert.equal(result.ok, true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "4111111111111111"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "02/32"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "182"), true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=payment_card_v1/);
+    assert.match(sessionText, /SENSITIVE/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime supports split oauth screens with cached credentials reuse", async () => {
-  const actions = [];
-  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-split-${Date.now()}.json`);
+test("AgentRuntime describes payment form artifact with billing fields to agent (agentic delegation)", async () => {
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-payment-form-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "credentials",
-      username: "alice@example.com",
-      password: "S3cret-987",
-      capability: "oauth",
-    }),
+    JSON.stringify({ kind: "form", capability: "payment", fields: { card_number: "4111111111111111", expiry: "02/32", cvc: "182" } }),
     "utf-8",
   );
 
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
-      {
-        thought: "Need Google account username",
-        action: {
-          type: "request_human_auth",
-          capability: "oauth",
-          instruction: "Provide account credentials.",
-          timeoutSec: 120,
-        },
-      },
-      {
-        thought: "Need Google password on next screen",
-        action: {
-          type: "request_human_auth",
-          capability: "oauth",
-          instruction: "Continue oauth login",
-          timeoutSec: 120,
-        },
-      },
+      { thought: "Need payment details", action: { type: "request_human_auth", capability: "payment", instruction: "Provide secure payment fields.", timeoutSec: 120 } },
+      { thought: "Done", action: { type: "finish", message: "Completed after delegated payment form fields" } },
+    ],
+  });
+
+  runtime.adb = { captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "emulator-5554", executeAction: async () => "ok" };
+
+  try {
+    const result = await runtime.runTask("delegated payment form test", undefined, undefined,
+      async () => ({ requestId: "req-payment-form", approved: true, status: "approved", message: "Payment form details shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile }),
+    );
+    assert.equal(result.ok, true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=form/);
+    assert.match(sessionText, /form_fields=\[/);
+  } finally {
+    fs.rmSync(artifactFile, { force: true });
+  }
+});
+
+test("AgentRuntime sends each oauth request to human auth in agentic mode (no cached credential reuse)", async () => {
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-split-${Date.now()}.json`);
+  fs.writeFileSync(
+    artifactFile,
+    JSON.stringify({ kind: "credentials", username: "alice@example.com", password: "S3cret-987", capability: "oauth" }),
+    "utf-8",
+  );
+
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "Need Google account username", action: { type: "request_human_auth", capability: "oauth", instruction: "Provide account credentials.", timeoutSec: 120 } },
+      { thought: "Need Google password on next screen", action: { type: "request_human_auth", capability: "oauth", instruction: "Continue oauth login", timeoutSec: 120 } },
       { thought: "Done", action: { type: "finish", message: "Completed split oauth login" } },
     ],
   });
 
-  runtime.adb = {
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  let dumpReads = 0;
-  runtime.emulator = {
-    runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
-        dumpReads += 1;
-        if (dumpReads === 1) {
-          return [
-            "<hierarchy>",
-            '<node index="0" text="" resource-id="com.demo:id/identifierId" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[60,320][1020,430]" />',
-            "</hierarchy>",
-          ].join("");
-        }
-        return [
-          "<hierarchy>",
-          '<node index="0" text="" resource-id="com.demo:id/password" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="true" selected="false" bounds="[60,460][1020,570]" />',
-          "</hierarchy>",
-        ].join("");
-      }
-      return "ok";
-    },
-  };
+  runtime.adb = { captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "emulator-5554", executeAction: async () => "ok" };
 
   let authCalls = 0;
   try {
-    const result = await runtime.runTask(
-      "split oauth login test",
-      undefined,
-      undefined,
+    const result = await runtime.runTask("split oauth login test", undefined, undefined,
       async () => {
         authCalls += 1;
-        if (authCalls > 1) {
-          throw new Error("oauth prompt should be auto-skipped when cached credentials are available");
-        }
         return {
-          requestId: "req-oauth-1",
-          approved: true,
-          status: "approved",
-          message: "Credentials shared",
-          decidedAt: new Date().toISOString(),
-          artifactPath: artifactFile,
+          requestId: `req-oauth-${authCalls}`, approved: true, status: "approved",
+          message: "Credentials shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile,
         };
       },
     );
 
     assert.equal(result.ok, true);
-    assert.equal(authCalls, 1);
-    const usernameTyped = actions.filter((action) => action.type === "type" && action.text === "alice@example.com");
-    const passwordTyped = actions.filter((action) => action.type === "type" && action.text === "S3cret-987");
-    assert.equal(usernameTyped.length >= 1, true);
-    assert.equal(passwordTyped.length >= 1, true);
-    // Username should be typed before password across split screens.
-    const firstUsernameIndex = actions.findIndex((action) => action.type === "type" && action.text === "alice@example.com");
-    const firstPasswordIndex = actions.findIndex((action) => action.type === "type" && action.text === "S3cret-987");
-    assert.equal(firstUsernameIndex >= 0, true);
-    assert.equal(firstPasswordIndex > firstUsernameIndex, true);
+    // In agentic mode, both oauth requests go through to human auth handler.
+    assert.equal(authCalls, 2);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=credentials/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
@@ -1469,149 +1788,150 @@ test("AgentRuntime redacts raw request_user_input text from session log", async 
   assert.doesNotMatch(sessionText, /CA-7XZ019/);
 });
 
-test("AgentRuntime applies delegated location artifact after human auth approval", async () => {
-  const adbActions = [];
-  const emulatorCommands = [];
+test("AgentRuntime describes location artifact to agent after human auth approval (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-geo-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "geo",
-      lat: 37.785834,
-      lon: -122.406417,
-      capability: "location",
-    }),
+    JSON.stringify({ kind: "geo", lat: 37.785834, lon: -122.406417, capability: "location" }),
     "utf-8",
   );
 
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
-      {
-        thought: "Need real location",
-        action: {
-          type: "request_human_auth",
-          capability: "location",
-          instruction: "Share current location.",
-          timeoutSec: 90,
-        },
-      },
+      { thought: "Need real location", action: { type: "request_human_auth", capability: "location", instruction: "Share current location.", timeoutSec: 90 } },
       { thought: "Done", action: { type: "finish", message: "Completed after delegated location" } },
     ],
   });
 
-  runtime.adb = {
-    queryLaunchablePackages: () => [],
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      adbActions.push(action);
-      return "ok";
-    },
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      emulatorCommands.push(args);
-      return "ok";
-    },
-  };
+  runtime.adb = { queryLaunchablePackages: () => [], captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "emulator-5554", executeAction: async () => "ok" };
 
   try {
-    const result = await runtime.runTask(
-      "delegated geo test",
-      undefined,
-      undefined,
-      async () => ({
-        requestId: "req-geo",
-        approved: true,
-        status: "approved",
-        message: "Location shared",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
-      }),
+    const result = await runtime.runTask("delegated geo test", undefined, undefined,
+      async () => ({ requestId: "req-geo", approved: true, status: "approved", message: "Location shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile }),
     );
-
     assert.equal(result.ok, true);
-    assert.equal(
-      emulatorCommands.some(
-        (args) =>
-          Array.isArray(args)
-          && args.includes("emu")
-          && args.includes("geo")
-          && args.includes("fix")
-          && args.includes(String(-122.406417))
-          && args.includes(String(37.785834)),
-      ),
-      true,
-    );
-    assert.equal(adbActions.some((action) => action.type === "type"), false);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=geo/);
+    assert.match(sessionText, /lat=37\.785834/);
+    assert.match(sessionText, /lon=-122\.406417/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime appends gallery template hint after delegated image artifact", async () => {
-  const emulatorCommands = [];
-  const observedUserPrompts = [];
+test("AgentRuntime describes location artifact on physical target to agent (agentic delegation)", async () => {
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-geo-physical-${Date.now()}.json`);
+  fs.writeFileSync(
+    artifactFile,
+    JSON.stringify({ kind: "geo", lat: 40.7128, lon: -74.006, capability: "location" }),
+    "utf-8",
+  );
+
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "Need real location", action: { type: "request_human_auth", capability: "location", instruction: "Share current location.", timeoutSec: 90 } },
+      { thought: "Done", action: { type: "finish", message: "Completed after delegated location" } },
+    ],
+  });
+
+  runtime.config.target.type = "physical-phone";
+  runtime.adb = { queryLaunchablePackages: () => [], captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "physical-serial-1", executeAction: async () => "ok" };
+
+  try {
+    const result = await runtime.runTask("delegated geo physical test", undefined, undefined,
+      async () => ({ requestId: "req-geo-physical", approved: true, status: "approved", message: "Location shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile }),
+    );
+    assert.equal(result.ok, true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=geo/);
+    assert.match(sessionText, /lat=40\.712800/);
+  } finally {
+    fs.rmSync(artifactFile, { force: true });
+  }
+});
+
+test("AgentRuntime pre-finish capability probe escalates human auth on sensitive active app", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "done", action: { type: "finish", message: "camera opened" } },
+    ],
+  });
+  runtime.config.humanAuth.enabled = true;
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot({
+      currentApp: "com.google.android.GoogleCamera",
+    }),
+    resolveDeviceId: () => "physical-serial-1",
+    executeAction: async () => "ok",
+  };
+  runtime.capabilityProbe.poll = () => ([
+    {
+      capability: "camera",
+      phase: "active",
+      packageName: "com.google.android.GoogleCamera",
+      source: "camera_service",
+      observedAt: new Date().toISOString(),
+      confidence: 0.99,
+      evidence: "camera_active",
+    },
+  ]);
+
+  let authCalls = 0;
+  const result = await runtime.runTask(
+    "finish pre-check human auth test",
+    undefined,
+    undefined,
+    async (request) => {
+      authCalls += 1;
+      assert.equal(request.capability, "camera");
+      return {
+        requestId: "req-finish-camera",
+        approved: true,
+        status: "approved",
+        message: "approved by test",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authCalls, 1);
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
+});
+
+test("AgentRuntime describes image artifact and pushes to device (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-image-${Date.now()}.jpg`);
   fs.writeFileSync(artifactFile, Buffer.from("fake-image-bytes"));
 
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
-      {
-        thought: "Need delegated camera capture",
-        action: {
-          type: "request_human_auth",
-          capability: "camera",
-          instruction: "Capture an image from real device camera.",
-          timeoutSec: 120,
-        },
-      },
+      { thought: "Need delegated camera capture", action: { type: "request_human_auth", capability: "camera", instruction: "Capture an image from real device camera.", timeoutSec: 120 } },
       { thought: "Continue with picker", action: { type: "finish", message: "Completed with delegated image" } },
     ],
-    hooks: {
-      captureUserPrompt: observedUserPrompts,
-    },
   });
 
-  runtime.adb = {
-    queryLaunchablePackages: () => [],
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async () => "ok",
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      emulatorCommands.push(args);
-      return "ok";
-    },
-  };
+  const pushCommands = [];
+  runtime.adb = { queryLaunchablePackages: () => [], captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "emulator-5554", executeAction: async () => "ok" };
+  runtime.emulator = { runAdb: (args) => { pushCommands.push(args); return "ok"; } };
 
   try {
-    const result = await runtime.runTask(
-      "delegated image template test",
-      undefined,
-      undefined,
-      async () => ({
-        requestId: "req-image",
-        approved: true,
-        status: "approved",
-        message: "Image captured",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
-      }),
+    const result = await runtime.runTask("delegated image template test", undefined, undefined,
+      async () => ({ requestId: "req-image", approved: true, status: "approved", message: "Image captured", decidedAt: new Date().toISOString(), artifactPath: artifactFile }),
     );
-
     assert.equal(result.ok, true);
-    assert.equal(
-      emulatorCommands.some((args) => Array.isArray(args) && args.includes("push") && args.includes(artifactFile)),
-      true,
-    );
-    assert.equal(
-      observedUserPrompts.some((text, index) => index > 0 && text.includes("delegation_template gallery_import_template")),
-      true,
-    );
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_path=/);
+    assert.match(sessionText, /device_path=.*sdcard.*Download/);
+    assert.match(sessionText, /pushed to Agent Phone/);
+    assert.equal(pushCommands.some((args) => Array.isArray(args) && args.includes("push")), true);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
