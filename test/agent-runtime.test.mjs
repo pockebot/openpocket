@@ -378,7 +378,7 @@ test("AgentRuntime prefers quick observation for post-action state delta when av
   assert.equal(screenCaptureCalls, 2);
 });
 
-test("AgentRuntime hides workspace tools for phone-style tasks", async () => {
+test("AgentRuntime keeps workspace tools available for phone-style tasks", async () => {
   let capturedToolNames = [];
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
@@ -398,9 +398,9 @@ test("AgentRuntime hides workspace tools for phone-style tasks", async () => {
 
   const result = await runtime.runTask("查询旧金山的天气");
   assert.equal(result.ok, true);
-  assert.equal(capturedToolNames.includes("read"), false);
-  assert.equal(capturedToolNames.includes("exec"), false);
-  assert.equal(capturedToolNames.includes("memory_search"), false);
+  assert.equal(capturedToolNames.includes("read"), true);
+  assert.equal(capturedToolNames.includes("exec"), true);
+  assert.equal(capturedToolNames.includes("memory_search"), true);
   assert.equal(capturedToolNames.includes("tap"), true);
   assert.equal(capturedToolNames.includes("finish"), true);
 });
@@ -479,7 +479,7 @@ test("AgentRuntime caps human-auth timeout to configured limit", async () => {
   assert.equal(observedTimeoutSec, runtime.config.humanAuth.requestTimeoutSec);
 });
 
-test("AgentRuntime exposes read tool for phone tasks when a matching skill exists", async () => {
+test("AgentRuntime still exposes workspace tools when a matching skill exists", async () => {
   let capturedToolNames = [];
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
@@ -508,7 +508,8 @@ test("AgentRuntime exposes read tool for phone tasks when a matching skill exist
   const result = await runtime.runTask("Open PayByPhone and continue nearest location flow");
   assert.equal(result.ok, true);
   assert.equal(capturedToolNames.includes("read"), true);
-  assert.equal(capturedToolNames.includes("exec"), false);
+  assert.equal(capturedToolNames.includes("exec"), true);
+  assert.equal(capturedToolNames.includes("memory_search"), true);
 });
 
 test("AgentRuntime supports none system prompt mode for constrained runs", async () => {

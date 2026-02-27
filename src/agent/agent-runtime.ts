@@ -3797,72 +3797,14 @@ export class AgentRuntime {
   }
 
   private shouldEnableWorkspaceToolsForTask(task: string): boolean {
-    const normalized = String(task || "").toLowerCase();
-    if (!normalized.trim()) {
+    const normalized = String(task || "").trim();
+    if (!normalized) {
       return false;
     }
-    const keywordHints = [
-      "code",
-      "coding",
-      "repo",
-      "repository",
-      "git",
-      "commit",
-      "branch",
-      "pull request",
-      "pr ",
-      "file",
-      "files",
-      "folder",
-      "directory",
-      "workspace",
-      "patch",
-      "apply_patch",
-      "read ",
-      "write ",
-      "edit ",
-      "grep",
-      "sed",
-      "awk",
-      "npm",
-      "pnpm",
-      "yarn",
-      "tsc",
-      "eslint",
-      "prettier",
-      "test",
-      "lint",
-      "build",
-      "script",
-      "shell command",
-      "terminal",
-      "agents.md",
-      "identity.md",
-      "user.md",
-      "tools.md",
-      "memory.md",
-      "代码",
-      "仓库",
-      "分支",
-      "提交",
-      "文件",
-      "目录",
-      "工作区",
-      "补丁",
-      "脚本",
-      "终端",
-      "命令行",
-      "读取",
-      "写入",
-      "编辑",
-      "搜索文件",
-      "构建",
-      "测试",
-      "格式化",
-      "记忆",
-      "历史记录",
-    ];
-    return keywordHints.some((hint) => normalized.includes(hint));
+    // Keep coding/workspace/memory tools available for all real tasks so
+    // the agent can decide autonomously whether it needs runtime probing,
+    // local scripting, or file-based tool composition.
+    return true;
   }
 
   private resolveToolMetasForTask(task: string, allowSkillRead = false): ToolMeta[] {

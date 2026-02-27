@@ -2067,8 +2067,9 @@ export class ChatAssistant {
       "Keep answers concise and practical.",
       "Users can talk naturally without command syntax.",
       "Assume operation requests are phone actions by default unless the user clearly asks for advice-only chat.",
+      "Treat questions about current runtime/device/app/environment/version/status as state-dependent and require executable verification.",
       "Do not expose internal file paths, session files, skills, or scripts in user-facing replies.",
-      "For requests that are not device automation tasks, answer directly in chat.",
+      "Only answer directly in chat when no external observation or execution is needed.",
     ].join("\n");
   }
 
@@ -2105,12 +2106,14 @@ export class ChatAssistant {
       "1.1) Treat operation as happening on phone by default.",
       "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
       "1.3) Question-like phrasing (e.g., 'can you ...? / 可以...吗？') must still be mode=task when it asks for executable outputs (create/write/build/run/install/open).",
-      "2) requiresExternalObservation=true when answering requires checking real-world/device/runtime/tool state.",
-      "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and general reasoning alone.",
+      "2) requiresExternalObservation=true when correctness depends on current real-world/device/runtime/tool state.",
+      "2.1) This includes requests about what is currently running, which device/environment/version/status is active, what is installed/connected/open right now, or any runtime fact that must be verified.",
+      "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and stable general knowledge alone.",
       "4) mode=chat only when canAnswerDirectly=true and no phone/tool execution is needed.",
       "5) If uncertain between chat and task, set confidence lower and prefer task semantics.",
       "6) task should be executable imperative sentence.",
       "7) for chat mode, reply should be concise.",
+      "8) If requiresExternalObservation=true, prefer mode=task.",
       `User message: ${inputText}`,
     ].join("\n");
 
@@ -2164,8 +2167,13 @@ export class ChatAssistant {
       "Rules:",
       "1) requiresExternalObservation=true when correctness depends on current real-world/device/runtime/tool state.",
       "2) requiresExternalObservation=true for requests that need phone actions, app inspection, script execution, log checking, or any state verification.",
+      "2.1) requiresExternalObservation=true for state-dependent factual questions about the current assistant instance (runtime environment, active device, app state, versions, connectivity, installed packages, process/log state).",
       "3) canAnswerDirectly=true only when answer is reliable from conversation context and stable general knowledge alone.",
       "4) If uncertain, choose requiresExternalObservation=true and lower confidence.",
+      "5) Examples:",
+      "- 'What Android version is the connected phone currently running?' => requiresExternalObservation=true",
+      "- 'Which app is open right now?' => requiresExternalObservation=true",
+      "- 'Explain what ADB is.' => requiresExternalObservation=false",
       "",
       "First-pass decision JSON:",
       JSON.stringify({
@@ -2245,15 +2253,6 @@ export class ChatAssistant {
         reason: `${reasonPrefix}executable_intent_task_bias`,
       };
     }
-    if (this.looksLikeCapabilityQuestionOnly(normalizedInput)) {
-      return {
-        mode: "chat",
-        task: "",
-        reply: decided.reply || "",
-        confidence: Math.max(0.75, decided.confidence),
-        reason: `${reasonPrefix}capability_only_chat`,
-      };
-    }
 
     const requiresExternalObservation =
       decided.requiresExternalObservation === true || decided.canAnswerDirectly === false;
@@ -2264,6 +2263,16 @@ export class ChatAssistant {
         reply: "",
         confidence: Math.max(0.8, decided.confidence),
         reason: `${reasonPrefix}requires_external_observation`,
+      };
+    }
+
+    if (this.looksLikeCapabilityQuestionOnly(normalizedInput)) {
+      return {
+        mode: "chat",
+        task: "",
+        reply: decided.reply || "",
+        confidence: Math.max(0.75, decided.confidence),
+        reason: `${reasonPrefix}capability_only_chat`,
       };
     }
 

@@ -187,6 +187,31 @@ test("ChatAssistant decide upgrades high-confidence chat to task when grounding 
   assert.match(out.reason, /requires_external_observation/);
 });
 
+test("ChatAssistant decide routes capability-style runtime introspection question to task when grounding audit requires observation", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.classifyWithModel = async () => ({
+    mode: "chat",
+    task: "",
+    reply: "I can answer this directly.",
+    confidence: 0.96,
+    reason: "model_classify",
+    requiresExternalObservation: false,
+    canAnswerDirectly: true,
+  });
+  assistant.auditGroundingNeed = async () => ({
+    requiresExternalObservation: true,
+    canAnswerDirectly: false,
+    confidence: 0.9,
+    reason: "runtime_state_requires_probe",
+  });
+
+  const input = "Can you tell me what Android version the connected device is currently running?";
+  const out = await assistant.decide(27, input);
+  assert.equal(out.mode, "task");
+  assert.equal(out.task, input);
+  assert.match(out.reason, /requires_external_observation/);
+});
+
 test("ChatAssistant decide reports missing API key without heuristics", async () => {
   await withTempCodexHome("openpocket-codex-empty-", async () => {
     const { assistant } = createAssistant();

@@ -102,6 +102,7 @@ export function buildSystemPrompt(
     return [
       "You are OpenPocket, an Android phone-use agent.",
       "Call exactly one tool step at a time.",
+      "For runtime/device/environment/status/version questions, gather evidence with available tools before answering.",
       "For Android in-emulator permission dialogs, approve locally with Allow and do not request human auth.",
       "If blocked by real-device authorization, use request_human_auth.",
       "For non-sensitive user-provided text required to continue (e.g., vehicle label/plate), use request_user_input.",
@@ -121,6 +122,7 @@ export function buildSystemPrompt(
       "- Call exactly one tool per step.",
       "- Pick the smallest deterministic action that progresses the task.",
       "- Workspace context (AGENTS/SOUL/USER/IDENTITY/TOOLS/MEMORY) is already injected in this prompt; treat startup checklist as satisfied and do not re-read those files unless user explicitly asks.",
+      "- For runtime/device/environment/status/version questions, verify with tools first; do not answer from assumptions.",
       "- For app-open tasks, first check whether the app is already installed/present; only go to Play Store if it is missing.",
       "- For Android in-emulator permission dialogs, tap Allow locally; do not call request_human_auth for these dialogs.",
       "- If blocked by sensitive checkpoints, call request_human_auth.",
@@ -167,6 +169,7 @@ export function buildSystemPrompt(
     "## Execution Policy",
     "- Prefer the smallest safe action that increases certainty.",
     "- Workspace context (AGENTS/SOUL/USER/IDENTITY/TOOLS/MEMORY) is already injected in this prompt; treat startup checklist as satisfied and do not re-read those files unless user explicitly asks.",
+    "- For runtime/device/environment/status/version questions, gather concrete evidence with tools before claiming results.",
     "- App-first policy: for requests to open/use an app, first verify app presence (launcher/app drawer/search).",
     "- If app is present, launch it directly; do not open web/Play Store first.",
     "- Only use Play Store install flow when app is confirmed missing.",
