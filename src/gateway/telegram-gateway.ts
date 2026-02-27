@@ -1221,22 +1221,60 @@ export class TelegramGateway {
     locale: "zh" | "en",
     progress: AgentProgressUpdate,
   ): string {
-    const action = String(progress.actionType || "unknown").trim();
+    const action = String(progress.actionType || "unknown").toLowerCase().trim();
     const app = String(progress.currentApp || "unknown").trim();
-    const thought = this.sanitizeForChat(
-      this.stripStepCounterTelemetry(String(progress.thought || progress.message || "").trim()),
-      320,
-    );
+    const appSuffix = app && app.toLowerCase() !== "unknown"
+      ? (locale === "zh" ? `（${app}）` : ` (${app})`)
+      : "";
+    const conciseDetail = this.sanitizeForChat(
+      this.stripStepCounterTelemetry(String(progress.thought || progress.message || ""))
+        .replace(/\[(?:goal|screen|next|intent|plan|observation|observed)\]\s*/gi, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .split(/(?:\s*[;；]\s*|\s+\|\s+|\s+[.。]\s+)/)[0] ?? "",
+      140,
+    ).trim();
+    const zhActionLineMap: Record<string, string> = {
+      launch_app: `我正在打开目标应用并确认页面状态${appSuffix}。`,
+      tap: `我正在执行界面操作并确认下一步入口${appSuffix}。`,
+      tap_element: `我正在点击关键控件并推进流程${appSuffix}。`,
+      swipe: `我正在浏览当前页面并定位目标区域${appSuffix}。`,
+      type_text: `我正在填写必要信息并继续流程${appSuffix}。`,
+      keyevent: `我正在执行系统导航操作${appSuffix}。`,
+      read: `我正在读取必要上下文并规划下一步${appSuffix}。`,
+      wait: `我正在等待页面加载完成${appSuffix}。`,
+      request_human_auth: `我已触发授权流程，等待你确认${appSuffix}。`,
+      request_user_input: "我正在等待你的补充信息后继续执行。",
+      request_user_decision: "我正在等待你的决策后继续执行。",
+      finish: `我正在整理执行结果${appSuffix}。`,
+    };
+    const enActionLineMap: Record<string, string> = {
+      launch_app: `Opening the target app and confirming the screen state${appSuffix}.`,
+      tap: `Performing a UI action and locating the next entry point${appSuffix}.`,
+      tap_element: `Tapping a key control to move the flow forward${appSuffix}.`,
+      swipe: `Scanning the current screen to locate the target area${appSuffix}.`,
+      type_text: `Filling required text and continuing the flow${appSuffix}.`,
+      keyevent: `Sending a system navigation input${appSuffix}.`,
+      read: `Reading required context before the next step${appSuffix}.`,
+      wait: `Waiting for the screen to finish loading${appSuffix}.`,
+      request_human_auth: `Human authorization is now required and waiting for your approval${appSuffix}.`,
+      request_user_input: "Waiting for your additional input before continuing.",
+      request_user_decision: "Waiting for your decision before continuing.",
+      finish: `Finalizing the task result${appSuffix}.`,
+    };
+    const actionLine = locale === "zh"
+      ? (zhActionLineMap[action] ?? `我正在执行任务第一步${appSuffix}。`)
+      : (enActionLineMap[action] ?? `Executing the first task step${appSuffix}.`);
     if (locale === "zh") {
-      if (thought) {
-        return `已开始执行任务：${task}\n${thought}`;
+      if (conciseDetail) {
+        return `已开始执行任务：${task}\n${actionLine}\n${conciseDetail}`;
       }
-      return `已开始执行任务：${task}\n当前动作：${action}（${app}）`;
+      return `已开始执行任务：${task}\n${actionLine}`;
     }
-    if (thought) {
-      return `Task started: ${task}\n${thought}`;
+    if (conciseDetail) {
+      return `Task started: ${task}\n${actionLine}\n${conciseDetail}`;
     }
-    return `Task started: ${task}\nCurrent action: ${action} (${app})`;
+    return `Task started: ${task}\n${actionLine}`;
   }
 
   private renderTaskQueuedMessage(position: number, locale: "zh" | "en"): string {

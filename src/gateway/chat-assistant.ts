@@ -2388,6 +2388,23 @@ export class ChatAssistant {
     return text;
   }
 
+  private cleanProgressSummaryForUser(raw: string, maxChars = 160): string {
+    const oneLine = this.normalizeOneLine(raw);
+    if (!oneLine) {
+      return "";
+    }
+    const stripped = oneLine
+      .replace(/\[(?:goal|screen|next|intent|plan|observation|observed)\]\s*/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!stripped) {
+      return "";
+    }
+    const firstClause = stripped.split(/(?:\s*[;；]\s*|\s+\|\s+|\s+[.。]\s+)/)[0]?.trim() ?? "";
+    const normalized = firstClause || stripped;
+    return this.trimForPrompt(normalized, maxChars);
+  }
+
   fallbackTaskProgressNarration(input: TaskProgressNarrationInput): TaskProgressNarrationDecision {
     const action = String(input.progress.actionType || "").toLowerCase();
     const message = String(input.progress.message || "");
@@ -2410,7 +2427,10 @@ export class ChatAssistant {
     }
 
     const app = this.trimForPrompt(input.progress.currentApp || "unknown", 120);
-    const summary = this.trimForPrompt(input.progress.thought || input.progress.message || "", 180);
+    const summary = this.cleanProgressSummaryForUser(
+      input.progress.thought || input.progress.message || "",
+      140,
+    );
     const messageText = input.locale === "zh"
       ? `小更新：我还在 ${app}，刚做了 ${input.progress.actionType}${summary ? `，${summary}` : ""}。`
       : `Quick update: still on ${app}, I just ran ${input.progress.actionType}${summary ? `, ${summary}` : ""}.`;

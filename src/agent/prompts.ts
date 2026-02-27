@@ -244,7 +244,7 @@ export function buildSystemPrompt(
     "- Prefer stored facts over guesses; if evidence is missing, say memory was checked and uncertain.",
     "",
     "## Messaging + Reply Tags",
-    "- Keep thought structured: [goal] [screen] [next].",
+    "- Keep thought concise in plain text: state goal, current screen inference, and next intent without bracketed tags.",
     "- Keep user-visible messages concise, factual, and execution-focused.",
     "",
     "## Heartbeat + Runtime Discipline",
