@@ -185,6 +185,12 @@ export const finishSchema = Type.Object({
   message: Type.String({ description: "Summary of what was accomplished." }),
 });
 
+export const generateImageSchema = Type.Object({
+  thought: ThoughtParam,
+  prompt: Type.String({ description: "Text description of the image to generate." }),
+  reason: ReasonParam,
+});
+
 // ---------------------------------------------------------------------------
 // Exported types (Static inference from TypeBox schemas)
 // ---------------------------------------------------------------------------
@@ -210,6 +216,7 @@ export type RequestUserDecisionParams = Static<typeof requestUserDecisionSchema>
 export type RequestUserInputParams = Static<typeof requestUserInputSchema>;
 export type WaitParams = Static<typeof waitSchema>;
 export type FinishParams = Static<typeof finishSchema>;
+export type GenerateImageParams = Static<typeof generateImageSchema>;
 
 // ---------------------------------------------------------------------------
 // Tool metadata list (name, description, schema) — used to build AgentTool[]
@@ -243,6 +250,7 @@ export const TOOL_METAS: ToolMeta[] = [
   { name: "request_user_input", description: "Ask user for a short non-sensitive text input needed to continue the task.", parameters: requestUserInputSchema },
   { name: "wait", description: "Wait / do nothing for a short period, e.g. while content is loading.", parameters: waitSchema },
   { name: "finish", description: "Signal that the user task is complete.", parameters: finishSchema },
+  { name: "generate_image", description: "Generate an image from text description using an image generation service.", parameters: generateImageSchema },
 ];
 
 // ---------------------------------------------------------------------------

@@ -271,6 +271,14 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "generate_image") {
+    return {
+      type,
+      prompt: String(input.prompt ?? ""),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "wait") {
     return {
       type,

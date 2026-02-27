@@ -225,6 +225,10 @@ export interface ModelProfile {
   maxTokens: number;
   reasoningEffort: "low" | "medium" | "high" | "xhigh" | null;
   temperature: number | null;
+  /** Optional: Override the API type (e.g., "openai-responses", "openai-completions") */
+  api?: string;
+  /** Optional: Override the provider (e.g., "openai", "openai-codex") */
+  provider?: string;
 }
 
 export interface OpenPocketConfig {
@@ -245,6 +249,7 @@ export interface OpenPocketConfig {
   cron: CronConfig;
   dashboard: DashboardConfig;
   humanAuth: HumanAuthConfig;
+  imageGeneration: ImageGenerationConfig;
   models: Record<string, ModelProfile>;
   configPath: string;
 }
@@ -382,7 +387,8 @@ export type AgentAction =
       reason?: string;
     }
   | { type: "wait"; durationMs?: number; reason?: string }
-  | { type: "finish"; message: string };
+  | { type: "finish"; message: string }
+  | { type: "generate_image"; prompt: string; reason?: string };
 
 export interface ModelStepOutput {
   thought: string;
@@ -414,6 +420,14 @@ export interface SkillInfo {
   description: string;
   source: "workspace" | "local" | "bundled";
   path: string;
+}
+
+export interface ImageGenerationConfig {
+  enabled: boolean;
+  provider: "fal" | "replicate" | "huggingface";
+  apiKey: string;
+  apiKeyEnv: string;
+  model?: string;
 }
 
 export interface CronJob {

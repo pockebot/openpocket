@@ -879,6 +879,9 @@ export class AdbRuntime {
       case "finish": {
         return `Finish: ${action.message}`;
       }
+      case "generate_image": {
+        return "generate_image is handled by AgentRuntime image generation service.";
+      }
       default: {
         const exhaust: never = action;
         return `Unknown action: ${JSON.stringify(exhaust)}`;
