@@ -28,7 +28,7 @@ test("SkillLoader loads workspace skills", () => {
   assert.match(summary, /location="/);
 });
 
-test("SkillLoader matches skills for task while keeping body out of prompt context", () => {
+test("SkillLoader matches skills and injects active skill content into prompt context", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-active-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -57,8 +57,8 @@ test("SkillLoader matches skills for task while keeping body out of prompt conte
 
   assert.match(context.summaryText, /PayByPhone Nearest Flow/);
   assert.equal(context.activeEntries.length > 0, true);
-  assert.equal(context.activePromptText, "");
-  assert.equal(context.activePromptChars, 0);
+  assert.match(context.activePromptText, /active_skill/);
+  assert.equal(context.activePromptChars > 0, true);
 });
 
 test("SkillLoader supports SKILL.md directory layout and metadata gating", () => {

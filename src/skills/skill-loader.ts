@@ -663,7 +663,25 @@ export class SkillLoader {
       });
     }
 
-    const activePromptText = "";
+    const activeBlocks: string[] = [];
+    for (const entry of activeEntries) {
+      const matchedSkill = scored.find((item) => item.skill.id === entry.skill.id);
+      if (!matchedSkill) {
+        continue;
+      }
+      let block = matchedSkill.skill.content;
+      if (block.length > entry.contentChars) {
+        block = block.slice(0, entry.contentChars).trimEnd() + "\n[...truncated]";
+      }
+      const safeName = entry.skill.name.replace(/"/g, "'");
+      const safeReason = (entry.reason || "").replace(/"/g, "'");
+      activeBlocks.push(
+        `<active_skill name="${safeName}" source="${entry.skill.source}" score="${entry.score}" reason="${safeReason}">\n${block}\n</active_skill>`,
+      );
+    }
+    const activePromptText = activeBlocks.length > 0
+      ? activeBlocks.join("\n\n")
+      : "";
 
     return {
       summaryText,

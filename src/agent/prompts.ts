@@ -148,6 +148,11 @@ export function buildSystemPrompt(
       "<available_skills>",
       trimmedSkills,
       "</available_skills>",
+      ...(options?.activeSkillsText?.trim() ? [
+        "",
+        "## Active Skills (auto-loaded)",
+        options.activeSkillsText.trim(),
+      ] : []),
       trimmedWorkspaceContext
         ? [
           "",
@@ -254,10 +259,14 @@ export function buildSystemPrompt(
     "- Write thought and all text fields in English.",
     "",
     "## Skill Selection Protocol (mandatory)",
-    "- Check <available_skills> before acting.",
-    "- The index only contains metadata, not full instructions.",
-    "- If one skill seems relevant, call read with its location path first, then follow SKILL.md guidance.",
-    "- If multiple skills match, read the narrowest one for current sub-goal first.",
+    "- Active Skills (if present in prompt) are pre-loaded — use them directly without calling read().",
+    "- For other skills in <available_skills>, call read(location) to load full content before applying.",
+    "",
+    "## Experience Replay (when active skill has ui_target data)",
+    "- If the active skill's Procedure contains `ui_target` entries with resourceId/text/class, match them against the current UI candidates list.",
+    "- When a ui_target matches a visible UI element, you can use tap_element directly without needing visual analysis of the screenshot.",
+    "- This significantly speeds up known workflows — prefer UI tree matching over screenshot analysis when a skill provides ui_target data.",
+    "- If no ui_target match is found, fall back to normal screenshot-based reasoning.",
     "",
     "## Memory Recall Protocol",
     "- Before answering prior-work/decision/date/preference/todo questions, run memory_search on MEMORY.md + memory/*.md.",
@@ -283,6 +292,12 @@ export function buildSystemPrompt(
     "<available_skills>",
     trimmedSkills,
     "</available_skills>",
+    ...(options?.activeSkillsText?.trim() ? [
+      "",
+      "## Active Skills (auto-loaded — no need to read() these)",
+      "The following skills matched this task and are loaded in full. Follow their guidance directly without calling read().",
+      options.activeSkillsText.trim(),
+    ] : []),
     trimmedWorkspaceContext
       ? [
         "",

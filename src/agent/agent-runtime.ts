@@ -244,6 +244,9 @@ type DelegatedPaymentField = {
 type ResolvedTapElementContext = {
   id: string;
   label: string;
+  text: string;
+  contentDesc: string;
+  resourceId: string;
   className: string;
   clickable: boolean;
   center: { x: number; y: number };
@@ -1196,6 +1199,9 @@ export class AgentRuntime {
     this.lastResolvedTapElementContext = {
       id: target.id,
       label,
+      text: target.text,
+      contentDesc: target.contentDesc,
+      resourceId: target.resourceId,
       className: target.className,
       clickable: target.clickable,
       center: target.center,
@@ -2409,6 +2415,22 @@ export class AgentRuntime {
             return trace;
           };
 
+          const buildTraceUiContext = (): import("../skills/auto-artifact-builder.js").StepTraceUiContext | undefined => {
+            const m = runtime.lastResolvedTapElementContext;
+            if (!m) {
+              return undefined;
+            }
+            return {
+              elementId: m.id,
+              label: m.label,
+              resourceId: m.resourceId || undefined,
+              text: m.text || undefined,
+              contentDesc: m.contentDesc || undefined,
+              className: m.className,
+              clickable: m.clickable,
+            };
+          };
+
           if (!snapshot && action.type !== "finish") {
             const msg = "No screen snapshot available for tool execution.";
             ctx.failMessage = msg;
@@ -2761,7 +2783,7 @@ export class AgentRuntime {
               /action execution error:/i.test(executionResult) ? "error" : "ok",
             ),
           );
-          ctx.traces.push({ step, action, result: stepResult, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+          ctx.traces.push({ step, action, result: stepResult, thought, currentApp: snapshot?.currentApp ?? "unknown", uiContext: buildTraceUiContext() });
           ctx.history.push(`step ${step}: app=${snapshot?.currentApp ?? "unknown"} action=${action.type} result=${executionResult}`);
 
           if (runtime.config.agent.verbose) {

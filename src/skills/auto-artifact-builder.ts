@@ -5,12 +5,23 @@ import path from "node:path";
 import type { AgentAction, OpenPocketConfig } from "../types.js";
 import { ensureDir, nowForFilename } from "../utils/paths.js";
 
+export interface StepTraceUiContext {
+  elementId?: string;
+  label?: string;
+  resourceId?: string;
+  text?: string;
+  contentDesc?: string;
+  className?: string;
+  clickable?: boolean;
+}
+
 export interface StepTrace {
   step: number;
   action: AgentAction;
   result: string;
   thought: string;
   currentApp: string;
+  uiContext?: StepTraceUiContext;
 }
 
 function slugify(input: string): string {
@@ -196,8 +207,19 @@ export class AutoArtifactBuilder {
         const stepLine = `${index + 1}. ${actionSummary(trace.action)} (app=${trace.currentApp || "unknown"})`;
         const thought = compactText(trace.thought, 160);
         const result = compactText(trace.result, 180);
+        const ui = trace.uiContext;
+        const uiLine = ui
+          ? `   - ui_target: ${[
+              ui.text ? `text="${ui.text}"` : "",
+              ui.resourceId ? `resourceId="${ui.resourceId}"` : "",
+              ui.contentDesc ? `contentDesc="${ui.contentDesc}"` : "",
+              ui.className ? `class=${ui.className}` : "",
+              ui.clickable !== undefined ? `clickable=${ui.clickable}` : "",
+            ].filter(Boolean).join(" ")}`
+          : "";
         const details = [
           thought ? `   - intent: ${thought}` : "",
+          uiLine || "",
           result ? `   - observed: ${result}` : "",
         ].filter(Boolean);
         return [stepLine, ...details].join("\n");

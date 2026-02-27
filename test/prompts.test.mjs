@@ -42,14 +42,15 @@ test("buildSystemPrompt includes workspace context when provided", () => {
   assert.match(prompt, /AGENTS\.md/);
 });
 
-test("buildSystemPrompt keeps available-skills index when activeSkillsText is provided", () => {
+test("buildSystemPrompt injects active skills content when activeSkillsText is provided", () => {
   const prompt = buildSystemPrompt("- skill-a", "", {
     mode: "full",
-    activeSkillsText: "### [workspace] Skill A\nReason: explicit id match\nPath: /tmp/skill-a.md\n# SKILL BODY",
+    activeSkillsText: "<active_skill name=\"Skill A\" source=\"workspace\" score=\"120\" reason=\"explicit id match\">\n# SKILL BODY\n</active_skill>",
   });
   assert.match(prompt, /<available_skills>/);
-  assert.match(prompt, /Use read\(location\) to load full SKILL.md/i);
-  assert.doesNotMatch(prompt, /SKILL BODY/);
+  assert.match(prompt, /Active Skills/);
+  assert.match(prompt, /SKILL BODY/);
+  assert.match(prompt, /no need to read\(\)/i);
 });
 
 test("buildSystemPrompt supports minimal mode", () => {
