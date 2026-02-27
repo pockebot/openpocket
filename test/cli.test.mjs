@@ -575,6 +575,87 @@ test("target set rejects invalid wakeup interval", () => {
   assert.match(run.stderr, /1-3600/i);
 });
 
+test("target pair validates required host/port/code in non-interactive mode", () => {
+  const home = makeHome("openpocket-ts-target-pair-required-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "pair",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /Missing host|pair-endpoint/i);
+});
+
+test("target pair dry-run updates target adb endpoint and preferred device", () => {
+  const home = makeHome("openpocket-ts-target-pair-dry-run-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "pair",
+      "--host",
+      "192.168.10.88",
+      "--pair-port",
+      "37099",
+      "--connect-port",
+      "5555",
+      "--code",
+      "123456",
+      "--type",
+      "android-tv",
+      "--dry-run",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.match(run.stdout, /ADB pairing flow completed/i);
+  assert.match(run.stdout, /dry-run/i);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "android-tv");
+  assert.equal(cfg.target.adbEndpoint, "192.168.10.88:5555");
+  assert.equal(cfg.agent.deviceId, "192.168.10.88:5555");
+});
+
+test("target pair rejects unsupported target type", () => {
+  const home = makeHome("openpocket-ts-target-pair-type-invalid-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "pair",
+      "--host",
+      "192.168.10.88",
+      "--pair-port",
+      "37099",
+      "--code",
+      "123456",
+      "--type",
+      "emulator",
+      "--dry-run",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /physical-phone \| android-tv/i);
+});
+
 test("test permission-app task prints recommended telegram flow", () => {
   const run = runCli(["test", "permission-app", "task"]);
   assert.equal(run.status, 0, run.stderr || run.stdout);

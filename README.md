@@ -130,6 +130,18 @@ adb connect <phone-ip>:5555
 openpocket target set --type physical-phone --adb-endpoint <phone-ip>:5555
 ```
 
+Or use the built-in pairing wrapper (no manual adb commands):
+
+```bash
+openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type physical-phone
+```
+
+For Google Streamer / Android TV:
+
+```bash
+openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type android-tv
+```
+
 Notes:
 
 - Keep phone unlocked during first pairing/authorization.

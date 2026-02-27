@@ -89,6 +89,7 @@ Usage:
   openpocket [--config <path>] config-show
   openpocket [--config <path>] target show
   openpocket [--config <path>] target set|set-target|config --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
+  openpocket [--config <path>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
   openpocket [--config <path>] emulator status
   openpocket [--config <path>] emulator start
   openpocket [--config <path>] emulator stop
@@ -121,6 +122,7 @@ Examples:
   openpocket target set --wakeup-interval 3
   openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
   openpocket target set --type physical-phone --device R5CX123456A --pin 1234
+  openpocket target pair --host 192.168.1.66 --pair-port 37099 --code 123456 --type android-tv
   openpocket emulator start
   openpocket emulator tap --x 120 --y 300
   openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
@@ -414,6 +416,11 @@ type ConnectedTargetDevice = {
   endpoint: string | null;
 };
 
+type HostAndPort = {
+  host: string;
+  port: number;
+};
+
 function adbDeviceProp(
   emulator: EmulatorManager,
   deviceId: string,
@@ -545,11 +552,204 @@ async function chooseTargetDeviceId(
   }
 }
 
+function normalizePort(raw: string, optionName: string): number {
+  const value = Number(raw.trim());
+  if (!Number.isFinite(value)) {
+    throw new Error(`${optionName} expects a numeric TCP port.`);
+  }
+  const port = Math.round(value);
+  if (port < 1 || port > 65535) {
+    throw new Error(`${optionName} must be between 1 and 65535.`);
+  }
+  return port;
+}
+
+function parseHostAndPort(raw: string, optionName: string): HostAndPort {
+  const value = String(raw ?? "").trim();
+  if (!value) {
+    throw new Error(`${optionName} cannot be empty.`);
+  }
+
+  const ipv6 = value.match(/^\[([^\]]+)\]:(\d+)$/);
+  if (ipv6?.[1] && ipv6[2]) {
+    return {
+      host: ipv6[1],
+      port: normalizePort(ipv6[2], optionName),
+    };
+  }
+
+  const index = value.lastIndexOf(":");
+  if (index <= 0 || index === value.length - 1) {
+    throw new Error(`${optionName} must be in host:port format.`);
+  }
+  const host = value.slice(0, index).trim();
+  const portRaw = value.slice(index + 1).trim();
+  if (!host) {
+    throw new Error(`${optionName} host is empty.`);
+  }
+  return {
+    host,
+    port: normalizePort(portRaw, optionName),
+  };
+}
+
+function normalizeHost(raw: string, optionName: string): string {
+  const host = raw.trim();
+  if (!host) {
+    throw new Error(`${optionName} cannot be empty.`);
+  }
+  if (/\s/.test(host)) {
+    throw new Error(`${optionName} cannot include spaces.`);
+  }
+  return host;
+}
+
+async function promptTextInput(
+  rl: Interface,
+  message: string,
+  initialValue = "",
+  required = false,
+): Promise<string> {
+  while (true) {
+    const suffix = initialValue.trim() ? ` [${initialValue.trim()}]` : "";
+    const answer = String(
+      await rl.question(
+        `${cliTheme.paint("[INPUT]", "warn")} ${message}${suffix}: `,
+      ),
+    ).trim();
+    const value = answer || initialValue.trim();
+    if (!required || value) {
+      return value;
+    }
+    printWarn("Input cannot be empty.");
+  }
+}
+
+async function runTargetPairCommand(configPath: string | undefined, args: string[]): Promise<number> {
+  ensureGatewayStoppedForTargetSwitch();
+
+  const dryRun = args.includes("--dry-run");
+  const withoutDryRun = args.filter((item) => item !== "--dry-run");
+  const { value: pairEndpointRaw, rest: afterPairEndpoint } = takeOption(withoutDryRun, "--pair-endpoint");
+  const { value: connectEndpointRaw, rest: afterConnectEndpoint } = takeOption(afterPairEndpoint, "--connect-endpoint");
+  const { value: hostRaw, rest: afterHost } = takeOption(afterConnectEndpoint, "--host");
+  const { value: pairPortRaw, rest: afterPairPort } = takeOption(afterHost, "--pair-port");
+  const { value: connectPortRaw, rest: afterConnectPort } = takeOption(afterPairPort, "--connect-port");
+  const { value: codeRaw, rest: afterCode } = takeOption(afterConnectPort, "--code");
+  const { value: typeRaw, rest: afterType } = takeOption(afterCode, "--type");
+  const { value: deviceRaw, rest } = takeOption(afterType, "--device");
+  if (rest.length > 0) {
+    throw new Error(`Unexpected target pair arguments: ${rest.join(" ")}`);
+  }
+
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  let host = hostRaw ? normalizeHost(hostRaw, "--host") : "";
+  let pairingPort = pairPortRaw ? normalizePort(pairPortRaw, "--pair-port") : 0;
+  let connectPort = connectPortRaw ? normalizePort(connectPortRaw, "--connect-port") : 5555;
+  let code = String(codeRaw ?? "").trim();
+
+  if (pairEndpointRaw !== null) {
+    const parsed = parseHostAndPort(pairEndpointRaw, "--pair-endpoint");
+    host = parsed.host;
+    pairingPort = parsed.port;
+  }
+  if (connectEndpointRaw !== null) {
+    const parsed = parseHostAndPort(connectEndpointRaw, "--connect-endpoint");
+    host = parsed.host;
+    connectPort = parsed.port;
+  }
+
+  if ((!host || !pairingPort || !code) && interactive) {
+    const rl = createInterface({ input, output });
+    try {
+      if (!host) {
+        host = normalizeHost(
+          await promptTextInput(rl, "ADB host/IP (for example 192.168.1.25)", "", true),
+          "--host",
+        );
+      }
+      if (!pairingPort) {
+        pairingPort = normalizePort(
+          await promptTextInput(rl, "ADB pairing port from TV/phone (for example 37099)", "", true),
+          "--pair-port",
+        );
+      }
+      connectPort = normalizePort(
+        await promptTextInput(rl, "ADB connect port", String(connectPort || 5555), true),
+        "--connect-port",
+      );
+      if (!code) {
+        code = await promptTextInput(rl, "Pairing code", "", true);
+      }
+    } finally {
+      rl.close();
+    }
+  }
+
+  if (!host) {
+    throw new Error("Missing host. Use --host <ip> or --pair-endpoint <host:port>.");
+  }
+  if (!pairingPort) {
+    throw new Error("Missing pairing port. Use --pair-port <port> or --pair-endpoint <host:port>.");
+  }
+  if (!code) {
+    throw new Error("Missing pairing code. Use --code <code>.");
+  }
+
+  const cfg = loadConfig(configPath);
+  if (typeRaw !== null) {
+    const normalized = normalizeDeviceTargetType(typeRaw);
+    if (normalized !== "physical-phone" && normalized !== "android-tv") {
+      throw new Error("target pair --type only supports: physical-phone | android-tv");
+    }
+    cfg.target.type = normalized;
+  } else if (cfg.target.type !== "physical-phone" && cfg.target.type !== "android-tv") {
+    cfg.target.type = "physical-phone";
+  }
+
+  const pairEndpoint = `${host}:${pairingPort}`;
+  const connectEndpoint = `${host}:${connectPort}`;
+  const runtimeConfig = JSON.parse(JSON.stringify(cfg)) as OpenPocketConfig;
+  const emulator = new EmulatorManager(runtimeConfig);
+
+  if (dryRun) {
+    printWarn(`[dry-run] skip: adb pair ${pairEndpoint} <code>`);
+    printWarn(`[dry-run] skip: adb connect ${connectEndpoint}`);
+  } else {
+    printInfo(`Pairing with ${pairEndpoint}...`);
+    const pairOutput = emulator.runAdb(["pair", pairEndpoint, code], 20_000).trim();
+    printInfo(pairOutput || "adb pair completed.");
+    printInfo(`Connecting to ${connectEndpoint}...`);
+    const connectOutput = emulator.runAdb(["connect", connectEndpoint], 20_000).trim();
+    printInfo(connectOutput || "adb connect completed.");
+  }
+
+  cfg.target.adbEndpoint = connectEndpoint;
+  if (deviceRaw !== null) {
+    const normalized = deviceRaw.trim().toLowerCase();
+    if (!normalized || normalized === "auto") {
+      cfg.agent.deviceId = null;
+    } else {
+      cfg.agent.deviceId = deviceRaw.trim();
+    }
+  } else {
+    cfg.agent.deviceId = connectEndpoint;
+  }
+  saveConfig(cfg);
+
+  printSuccess("ADB pairing flow completed.");
+  printTargetSummary(cfg);
+  return 0;
+}
+
 async function runTargetCommand(configPath: string | undefined, args: string[]): Promise<number> {
   const rawSub = (args[0] ?? "show").trim();
   const sub = rawSub === "set-target" || rawSub === "config" ? "set" : rawSub;
+  if (rawSub === "pair") {
+    return runTargetPairCommand(configPath, args.slice(1));
+  }
   if (sub !== "show" && sub !== "set") {
-    throw new Error(`Unknown target subcommand: ${rawSub}. Use: target show|set|set-target|config`);
+    throw new Error(`Unknown target subcommand: ${rawSub}. Use: target show|set|set-target|config|pair`);
   }
 
   const cfg = loadConfig(configPath);
