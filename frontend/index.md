@@ -7,6 +7,14 @@ titleTemplate: false
 
 <script setup>
 import { withBase } from "vitepress";
+
+function onVideoEnd(e) {
+  const video = e.target;
+  setTimeout(() => {
+    video.currentTime = 0;
+    video.play();
+  }, 600);
+}
 </script>
 
 <div class="op-landing">
@@ -36,7 +44,7 @@ import { withBase } from "vitepress";
     </div>
   </div>
   <div class="op-hero-right">
-    <video autoplay loop muted playsinline :src="withBase('/openpocket.mp4')"></video>
+    <video autoplay muted playsinline preload="auto" :src="withBase('/hamster-cover.mp4') + '?v=2'" @ended="onVideoEnd"></video>
   </div>
 </section>
 
@@ -57,7 +65,11 @@ import { withBase } from "vitepress";
       <p>All sessions and memory stay visible and local. Your data, your rules.</p>
     </div>
   </div>
-  <p class="op-section-desc"><img class="op-desc-logo" :src="withBase('/openpocket-logo.png')" alt="" /><span class="op-desc-brand">OpenPocket</span> helps users automate real mobile app tasks, <span class="op-underline-dotted">without</span> sending execution control to a cloud phone runtime.</p>
+</section>
+
+<!-- OpenPocket Tagline -->
+<section class="op-tagline">
+  <p class="op-section-desc"><img class="op-desc-logo" :src="withBase('/openpocket-logo.png')" alt="" /><span class="op-desc-brand">OpenPocket</span> helps users automate real mobile app tasks,<br/><span class="op-underline-dotted">without</span> sending execution control to a cloud phone runtime.</p>
 </section>
 
 <!-- Use Cases -->
@@ -65,18 +77,18 @@ import { withBase } from "vitepress";
   <p class="op-section-label">Use Cases</p>
   <div class="op-usecases-scroll-wrap">
     <div class="op-usecases-track">
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-shopping.png')" alt="Shopping" /><span>Shopping</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-social.png')" alt="Social Workflows" /><span>Social Workflows</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-entertainment.png')" alt="Entertainment" /><span>Entertainment</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-andmore.png')" alt="And More" /><span>And More</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-shopping.png')" alt="Shopping" /><span>Shopping</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-social.png')" alt="Social Workflows" /><span>Social Workflows</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-entertainment.png')" alt="Entertainment" /><span>Entertainment</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-andmore.png')" alt="And More" /><span>And More</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-shopping.png')" alt="Shopping" /><span>Shopping</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-social.png')" alt="Social Workflows" /><span>Social Workflows</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-entertainment.png')" alt="Entertainment" /><span>Entertainment</span></div>
-      <div class="op-usecase-card"><img class="op-usecase-icon" :src="withBase('/usecase-andmore.png')" alt="And More" /><span>And More</span></div>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-shopping.png')" alt="Shopping" /><span>Shopping</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-social.png')" alt="Social" /><span>Social</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-entertainment.png')" alt="Entertainment" /><span>Entertainment</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-andmore.png')" alt="And More" /><span>And More</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-shopping.png')" alt="Shopping" /><span>Shopping</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-social.png')" alt="Social" /><span>Social</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-entertainment.png')" alt="Entertainment" /><span>Entertainment</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-andmore.png')" alt="And More" /><span>And More</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-shopping.png')" alt="Shopping" /><span>Shopping</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-social.png')" alt="Social" /><span>Social</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-entertainment.png')" alt="Entertainment" /><span>Entertainment</span></a>
+      <a class="op-usecase-card" :href="withBase('/concepts/project-blueprint') + '#user-scenarios'"><img class="op-usecase-icon" :src="withBase('/usecase-andmore.png')" alt="And More" /><span>And More</span></a>
     </div>
     <div class="op-usecases-fade-l"></div>
     <div class="op-usecases-fade-r"></div>
@@ -113,27 +125,32 @@ import { withBase } from "vitepress";
 
 <!-- Architecture -->
 <section class="op-arch">
-  <p class="op-section-label">Architecture</p>
-  <div class="op-arch-simple op-arch-group">
-    <div class="op-arch-flow">
-      <div class="op-arch-node op-arch-node--gray">User</div>
-      <span class="op-arch-arrow">→</span>
-      <div class="op-arch-node op-arch-node--blue">Gateway</div>
-      <span class="op-arch-arrow">→</span>
-      <div class="op-arch-node op-arch-node--orange">Agent Runtime</div>
-      <span class="op-arch-arrow">→</span>
-      <div class="op-arch-node op-arch-node--blue">ADB Runtime</div>
-      <span class="op-arch-arrow">→</span>
-      <div class="op-arch-node op-arch-node--gray">Android Emulator</div>
+  <p class="op-section-label">Architecture Behind OpenPocket</p>
+  <div class="op-arch-with-video">
+    <div class="op-arch-simple op-arch-group">
+      <div class="op-arch-flow op-arch-flow--vertical">
+        <div class="op-arch-node op-arch-node--gray">User</div>
+        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
+        <div class="op-arch-node op-arch-node--blue">Gateway</div>
+        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
+        <div class="op-arch-node op-arch-node--orange">Agent Runtime</div>
+        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
+        <div class="op-arch-node op-arch-node--blue">ADB Runtime</div>
+        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
+        <div class="op-arch-node op-arch-node--gray">Android Emulator</div>
+      </div>
+      <div class="op-arch-flow op-arch-flow--branch op-arch-flow--vertical">
+        <div class="op-arch-node op-arch-node--blue">Gateway</div>
+        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
+        <div class="op-arch-node op-arch-node--blue">Auth Relay</div>
+        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
+        <div class="op-arch-node op-arch-node--orange">Agent Runtime</div>
+        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
+        <div class="op-arch-node op-arch-node--gray">User Interface</div>
+      </div>
     </div>
-    <div class="op-arch-flow op-arch-flow--branch">
-      <div class="op-arch-node op-arch-node--blue op-arch-node--compact">Gateway</div>
-      <span class="op-arch-arrow">→</span>
-      <div class="op-arch-node op-arch-node--blue op-arch-node--compact">Auth Relay</div>
-      <span class="op-arch-arrow">←</span>
-      <div class="op-arch-node op-arch-node--orange op-arch-node--compact">Agent Runtime</div>
-      <span class="op-arch-arrow">↔</span>
-      <div class="op-arch-node op-arch-node--gray op-arch-node--compact">User Interface</div>
+    <div class="op-arch-video">
+      <video autoplay muted playsinline :src="withBase('/hamster-architecture.mp4')" @ended="onVideoEnd"></video>
     </div>
   </div>
 </section>
