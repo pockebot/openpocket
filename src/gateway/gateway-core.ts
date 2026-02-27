@@ -409,9 +409,10 @@ export class GatewayCore {
     const adapter = this.router.getAdapter(envelope.channelType);
     if (adapter && !adapter.isAllowed(envelope.senderId)) {
       const dmPolicy = this.resolveDmPolicy(envelope.channelType);
+      const allowFrom = this.resolveAllowFrom(envelope.channelType);
       const result = evaluateDmPolicy(envelope.senderId, envelope.senderName, {
         policy: dmPolicy,
-        allowFrom: [],
+        allowFrom,
         pairingStore: this.pairingStore,
         channelType: envelope.channelType,
       });
@@ -869,8 +870,25 @@ export class GatewayCore {
     return `${oneLine.slice(0, Math.max(0, maxChars - 3))}...`;
   }
 
+  private getChannelConfig(channelType: import("../channel/types.js").ChannelType): { dmPolicy?: DmPolicy; allowFrom?: string[] } | undefined {
+    const channels = this.config.channels;
+    if (!channels) return undefined;
+    switch (channelType) {
+      case "telegram": return channels.telegram;
+      case "discord": return channels.discord;
+      case "whatsapp": return channels.whatsapp;
+      default: return undefined;
+    }
+  }
+
   private resolveDmPolicy(channelType: import("../channel/types.js").ChannelType): DmPolicy {
-    // Future: read from channels config. For now default to "allowlist" for backward compat.
+    const cfg = this.getChannelConfig(channelType);
+    if (cfg?.dmPolicy) return cfg.dmPolicy;
+    if (this.config.channels?.defaults?.dmPolicy) return this.config.channels.defaults.dmPolicy;
     return "allowlist";
+  }
+
+  private resolveAllowFrom(channelType: import("../channel/types.js").ChannelType): string[] {
+    return this.getChannelConfig(channelType)?.allowFrom ?? [];
   }
 }

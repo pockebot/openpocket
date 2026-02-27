@@ -325,6 +325,8 @@ export interface WhatsAppChannelConfig {
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   sendReadReceipts?: boolean;
+  /** HTTP/SOCKS proxy URL for Baileys WebSocket connection (e.g. "http://127.0.0.1:7897") */
+  proxyUrl?: string;
 }
 
 export interface ChannelsConfig {

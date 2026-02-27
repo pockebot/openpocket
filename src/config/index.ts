@@ -838,6 +838,12 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       },
     },
     models,
+    ...(merged.channels
+      ? { channels: merged.channels as import("../channel/types.js").ChannelsConfig }
+      : {}),
+    ...(merged.pairing
+      ? { pairing: merged.pairing as import("../channel/types.js").PairingConfig }
+      : {}),
     configPath,
   };
 

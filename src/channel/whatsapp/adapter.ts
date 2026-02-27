@@ -1,5 +1,7 @@
 import makeWASocket, {
+  Browsers,
   DisconnectReason,
+  fetchLatestWaWebVersion,
   useMultiFileAuthState,
   type WASocket,
   type WAMessage,
@@ -8,6 +10,7 @@ import makeWASocket, {
 import { Boom } from "@hapi/boom";
 import fs from "node:fs";
 import path from "node:path";
+import pino from "pino";
 
 import type {
   OpenPocketConfig,
@@ -262,10 +265,34 @@ export class WhatsAppAdapter implements ChannelAdapter {
     fs.mkdirSync(this.authDir, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
 
-    const sock = makeWASocket({
+    let waVersion: [number, number, number] | undefined;
+    try {
+      const { version } = await fetchLatestWaWebVersion({});
+      waVersion = version;
+      this.log(`using WA Web version: ${version.join(".")}`);
+    } catch {
+      this.log("could not fetch latest WA version, using default");
+    }
+
+    const socketOpts: any = {
       auth: state,
-      browser: ["OpenPocket", "Desktop", "1.0.0"],
-    });
+      browser: Browsers.macOS("Chrome"),
+      logger: pino({ level: "silent" }),
+      ...(waVersion ? { version: waVersion } : {}),
+    };
+
+    const proxyUrl = this.resolveProxyUrl();
+    if (proxyUrl) {
+      try {
+        const { HttpsProxyAgent } = await import("https-proxy-agent");
+        socketOpts.agent = new HttpsProxyAgent(proxyUrl);
+        this.log(`using proxy: ${proxyUrl}`);
+      } catch {
+        this.log("https-proxy-agent not available, connecting directly");
+      }
+    }
+
+    const sock = makeWASocket(socketOpts);
 
     this.sock = sock;
 
@@ -281,17 +308,28 @@ export class WhatsAppAdapter implements ChannelAdapter {
     this.log("whatsapp connecting...");
   }
 
+  private resolveProxyUrl(): string | null {
+    if (this.waConfig.proxyUrl) return this.waConfig.proxyUrl;
+    return process.env.HTTPS_PROXY || process.env.https_proxy
+      || process.env.HTTP_PROXY || process.env.http_proxy
+      || process.env.ALL_PROXY || process.env.all_proxy
+      || null;
+  }
+
   private async handleConnectionUpdate(update: Partial<ConnectionState>): Promise<void> {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr && !this.qrDisplayed) {
-      this.qrDisplayed = true;
-      this.log(`whatsapp QR code generated — scan with your phone to link. QR data: ${qr.slice(0, 40)}...`);
+    if (qr) {
+      if (!this.qrDisplayed) {
+        this.qrDisplayed = true;
+        this.log("whatsapp session not linked. To link, stop the gateway and run:");
+        this.log("    openpocket whatsapp link");
+      }
     }
 
     if (connection === "open") {
       this.qrDisplayed = false;
-      this.log("whatsapp connection established");
+      this.log("whatsapp connection established — session saved");
     }
 
     if (connection === "close") {
@@ -306,7 +344,8 @@ export class WhatsAppAdapter implements ChannelAdapter {
           void this.connect();
         }, 3000);
       } else if (statusCode === DisconnectReason.loggedOut) {
-        this.log("whatsapp logged out — session cleared. Re-scan QR to re-link.");
+        this.log("whatsapp session expired or unlinked (401). To re-link, run:");
+        this.log("    openpocket whatsapp link");
       }
     }
   }
@@ -587,6 +626,20 @@ export class WhatsAppAdapter implements ChannelAdapter {
       pending.reject(new Error("Adapter stopping."));
     }
     this.pendingUserInputs.clear();
+  }
+
+  private clearAuthState(): void {
+    try {
+      if (fs.existsSync(this.authDir)) {
+        const files = fs.readdirSync(this.authDir);
+        for (const file of files) {
+          fs.unlinkSync(path.join(this.authDir, file));
+        }
+        this.log("cleared old auth state files");
+      }
+    } catch (err) {
+      this.log(`warning: failed to clear auth state: ${(err as Error).message}`);
+    }
   }
 
   private log(message: string): void {

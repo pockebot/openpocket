@@ -1580,13 +1580,287 @@ async function runWhatsAppStep(
   state.whatsappConfiguredAt = nowIso();
   saveConfig(config);
 
-  await prompter.note(
-    "WhatsApp Setup",
-    [
-      "WhatsApp channel configured.",
-      "QR code for session linking will appear on next `openpocket gateway start`.",
-    ].join("\n"),
+  const authDir = path.join(config.stateDir, "whatsapp-auth");
+  const alreadyLinked = fs.existsSync(path.join(authDir, "creds.json"));
+
+  if (alreadyLinked) {
+    await prompter.note(
+      "WhatsApp Setup",
+      [
+        "WhatsApp channel configured.",
+        `Existing session found at: ${authDir}`,
+        "Gateway will reconnect automatically on next start.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const linkNow = await prompter.confirm(
+    "Link WhatsApp now? (A QR code will be displayed for you to scan)",
+    true,
   );
+
+  if (!linkNow) {
+    await prompter.note(
+      "WhatsApp Setup",
+      [
+        "WhatsApp channel configured (linking deferred).",
+        "QR code will be displayed when you run `openpocket gateway start`.",
+        "",
+        "To link later:",
+        "  1) Run `openpocket gateway start`",
+        "  2) Scan the QR code with WhatsApp on your phone:",
+        "     iOS:     Settings > Linked Devices > Link a Device",
+        "     Android: Menu (⋮) > Linked Devices > Link a Device",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  await runWhatsAppQrPairing(config, prompter);
+}
+
+async function runWhatsAppQrPairing(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+): Promise<void> {
+  const authDir = path.join(config.stateDir, "whatsapp-auth");
+  fs.mkdirSync(authDir, { recursive: true });
+
+  const proxyUrl = await detectProxyForWhatsApp(prompter);
+
+  await prompter.note(
+    "WhatsApp QR Pairing",
+    [
+      "Connecting to WhatsApp Web...",
+      proxyUrl ? `  Using proxy: ${proxyUrl}` : "",
+      "A QR code will appear below. On your phone, open:",
+      "  iOS:     WhatsApp > Settings > Linked Devices > Link a Device",
+      "  Android: WhatsApp > Menu (⋮) > Linked Devices > Link a Device",
+      "Then point your camera at the QR code.",
+      "",
+      "The QR code refreshes every ~60 seconds. Total timeout: 2 minutes.",
+    ].filter(Boolean).join("\n"),
+  );
+
+  const baileys = await import("baileys");
+  const makeWASocket = baileys.default;
+  const { useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestWaWebVersion } = baileys;
+  const QRCode = await import("qrcode");
+  const pino = (await import("pino")).default;
+
+  const silentLogger = pino({ level: "silent" }) as any;
+
+  let waVersion: [number, number, number] | undefined;
+  try {
+    const { version } = await fetchLatestWaWebVersion({});
+    waVersion = version;
+    console.log(`  [WhatsApp] Using WA Web version: ${version.join(".")}`);
+  } catch {
+    console.log("  [WhatsApp] Could not fetch latest WA version, using default.");
+  }
+
+  let proxyAgent: any = undefined;
+  if (proxyUrl) {
+    try {
+      const { HttpsProxyAgent } = await import("https-proxy-agent");
+      proxyAgent = new HttpsProxyAgent(proxyUrl);
+    } catch {
+      console.log("  [WhatsApp] Could not create proxy agent, connecting directly.");
+    }
+  }
+
+  let currentSock: ReturnType<typeof makeWASocket> | null = null;
+
+  const result = await new Promise<"linked" | "timeout" | "error">((resolve) => {
+    let resolved = false;
+    const timeoutMs = 120_000;
+    let qrCount = 0;
+    let retryCount = 0;
+    const maxRetries = 5;
+
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        resolve("timeout");
+      }
+    }, timeoutMs);
+
+    async function startSocket(): Promise<void> {
+      if (resolved) return;
+
+      const { state, saveCreds } = await useMultiFileAuthState(authDir);
+
+      const socketOpts: any = {
+        auth: state,
+        browser: Browsers.macOS("Chrome"),
+        logger: silentLogger,
+        ...(waVersion ? { version: waVersion } : {}),
+      };
+      if (proxyAgent) {
+        socketOpts.agent = proxyAgent;
+      }
+
+      const sock = makeWASocket(socketOpts);
+      currentSock = sock;
+
+      sock.ev.on("creds.update", saveCreds);
+
+      sock.ev.on("connection.update", async (update) => {
+        if (resolved) return;
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+          qrCount++;
+          retryCount = 0;
+          console.log("");
+          console.log("  ┌─────────────────────────────────────────┐");
+          console.log(`  │  Scan this QR code with WhatsApp  (${qrCount})    │`);
+          console.log("  └─────────────────────────────────────────┘");
+          console.log("");
+          try {
+            const qrArt = await QRCode.toString(qr, { type: "utf8", errorCorrectionLevel: "L", margin: 2 });
+            for (const line of qrArt.trimEnd().split("\n")) {
+              console.log(`  ${line}`);
+            }
+          } catch {
+            console.log(`  QR data: ${qr}`);
+          }
+          console.log("");
+          console.log("  Waiting for scan...");
+        }
+
+        if (connection === "open") {
+          clearTimeout(timer);
+          if (!resolved) {
+            resolved = true;
+            resolve("linked");
+          }
+        }
+
+        if (connection === "close") {
+          const err = lastDisconnect?.error as any;
+          const statusCode = err?.output?.statusCode as number | undefined;
+          const errMsg = err?.message || err?.output?.payload?.message || "unknown";
+
+          if (statusCode === DisconnectReason.loggedOut) {
+            clearTimeout(timer);
+            if (!resolved) {
+              resolved = true;
+              resolve("error");
+            }
+            return;
+          }
+
+          retryCount++;
+          if (retryCount > maxRetries) {
+            console.log(`  [WhatsApp] Connection failed after ${maxRetries} retries: ${errMsg}`);
+            console.log("  [WhatsApp] This may be a network issue. Check if WhatsApp Web is accessible from your network.");
+            clearTimeout(timer);
+            if (!resolved) {
+              resolved = true;
+              resolve("error");
+            }
+            return;
+          }
+
+          console.log(`  [WhatsApp] Connection closed (${errMsg}), retrying ${retryCount}/${maxRetries}...`);
+          try { sock.end(undefined); } catch { /* ignore */ }
+          const delay = Math.min(2000 * retryCount, 10_000);
+          setTimeout(() => { void startSocket(); }, delay);
+        }
+      });
+    }
+
+    void startSocket();
+  });
+
+  if (currentSock) {
+    try {
+      (currentSock as any).ev?.removeAllListeners();
+      (currentSock as any).end(undefined);
+    } catch { /* ignore */ }
+    currentSock = null;
+  }
+
+  if (result === "linked") {
+    console.log("");
+    await prompter.note(
+      "WhatsApp Pairing",
+      [
+        "WhatsApp linked successfully!",
+        `Session saved to: ${authDir}`,
+        "Gateway will reconnect automatically on subsequent starts.",
+      ].join("\n"),
+    );
+  } else if (result === "timeout") {
+    await prompter.note(
+      "WhatsApp Pairing",
+      [
+        "QR code scan timed out (2 minutes).",
+        "You can pair later when running `openpocket gateway start`.",
+        "A new QR code will be displayed at that time.",
+      ].join("\n"),
+    );
+  } else {
+    await prompter.note(
+      "WhatsApp Pairing",
+      [
+        "WhatsApp pairing failed.",
+        "You can retry later when running `openpocket gateway start`.",
+      ].join("\n"),
+    );
+  }
+}
+
+async function detectProxyForWhatsApp(prompter: SetupPrompter): Promise<string | null> {
+  const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy
+    || process.env.HTTP_PROXY || process.env.http_proxy
+    || process.env.ALL_PROXY || process.env.all_proxy;
+  if (envProxy) return envProxy;
+
+  if (process.platform === "darwin") {
+    try {
+      const { execSync } = await import("node:child_process");
+      const output = execSync("networksetup -getsecurewebproxy Wi-Fi", { timeout: 5000, encoding: "utf-8" });
+      const enabled = /^Enabled:\s*Yes/im.test(output);
+      const serverMatch = output.match(/^Server:\s*(.+)$/im);
+      const portMatch = output.match(/^Port:\s*(\d+)$/im);
+      if (enabled && serverMatch && portMatch) {
+        const url = `http://${serverMatch[1].trim()}:${portMatch[1].trim()}`;
+        const ok = await testProxyConnectivity(url);
+        if (ok) return url;
+      }
+    } catch { /* ignore */ }
+  }
+
+  const commonPorts = [7897, 7890, 1087, 8080, 1080];
+  for (const port of commonPorts) {
+    const url = `http://127.0.0.1:${port}`;
+    const ok = await testProxyConnectivity(url);
+    if (ok) return url;
+  }
+
+  return null;
+}
+
+async function testProxyConnectivity(proxyUrl: string): Promise<boolean> {
+  try {
+    const { HttpsProxyAgent } = await import("https-proxy-agent");
+    const https = await import("node:https");
+    const agent = new HttpsProxyAgent(proxyUrl);
+
+    return new Promise<boolean>((resolve) => {
+      const req = https.get("https://web.whatsapp.com", { agent, timeout: 8000 } as any, (res) => {
+        res.on("data", () => {});
+        res.on("end", () => resolve(res.statusCode === 200));
+      });
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => { req.destroy(); resolve(false); });
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function runChannelSetupStep(
