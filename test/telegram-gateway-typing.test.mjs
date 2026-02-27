@@ -1753,7 +1753,7 @@ test("TelegramGateway queues follow-up /run task while busy and drains after cur
 
     assert.equal(runCalls.length, 1);
     assert.equal(runCalls[0].task, "first task");
-    assert.equal(sent.some((item) => /On it:/i.test(item.text)), true);
+    assert.equal(sent.some((item) => /On it:/i.test(item.text)), false);
     assert.equal(
       sent.some((item) => /queued/i.test(item.text)),
       true,
@@ -1966,11 +1966,10 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     };
     gateway.bot.sendChatAction = async () => true;
 
-    // Sparse narration: step 1 is high-signal (first step) so LLM is called.
+    // Step 1 emits an agent-loop start message directly (no extra LLM rewrite).
     // Steps 2 and 3 are low-signal (wait) and below the interval threshold,
     // so they use the fallback path which skips notification for "wait" actions.
-    // Step 4 (tap) also uses fallback — tap IS high-signal in fallback rules but
-    // not in the sparse LLM check, so it uses fallback and notifies.
+    // Step 4 (tap) also uses fallback and notifies.
     const llmDecisions = [
       { notify: true, message: "进度：已打开 Gmail 首页。", reason: "screen_transition" },
     ];
@@ -2046,12 +2045,13 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     });
 
     assert.equal(result.ok, true);
-    // LLM was only called once (step 1 = high signal).
-    assert.equal(llmIndex, 1);
-    // 3 messages: step 1 LLM narration + step 4 fallback narration + final outcome.
+    // LLM should not be called for step 1 start narration.
+    assert.equal(llmIndex, 0);
+    // 3 messages: step 1 start narration + step 4 fallback narration + final outcome.
     assert.equal(sent.length, 3);
     assert.equal(sent[0].chatId, 9201);
-    assert.match(sent[0].text, /Gmail/);
+    assert.match(sent[0].text, /已开始执行任务/);
+    assert.doesNotMatch(sent[0].text, /收到，我先处理这个任务/);
     assert.equal(sent[2].text, "收件箱已打开，当前可见最新邮件列表。");
     assert.equal(sent.slice(0, 2).some((item) => /\d+\/\d+/.test(item.text)), false);
     assert.equal(

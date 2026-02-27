@@ -1216,11 +1216,27 @@ export class TelegramGateway {
     return false;
   }
 
-  private renderTaskAcceptedMessage(task: string, locale: "zh" | "en"): string {
+  private renderAgentLoopStartMessage(
+    task: string,
+    locale: "zh" | "en",
+    progress: AgentProgressUpdate,
+  ): string {
+    const action = String(progress.actionType || "unknown").trim();
+    const app = String(progress.currentApp || "unknown").trim();
+    const thought = this.sanitizeForChat(
+      this.stripStepCounterTelemetry(String(progress.thought || progress.message || "").trim()),
+      320,
+    );
     if (locale === "zh") {
-      return `收到，我先处理这个任务：${task}\n有明确进展我会及时告诉你。`;
+      if (thought) {
+        return `已开始执行任务：${task}\n${thought}`;
+      }
+      return `已开始执行任务：${task}\n当前动作：${action}（${app}）`;
     }
-    return `On it: ${task}\nI'll update you when there's meaningful progress.`;
+    if (thought) {
+      return `Task started: ${task}\n${thought}`;
+    }
+    return `Task started: ${task}\nCurrent action: ${action} (${app})`;
   }
 
   private renderTaskQueuedMessage(position: number, locale: "zh" | "en"): string {
@@ -2322,16 +2338,14 @@ export class TelegramGateway {
       skipAcceptedMessage?: boolean;
     },
   ): Promise<boolean> {
-    const locale = this.inferTaskLocale(task);
     const isIdle = !this.drainingChatTaskQueue && !this.agent.isBusy() && this.pendingChatTasks.length === 0;
     const queuePosition = this.pendingChatTasks.length + 1;
     if (!options?.skipAcceptedMessage) {
-      const ackMessage = isIdle
-        ? this.renderTaskAcceptedMessage(task, locale)
-        : this.renderTaskQueuedMessage(queuePosition, locale);
-      await this.bot.sendMessage(chatId, ackMessage);
-      this.chat.appendExternalTurn(chatId, "assistant", ackMessage);
       if (!isIdle) {
+        const locale = this.inferTaskLocale(task);
+        const queuedMessage = this.renderTaskQueuedMessage(queuePosition, locale);
+        await this.bot.sendMessage(chatId, queuedMessage);
+        this.chat.appendExternalTurn(chatId, "assistant", queuedMessage);
         this.log(`task queued busy chat=${chatId} position=${queuePosition} task=${JSON.stringify(task)}`);
       }
     }
@@ -2408,38 +2422,45 @@ export class TelegramGateway {
               );
               const recentProgress = [...progressNarrationState.recentProgress, progress].slice(-8);
               progressNarrationState.allProgress = [...progressNarrationState.allProgress, progress].slice(-16);
+              const isFirstProgress =
+                progressNarrationState.lastNotifiedProgress === null && progress.step === 1;
 
               // Determine if this step qualifies for LLM narration or should use
               // the cheaper rule-based fallback instead.
               const action = String(progress.actionType || "").toLowerCase();
               const isHighSignal =
-                progress.step === 1
-                || action === "finish"
+                action === "finish"
                 || action === "request_human_auth"
                 || action === "request_user_input"
                 || /(error|failed|timeout|interrupted|rejected)/i.test(
                   `${progress.message} ${progress.thought}`,
                 );
               const isIntervalStep = progressNarrationState.skippedSteps >= NARRATION_LLM_INTERVAL;
-              const useLlm = isHighSignal || isIntervalStep;
+              const useLlm = !isFirstProgress && (isHighSignal || isIntervalStep);
 
-              const decision = useLlm
-                ? await this.chat.narrateTaskProgress({
-                  task,
-                  locale: progressLocale,
-                  progress,
-                  recentProgress,
-                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                  skippedSteps: progressNarrationState.skippedSteps,
-                })
-                : this.chat.fallbackTaskProgressNarration({
-                  task,
-                  locale: progressLocale,
-                  progress,
-                  recentProgress,
-                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                  skippedSteps: progressNarrationState.skippedSteps,
-                });
+              const decision = isFirstProgress
+                ? {
+                  notify: true,
+                  message: this.renderAgentLoopStartMessage(task, progressLocale, progress),
+                  reason: "agent_loop_start",
+                }
+                : useLlm
+                  ? await this.chat.narrateTaskProgress({
+                    task,
+                    locale: progressLocale,
+                    progress,
+                    recentProgress,
+                    lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                    skippedSteps: progressNarrationState.skippedSteps,
+                  })
+                  : this.chat.fallbackTaskProgressNarration({
+                    task,
+                    locale: progressLocale,
+                    progress,
+                    recentProgress,
+                    lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                    skippedSteps: progressNarrationState.skippedSteps,
+                  });
 
               if (!decision.notify) {
                 progressNarrationState.skippedSteps += 1;
