@@ -276,6 +276,7 @@ function errorMessage(error: unknown): string {
 const DEFAULT_LOCKSCREEN_PIN = "1234";
 const SCREEN_AWAKE_HEARTBEAT_MS = 3_000;
 const PIN_UNLOCK_MAX_ATTEMPTS = 2;
+const PIN_UNLOCK_SETTLE_MS = 1_200;
 
 type ScreenAwakeWorkerParams = {
   adbPath: string;
@@ -536,7 +537,7 @@ export class AdbRuntime {
     const configuredPin = this.resolveConfiguredUnlockPin();
     for (let pinAttempt = 0; pinAttempt < PIN_UNLOCK_MAX_ATTEMPTS; pinAttempt += 1) {
       await this.attemptPinUnlock(deviceId, configuredPin);
-      const keyguardAfterPin = this.isKeyguardShowing(deviceId);
+      let keyguardAfterPin = this.isKeyguardShowing(deviceId);
       if (keyguardAfterPin === false) {
         return;
       }
@@ -544,6 +545,16 @@ export class AdbRuntime {
         return;
       }
       if (pinAttempt < PIN_UNLOCK_MAX_ATTEMPTS - 1) {
+        // Keyguard state may lag right after successful unlock.
+        // Re-check after a short settle delay before entering PIN again.
+        await sleep(PIN_UNLOCK_SETTLE_MS);
+        keyguardAfterPin = this.isKeyguardShowing(deviceId);
+        if (keyguardAfterPin === false) {
+          return;
+        }
+        if (keyguardAfterPin !== true) {
+          return;
+        }
         // Give keyguard a short settle window before retrying PIN entry.
         await sleep(220);
       }

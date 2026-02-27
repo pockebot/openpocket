@@ -326,6 +326,7 @@ test("AdbRuntime fails clearly when physical phone stays locked after unlock att
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
     ],
   });
   const runtime = new AdbRuntime(
@@ -382,6 +383,7 @@ test("AdbRuntime retries PIN unlock once when first attempt still reports locked
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=false",
     ],
   });
@@ -404,6 +406,37 @@ test("AdbRuntime retries PIN unlock once when first attempt still reports locked
       && args[5] === "8",
   ).length;
   assert.equal(digitOneCount, 2);
+});
+
+test("AdbRuntime avoids second PIN entry when lock clears after settle delay", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", pin: "1234" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 180, y: 420 });
+  assert.match(result, /Tapped at/i);
+  const digitOneCount = emulator.calls.filter(
+    (args) =>
+      args[0] === "-s"
+      && args[2] === "shell"
+      && args[3] === "input"
+      && args[4] === "keyevent"
+      && args[5] === "8",
+  ).length;
+  assert.equal(digitOneCount, 1);
 });
 
 test("AdbRuntime falls back to default PIN when physical PIN is empty", async () => {
