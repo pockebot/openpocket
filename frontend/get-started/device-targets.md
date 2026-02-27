@@ -97,6 +97,55 @@ Notes:
 - Some Android 11+ builds prefer **Wireless debugging** pairing flow from Developer options.
 - Keep the phone unlocked during first pairing/authorization.
 
+## Physical Phone Setup (Wi-Fi Pairing via `target pair`)
+
+For Android 11+ **Wireless debugging**, you can use OpenPocket's built-in pairing wrapper instead of running raw `adb pair` manually.
+
+### 1) On phone, open Wireless debugging pairing details
+
+1. Open **Settings -> Developer options -> Wireless debugging**.
+2. Tap **Pair device with pairing code**.
+3. Keep the pairing panel visible and note:
+   - IP address
+   - Pairing port
+   - Pairing code
+
+### 2) Run OpenPocket pairing command (non-interactive)
+
+```bash
+openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type physical-phone
+```
+
+This command:
+
+- runs `adb pair` with the provided endpoint/code,
+- runs `adb connect` for the same host,
+- updates target config (`type`, `preferredDeviceId`, `adbEndpoint`).
+
+### 3) Optional: specify connect port explicitly
+
+If your device uses a non-default ADB connect port:
+
+```bash
+openpocket target pair --host <device-ip> --pair-port <pair-port> --connect-port <adb-connect-port> --code <pairing-code> --type physical-phone
+```
+
+### 4) Optional: interactive pairing prompts
+
+If you omit some arguments, OpenPocket can prompt for them:
+
+```bash
+openpocket target pair --type physical-phone
+```
+
+### 5) Verify and continue
+
+```bash
+adb devices -l
+openpocket target show
+openpocket gateway start
+```
+
 ## Android TV and Cloud Paths
 
 `android-tv` and `cloud` targets are visible now for forward compatibility, but these two deployment paths are still under active implementation and documentation expansion.

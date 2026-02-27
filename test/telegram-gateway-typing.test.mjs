@@ -2000,7 +2000,7 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
         currentApp: "com.google.android.gm",
         actionType: "launch_app",
         message: "Opened app",
-        thought: "[goal] Open inbox. [screen] Gmail home. [next] Tap inbox entry.",
+        thought: "Sub-goal: open inbox (pending). Screen is Gmail home. Next: tap inbox entry.",
         screenshotPath: null,
       });
       await onProgress({
@@ -2053,6 +2053,7 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     assert.match(sent[0].text, /已开始执行任务/);
     assert.doesNotMatch(sent[0].text, /收到，我先处理这个任务/);
     assert.doesNotMatch(sent[0].text, /\[(goal|screen|next)\]/i);
+    assert.doesNotMatch(sent[0].text, /Sub-goal|Screen is|Next:/i);
     assert.equal(sent[2].text, "收件箱已打开，当前可见最新邮件列表。");
     assert.equal(sent.slice(0, 2).some((item) => /\d+\/\d+/.test(item.text)), false);
     assert.equal(

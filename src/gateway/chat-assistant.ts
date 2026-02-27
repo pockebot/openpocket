@@ -1285,9 +1285,10 @@ export class ChatAssistant {
       "2) notify=true when meaningful progress happened (page transition, key checkpoint, auth blocker, error, or completion signal).",
       "3) If notify=true, message must be concise, natural language, and in locale hint.",
       "4) Do not include step counters (8/50, step 8, progress 8) unless user explicitly asked for it.",
-      "5) Use conversational tone. Avoid repeating the same opening pattern across updates.",
-      "6) Do not expose internal mechanics (model, filters, callbacks, tools).",
-      "7) If notify=false, message must be empty string.",
+      "5) Talk like a helpful friend, not a robot. Vary your phrasing naturally.",
+      "6) Never expose internal mechanics: no tool names, action types, model names, JSON, log lines, file paths, or debug output.",
+      "7) Never echo back raw 'thought' or 'observation' text from the progress context. Rephrase in your own words.",
+      "8) If notify=false, message must be empty string.",
       "",
       "TASK_PROGRESS_REPORTER.md:",
       this.readTaskProgressReporterGuide(),
@@ -2393,15 +2394,11 @@ export class ChatAssistant {
     if (!oneLine) {
       return "";
     }
-    const stripped = oneLine
-      .replace(/\[(?:goal|screen|next|intent|plan|observation|observed)\]\s*/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!stripped) {
-      return "";
-    }
-    const firstClause = stripped.split(/(?:\s*[;；]\s*|\s+\|\s+|\s+[.。]\s+)/)[0]?.trim() ?? "";
-    const normalized = firstClause || stripped;
+    // Take the first meaningful clause as a concise summary.
+    // No content-based keyword stripping — the narration model handles tone;
+    // this fallback path only needs to truncate safely.
+    const firstClause = oneLine.split(/(?:\s*[;；]\s*|\s+\|\s+|\s+[.。]\s+)/)[0]?.trim() ?? "";
+    const normalized = firstClause || oneLine;
     return this.trimForPrompt(normalized, maxChars);
   }
 

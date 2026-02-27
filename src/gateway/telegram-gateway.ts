@@ -272,7 +272,7 @@ export class TelegramGateway {
       .replace(/\/(?:Users|home|var|tmp)\/[^\s)\]]+/g, "[local-path]")
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
 
-    return this.compact(redacted, maxChars);
+    return this.compact(this.normalizeWhitespace(redacted), maxChars);
   }
 
   private sanitizeForChatMultiline(text: string, maxChars: number): string {
@@ -287,7 +287,28 @@ export class TelegramGateway {
       .replace(/\/(?:Users|home|var|tmp)\/[^\s)\]]+/g, "[local-path]")
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
 
-    return this.compactMultiline(redacted, maxChars);
+    return this.compactMultiline(
+      this.normalizeWhitespace(redacted, { preserveNewlines: true }),
+      maxChars,
+    );
+  }
+
+  private normalizeWhitespace(
+    text: string,
+    options?: { preserveNewlines?: boolean },
+  ): string {
+    if (options?.preserveNewlines) {
+      return String(text || "")
+        .replace(/\r\n?/g, "\n")
+        .split("\n")
+        .map((line) => line.replace(/[ \t]+/g, " ").trim())
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    }
+    return String(text || "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private escapeTelegramHtml(text: string): string {
@@ -1226,14 +1247,6 @@ export class TelegramGateway {
     const appSuffix = app && app.toLowerCase() !== "unknown"
       ? (locale === "zh" ? `（${app}）` : ` (${app})`)
       : "";
-    const conciseDetail = this.sanitizeForChat(
-      this.stripStepCounterTelemetry(String(progress.thought || progress.message || ""))
-        .replace(/\[(?:goal|screen|next|intent|plan|observation|observed)\]\s*/gi, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .split(/(?:\s*[;；]\s*|\s+\|\s+|\s+[.。]\s+)/)[0] ?? "",
-      140,
-    ).trim();
     const zhActionLineMap: Record<string, string> = {
       launch_app: `我正在打开目标应用并确认页面状态${appSuffix}。`,
       tap: `我正在执行界面操作并确认下一步入口${appSuffix}。`,
@@ -1266,13 +1279,7 @@ export class TelegramGateway {
       ? (zhActionLineMap[action] ?? `我正在执行任务第一步${appSuffix}。`)
       : (enActionLineMap[action] ?? `Executing the first task step${appSuffix}.`);
     if (locale === "zh") {
-      if (conciseDetail) {
-        return `已开始执行任务：${task}\n${actionLine}\n${conciseDetail}`;
-      }
       return `已开始执行任务：${task}\n${actionLine}`;
-    }
-    if (conciseDetail) {
-      return `Task started: ${task}\n${actionLine}\n${conciseDetail}`;
     }
     return `Task started: ${task}\n${actionLine}`;
   }

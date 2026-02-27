@@ -241,12 +241,6 @@ type DelegatedPaymentField = {
   resourceIdHint: string;
 };
 
-type OauthCredentialCache = {
-  username: string;
-  password: string;
-  updatedAtMs: number;
-};
-
 type ResolvedTapElementContext = {
   id: string;
   label: string;
@@ -345,7 +339,6 @@ export class AgentRuntime {
   private currentTaskStartedAtMs: number | null = null;
   private lastSystemPromptReport: WorkspacePromptContextReport | null = null;
   private lastResolvedTapElementContext: ResolvedTapElementContext | null = null;
-  private delegatedOauthCredentials: OauthCredentialCache | null = null;
   private readonly agentFactory: AgentFactory;
 
   constructor(config: OpenPocketConfig, options?: AgentRuntimeOptions) {
@@ -807,288 +800,6 @@ export class AgentRuntime {
     });
   }
 
-  private isImageArtifactPath(artifactPath: string): boolean {
-    const ext = path.extname(artifactPath).toLowerCase();
-    return [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".gif"].includes(ext);
-  }
-
-  private extractDelegatedText(artifactJson: Record<string, unknown> | null): string | null {
-    if (!artifactJson) {
-      return null;
-    }
-    const value = artifactJson.value;
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-    return null;
-  }
-
-  private extractDelegatedTextFromDecisionMessage(message: string): string | null {
-    const raw = String(message || "").trim();
-    if (!raw) {
-      return null;
-    }
-
-    const normalized = raw.toLowerCase();
-    if (
-      normalized.startsWith("approved by ") ||
-      normalized.startsWith("rejected by ") ||
-      normalized === "approved from web link." ||
-      normalized === "rejected from web link."
-    ) {
-      return null;
-    }
-
-    const explicitCode = raw.match(/\b\d{4,10}\b/);
-    if (explicitCode?.[0]) {
-      return explicitCode[0];
-    }
-
-    if (/^[A-Za-z0-9._-]{4,32}$/.test(raw)) {
-      return raw;
-    }
-    return null;
-  }
-
-  private extractDelegatedGeo(
-    artifactJson: Record<string, unknown> | null,
-  ): { lat: number; lon: number } | null {
-    if (!artifactJson) {
-      return null;
-    }
-    const lat = Number(artifactJson.lat);
-    const lon = Number(artifactJson.lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      return null;
-    }
-    return { lat, lon };
-  }
-
-  private extractDelegatedCredentials(
-    artifactJson: Record<string, unknown> | null,
-  ): { username: string; password: string } | null {
-    if (!artifactJson) {
-      return null;
-    }
-    if (String(artifactJson.kind ?? "") !== "credentials") {
-      return null;
-    }
-    const usernameRaw = artifactJson.username;
-    const passwordRaw = artifactJson.password;
-    const username = typeof usernameRaw === "string" ? usernameRaw.trim() : "";
-    const password = typeof passwordRaw === "string" ? passwordRaw : "";
-    if (!username && !password) {
-      return null;
-    }
-    return { username, password };
-  }
-
-  private isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-  }
-
-  private paymentFieldLabelForSemantic(semantic: PaymentFieldSemantic, fallback: string): string {
-    switch (semantic) {
-      case "card_number":
-        return "card_number";
-      case "expiry":
-        return "expiry";
-      case "cvc":
-        return "cvc";
-      case "cardholder_name":
-        return "cardholder_name";
-      case "billing_name":
-        return "billing_name";
-      case "postal_code":
-        return "postal_code";
-      case "billing_address_line1":
-        return "billing_address_line1";
-      case "billing_address_line2":
-        return "billing_address_line2";
-      case "billing_city":
-        return "billing_city";
-      case "billing_state":
-        return "billing_state";
-      case "billing_country":
-        return "billing_country";
-      case "billing_email":
-        return "billing_email";
-      case "billing_phone":
-        return "billing_phone";
-      default: {
-        const normalized = this.normalizePermissionUiText(fallback).replace(/[^a-z0-9]+/g, "_");
-        return normalized || "payment_field";
-      }
-    }
-  }
-
-  private inferPaymentSemanticFromArtifactKey(rawKey: string): {
-    semantic: PaymentFieldSemantic;
-    resourceIdHint: string;
-  } {
-    const parsed = parsePaymentArtifactKey(rawKey);
-    if (parsed) {
-      return {
-        semantic: parsed.semantic ?? "unknown",
-        resourceIdHint: parsed.resourceIdHint,
-      };
-    }
-    const normalizedKey = this.normalizePermissionUiText(String(rawKey || ""));
-    const inferred = inferPaymentFieldSemantic({
-      label: normalizedKey,
-      hint: normalizedKey,
-      resourceId: normalizedKey,
-      contentDesc: normalizedKey,
-      className: "",
-    });
-    return {
-      semantic: inferred.semantic,
-      resourceIdHint: normalizedKey.replace(/[^a-z0-9]+/g, "_"),
-    };
-  }
-
-  private normalizePaymentFieldValue(semantic: PaymentFieldSemantic, rawValue: string): string {
-    const value = String(rawValue || "").trim();
-    if (!value) {
-      return "";
-    }
-    if (semantic === "card_number") {
-      return value.replace(/\s+/g, "");
-    }
-    return value;
-  }
-
-  private extractDelegatedPaymentFields(
-    artifactJson: Record<string, unknown> | null,
-  ): DelegatedPaymentField[] {
-    if (!artifactJson) {
-      return [];
-    }
-    const out: DelegatedPaymentField[] = [];
-    const fieldsRaw = this.isRecord(artifactJson.fields)
-      ? artifactJson.fields
-      : this.isRecord(artifactJson.form_data)
-        ? artifactJson.form_data
-        : null;
-
-    const pushField = (
-      semantic: PaymentFieldSemantic,
-      valueRaw: unknown,
-      artifactKey: string,
-      labelFallback: string,
-      resourceIdHint = "",
-    ) => {
-      const value = typeof valueRaw === "string" || typeof valueRaw === "number"
-        ? this.normalizePaymentFieldValue(semantic, String(valueRaw))
-        : "";
-      if (!value) {
-        return;
-      }
-      out.push({
-        semantic,
-        value,
-        artifactKey,
-        label: this.paymentFieldLabelForSemantic(semantic, labelFallback),
-        resourceIdHint,
-      });
-    };
-
-    const kind = String(artifactJson.kind ?? "").trim().toLowerCase();
-    if ((kind === "payment_card_v1" || kind === "payment_card") && (!fieldsRaw || Object.keys(fieldsRaw).length === 0)) {
-      pushField("card_number", artifactJson.cardNumber ?? artifactJson.card_number, "payment_card_number", "card_number");
-      pushField("expiry", artifactJson.expiry, "payment_expiry", "expiry");
-      pushField("cvc", artifactJson.cvc ?? artifactJson.cvv, "payment_cvc", "cvc");
-      pushField("postal_code", artifactJson.zip ?? artifactJson.postalCode, "payment_postal_code", "postal_code");
-      pushField("cardholder_name", artifactJson.cardholderName ?? artifactJson.cardholder_name, "payment_cardholder_name", "cardholder_name");
-    }
-
-    if (fieldsRaw) {
-      for (const [rawKey, rawValue] of Object.entries(fieldsRaw)) {
-        if ((typeof rawValue !== "string" && typeof rawValue !== "number")) {
-          continue;
-        }
-        const valueText = String(rawValue).trim();
-        if (!valueText) {
-          continue;
-        }
-        const parsed = this.inferPaymentSemanticFromArtifactKey(rawKey);
-        pushField(
-          parsed.semantic,
-          valueText,
-          rawKey,
-          rawKey,
-          parsed.resourceIdHint,
-        );
-      }
-    }
-
-    const deduped = new Map<string, DelegatedPaymentField>();
-    for (const field of out) {
-      const key = `${field.semantic}|${field.artifactKey}`;
-      if (!deduped.has(key)) {
-        deduped.set(key, field);
-      }
-    }
-
-    return [...deduped.values()];
-  }
-
-  private isPaymentArtifactKind(kind: string): boolean {
-    const normalized = String(kind || "").trim().toLowerCase();
-    return normalized === "payment_card_v1" || normalized === "payment_card";
-  }
-
-  private shouldDeleteSensitiveDelegationArtifact(
-    capability: HumanAuthCapability,
-    artifactJson: Record<string, unknown> | null,
-  ): boolean {
-    const kind = String(artifactJson?.kind ?? "").trim().toLowerCase();
-    if (kind === "credentials") {
-      return true;
-    }
-    if (this.isPaymentArtifactKind(kind)) {
-      return true;
-    }
-    if (capability === "payment") {
-      return true;
-    }
-    return false;
-  }
-
-  private getCachedOauthCredentials(maxAgeMs = 15 * 60 * 1000): { username: string; password: string } | null {
-    const cache = this.delegatedOauthCredentials;
-    if (!cache) {
-      return null;
-    }
-    if (Date.now() - cache.updatedAtMs > maxAgeMs) {
-      this.delegatedOauthCredentials = null;
-      return null;
-    }
-    return {
-      username: cache.username,
-      password: cache.password,
-    };
-  }
-
-  private putCachedOauthCredentials(username: string, password: string): void {
-    const current = this.delegatedOauthCredentials;
-    const mergedUsername = username || current?.username || "";
-    const mergedPassword = password || current?.password || "";
-    if (!mergedUsername && !mergedPassword) {
-      this.delegatedOauthCredentials = null;
-      return;
-    }
-    this.delegatedOauthCredentials = {
-      username: mergedUsername,
-      password: mergedPassword,
-      updatedAtMs: Date.now(),
-    };
-  }
-
-  private clearCachedOauthCredentials(): void {
-    this.delegatedOauthCredentials = null;
-  }
-
   private runAdbForLocationStrategy(
     deviceId: string,
     args: string[],
@@ -1268,570 +979,6 @@ export class AgentRuntime {
     };
   }
 
-  private async applyLocationDelegation(lat: number, lon: number): Promise<DelegationApplyResult> {
-    const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
-    const isEmulator = this.config.target.type === "emulator";
-
-    if (isEmulator) {
-      this.emulator.runAdb(
-        ["-s", deviceId, "emu", "geo", "fix", String(lon), String(lat)],
-        20_000,
-      );
-      return {
-        message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=emulator`,
-        templateHint: "location_injected_continue_flow",
-      };
-    }
-
-    const emuGeoFix = this.runAdbForLocationStrategy(
-      deviceId,
-      ["emu", "geo", "fix", String(lon), String(lat)],
-      10_000,
-    );
-    if (emuGeoFix.ok) {
-      return {
-        message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=device(emu_geo_fix)`,
-        templateHint: "location_injected_continue_flow",
-      };
-    }
-
-    const cmdLocation = this.tryInjectLocationViaCmdLocation(deviceId, lat, lon);
-    if (cmdLocation.ok) {
-      return {
-        message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=device(${cmdLocation.detail})`,
-        templateHint: "location_injected_continue_flow",
-      };
-    }
-
-    const appiumSettings = this.tryInjectLocationViaAppiumSettings(deviceId, lat, lon);
-    if (appiumSettings.ok) {
-      return {
-        message: `delegated location injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=device(${appiumSettings.detail})`,
-        templateHint: "location_injected_continue_flow",
-      };
-    }
-
-    return {
-      message: `delegated location NOT injected lat=${lat.toFixed(6)} lon=${lon.toFixed(6)} target=device — `
-        + `tried=emu_geo_fix,cmd_location,appium_settings. `
-        + `To enable real-device injection, install io.appium.settings and set it as the mock location app in Developer options. `
-        + `The coordinates are available in the delegation artifact for the agent to use manually.`,
-      templateHint: null,
-    };
-  }
-
-  private async applyTextDelegation(text: string): Promise<DelegationApplyResult> {
-    const result = await this.adb.executeAction(
-      {
-        type: "type",
-        text,
-        reason: "human_auth_delegate_text",
-      },
-      this.config.agent.deviceId,
-    );
-    return {
-      message: `delegated text typed (${text.length} chars): ${result}`,
-      templateHint: "text_typed_continue_flow",
-    };
-  }
-
-  private paymentSemanticScore(node: PaymentInputNode, target: PaymentFieldSemantic): number {
-    const inferred = inferPaymentFieldSemantic({
-      label: node.text,
-      hint: node.hint,
-      resourceId: node.resourceId,
-      contentDesc: node.contentDesc,
-      className: node.className,
-    });
-    if (inferred.semantic === target) {
-      return 170 + Math.round(inferred.confidence * 70);
-    }
-    if (
-      (target === "billing_name" && inferred.semantic === "cardholder_name")
-      || (target === "cardholder_name" && inferred.semantic === "billing_name")
-    ) {
-      return 130;
-    }
-    if (target === "unknown") {
-      return 40;
-    }
-    return 0;
-  }
-
-  private paymentHintScore(
-    node: PaymentInputNode,
-    field: DelegatedPaymentField,
-  ): number {
-    const combined = this.normalizePermissionUiText(
-      `${node.resourceId} ${node.hint} ${node.text} ${node.contentDesc} ${node.className}`,
-    );
-    if (!combined) {
-      return 0;
-    }
-    let score = this.paymentSemanticScore(node, field.semantic);
-    const resourceHint = this.normalizePermissionUiText(field.resourceIdHint).replace(/[^a-z0-9]+/g, "_");
-    if (resourceHint) {
-      const normalizedNodeResource = this.normalizePermissionUiText(node.resourceId).replace(/[^a-z0-9]+/g, "_");
-      if (normalizedNodeResource.includes(resourceHint)) {
-        score += 220;
-      }
-    }
-
-    const labelTokens = this.normalizePermissionUiText(field.label)
-      .split(/[^a-z0-9]+/)
-      .filter((token) => token.length >= 3);
-    for (const token of labelTokens) {
-      if (combined.includes(token)) {
-        score += 18;
-      }
-    }
-
-    if (field.semantic === "cvc" && node.password) {
-      score += 25;
-    }
-    if (field.semantic === "card_number" && /\b(number|pan|card)\b/.test(combined)) {
-      score += 30;
-    }
-    if (field.semantic === "expiry" && /\b(exp|expiry|expiration|mm|yy)\b/.test(combined)) {
-      score += 30;
-    }
-    if (field.semantic === "postal_code" && /\b(postal|zip|postcode)\b/.test(combined)) {
-      score += 30;
-    }
-    if (field.semantic === "billing_email" && /\b(email|e-mail)\b/.test(combined)) {
-      score += 35;
-    }
-    if (field.semantic === "billing_phone" && /\b(phone|mobile|tel|telephone)\b/.test(combined)) {
-      score += 35;
-    }
-
-    return score;
-  }
-
-  private pickPaymentInputNode(
-    nodes: PaymentInputNode[],
-    field: DelegatedPaymentField,
-    used: Set<PaymentInputNode>,
-  ): PaymentInputNode | null {
-    const available = nodes.filter((node) => !used.has(node));
-    if (available.length === 0) {
-      return null;
-    }
-    const scored = available
-      .map((node) => ({
-        node,
-        score: this.paymentHintScore(node, field),
-      }))
-      .sort((a, b) => {
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        if (a.node.top !== b.node.top) {
-          return a.node.top - b.node.top;
-        }
-        return a.node.left - b.node.left;
-      });
-
-    const best = scored[0];
-    if (!best) {
-      return null;
-    }
-    if (best.score > 0) {
-      return best.node;
-    }
-    if (field.semantic === "unknown") {
-      return best.node;
-    }
-    return null;
-  }
-
-  private paymentFieldOrderScore(semantic: PaymentFieldSemantic): number {
-    switch (semantic) {
-      case "card_number":
-        return 0;
-      case "expiry":
-        return 1;
-      case "cvc":
-        return 2;
-      case "cardholder_name":
-      case "billing_name":
-        return 3;
-      case "billing_address_line1":
-        return 4;
-      case "billing_address_line2":
-        return 5;
-      case "billing_city":
-        return 6;
-      case "billing_state":
-        return 7;
-      case "postal_code":
-        return 8;
-      case "billing_country":
-        return 9;
-      case "billing_email":
-        return 10;
-      case "billing_phone":
-        return 11;
-      default:
-        return 20;
-    }
-  }
-
-  private credentialHintScore(node: CredentialInputNode, target: "username" | "password"): number {
-    const resource = this.normalizePermissionUiText(node.resourceId);
-    const hint = this.normalizePermissionUiText(node.hint);
-    const className = this.normalizePermissionUiText(node.className);
-    const combined = `${resource} ${hint} ${className}`;
-
-    if (target === "password") {
-      let score = 0;
-      if (node.password) {
-        score += 140;
-      }
-      if (combined.includes("password") || combined.includes("passcode") || combined.includes("pwd")) {
-        score += 110;
-      }
-      return score;
-    }
-
-    let score = 0;
-    if (!node.password) {
-      score += 20;
-    }
-    if (
-      combined.includes("username") ||
-      combined.includes("user name") ||
-      combined.includes("email") ||
-      combined.includes("account") ||
-      combined.includes("phone")
-    ) {
-      score += 120;
-    }
-    return score;
-  }
-
-  private pickCredentialInputNode(
-    nodes: CredentialInputNode[],
-    target: "username" | "password",
-    exclude: CredentialInputNode | null,
-  ): CredentialInputNode | null {
-    const filtered = nodes.filter((node) => node !== exclude);
-    if (filtered.length === 0) {
-      return null;
-    }
-    const scored = filtered
-      .map((node) => ({
-        node,
-        score: this.credentialHintScore(node, target),
-      }))
-      .sort((a, b) => {
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        if (a.node.top !== b.node.top) {
-          return a.node.top - b.node.top;
-        }
-        return a.node.left - b.node.left;
-      });
-    if ((scored[0]?.score ?? 0) > 0) {
-      return scored[0]?.node ?? null;
-    }
-    if (target === "password") {
-      const passwordNode = filtered.find((node) => node.password);
-      if (passwordNode) {
-        return passwordNode;
-      }
-      return filtered[filtered.length - 1] ?? null;
-    }
-    const textNode = filtered.find((node) => !node.password);
-    if (textNode) {
-      return textNode;
-    }
-    return null;
-  }
-
-  private async tapCredentialNode(
-    node: CredentialInputNode,
-    reason: string,
-  ): Promise<void> {
-    const tapX = Math.max(0, Math.round((node.left + node.right) / 2));
-    const tapY = Math.max(0, Math.round((node.top + node.bottom) / 2));
-    await this.adb.executeAction(
-      {
-        type: "tap",
-        x: tapX,
-        y: tapY,
-        reason,
-      },
-      this.config.agent.deviceId,
-    );
-    await sleep(120);
-  }
-
-  private async applyCredentialDelegation(
-    username: string,
-    password: string,
-  ): Promise<DelegationApplyResult> {
-    const deviceId = this.resolveDelegationDeviceId();
-    const uiDumpXml = this.captureUiDumpXml(deviceId);
-    const nodes = this.parseCredentialInputNodes(uiDumpXml);
-    let focusedUsernameNode: CredentialInputNode | null = null;
-
-    let typedUsername = false;
-    let typedPassword = false;
-
-    if (username) {
-      focusedUsernameNode = this.pickCredentialInputNode(nodes, "username", null);
-      if (focusedUsernameNode) {
-        await this.tapCredentialNode(focusedUsernameNode, "human_auth_focus_username");
-        await this.adb.executeAction(
-          {
-            type: "type",
-            text: username,
-            reason: "human_auth_delegate_username",
-          },
-          this.config.agent.deviceId,
-        );
-        typedUsername = true;
-      }
-    }
-
-    if (password) {
-      const passwordNode = this.pickCredentialInputNode(nodes, "password", focusedUsernameNode);
-      if (passwordNode) {
-        await this.tapCredentialNode(passwordNode, "human_auth_focus_password");
-        await this.adb.executeAction(
-          {
-            type: "type",
-            text: password,
-            reason: "human_auth_delegate_password",
-          },
-          this.config.agent.deviceId,
-        );
-        typedPassword = true;
-      }
-    }
-
-    // Keep oauth credentials cached for split-screen sign-in (username -> next -> password).
-    this.putCachedOauthCredentials(username, password);
-    if (typedPassword) {
-      // Once password has been typed on-device, clear cache to reduce credential lifetime.
-      this.clearCachedOauthCredentials();
-    }
-
-    // Redact credential details from logs — only report typed/deferred fields.
-    const typed: string[] = [];
-    const deferred: string[] = [];
-    if (username) {
-      if (typedUsername) {
-        typed.push("username");
-      } else {
-        deferred.push("username");
-      }
-    }
-    if (password) {
-      if (typedPassword) {
-        typed.push("password");
-      } else {
-        deferred.push("password");
-      }
-    }
-    const messageParts: string[] = [];
-    if (typed.length > 0) {
-      messageParts.push(`delegated credentials typed: ${typed.join(" + ")}`);
-    }
-    if (deferred.length > 0) {
-      messageParts.push(`deferred for next oauth step: ${deferred.join(" + ")}`);
-    }
-    if (messageParts.length === 0) {
-      messageParts.push("no credential input fields detected for delegation");
-    }
-
-    return {
-      message: messageParts.join(" ; "),
-      templateHint: "oauth_credentials_typed_continue_flow",
-      oauthTyped: {
-        username: typedUsername,
-        password: typedPassword,
-      },
-    };
-  }
-
-  private async applyPaymentDelegation(
-    fields: DelegatedPaymentField[],
-  ): Promise<DelegationApplyResult> {
-    const deviceId = this.resolveDelegationDeviceId();
-    const uiDumpXml = this.captureUiDumpXml(deviceId);
-    const nodes = this.parsePaymentInputNodes(uiDumpXml);
-    const used = new Set<PaymentInputNode>();
-    const orderedFields = [...fields]
-      .map((field, index) => ({ field, index }))
-      .sort((a, b) => {
-        const scoreA = this.paymentFieldOrderScore(a.field.semantic);
-        const scoreB = this.paymentFieldOrderScore(b.field.semantic);
-        if (scoreA !== scoreB) {
-          return scoreA - scoreB;
-        }
-        return a.index - b.index;
-      })
-      .map((item) => item.field);
-
-    const typedFields: string[] = [];
-    const deferredFields: string[] = [];
-    for (const field of orderedFields) {
-      if (!field.value) {
-        continue;
-      }
-      const node = this.pickPaymentInputNode(nodes, field, used);
-      if (!node) {
-        deferredFields.push(field.label);
-        continue;
-      }
-      used.add(node);
-      const semanticReasonToken = field.semantic.replace(/[^a-z0-9_]+/g, "_");
-      await this.tapCredentialNode(node, `human_auth_focus_payment_${semanticReasonToken}`);
-      await this.adb.executeAction(
-        {
-          type: "type",
-          text: field.value,
-          reason: `human_auth_delegate_payment_${semanticReasonToken}`,
-        },
-        this.config.agent.deviceId,
-      );
-      typedFields.push(field.label);
-    }
-
-    const parts: string[] = [];
-    if (typedFields.length > 0) {
-      parts.push(`delegated payment fields typed: ${typedFields.join(" + ")}`);
-    }
-    if (deferredFields.length > 0) {
-      parts.push(`payment fields not matched in current UI: ${deferredFields.join(" + ")}`);
-    }
-    if (parts.length === 0) {
-      parts.push("no payment fields provided for delegation");
-    }
-
-    return {
-      message: parts.join(" ; "),
-      templateHint: "payment_fields_typed_continue_flow",
-    };
-  }
-
-  private async applyImageDelegation(artifactPath: string): Promise<DelegationApplyResult> {
-    const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
-    const ext = path.extname(artifactPath).toLowerCase() || ".jpg";
-    const remoteName = `openpocket-human-auth-${Date.now()}${ext}`;
-    const remotePath = `/sdcard/Download/${remoteName}`;
-    this.emulator.runAdb(
-      [
-        "-s",
-        deviceId,
-        "push",
-        artifactPath,
-        remotePath,
-      ],
-      30_000,
-    );
-    try {
-      this.emulator.runAdb(
-        [
-          "-s",
-          deviceId,
-          "shell",
-          "am",
-          "broadcast",
-          "-a",
-          "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
-          "-d",
-          `file://${remotePath}`,
-        ],
-        15_000,
-      );
-    } catch {
-      // Media scan broadcast is best-effort.
-    }
-    return {
-      message: `delegated image pushed to ${remotePath}`,
-      templateHint:
-        `gallery_import_template: tap app upload/attach/gallery entry, open Downloads, select ${remoteName}, then confirm.`,
-    };
-  }
-
-  private isAudioArtifactPath(artifactPath: string): boolean {
-    const ext = path.extname(artifactPath).toLowerCase();
-    return [".webm", ".ogg", ".mp3", ".wav", ".aac", ".m4a", ".opus", ".flac"].includes(ext);
-  }
-
-  private async applyMultiPhotoDelegation(
-    artifactJson: Record<string, unknown>,
-    artifactPath: string,
-  ): Promise<DelegationApplyResult> {
-    const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
-    const photos = Array.isArray(artifactJson.photos) ? artifactJson.photos : [];
-    if (photos.length === 0) {
-      return { message: "photos_multi artifact has no photos", templateHint: null };
-    }
-
-    const pushedPaths: string[] = [];
-    for (let i = 0; i < photos.length; i++) {
-      const photo = photos[i] as Record<string, unknown>;
-      if (!photo || typeof photo.base64 !== "string") {
-        continue;
-      }
-      const mimeType = String(photo.mimeType || "image/jpeg");
-      const ext = mimeType.includes("png") ? ".png" : mimeType.includes("webp") ? ".webp" : ".jpg";
-      const remoteName = `openpocket-human-auth-${Date.now()}-${i}${ext}`;
-      const remotePath = `/sdcard/Download/${remoteName}`;
-      const tmpPath = path.join(this.config.stateDir, `human-auth-artifacts`, `_tmp_photo_${i}${ext}`);
-      try {
-        fs.writeFileSync(tmpPath, Buffer.from(photo.base64 as string, "base64"));
-        this.emulator.runAdb(["-s", deviceId, "push", tmpPath, remotePath], 30_000);
-        pushedPaths.push(remotePath);
-        try { fs.unlinkSync(tmpPath); } catch { /* cleanup best-effort */ }
-        try {
-          this.emulator.runAdb([
-            "-s", deviceId, "shell", "am", "broadcast",
-            "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
-            "-d", `file://${remotePath}`,
-          ], 15_000);
-        } catch { /* best-effort */ }
-      } catch {
-        try { fs.unlinkSync(tmpPath); } catch { /* cleanup */ }
-      }
-    }
-
-    try { fs.unlinkSync(artifactPath); } catch { /* cleanup source */ }
-
-    if (pushedPaths.length === 0) {
-      return { message: "photos_multi: failed to push any photos to device", templateHint: null };
-    }
-
-    return {
-      message: `delegated ${pushedPaths.length}/${photos.length} photos pushed to /sdcard/Download/`,
-      templateHint: `gallery_import_template: ${pushedPaths.length} photos in Downloads. Open file picker, navigate to Downloads, select the openpocket-human-auth files.`,
-    };
-  }
-
-  private async applyAudioDelegation(artifactPath: string): Promise<DelegationApplyResult> {
-    const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
-    const ext = path.extname(artifactPath).toLowerCase() || ".webm";
-    const remoteName = `openpocket-human-auth-${Date.now()}${ext}`;
-    const remotePath = `/sdcard/Download/${remoteName}`;
-    this.emulator.runAdb(["-s", deviceId, "push", artifactPath, remotePath], 30_000);
-    try {
-      this.emulator.runAdb([
-        "-s", deviceId, "shell", "am", "broadcast",
-        "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
-        "-d", `file://${remotePath}`,
-      ], 15_000);
-    } catch { /* best-effort */ }
-    return {
-      message: `delegated audio pushed to ${remotePath}`,
-      templateHint: `audio_import_template: audio file in Downloads (${remoteName}). Open file picker, navigate to Downloads, select the file.`,
-    };
-  }
-
   private normalizePermissionUiText(value: string): string {
     return value
       .toLowerCase()
@@ -1901,92 +1048,6 @@ export class AgentRuntime {
       });
       match = nodeRe.exec(uiDumpXml);
     }
-    return nodes;
-  }
-
-  private parseCredentialInputNodes(uiDumpXml: string): CredentialInputNode[] {
-    const nodes: CredentialInputNode[] = [];
-    const nodeRe = /<node\s+([^>]*?)\/>/g;
-    let match = nodeRe.exec(uiDumpXml);
-    while (match) {
-      const attrs = this.parseUiNodeAttributes(match[1] ?? "");
-      const className = String(attrs.class ?? "");
-      const classNormalized = this.normalizePermissionUiText(className);
-      const parsedBounds = this.parseBounds(String(attrs.bounds ?? "").trim());
-      if (!parsedBounds || !classNormalized.includes("edittext")) {
-        match = nodeRe.exec(uiDumpXml);
-        continue;
-      }
-      const enabled = String(attrs.enabled ?? "").toLowerCase() !== "false";
-      if (!enabled) {
-        match = nodeRe.exec(uiDumpXml);
-        continue;
-      }
-      nodes.push({
-        resourceId: String(attrs["resource-id"] ?? ""),
-        className,
-        hint: String(attrs.hint ?? attrs.text ?? attrs["content-desc"] ?? ""),
-        password: String(attrs.password ?? "").toLowerCase() === "true",
-        left: parsedBounds.left,
-        top: parsedBounds.top,
-        right: parsedBounds.right,
-        bottom: parsedBounds.bottom,
-      });
-      match = nodeRe.exec(uiDumpXml);
-    }
-    nodes.sort((a, b) => {
-      if (a.top !== b.top) {
-        return a.top - b.top;
-      }
-      return a.left - b.left;
-    });
-    return nodes;
-  }
-
-  private parsePaymentInputNodes(uiDumpXml: string): PaymentInputNode[] {
-    const nodes: PaymentInputNode[] = [];
-    const nodeRe = /<node\s+([^>]*?)\/>/g;
-    let match = nodeRe.exec(uiDumpXml);
-    while (match) {
-      const attrs = this.parseUiNodeAttributes(match[1] ?? "");
-      const className = String(attrs.class ?? "");
-      const classNormalized = this.normalizePermissionUiText(className);
-      const parsedBounds = this.parseBounds(String(attrs.bounds ?? "").trim());
-      const isTextInputClass =
-        classNormalized.includes("edittext")
-        || classNormalized.includes("autocompletetextview")
-        || classNormalized.includes("textinput");
-      if (!parsedBounds || !isTextInputClass) {
-        match = nodeRe.exec(uiDumpXml);
-        continue;
-      }
-      const enabled = String(attrs.enabled ?? "").toLowerCase() !== "false";
-      if (!enabled) {
-        match = nodeRe.exec(uiDumpXml);
-        continue;
-      }
-      const text = String(attrs.text ?? "");
-      const contentDesc = String(attrs["content-desc"] ?? "");
-      nodes.push({
-        resourceId: String(attrs["resource-id"] ?? ""),
-        className,
-        hint: String(attrs.hint ?? text ?? contentDesc ?? ""),
-        text,
-        contentDesc,
-        password: String(attrs.password ?? "").toLowerCase() === "true",
-        left: parsedBounds.left,
-        top: parsedBounds.top,
-        right: parsedBounds.right,
-        bottom: parsedBounds.bottom,
-      });
-      match = nodeRe.exec(uiDumpXml);
-    }
-    nodes.sort((a, b) => {
-      if (a.top !== b.top) {
-        return a.top - b.top;
-      }
-      return a.left - b.left;
-    });
     return nodes;
   }
 
@@ -2536,31 +1597,30 @@ export class AgentRuntime {
 
   private pickCapabilityProbeEventForHumanAuth(
     events: CapabilityProbeEvent[],
-    _observedAppAfterAction: string,
+    observedAppAfterAction: string,
   ): CapabilityProbeEvent | null {
+    const observedApp = String(observedAppAfterAction || "").trim().toLowerCase();
     const candidates = events
       .filter((event) => this.mapProbeCapabilityToHumanAuthCapability(event.capability) !== null)
       .filter((event) => !this.isPermissionDialogApp(event.packageName))
       .sort((a, b) => {
-        const priority = (event: CapabilityProbeEvent): number => {
-          if (event.capability === "payment") {
-            return 0;
+        if (observedApp) {
+          const aCurrent = a.packageName.toLowerCase() === observedApp ? 1 : 0;
+          const bCurrent = b.packageName.toLowerCase() === observedApp ? 1 : 0;
+          if (aCurrent !== bCurrent) {
+            return bCurrent - aCurrent;
           }
-          if (event.capability === "camera") {
-            return 1;
-          }
-          return 2;
-        };
-        const pa = priority(a);
-        const pb = priority(b);
-        if (pa !== pb) {
-          return pa - pb;
         }
         if (a.phase !== b.phase) {
           return a.phase === "requested" ? -1 : 1;
         }
         if (b.confidence !== a.confidence) {
           return b.confidence - a.confidence;
+        }
+        const aTs = Date.parse(a.observedAt || "");
+        const bTs = Date.parse(b.observedAt || "");
+        if (Number.isFinite(aTs) && Number.isFinite(bTs) && bTs !== aTs) {
+          return bTs - aTs;
         }
         if (a.packageName !== b.packageName) {
           return a.packageName.localeCompare(b.packageName);
@@ -2696,7 +1756,6 @@ export class AgentRuntime {
         `human_auth_probe skipped=reused capability=${capability} pkg=${event.packageName}`,
         `human_artifact=${cachedApproval.decision.artifactPath}`,
         cachedApproval.delegationMessage ? `delegation=${cachedApproval.delegationMessage}` : "",
-        cachedApproval.templateHint ? `delegation_template=${cachedApproval.templateHint}` : "",
       ].filter(Boolean);
     }
 
@@ -2755,7 +1814,6 @@ export class AgentRuntime {
       `human_auth_probe capability=${capability} status=${decision.status} pkg=${event.packageName}`,
       decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
       delegation?.message ? `delegation=${delegation.message}` : "",
-      delegation?.templateHint ? `delegation_template=${delegation.templateHint}` : "",
     ].filter(Boolean);
 
     if (!decision.approved) {
@@ -2975,146 +2033,126 @@ export class AgentRuntime {
     decision: HumanAuthDecision,
     currentApp: string,
   ): Promise<DelegationApplyResult | null> {
+    // Agentic delegation: we only describe the artifact to the Agent.
+    // The Agent decides how to use it (push files, type text, inject location, etc.)
+    // guided by the "Human Auth Delegation" skill.
+
     const messages: string[] = [];
-    let templateHint: string | null = null;
 
     const permissionDecision = await this.applyPermissionDialogDecision(capability, decision, currentApp);
     if (permissionDecision) {
       messages.push(permissionDecision.message);
-      if (permissionDecision.templateHint) {
-        templateHint = permissionDecision.templateHint;
-      }
     }
 
     if (!decision.approved || !decision.artifactPath) {
-      if (
-        decision.approved &&
-        !decision.artifactPath &&
-        capability === "oauth"
-      ) {
-        const cachedCredentials = this.getCachedOauthCredentials();
-        if (cachedCredentials) {
-          const reused = await this.applyCredentialDelegation(
-            cachedCredentials.username,
-            cachedCredentials.password,
-          );
-          messages.push(reused.message);
-          if (reused.templateHint) {
-            templateHint = reused.templateHint;
-          }
-        }
-      }
-      if (
-        decision.approved &&
-        !decision.artifactPath &&
-        (capability === "sms" || capability === "2fa" || capability === "qr" || capability === "voice")
-      ) {
-        const fallbackText = this.extractDelegatedTextFromDecisionMessage(decision.message);
-        if (fallbackText) {
-          const typed = await this.applyTextDelegation(fallbackText);
-          messages.push(typed.message);
-          if (typed.templateHint) {
-            templateHint = typed.templateHint;
-          }
-        }
-      }
       if (messages.length === 0) {
         return null;
       }
-      return {
-        message: messages.join(" ; "),
-        templateHint,
-      };
+      return { message: messages.join(" ; "), templateHint: null };
     }
+
     if (!fs.existsSync(decision.artifactPath)) {
       messages.push(`delegation artifact not found: ${decision.artifactPath}`);
-      return {
-        message: messages.join(" ; "),
-        templateHint,
-      };
+      return { message: messages.join(" ; "), templateHint: null };
     }
 
+    const summary = this.describeArtifact(decision.artifactPath, capability);
+    messages.push(summary);
+
+    return { message: messages.join(" ; "), templateHint: null };
+  }
+
+  private isFileArtifact(artifactPath: string): boolean {
+    const ext = path.extname(artifactPath).toLowerCase();
+    const fileExts = new Set([
+      ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".gif",
+      ".webm", ".ogg", ".mp3", ".wav", ".aac", ".m4a", ".opus", ".flac",
+      ".mp4", ".3gp", ".pdf", ".vcf", ".ics", ".csv",
+    ]);
+    return fileExts.has(ext);
+  }
+
+  private pushArtifactToDevice(artifactPath: string): string | null {
     try {
-      const artifactJson = this.readJsonArtifact(decision.artifactPath);
-      // Immediately delete sensitive artifacts from disk to avoid plaintext lingering.
-      if (this.shouldDeleteSensitiveDelegationArtifact(capability, artifactJson)) {
-        try {
-          fs.unlinkSync(decision.artifactPath);
-        } catch {
-          // Best-effort cleanup; file may already be removed.
-        }
+      const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
+      const ext = path.extname(artifactPath).toLowerCase() || ".bin";
+      const remoteName = `openpocket-human-auth-${Date.now()}${ext}`;
+      const remotePath = `/sdcard/Download/${remoteName}`;
+      this.emulator.runAdb(["-s", deviceId, "push", artifactPath, remotePath], 30_000);
+      try {
+        this.emulator.runAdb([
+          "-s", deviceId, "shell", "am", "broadcast",
+          "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+          "-d", `file://${remotePath}`,
+        ], 15_000);
+      } catch {
+        // best-effort media scan
       }
-      let artifactResult: DelegationApplyResult | null = null;
-
-      if (capability === "location") {
-        const geo = this.extractDelegatedGeo(artifactJson);
-        if (geo) {
-          artifactResult = await this.applyLocationDelegation(geo.lat, geo.lon);
-        }
-      }
-
-      // Credential delegation: match by oauth capability OR by artifact kind=credentials.
-      if (!artifactResult && (capability === "oauth" || artifactJson?.kind === "credentials")) {
-        const credentials = this.extractDelegatedCredentials(artifactJson);
-        if (credentials) {
-          artifactResult = await this.applyCredentialDelegation(credentials.username, credentials.password);
-        }
-      }
-
-      if (!artifactResult && (capability === "payment" || this.isPaymentArtifactKind(String(artifactJson?.kind ?? "")))) {
-        const paymentFields = this.extractDelegatedPaymentFields(artifactJson);
-        if (paymentFields.length > 0) {
-          artifactResult = await this.applyPaymentDelegation(paymentFields);
-        }
-      }
-
-      if (!artifactResult && (capability === "sms" || capability === "2fa" || capability === "qr" || capability === "voice")) {
-        const text = this.extractDelegatedText(artifactJson);
-        if (text) {
-          artifactResult = await this.applyTextDelegation(text);
-        }
-      }
-
-      if (!artifactResult && (artifactJson?.kind === "text" || artifactJson?.kind === "qr_text")) {
-        const text = this.extractDelegatedText(artifactJson);
-        if (text) {
-          artifactResult = await this.applyTextDelegation(text);
-        }
-      }
-
-      if (!artifactResult && artifactJson?.kind === "photos_multi") {
-        artifactResult = await this.applyMultiPhotoDelegation(artifactJson, decision.artifactPath);
-      }
-
-      if (!artifactResult && this.isAudioArtifactPath(decision.artifactPath)) {
-        artifactResult = await this.applyAudioDelegation(decision.artifactPath);
-      }
-
-      if (!artifactResult && this.isImageArtifactPath(decision.artifactPath)) {
-        artifactResult = await this.applyImageDelegation(decision.artifactPath);
-      }
-
-      if (!artifactResult) {
-        artifactResult = {
-          message: `delegation artifact stored at ${decision.artifactPath}`,
-          templateHint: null,
-        };
-      }
-      messages.push(artifactResult.message);
-      if (artifactResult.templateHint) {
-        templateHint = artifactResult.templateHint;
-      }
-      return {
-        message: messages.join(" ; "),
-        templateHint,
-      };
-    } catch (error) {
-      messages.push(`delegation apply failed: ${(error as Error).message}`);
-      return {
-        message: messages.join(" ; "),
-        templateHint,
-      };
+      return remotePath;
+    } catch {
+      return null;
     }
+  }
+
+  private describeArtifact(artifactPath: string, capability: HumanAuthCapability): string {
+    const ext = path.extname(artifactPath).toLowerCase();
+    const stats = fs.statSync(artifactPath);
+    const sizeKb = (stats.size / 1024).toFixed(1);
+    const lines: string[] = [];
+
+    lines.push(`artifact_path=${artifactPath}`);
+    lines.push(`artifact_size=${sizeKb}KB`);
+    lines.push(`capability=${capability}`);
+
+    const artifactJson = this.readJsonArtifact(artifactPath);
+    if (artifactJson) {
+      const kind = String(artifactJson.kind ?? "unknown");
+      lines.push(`artifact_kind=${kind}`);
+
+      if (kind === "geo" && typeof artifactJson.lat === "number" && typeof artifactJson.lon === "number") {
+        lines.push(`lat=${(artifactJson.lat as number).toFixed(6)} lon=${(artifactJson.lon as number).toFixed(6)}`);
+      } else if (kind === "text" || kind === "qr_text") {
+        const rawValue = String(artifactJson.value ?? "");
+        lines.push(`value_length=${rawValue.length}`);
+        lines.push("Read the artifact file to get the actual value.");
+      } else if (kind === "credentials") {
+        lines.push(`has_username=${Boolean(artifactJson.username)} has_password=${Boolean(artifactJson.password)}`);
+        lines.push("SENSITIVE: delete artifact after use with exec(\"rm <path>\")");
+      } else if (kind.startsWith("payment_card") || kind === "payment") {
+        const fieldKeys = Object.keys(artifactJson.fields ?? artifactJson.form_data ?? artifactJson).filter(
+          (k) => !["kind", "capability", "templateId", "capturedAt"].includes(k),
+        );
+        lines.push(`payment_fields=[${fieldKeys.join(",")}]`);
+        lines.push("SENSITIVE: delete artifact after use with exec(\"rm <path>\")");
+      } else if (kind === "photos_multi") {
+        const count = Array.isArray(artifactJson.photos) ? artifactJson.photos.length : 0;
+        lines.push(`photo_count=${count}`);
+      } else if (kind === "form") {
+        const fieldKeys = Object.keys(artifactJson.fields ?? artifactJson.form_data ?? {});
+        lines.push(`form_fields=[${fieldKeys.join(",")}]`);
+      }
+    }
+
+    // For file-type artifacts (images, audio, etc.), auto-push to Agent Phone
+    // so the Agent can access them via file pickers and app UIs.
+    if (this.isFileArtifact(artifactPath)) {
+      const devicePath = this.pushArtifactToDevice(artifactPath);
+      if (devicePath) {
+        lines.push(`device_path=${devicePath}`);
+        lines.push("File has been pushed to Agent Phone Downloads and is ready for selection in any file picker.");
+      } else {
+        lines.push("WARNING: failed to push file to Agent Phone. Use shell(\"adb push ...\") manually.");
+      }
+    } else if (!artifactJson) {
+      lines.push("artifact_type=binary");
+      const devicePath = this.pushArtifactToDevice(artifactPath);
+      if (devicePath) {
+        lines.push(`device_path=${devicePath}`);
+      }
+    }
+
+    lines.push("Use the Human Auth Delegation skill to decide how to apply this artifact.");
+    return lines.join(" | ");
   }
 
   // =========================================================================
@@ -3503,43 +2541,6 @@ export class AgentRuntime {
               }
             }
 
-            // Reuse cached oauth credentials on split Google sign-in pages.
-            // If password is already cached from previous step, skip a second human-auth prompt.
-            if (action.capability === "oauth") {
-              const cachedOauth = runtime.getCachedOauthCredentials();
-              if (cachedOauth?.password) {
-                const syntheticDecision: HumanAuthDecision = {
-                  requestId: "oauth-cached",
-                  approved: true,
-                  status: "approved",
-                  message: "Approved using cached oauth credentials from prior step.",
-                  decidedAt: nowIso(),
-                  artifactPath: null,
-                };
-                const delegation = await runtime.applyHumanDelegation("oauth", syntheticDecision, currentApp);
-                const delegationTemplate = delegation?.templateHint ?? null;
-                const resultText = [
-                  `Human auth ${syntheticDecision.status}: ${syntheticDecision.message}`,
-                  delegation?.message ? `delegation=${delegation.message}` : "",
-                  delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
-                ].filter(Boolean).join("\n");
-                runtime.workspace.appendStep(
-                  ctx.session,
-                  step,
-                  thought,
-                  JSON.stringify(action, null, 2),
-                  resultText,
-                  buildStepTrace(currentApp, "ok"),
-                );
-                ctx.traces.push({ step, action, result: resultText, thought, currentApp });
-                ctx.history.push("step " + step + ": action=request_human_auth decision=approved(cached_oauth)");
-                if (delegationTemplate) {
-                  ctx.history.push(`delegation_template ${delegationTemplate}`);
-                }
-                return { content: [{ type: "text" as const, text: resultText }], details: {} };
-              }
-            }
-
             if (!ctx.onHumanAuth) {
               const msg = `Human authorization required (${action.capability}), but no handler configured.`;
               ctx.failMessage = msg;
@@ -3582,12 +2583,10 @@ export class AgentRuntime {
             }
 
             const delegation = await runtime.applyHumanDelegation(action.capability, decision, currentApp);
-            const delegationTemplate = delegation?.templateHint ?? null;
             const resultText = [
               `Human auth ${decision.status}: ${decision.message}`,
               decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
               delegation?.message ? `delegation=${delegation.message}` : "",
-              delegationTemplate ? `delegation_template=${delegationTemplate}` : "",
             ].filter(Boolean).join("\n");
             runtime.workspace.appendStep(
               ctx.session,
@@ -3599,9 +2598,6 @@ export class AgentRuntime {
             );
             ctx.traces.push({ step, action, result: resultText, thought, currentApp });
             ctx.history.push(`step ${step}: action=request_human_auth decision=${decision.status}`);
-            if (delegationTemplate) {
-              ctx.history.push(`delegation_template ${delegationTemplate}`);
-            }
 
             if (!decision.approved) {
               ctx.failMessage = `Human authorization ${decision.status}: ${decision.message}`;
@@ -4131,7 +3127,6 @@ export class AgentRuntime {
           if (shouldReturnHome) {
             await this.safeReturnToHome();
           }
-          this.clearCachedOauthCredentials();
           this.busy = false;
           this.currentTask = null;
           this.currentTaskStartedAtMs = null;

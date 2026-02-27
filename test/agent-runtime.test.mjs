@@ -1448,8 +1448,7 @@ test("AgentRuntime still requests human auth for camera capability while local V
   );
 });
 
-test("AgentRuntime applies OTP code from manual approval note when no artifact is provided", async () => {
-  const actions = [];
+test("AgentRuntime returns approval message to agent when no artifact is provided (agentic delegation)", async () => {
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
@@ -1470,10 +1469,7 @@ test("AgentRuntime applies OTP code from manual approval note when no artifact i
     queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
+    executeAction: async () => "ok",
   };
 
   const result = await runtime.runTask(
@@ -1491,19 +1487,15 @@ test("AgentRuntime applies OTP code from manual approval note when no artifact i
   );
 
   assert.equal(result.ok, true);
-  assert.equal(actions.some((action) => action.type === "type" && action.text === "123456"), true);
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /Human auth approved/i);
 });
 
-test("AgentRuntime applies delegated text artifact after human auth approval", async () => {
-  const actions = [];
+test("AgentRuntime describes text artifact to agent after human auth approval (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-text-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "text",
-      value: "123456",
-      capability: "2fa",
-    }),
+    JSON.stringify({ kind: "text", value: "123456", capability: "2fa" }),
     "utf-8",
   );
 
@@ -1512,12 +1504,7 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
     scriptedSteps: [
       {
         thought: "Need OTP from phone",
-        action: {
-          type: "request_human_auth",
-          capability: "2fa",
-          instruction: "Input OTP code.",
-          timeoutSec: 90,
-        },
+        action: { type: "request_human_auth", capability: "2fa", instruction: "Input OTP code.", timeoutSec: 90 },
       },
       { thought: "Done", action: { type: "finish", message: "Completed after OTP delegation" } },
     ],
@@ -1527,45 +1514,34 @@ test("AgentRuntime applies delegated text artifact after human auth approval", a
     queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
+    executeAction: async () => "ok",
   };
 
   try {
     const result = await runtime.runTask(
       "delegated text test",
-      undefined,
-      undefined,
+      undefined, undefined,
       async () => ({
-        requestId: "req-text",
-        approved: true,
-        status: "approved",
-        message: "Code confirmed",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
+        requestId: "req-text", approved: true, status: "approved",
+        message: "Code confirmed", decidedAt: new Date().toISOString(), artifactPath: artifactFile,
       }),
     );
 
     assert.equal(result.ok, true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "123456"), true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=text/);
+    assert.match(sessionText, /value_length=6/);
+    assert.doesNotMatch(sessionText, /value=123456/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime applies delegated oauth credentials artifact after human auth approval", async () => {
-  const actions = [];
+test("AgentRuntime describes credentials artifact to agent after human auth approval (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "credentials",
-      username: "alice@example.com",
-      password: "S3cret-987",
-      capability: "oauth",
-    }),
+    JSON.stringify({ kind: "credentials", username: "alice@example.com", password: "S3cret-987", capability: "oauth" }),
     "utf-8",
   );
 
@@ -1574,12 +1550,7 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
     scriptedSteps: [
       {
         thought: "Need account login",
-        action: {
-          type: "request_human_auth",
-          capability: "oauth",
-          instruction: "Provide account credentials.",
-          timeoutSec: 120,
-        },
+        action: { type: "request_human_auth", capability: "oauth", instruction: "Provide account credentials.", timeoutSec: 120 },
       },
       { thought: "Done", action: { type: "finish", message: "Completed after credential delegation" } },
     ],
@@ -1588,62 +1559,35 @@ test("AgentRuntime applies delegated oauth credentials artifact after human auth
   runtime.adb = {
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
-        return [
-          "<hierarchy>",
-          '<node index="0" text="" resource-id="com.demo:id/username" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[60,320][1020,430]" />',
-          '<node index="1" text="" resource-id="com.demo:id/password" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="true" selected="false" bounds="[60,460][1020,570]" />',
-          "</hierarchy>",
-        ].join("");
-      }
-      return "ok";
-    },
+    executeAction: async () => "ok",
   };
 
   try {
     const result = await runtime.runTask(
       "delegated oauth credentials test",
-      undefined,
-      undefined,
+      undefined, undefined,
       async () => ({
-        requestId: "req-oauth",
-        approved: true,
-        status: "approved",
-        message: "Credentials shared",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
+        requestId: "req-oauth", approved: true, status: "approved",
+        message: "Credentials shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile,
       }),
     );
 
     assert.equal(result.ok, true);
-    assert.equal(actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_username"), true);
-    assert.equal(actions.some((action) => action.type === "tap" && action.reason === "human_auth_focus_password"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "alice@example.com"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "S3cret-987"), true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=credentials/);
+    assert.match(sessionText, /has_username=true/);
+    assert.match(sessionText, /has_password=true/);
+    assert.match(sessionText, /SENSITIVE/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime applies delegated payment artifact after human auth approval", async () => {
-  const actions = [];
+test("AgentRuntime describes payment artifact to agent after human auth approval (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-payment-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "payment_card_v1",
-      cardNumber: "4111111111111111",
-      expiry: "02/32",
-      cvc: "182",
-      capability: "payment",
-    }),
+    JSON.stringify({ kind: "payment_card_v1", cardNumber: "4111111111111111", expiry: "02/32", cvc: "182", capability: "payment" }),
     "utf-8",
   );
 
@@ -1652,12 +1596,7 @@ test("AgentRuntime applies delegated payment artifact after human auth approval"
     scriptedSteps: [
       {
         thought: "Need payment details",
-        action: {
-          type: "request_human_auth",
-          capability: "payment",
-          instruction: "Provide payment card data.",
-          timeoutSec: 120,
-        },
+        action: { type: "request_human_auth", capability: "payment", instruction: "Provide payment card data.", timeoutSec: 120 },
       },
       { thought: "Done", action: { type: "finish", message: "Completed after delegated payment fields" } },
     ],
@@ -1666,252 +1605,95 @@ test("AgentRuntime applies delegated payment artifact after human auth approval"
   runtime.adb = {
     captureScreenSnapshot: () => makeSnapshot(),
     resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
-        return [
-          "<hierarchy>",
-          '<node index="0" text="Card number" resource-id="com.demo:id/card_number" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,320][1020,430]" />',
-          '<node index="1" text="Expiration date, 2 digit month, 2 digit year" resource-id="com.demo:id/expiry" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,460][520,570]" />',
-          '<node index="2" text="Security code" resource-id="com.demo:id/cvc" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[560,460][1020,570]" />',
-          "</hierarchy>",
-        ].join("");
-      }
-      return "ok";
-    },
+    executeAction: async () => "ok",
   };
 
   try {
     const result = await runtime.runTask(
       "delegated payment test",
-      undefined,
-      undefined,
+      undefined, undefined,
       async () => ({
-        requestId: "req-payment",
-        approved: true,
-        status: "approved",
-        message: "Payment details shared",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
+        requestId: "req-payment", approved: true, status: "approved",
+        message: "Payment details shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile,
       }),
     );
 
     assert.equal(result.ok, true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "4111111111111111"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "02/32"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "182"), true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=payment_card_v1/);
+    assert.match(sessionText, /SENSITIVE/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime applies delegated payment form artifact with billing fields", async () => {
-  const actions = [];
+test("AgentRuntime describes payment form artifact with billing fields to agent (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-payment-form-${Date.now()}.json`);
-  const cardKey = buildPaymentArtifactKey("card_number", "card_number", 0);
-  const expiryKey = buildPaymentArtifactKey("expiry", "expiry", 0);
-  const cvcKey = buildPaymentArtifactKey("cvc", "cvc", 0);
-  const nameKey = buildPaymentArtifactKey("billing_name", "billing_name", 0);
-  const emailKey = buildPaymentArtifactKey("billing_email", "billing_email", 0);
-  const addressKey = buildPaymentArtifactKey("billing_address_line1", "billing_address", 0);
-  const zipKey = buildPaymentArtifactKey("postal_code", "postal_code", 0);
-
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "form",
-      capability: "payment",
-      fields: {
-        [cardKey]: "4111111111111111",
-        [expiryKey]: "02/32",
-        [cvcKey]: "182",
-        [nameKey]: "Sergio Chan",
-        [emailKey]: "sergio@example.com",
-        [addressKey]: "1 Market St",
-        [zipKey]: "94105",
-      },
-    }),
+    JSON.stringify({ kind: "form", capability: "payment", fields: { card_number: "4111111111111111", expiry: "02/32", cvc: "182" } }),
     "utf-8",
   );
 
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
-      {
-        thought: "Need payment details",
-        action: {
-          type: "request_human_auth",
-          capability: "payment",
-          instruction: "Provide secure payment fields.",
-          timeoutSec: 120,
-        },
-      },
+      { thought: "Need payment details", action: { type: "request_human_auth", capability: "payment", instruction: "Provide secure payment fields.", timeoutSec: 120 } },
       { thought: "Done", action: { type: "finish", message: "Completed after delegated payment form fields" } },
     ],
   });
 
-  runtime.adb = {
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
-        return [
-          "<hierarchy>",
-          '<node index="0" text="Card number" resource-id="com.demo:id/card_number" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,320][1020,430]" />',
-          '<node index="1" text="Expiration" resource-id="com.demo:id/expiry" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,440][520,550]" />',
-          '<node index="2" text="Security code" resource-id="com.demo:id/cvc" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="true" bounds="[560,440][1020,550]" />',
-          '<node index="3" text="Name" resource-id="com.demo:id/billing_name" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,560][1020,670]" />',
-          '<node index="4" text="Email" resource-id="com.demo:id/billing_email" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,680][1020,790]" />',
-          '<node index="5" text="Billing address" resource-id="com.demo:id/billing_address" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,800][1020,910]" />',
-          '<node index="6" text="ZIP Code" resource-id="com.demo:id/postal_code" class="android.widget.EditText" package="com.demo" content-desc="" clickable="true" enabled="true" focusable="true" password="false" bounds="[60,920][520,1030]" />',
-          "</hierarchy>",
-        ].join("");
-      }
-      return "ok";
-    },
-  };
+  runtime.adb = { captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "emulator-5554", executeAction: async () => "ok" };
 
   try {
-    const result = await runtime.runTask(
-      "delegated payment form test",
-      undefined,
-      undefined,
-      async () => ({
-        requestId: "req-payment-form",
-        approved: true,
-        status: "approved",
-        message: "Payment form details shared",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
-      }),
+    const result = await runtime.runTask("delegated payment form test", undefined, undefined,
+      async () => ({ requestId: "req-payment-form", approved: true, status: "approved", message: "Payment form details shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile }),
     );
-
     assert.equal(result.ok, true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "4111111111111111"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "02/32"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "182"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "Sergio Chan"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "sergio@example.com"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "1 Market St"), true);
-    assert.equal(actions.some((action) => action.type === "type" && action.text === "94105"), true);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=form/);
+    assert.match(sessionText, /form_fields=\[/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime supports split oauth screens with cached credentials reuse", async () => {
-  const actions = [];
+test("AgentRuntime sends each oauth request to human auth in agentic mode (no cached credential reuse)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-credentials-split-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "credentials",
-      username: "alice@example.com",
-      password: "S3cret-987",
-      capability: "oauth",
-    }),
+    JSON.stringify({ kind: "credentials", username: "alice@example.com", password: "S3cret-987", capability: "oauth" }),
     "utf-8",
   );
 
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
-      {
-        thought: "Need Google account username",
-        action: {
-          type: "request_human_auth",
-          capability: "oauth",
-          instruction: "Provide account credentials.",
-          timeoutSec: 120,
-        },
-      },
-      {
-        thought: "Need Google password on next screen",
-        action: {
-          type: "request_human_auth",
-          capability: "oauth",
-          instruction: "Continue oauth login",
-          timeoutSec: 120,
-        },
-      },
+      { thought: "Need Google account username", action: { type: "request_human_auth", capability: "oauth", instruction: "Provide account credentials.", timeoutSec: 120 } },
+      { thought: "Need Google password on next screen", action: { type: "request_human_auth", capability: "oauth", instruction: "Continue oauth login", timeoutSec: 120 } },
       { thought: "Done", action: { type: "finish", message: "Completed split oauth login" } },
     ],
   });
 
-  runtime.adb = {
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      actions.push(action);
-      return "ok";
-    },
-  };
-  let dumpReads = 0;
-  runtime.emulator = {
-    runAdb: (args) => {
-      if (Array.isArray(args) && args.includes("cat") && args.some((item) => String(item).includes("openpocket-uidump"))) {
-        dumpReads += 1;
-        if (dumpReads === 1) {
-          return [
-            "<hierarchy>",
-            '<node index="0" text="" resource-id="com.demo:id/identifierId" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[60,320][1020,430]" />',
-            "</hierarchy>",
-          ].join("");
-        }
-        return [
-          "<hierarchy>",
-          '<node index="0" text="" resource-id="com.demo:id/password" class="android.widget.EditText" package="com.demo" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="true" selected="false" bounds="[60,460][1020,570]" />',
-          "</hierarchy>",
-        ].join("");
-      }
-      return "ok";
-    },
-  };
+  runtime.adb = { captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "emulator-5554", executeAction: async () => "ok" };
 
   let authCalls = 0;
   try {
-    const result = await runtime.runTask(
-      "split oauth login test",
-      undefined,
-      undefined,
+    const result = await runtime.runTask("split oauth login test", undefined, undefined,
       async () => {
         authCalls += 1;
-        if (authCalls > 1) {
-          throw new Error("oauth prompt should be auto-skipped when cached credentials are available");
-        }
         return {
-          requestId: "req-oauth-1",
-          approved: true,
-          status: "approved",
-          message: "Credentials shared",
-          decidedAt: new Date().toISOString(),
-          artifactPath: artifactFile,
+          requestId: `req-oauth-${authCalls}`, approved: true, status: "approved",
+          message: "Credentials shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile,
         };
       },
     );
 
     assert.equal(result.ok, true);
-    assert.equal(authCalls, 1);
-    const usernameTyped = actions.filter((action) => action.type === "type" && action.text === "alice@example.com");
-    const passwordTyped = actions.filter((action) => action.type === "type" && action.text === "S3cret-987");
-    assert.equal(usernameTyped.length >= 1, true);
-    assert.equal(passwordTyped.length >= 1, true);
-    // Username should be typed before password across split screens.
-    const firstUsernameIndex = actions.findIndex((action) => action.type === "type" && action.text === "alice@example.com");
-    const firstPasswordIndex = actions.findIndex((action) => action.type === "type" && action.text === "S3cret-987");
-    assert.equal(firstUsernameIndex >= 0, true);
-    assert.equal(firstPasswordIndex > firstUsernameIndex, true);
+    // In agentic mode, both oauth requests go through to human auth handler.
+    assert.equal(authCalls, 2);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=credentials/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
@@ -2006,162 +1788,65 @@ test("AgentRuntime redacts raw request_user_input text from session log", async 
   assert.doesNotMatch(sessionText, /CA-7XZ019/);
 });
 
-test("AgentRuntime applies delegated location artifact after human auth approval", async () => {
-  const adbActions = [];
-  const emulatorCommands = [];
+test("AgentRuntime describes location artifact to agent after human auth approval (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-geo-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "geo",
-      lat: 37.785834,
-      lon: -122.406417,
-      capability: "location",
-    }),
+    JSON.stringify({ kind: "geo", lat: 37.785834, lon: -122.406417, capability: "location" }),
     "utf-8",
   );
 
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
-      {
-        thought: "Need real location",
-        action: {
-          type: "request_human_auth",
-          capability: "location",
-          instruction: "Share current location.",
-          timeoutSec: 90,
-        },
-      },
+      { thought: "Need real location", action: { type: "request_human_auth", capability: "location", instruction: "Share current location.", timeoutSec: 90 } },
       { thought: "Done", action: { type: "finish", message: "Completed after delegated location" } },
     ],
   });
 
-  runtime.adb = {
-    queryLaunchablePackages: () => [],
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async (action) => {
-      adbActions.push(action);
-      return "ok";
-    },
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      emulatorCommands.push(args);
-      return "ok";
-    },
-  };
+  runtime.adb = { queryLaunchablePackages: () => [], captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "emulator-5554", executeAction: async () => "ok" };
 
   try {
-    const result = await runtime.runTask(
-      "delegated geo test",
-      undefined,
-      undefined,
-      async () => ({
-        requestId: "req-geo",
-        approved: true,
-        status: "approved",
-        message: "Location shared",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
-      }),
+    const result = await runtime.runTask("delegated geo test", undefined, undefined,
+      async () => ({ requestId: "req-geo", approved: true, status: "approved", message: "Location shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile }),
     );
-
     assert.equal(result.ok, true);
-    assert.equal(
-      emulatorCommands.some(
-        (args) =>
-          Array.isArray(args)
-          && args.includes("emu")
-          && args.includes("geo")
-          && args.includes("fix")
-          && args.includes(String(-122.406417))
-          && args.includes(String(37.785834)),
-      ),
-      true,
-    );
-    assert.equal(adbActions.some((action) => action.type === "type"), false);
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_kind=geo/);
+    assert.match(sessionText, /lat=37\.785834/);
+    assert.match(sessionText, /lon=-122\.406417/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
 });
 
-test("AgentRuntime injects delegated location on physical target via cmd location", async () => {
-  const emulatorCommands = [];
+test("AgentRuntime describes location artifact on physical target to agent (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-geo-physical-${Date.now()}.json`);
   fs.writeFileSync(
     artifactFile,
-    JSON.stringify({
-      kind: "geo",
-      lat: 40.7128,
-      lon: -74.006,
-      capability: "location",
-    }),
+    JSON.stringify({ kind: "geo", lat: 40.7128, lon: -74.006, capability: "location" }),
     "utf-8",
   );
 
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
-      {
-        thought: "Need real location",
-        action: {
-          type: "request_human_auth",
-          capability: "location",
-          instruction: "Share current location.",
-          timeoutSec: 90,
-        },
-      },
+      { thought: "Need real location", action: { type: "request_human_auth", capability: "location", instruction: "Share current location.", timeoutSec: 90 } },
       { thought: "Done", action: { type: "finish", message: "Completed after delegated location" } },
     ],
   });
 
   runtime.config.target.type = "physical-phone";
-  runtime.adb = {
-    queryLaunchablePackages: () => [],
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "physical-serial-1",
-    executeAction: async () => "ok",
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      emulatorCommands.push(args);
-      if (Array.isArray(args) && args.includes("emu") && args.includes("geo")) {
-        throw new Error("geo fix is not available on real devices");
-      }
-      return "ok";
-    },
-  };
+  runtime.adb = { queryLaunchablePackages: () => [], captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "physical-serial-1", executeAction: async () => "ok" };
 
   try {
-    const result = await runtime.runTask(
-      "delegated geo physical test",
-      undefined,
-      undefined,
-      async () => ({
-        requestId: "req-geo-physical",
-        approved: true,
-        status: "approved",
-        message: "Location shared",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
-      }),
+    const result = await runtime.runTask("delegated geo physical test", undefined, undefined,
+      async () => ({ requestId: "req-geo-physical", approved: true, status: "approved", message: "Location shared", decidedAt: new Date().toISOString(), artifactPath: artifactFile }),
     );
-
     assert.equal(result.ok, true);
-    assert.equal(
-      emulatorCommands.some(
-        (args) =>
-          Array.isArray(args)
-          && args.includes("cmd")
-          && args.includes("location")
-          && args.includes("set-test-provider-location"),
-      ),
-      true,
-    );
     const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
-    assert.match(sessionText, /delegated location injected .*cmd_location/i);
+    assert.match(sessionText, /artifact_kind=geo/);
+    assert.match(sessionText, /lat=40\.712800/);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }
@@ -2221,68 +1906,32 @@ test("AgentRuntime pre-finish capability probe escalates human auth on sensitive
   assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
 });
 
-test("AgentRuntime appends gallery template hint after delegated image artifact", async () => {
-  const emulatorCommands = [];
-  const observedUserPrompts = [];
+test("AgentRuntime describes image artifact and pushes to device (agentic delegation)", async () => {
   const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-image-${Date.now()}.jpg`);
   fs.writeFileSync(artifactFile, Buffer.from("fake-image-bytes"));
 
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,
     scriptedSteps: [
-      {
-        thought: "Need delegated camera capture",
-        action: {
-          type: "request_human_auth",
-          capability: "camera",
-          instruction: "Capture an image from real device camera.",
-          timeoutSec: 120,
-        },
-      },
+      { thought: "Need delegated camera capture", action: { type: "request_human_auth", capability: "camera", instruction: "Capture an image from real device camera.", timeoutSec: 120 } },
       { thought: "Continue with picker", action: { type: "finish", message: "Completed with delegated image" } },
     ],
-    hooks: {
-      captureUserPrompt: observedUserPrompts,
-    },
   });
 
-  runtime.adb = {
-    queryLaunchablePackages: () => [],
-    captureScreenSnapshot: () => makeSnapshot(),
-    resolveDeviceId: () => "emulator-5554",
-    executeAction: async () => "ok",
-  };
-  runtime.emulator = {
-    runAdb: (args) => {
-      emulatorCommands.push(args);
-      return "ok";
-    },
-  };
+  const pushCommands = [];
+  runtime.adb = { queryLaunchablePackages: () => [], captureScreenSnapshot: () => makeSnapshot(), resolveDeviceId: () => "emulator-5554", executeAction: async () => "ok" };
+  runtime.emulator = { runAdb: (args) => { pushCommands.push(args); return "ok"; } };
 
   try {
-    const result = await runtime.runTask(
-      "delegated image template test",
-      undefined,
-      undefined,
-      async () => ({
-        requestId: "req-image",
-        approved: true,
-        status: "approved",
-        message: "Image captured",
-        decidedAt: new Date().toISOString(),
-        artifactPath: artifactFile,
-      }),
+    const result = await runtime.runTask("delegated image template test", undefined, undefined,
+      async () => ({ requestId: "req-image", approved: true, status: "approved", message: "Image captured", decidedAt: new Date().toISOString(), artifactPath: artifactFile }),
     );
-
     assert.equal(result.ok, true);
-    assert.equal(
-      emulatorCommands.some((args) => Array.isArray(args) && args.includes("push") && args.includes(artifactFile)),
-      true,
-    );
-    assert.equal(
-      observedUserPrompts.some((text, index) => index > 0 && text.includes("delegation_template gallery_import_template")),
-      true,
-    );
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /artifact_path=/);
+    assert.match(sessionText, /device_path=.*sdcard.*Download/);
+    assert.match(sessionText, /pushed to Agent Phone/);
+    assert.equal(pushCommands.some((args) => Array.isArray(args) && args.includes("push")), true);
   } finally {
     fs.rmSync(artifactFile, { force: true });
   }

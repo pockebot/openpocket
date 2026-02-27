@@ -5,9 +5,14 @@
 Allow `request_human_auth` to render request-specific authorization pages instead of a fixed portal,
 while keeping approval and delegated artifacts local-first and auditable.
 
-## Current Implemented Layer
+Post-approval artifact handling is fully **agentic** — the runtime describes artifacts to the Agent,
+and the Agent decides how to apply them guided by capability-specific Skills.
 
-OpenPocket now supports dynamic portal rendering driven by `uiTemplate`:
+## Current Implemented Layers
+
+### 1) Dynamic Portal Rendering
+
+OpenPocket supports dynamic portal rendering driven by `uiTemplate`:
 
 - fixed secure shell sections (remote connection controls, context, title)
 - per-request override (`title`, `summary`, `style`, `fields`, attachment toggles)
@@ -15,65 +20,82 @@ OpenPocket now supports dynamic portal rendering driven by `uiTemplate`:
 - native Agent Loop path: coding tools can generate JSON template files and pass `templatePath`
 - artifact policy (`artifactKind`, `requireArtifactOnApprove`)
 
-This gives immediate flexibility for login, payment, media, and custom form collection without shipping a new hardcoded capability page for every case.
+Portal security:
 
-## Feasibility Assessment
+- CSP meta tag restricts all network requests to same-origin
+- `middleScript`/`approveScript` run via `new Function()` with synchronous API contract
+- one-time token model; token not exposed to custom scripts
 
-### 1) Dynamic auth page generation from agent requests
+### 2) Agentic Delegation (Skill-Driven)
 
-Feasible now and implemented.
+After human approval, the runtime does NOT auto-apply artifacts. Instead:
 
-- transport already exists (`request_human_auth` -> bridge -> relay)
-- relay can safely sanitize and render dynamic schema
-- approved payload returns as a typed artifact for runtime application
+1. Artifact is saved to `state/human-auth-artifacts/`.
+2. `describeArtifact()` generates a structured summary (kind, size, fields, sensitivity flags).
+3. Summary is returned to the Agent as tool result text.
+4. Agent reads the relevant Human Auth Skill and decides what to do.
 
-### 2) Reusable template registry
+**Sensitive data protection:** OTP/verification code values are NOT included in the description or session logs. Only `value_length=N` is recorded. The Agent reads actual values from the artifact file.
 
-Feasible with low risk.
+### 3) Capability Probe (System-Level Detection)
 
-Recommended next layer:
+`PhoneUseCapabilityProbe` monitors ADB signals (appops, camera service, logcat activity intents) to detect when apps on Agent Phone request hardware capabilities (camera, microphone, location, photos).
 
-- add `templateId + templateVersion`
-- persist template specs under local state (e.g. `state/human-auth-templates/`)
-- allow runtime to reuse the same template by id without regenerating fields each time
+When detected, the runtime automatically:
+- Constructs an appropriate `uiTemplate` based on the detected capability type
+- Sends a Human Auth request to the human
 
-### 3) Agent-authored page code generation (coding agent)
+This is a **system-level safety mechanism** — it runs before the Agent has a chance to react, ensuring sensitive hardware access is always gated through human authorization. The template construction uses a simple mapping (camera → photo attachment, microphone → audio attachment, etc.) which is intentionally hardcoded infrastructure, not agent decision logic.
 
-Feasible with guardrails.
+### 4) SSE Decision Notification
 
-Recommended architecture:
+The relay server supports Server-Sent Events for instant decision notification:
 
-- treat generated page code as a plugin renderer behind a strict sandbox contract
-- base renderer remains schema-driven fallback
-- generated code can only receive whitelisted request payload, no raw local secrets
-- generated output must pass static checks (size, forbidden APIs, CSP-compatible)
+- `GET /v1/human-auth/requests/:id/events?pollToken=...`
+- Sends `event: decision` with full payload when resolved
+- 15-second keepalive with proactive timeout checking
+- Bridge tries SSE first, falls back to traditional polling
 
-### 4) Human Phone hardware passthrough (camera/mic/location/album)
+## Human Auth Skills
 
-Partially feasible, but should be phased.
+Each capability has a dedicated Skill file in `skills/human-auth-*/SKILL.md`:
 
-- **Immediate safe model (implemented):** approval + artifact delegation
-  - Human Phone captures/chooses data
-  - relay returns artifact to Agent Phone runtime
-- **Future advanced model:** live capability streaming (for example WebRTC bridge)
-  - higher complexity: latency, reliability, trust model, attack surface
-  - should be isolated as a separate capability provider layer, not mixed with basic auth portal
+```
+skills/
+  human-auth-delegation/SKILL.md   # Overview and artifact type reference
+  human-auth-camera/SKILL.md       # Photo capture → push → picker flow
+  human-auth-photos/SKILL.md       # Album selection (single + multi)
+  human-auth-microphone/SKILL.md   # Audio recording → push → file picker
+  human-auth-location/SKILL.md     # GPS injection (emulator) / manual input (device)
+  human-auth-oauth/SKILL.md        # Credential reading → login form fill
+  human-auth-payment/SKILL.md      # Card field reading → checkout form fill
+  human-auth-sms-2fa/SKILL.md      # OTP code reading → verification input
+  human-auth-qr/SKILL.md           # QR scan result handling
+  human-auth-nfc/SKILL.md          # NFC/RFID data handling
+  human-auth-biometric/SKILL.md    # Biometric auth + PIN fallback
+  human-auth-contacts-data/SKILL.md # Contacts/calendar/file import
+```
 
-## Recommended Target Architecture
+Skills are discovered by `SkillLoader` and appear in the Agent's `<available_skills>` context. The Agent can `read()` any skill for detailed instructions.
+
+**Adding new capabilities requires only a new Skill markdown file** — no TypeScript code changes.
+
+## Architecture
 
 ```mermaid
 flowchart LR
   A["AgentRuntime"] --> B["request_human_auth"]
   B --> C["HumanAuthBridge"]
   C --> D["Relay API"]
-  D --> E["Schema Renderer (default)"]
-  D --> F["Generated Renderer (optional)"]
+  D --> E["Portal Renderer"]
   E --> G["Human Phone Browser"]
-  F --> G
   G --> D
   D --> H["Artifact Store"]
   H --> C
   C --> A
+  A --> SK["Read Skill"]
+  SK --> A
+  A --> T["Agent executes: shell/type/tap"]
 ```
 
 ## Security and Compliance Constraints
@@ -82,12 +104,14 @@ flowchart LR
 - Enforce `requireArtifactOnApprove` on both client and relay server.
 - Keep request state and artifacts local (`state/human-auth-relay/`, `state/human-auth-artifacts/`).
 - Keep one-time token model for open/poll channels.
-- Never allow generated portal code to access unrestricted filesystem or process APIs.
+- CSP restricts portal page network access to same-origin.
+- OTP/code values are not written to session logs (only length).
+- Skills instruct Agent to delete sensitive artifacts (credentials, payment) after use.
+- Artifact size limit: 20MB base64.
 
 ## Suggested Next Milestones
 
-1. Template registry + versioning
-2. Renderer selection (`schema` vs `generated`) with fallback
-3. Template lint + security validation pipeline
-4. Capability provider abstraction for future Human Phone live resource relay
-5. E2E suite for payment/card, media delegation, and custom template scenarios
+1. Template registry + versioning for reusable portal layouts
+2. WebRTC capability provider for live camera/microphone streaming (future layer)
+3. E2E test suite covering all 12 Human Auth Skills
+4. Skill contribution guide for open-source contributors

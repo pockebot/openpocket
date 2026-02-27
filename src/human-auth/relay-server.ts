@@ -1291,51 +1291,7 @@ export class HumanAuthRelayServer {
         <div id="cameraPrimaryMount"></div>
       </div>
 
-      <div class="section" id="decisionSection">
-        <div id="decisionMountDefault">
-          <div id="decisionBlock">
-            <div class="actions decisionActions">
-              <button id="approve" type="button">${approveLabelEscaped}</button>
-              <button id="reject" type="button">${rejectLabelEscaped}</button>
-            </div>
-            <div class="muted securityTrust">
-              Security: this is a one-time authorization link. All transmissions are encrypted. Relay and credential handling run only on your own computer.
-            </div>
-            <label for="note">${noteLabelEscaped}</label>
-            <textarea id="note" placeholder="${notePlaceholderEscaped}"></textarea>
-            <div class="status" id="status"></div>
-          </div>
-        </div>
-      </div>
-
       <div class="capabilityLine" id="capabilityHint"></div>
-
-      <div class="section">
-        <div class="takeover-head">
-          <h2>Optional Remote Takeover (Live)</h2>
-          <div class="takeover-meta" id="takeoverMeta">Preparing stream...</div>
-        </div>
-        <div class="takeover-actions">
-          <button id="takeoverStart" type="button">Open Live Stream</button>
-          <button id="takeoverStop" type="button">Stop Stream</button>
-          <button id="takeoverRefresh" type="button">Refresh Snapshot</button>
-        </div>
-        <div class="stream-wrap">
-          <img id="takeoverStream" alt="Emulator live stream" hidden />
-          <div class="stream-empty" id="takeoverEmpty">Connecting to emulator live stream...</div>
-        </div>
-        <div class="quick-keys">
-          <button id="keyBack" type="button">Back</button>
-          <button id="keyHome" type="button">Home</button>
-          <button id="keyRecents" type="button">Recents</button>
-          <button id="keyEnter" type="button">Enter</button>
-        </div>
-        <div class="takeover-input">
-          <input id="takeoverText" type="text" placeholder="Type text to emulator input field" />
-          <button id="takeoverSendText" type="button">Send Text</button>
-        </div>
-        <div class="takeover-status" id="takeoverStatus">Tip: tap inside live view to control emulator directly.</div>
-      </div>
 
       <div class="section" id="delegatedDataSection">
         <h2>Optional Delegated Data</h2>
@@ -1411,6 +1367,50 @@ export class HumanAuthRelayServer {
           <div class="muted" id="filePreview">No file attached yet.</div>
           <input id="fileInput" type="file" accept="*/*" hidden />
         </div>
+      </div>
+
+      <div class="section" id="decisionSection">
+        <div id="decisionMountDefault">
+          <div id="decisionBlock">
+            <div class="actions decisionActions">
+              <button id="approve" type="button">${approveLabelEscaped}</button>
+              <button id="reject" type="button">${rejectLabelEscaped}</button>
+            </div>
+            <div class="muted securityTrust">
+              Security: this is a one-time authorization link. All transmissions are encrypted. Relay and credential handling run only on your own computer.
+            </div>
+            <label for="note">${noteLabelEscaped}</label>
+            <textarea id="note" placeholder="${notePlaceholderEscaped}"></textarea>
+            <div class="status" id="status"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="takeover-head">
+          <h2>Optional Remote Takeover (Live)</h2>
+          <div class="takeover-meta" id="takeoverMeta">Preparing stream...</div>
+        </div>
+        <div class="takeover-actions">
+          <button id="takeoverStart" type="button">Open Live Stream</button>
+          <button id="takeoverStop" type="button">Stop Stream</button>
+          <button id="takeoverRefresh" type="button">Refresh Snapshot</button>
+        </div>
+        <div class="stream-wrap">
+          <img id="takeoverStream" alt="Emulator live stream" hidden />
+          <div class="stream-empty" id="takeoverEmpty">Connecting to emulator live stream...</div>
+        </div>
+        <div class="quick-keys">
+          <button id="keyBack" type="button">Back</button>
+          <button id="keyHome" type="button">Home</button>
+          <button id="keyRecents" type="button">Recents</button>
+          <button id="keyEnter" type="button">Enter</button>
+        </div>
+        <div class="takeover-input">
+          <input id="takeoverText" type="text" placeholder="Type text to emulator input field" />
+          <button id="takeoverSendText" type="button">Send Text</button>
+        </div>
+        <div class="takeover-status" id="takeoverStatus">Tip: tap inside live view to control emulator directly.</div>
       </div>
 
       <details class="context">
@@ -1536,6 +1536,11 @@ export class HumanAuthRelayServer {
 
     function isCameraPrimaryFlowEnabled() {
       return capability === "camera" && Boolean(uiTemplate.allowPhotoAttachment);
+    }
+
+    function isAlbumPrimaryFlow() {
+      var cap = String(capability || "").trim().toLowerCase();
+      return (cap === "files" || cap === "photos") && Boolean(uiTemplate.allowPhotoAttachment);
     }
 
     function focusCameraPrimarySection() {
@@ -1828,6 +1833,27 @@ export class HumanAuthRelayServer {
       photoInputEl.multiple = !useCameraPrimaryFlow;
       if (snapCamBtn && "disabled" in snapCamBtn) {
         snapCamBtn.disabled = true;
+      }
+
+      if (isAlbumPrimaryFlow() && !useCameraPrimaryFlow) {
+        if (pickPhotoBtn) {
+          pickPhotoBtn.textContent = "Choose From Album";
+          pickPhotoBtn.style.background = "var(--op-brand)";
+          pickPhotoBtn.style.color = "#121212";
+          pickPhotoBtn.style.borderColor = "rgba(255, 138, 0, 0.6)";
+        }
+        if (snapCamBtn) {
+          snapCamBtn.textContent = "Use Camera Instead";
+          snapCamBtn.style.background = "#f7f8fb";
+          snapCamBtn.style.color = "#2d3136";
+        }
+        if (cameraHelpTextEl) {
+          cameraHelpTextEl.textContent =
+            "Select photos from your phone album. You can also use the camera if needed.";
+        }
+        if (cameraPlaceholderEl) {
+          cameraPlaceholderEl.textContent = "Choose photos from your album, or use camera above.";
+        }
       }
 
       if (useCameraPrimaryFlow) {
