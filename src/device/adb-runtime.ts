@@ -537,6 +537,12 @@ export class AdbRuntime {
     if (keyguardAfterPin === false) {
       return;
     }
+    if (keyguardAfterPin !== true) {
+      // When lock state is unknown, avoid KEYCODE_MENU fallback.
+      // Some launchers map MENU to desktop customization (wallpaper/widgets),
+      // which can disrupt post-unlock automation flow.
+      return;
+    }
 
     try {
       this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_MENU"]);

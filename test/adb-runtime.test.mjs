@@ -348,6 +348,33 @@ test("AdbRuntime fails clearly when physical phone stays locked after unlock att
   );
 });
 
+test("AdbRuntime avoids KEYCODE_MENU fallback when lock state is unknown after PIN unlock", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "unable to resolve keyguard state",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", pin: "1234" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 140, y: 320 });
+  assert.match(result, /Tapped at/i);
+  assert.equal(
+    emulator.calls.some(
+      (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_MENU",
+    ),
+    false,
+  );
+});
+
 test("AdbRuntime falls back to default PIN when physical PIN is empty", async () => {
   const emulator = new FakeEmulator({
     powerDumps: ["mInteractive=true"],
