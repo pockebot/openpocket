@@ -28,7 +28,7 @@ function defaultConfigObject() {
       type: "emulator" as const,
       adbEndpoint: "",
       virtualPhonePin: "1234",
-      physicalPhonePin: "",
+      physicalPhonePin: "1234",
       cloudProvider: "",
     },
     emulator: {
@@ -699,7 +699,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       type: normalizeDeviceTargetType(target.type),
       adbEndpoint: String(target.adbEndpoint ?? "").trim(),
       virtualPhonePin: normalizeFourDigitPin(target.virtualPhonePin, "1234"),
-      physicalPhonePin: normalizeFourDigitPin(target.physicalPhonePin, ""),
+      physicalPhonePin: normalizeFourDigitPin(target.physicalPhonePin, "1234"),
       cloudProvider: String(target.cloudProvider ?? "").trim(),
     },
     emulator: {

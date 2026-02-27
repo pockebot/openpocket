@@ -580,14 +580,11 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
     cfg.target.virtualPhonePin = "1234";
   }
   if (clearPhysicalPin) {
-    cfg.target.physicalPhonePin = "";
+    cfg.target.physicalPhonePin = "1234";
   }
 
   if (isEmulatorTarget(cfg.target.type)) {
     cfg.target.adbEndpoint = "";
-  }
-  if (cfg.target.type === "physical-phone" && !/^\d{4}$/.test(cfg.target.physicalPhonePin.trim())) {
-    throw new Error("Physical phone target requires --physical-pin <4-digit-pin> to enable auto unlock.");
   }
 
   const shouldPromptDeviceSelection =

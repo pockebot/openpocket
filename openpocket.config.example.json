@@ -12,7 +12,7 @@
     "type": "emulator",
     "adbEndpoint": "",
     "virtualPhonePin": "1234",
-    "physicalPhonePin": "",
+    "physicalPhonePin": "1234",
     "cloudProvider": ""
   },
   "emulator": {

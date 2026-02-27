@@ -344,12 +344,13 @@ test("AdbRuntime fails clearly when physical phone stays locked after unlock att
   );
 });
 
-test("AdbRuntime requires configured physical PIN before auto-unlock on locked phone", async () => {
+test("AdbRuntime falls back to default PIN when physical PIN is empty", async () => {
   const emulator = new FakeEmulator({
     powerDumps: ["mInteractive=true"],
     policyDumps: [
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=false",
     ],
   });
   const runtime = new AdbRuntime(
@@ -360,10 +361,22 @@ test("AdbRuntime requires configured physical PIN before auto-unlock on locked p
     emulator,
   );
 
-  await assert.rejects(
-    runtime.executeAction({ type: "tap", x: 90, y: 180 }),
-    /physicalPhonePin/i,
-  );
+  const result = await runtime.executeAction({ type: "tap", x: 90, y: 180 });
+  assert.match(result, /Tapped at/i);
+  for (const keycode of ["8", "9", "10", "11", "66"]) {
+    assert.equal(
+      emulator.calls.some(
+        (args) =>
+          args[0] === "-s"
+          && args[2] === "shell"
+          && args[3] === "input"
+          && args[4] === "keyevent"
+          && args[5] === keycode,
+      ),
+      true,
+      `missing keyevent ${keycode}`,
+    );
+  }
 });
 
 test("extractPackageName parses top resumed activity from activity dump", () => {

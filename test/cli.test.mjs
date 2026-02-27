@@ -39,7 +39,7 @@ test("init creates config and workspace files", () => {
   assert.equal(cfg.defaultModel, "gpt-5.2-codex");
   assert.equal(cfg.target.type, "emulator");
   assert.equal(cfg.target.virtualPhonePin, "1234");
-  assert.equal(cfg.target.physicalPhonePin, "");
+  assert.equal(cfg.target.physicalPhonePin, "1234");
 
   const mustFiles = [
     "AGENTS.md",
@@ -459,7 +459,7 @@ test("target set supports updating virtual phone PIN", () => {
   assert.equal(cfg.target.virtualPhonePin, "9876");
 });
 
-test("target set validates physical phone PIN for physical target", () => {
+test("target set uses default physical phone PIN for physical target", () => {
   const home = makeHome("openpocket-ts-target-set-pin-required-");
   const init = runCli(["init"], { OPENPOCKET_HOME: home });
   assert.equal(init.status, 0, init.stderr || init.stdout);
@@ -475,8 +475,11 @@ test("target set validates physical phone PIN for physical target", () => {
       OPENPOCKET_HOME: home,
     },
   );
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /--physical-pin/i);
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "physical-phone");
+  assert.equal(cfg.target.physicalPhonePin, "1234");
 });
 
 test("target set rejects non-4-digit PIN", () => {

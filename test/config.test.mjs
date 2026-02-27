@@ -51,7 +51,7 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.equal(cfg.target.type, "emulator");
     assert.equal(cfg.target.adbEndpoint, "");
     assert.equal(cfg.target.virtualPhonePin, "1234");
-    assert.equal(cfg.target.physicalPhonePin, "");
+    assert.equal(cfg.target.physicalPhonePin, "1234");
     assert.equal(cfg.target.cloudProvider, "");
     assert.equal(cfg.agent.returnHomeOnTaskEnd, true);
     assert.equal(cfg.agent.autoArtifactsEnabled, true);
