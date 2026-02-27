@@ -9,6 +9,9 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /Planning Loop/);
   assert.match(prompt, /deterministic action/);
   assert.match(prompt, /Human Authorization Policy/);
+  assert.match(prompt, /Device Ownership Model/);
+  assert.match(prompt, /Agent Phone/);
+  assert.match(prompt, /Human Phone/);
   assert.match(prompt, /Available Skills/);
   assert.match(prompt, /<available_skills>/);
   assert.match(prompt, /Skill Selection Protocol/);
@@ -54,6 +57,8 @@ test("buildSystemPrompt supports minimal mode", () => {
   assert.match(prompt, /Use request_user_decision only for non-sensitive preference\/choice disambiguation/i);
   assert.match(prompt, /Use request_user_input for non-sensitive short text values/i);
   assert.match(prompt, /Never use request_user_decision to collect credentials\/OTP\/payment/i);
+  assert.match(prompt, /Device model: Agent Phone is the controlled Android target/i);
+  assert.match(prompt, /default to Human Phone as the data source/i);
   assert.match(prompt, /already injected in this prompt/i);
   assert.match(prompt, /Workspace Prompt Context/);
   assert.match(prompt, /Tooling/);
@@ -76,6 +81,8 @@ test("buildSystemPrompt filters tool catalog when availableToolNames is provided
 test("buildSystemPrompt supports none mode", () => {
   const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A", { mode: "none" });
   assert.match(prompt, /Call exactly one tool step at a time/);
+  assert.match(prompt, /Device model: Agent Phone is the controlled Android device/i);
+  assert.match(prompt, /treat it as Human Phone data and use request_human_auth/i);
   assert.match(prompt, /permission dialogs/i);
   assert.doesNotMatch(prompt, /Workspace Prompt Context/);
   assert.doesNotMatch(prompt, /Available Skills/);
