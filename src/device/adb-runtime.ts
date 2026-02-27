@@ -338,21 +338,9 @@ export class AdbRuntime {
   }
 
   private resolveConfiguredUnlockPin(): string {
-    const targetType = this.targetType();
-    if (targetType === "physical-phone" || targetType === "android-tv") {
-      const physicalPin = String(this.config.target?.physicalPhonePin ?? "").trim();
-      if (/^\d{4}$/.test(physicalPin)) {
-        return physicalPin;
-      }
-      const virtualPinFallback = String(this.config.target?.virtualPhonePin ?? "").trim();
-      if (/^\d{4}$/.test(virtualPinFallback)) {
-        return virtualPinFallback;
-      }
-      return DEFAULT_LOCKSCREEN_PIN;
-    }
-    const virtualPin = String(this.config.target?.virtualPhonePin ?? "").trim();
-    if (/^\d{4}$/.test(virtualPin)) {
-      return virtualPin;
+    const configured = String(this.config.target?.pin ?? "").trim();
+    if (/^\d{4}$/.test(configured)) {
+      return configured;
     }
     return DEFAULT_LOCKSCREEN_PIN;
   }

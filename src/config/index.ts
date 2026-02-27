@@ -27,8 +27,7 @@ function defaultConfigObject() {
     target: {
       type: "emulator" as const,
       adbEndpoint: "",
-      virtualPhonePin: "1234",
-      physicalPhonePin: "1234",
+      pin: "1234",
       cloudProvider: "",
     },
     emulator: {
@@ -351,6 +350,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
   const targetMap: Record<string, string> = {
     target_type: "type",
     adb_endpoint: "adbEndpoint",
+    target_pin: "pin",
     virtual_phone_pin: "virtualPhonePin",
     physical_phone_pin: "physicalPhonePin",
     cloud_provider: "cloudProvider",
@@ -358,6 +358,13 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
   for (const [oldKey, newKey] of Object.entries(targetMap)) {
     if (oldKey in target && !(newKey in target)) {
       target[newKey] = target[oldKey];
+    }
+  }
+  if (!("pin" in target)) {
+    if ("physicalPhonePin" in target) {
+      target.pin = target.physicalPhonePin;
+    } else if ("virtualPhonePin" in target) {
+      target.pin = target.virtualPhonePin;
     }
   }
   if (Object.keys(target).length > 0) {
@@ -698,8 +705,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     target: {
       type: normalizeDeviceTargetType(target.type),
       adbEndpoint: String(target.adbEndpoint ?? "").trim(),
-      virtualPhonePin: normalizeFourDigitPin(target.virtualPhonePin, "1234"),
-      physicalPhonePin: normalizeFourDigitPin(target.physicalPhonePin, "1234"),
+      pin: normalizeFourDigitPin(target.pin, "1234"),
       cloudProvider: String(target.cloudProvider ?? "").trim(),
     },
     emulator: {

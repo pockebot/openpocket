@@ -8,15 +8,10 @@ export interface DeviceTargetConfig {
    */
   adbEndpoint: string;
   /**
-   * Default lock-screen PIN used for virtual agent phone workflows.
+   * Lock-screen PIN used for target auto-unlock.
    * Must be 4 digits when set.
    */
-  virtualPhonePin: string;
-  /**
-   * Physical phone lock-screen PIN used for auto-unlock.
-   * Must be 4 digits when set.
-   */
-  physicalPhonePin: string;
+  pin: string;
   /**
    * Reserved for cloud integrations. Current runtime still uses adb transport.
    */

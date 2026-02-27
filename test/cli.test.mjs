@@ -38,8 +38,7 @@ test("init creates config and workspace files", () => {
   assert.equal(cfg.projectName, "OpenPocket");
   assert.equal(cfg.defaultModel, "gpt-5.2-codex");
   assert.equal(cfg.target.type, "emulator");
-  assert.equal(cfg.target.virtualPhonePin, "1234");
-  assert.equal(cfg.target.physicalPhonePin, "1234");
+  assert.equal(cfg.target.pin, "1234");
 
   const mustFiles = [
     "AGENTS.md",
@@ -396,7 +395,7 @@ test("target show prints deployment target summary", () => {
   assert.equal(run.status, 0, run.stderr || run.stdout);
   assert.match(run.stdout, /Deployment Target/i);
   assert.match(run.stdout, /emulator/i);
-  assert.match(run.stdout, /Virtual phone PIN/i);
+  assert.match(run.stdout, /Phone PIN/i);
 });
 
 test("target set updates config for physical phone deployment", () => {
@@ -414,7 +413,7 @@ test("target set updates config for physical phone deployment", () => {
       "192.168.50.10",
       "--device",
       "R5CX123456A",
-      "--physical-pin",
+      "--pin",
       "2468",
     ],
     {
@@ -428,12 +427,11 @@ test("target set updates config for physical phone deployment", () => {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(cfg.target.type, "physical-phone");
   assert.equal(cfg.target.adbEndpoint, "192.168.50.10:5555");
-  assert.equal(cfg.target.virtualPhonePin, "1234");
-  assert.equal(cfg.target.physicalPhonePin, "2468");
+  assert.equal(cfg.target.pin, "2468");
   assert.equal(cfg.agent.deviceId, "R5CX123456A");
 });
 
-test("target set supports updating virtual phone PIN", () => {
+test("target set supports updating target PIN", () => {
   const home = makeHome("openpocket-ts-target-set-virtual-pin-");
   const init = runCli(["init"], { OPENPOCKET_HOME: home });
   assert.equal(init.status, 0, init.stderr || init.stdout);
@@ -444,7 +442,7 @@ test("target set supports updating virtual phone PIN", () => {
       "set",
       "--type",
       "emulator",
-      "--virtual-pin",
+      "--pin",
       "9876",
     ],
     {
@@ -456,7 +454,7 @@ test("target set supports updating virtual phone PIN", () => {
   const cfgPath = path.join(home, "config.json");
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(cfg.target.type, "emulator");
-  assert.equal(cfg.target.virtualPhonePin, "9876");
+  assert.equal(cfg.target.pin, "9876");
 });
 
 test("target set uses default physical phone PIN for physical target", () => {
@@ -479,7 +477,7 @@ test("target set uses default physical phone PIN for physical target", () => {
   const cfgPath = path.join(home, "config.json");
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(cfg.target.type, "physical-phone");
-  assert.equal(cfg.target.physicalPhonePin, "1234");
+  assert.equal(cfg.target.pin, "1234");
 });
 
 test("target set rejects non-4-digit PIN", () => {
@@ -491,7 +489,7 @@ test("target set rejects non-4-digit PIN", () => {
     [
       "target",
       "set",
-      "--virtual-pin",
+      "--pin",
       "12ab",
     ],
     {
