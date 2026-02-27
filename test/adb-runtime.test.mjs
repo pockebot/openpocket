@@ -375,6 +375,37 @@ test("AdbRuntime avoids KEYCODE_MENU fallback when lock state is unknown after P
   );
 });
 
+test("AdbRuntime retries PIN unlock once when first attempt still reports locked", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", pin: "1234" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 160, y: 360 });
+  assert.match(result, /Tapped at/i);
+  const digitOneCount = emulator.calls.filter(
+    (args) =>
+      args[0] === "-s"
+      && args[2] === "shell"
+      && args[3] === "input"
+      && args[4] === "keyevent"
+      && args[5] === "8",
+  ).length;
+  assert.equal(digitOneCount, 2);
+});
+
 test("AdbRuntime falls back to default PIN when physical PIN is empty", async () => {
   const emulator = new FakeEmulator({
     powerDumps: ["mInteractive=true"],

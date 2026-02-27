@@ -275,6 +275,7 @@ function errorMessage(error: unknown): string {
 
 const DEFAULT_LOCKSCREEN_PIN = "1234";
 const SCREEN_AWAKE_HEARTBEAT_MS = 3_000;
+const PIN_UNLOCK_MAX_ATTEMPTS = 2;
 
 type ScreenAwakeWorkerParams = {
   adbPath: string;
@@ -532,16 +533,25 @@ export class AdbRuntime {
       return;
     }
 
-    await this.attemptPinUnlock(deviceId, this.resolveConfiguredUnlockPin());
-    const keyguardAfterPin = this.isKeyguardShowing(deviceId);
-    if (keyguardAfterPin === false) {
-      return;
+    const configuredPin = this.resolveConfiguredUnlockPin();
+    for (let pinAttempt = 0; pinAttempt < PIN_UNLOCK_MAX_ATTEMPTS; pinAttempt += 1) {
+      await this.attemptPinUnlock(deviceId, configuredPin);
+      const keyguardAfterPin = this.isKeyguardShowing(deviceId);
+      if (keyguardAfterPin === false) {
+        return;
+      }
+      if (keyguardAfterPin !== true) {
+        return;
+      }
+      if (pinAttempt < PIN_UNLOCK_MAX_ATTEMPTS - 1) {
+        // Give keyguard a short settle window before retrying PIN entry.
+        await sleep(220);
+      }
     }
-    if (keyguardAfterPin === true) {
-      throw new Error(
-        `Target device '${deviceId}' is locked. Please unlock and keep the screen on, then retry.`,
-      );
-    }
+
+    throw new Error(
+      `Target device '${deviceId}' is locked. Please unlock and keep the screen on, then retry.`,
+    );
   }
 
   private shouldPrepareForAction(action: AgentAction): boolean {
