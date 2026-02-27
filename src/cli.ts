@@ -616,7 +616,13 @@ async function runAgentCommand(configPath: string | undefined, args: string[]): 
 
   const cfg = loadConfig(configPath);
   const agent = new AgentRuntime(cfg);
-  const result = await agent.runTask(task, model ?? undefined);
+  agent.startScreenAwakeHeartbeat(5_000);
+  let result: Awaited<ReturnType<AgentRuntime["runTask"]>>;
+  try {
+    result = await agent.runTask(task, model ?? undefined);
+  } finally {
+    agent.stopScreenAwakeHeartbeat();
+  }
   if (result.ok) {
     printSuccess(result.message);
   } else {

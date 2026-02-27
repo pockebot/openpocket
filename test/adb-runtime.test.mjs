@@ -150,6 +150,17 @@ class FakeEmulator {
   }
 }
 
+function countWakeupCalls(calls) {
+  return calls.filter(
+    (args) =>
+      args[0] === "-s"
+      && args[2] === "shell"
+      && args[3] === "input"
+      && args[4] === "keyevent"
+      && args[5] === "KEYCODE_WAKEUP",
+  ).length;
+}
+
 test("AdbRuntime uses clipboard paste for non-ASCII typing", async () => {
   const emulator = new FakeEmulator();
   const runtime = new AdbRuntime(makeConfig(), emulator);
@@ -377,6 +388,18 @@ test("AdbRuntime falls back to default PIN when physical PIN is empty", async ()
       `missing keyevent ${keycode}`,
     );
   }
+});
+
+test("AdbRuntime screen-awake heartbeat sends wakeup pulses independently", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  runtime.startScreenAwakeHeartbeat("emulator-5554", 20);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  runtime.stopScreenAwakeHeartbeat();
+
+  const wakeCalls = countWakeupCalls(emulator.calls);
+  assert.equal(wakeCalls >= 1, true);
 });
 
 test("extractPackageName parses top resumed activity from activity dump", () => {

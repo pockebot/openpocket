@@ -1404,6 +1404,7 @@ export class TelegramGateway {
       }
     }
 
+    this.agent.startScreenAwakeHeartbeat(5_000);
     this.heartbeat.start();
     this.cron.start();
     this.log("telegram polling started");
@@ -1416,6 +1417,7 @@ export class TelegramGateway {
     }
     this.running = false;
     this.agent.stopCurrentTask();
+    this.agent.stopScreenAwakeHeartbeat();
     const droppedQueued = this.clearAllQueuedTasks();
     const cancelledWaits = this.cancelAllPendingUserWaits("Task stopped by gateway shutdown.");
     if (droppedQueued > 0 || cancelledWaits > 0) {

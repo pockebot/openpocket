@@ -404,6 +404,14 @@ export class AgentRuntime {
     );
   }
 
+  startScreenAwakeHeartbeat(intervalMs = 5_000): void {
+    this.adb.startScreenAwakeHeartbeat(this.config.agent.deviceId, intervalMs);
+  }
+
+  stopScreenAwakeHeartbeat(): void {
+    this.adb.stopScreenAwakeHeartbeat();
+  }
+
   stopCurrentTask(): boolean {
     if (!this.busy) {
       return false;

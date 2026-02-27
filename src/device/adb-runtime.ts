@@ -271,11 +271,15 @@ function errorMessage(error: unknown): string {
 }
 
 const DEFAULT_LOCKSCREEN_PIN = "1234";
+const SCREEN_AWAKE_HEARTBEAT_MS = 5_000;
 
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
   private readonly screenSizeCache = new Map<string, { width: number; height: number; updatedAtMs: number }>();
+  private screenAwakeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private screenAwakeHeartbeatPreferredDeviceId: string | null = null;
+  private screenAwakeHeartbeatIntervalMs = SCREEN_AWAKE_HEARTBEAT_MS;
 
   constructor(config: OpenPocketConfig, emulator: EmulatorManager) {
     this.config = config;
@@ -289,6 +293,61 @@ export class AdbRuntime {
   private shouldPrepareInteractiveTarget(): boolean {
     const targetType = this.targetType();
     return targetType === "physical-phone" || targetType === "android-tv";
+  }
+
+  private pulseScreenAwake(): void {
+    const preferred =
+      this.screenAwakeHeartbeatPreferredDeviceId !== null
+        ? this.screenAwakeHeartbeatPreferredDeviceId
+        : this.config.agent.deviceId;
+    let deviceId = "";
+    try {
+      deviceId = this.resolveDeviceId(preferred);
+    } catch {
+      return;
+    }
+    if (!deviceId) {
+      return;
+    }
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_WAKEUP"]);
+    } catch {
+      // Best effort keep-awake pulse.
+    }
+  }
+
+  startScreenAwakeHeartbeat(preferred?: string | null, intervalMs = SCREEN_AWAKE_HEARTBEAT_MS): void {
+    if (preferred !== undefined) {
+      this.screenAwakeHeartbeatPreferredDeviceId = preferred;
+    }
+    const normalizedInterval = Math.max(1_000, Math.round(intervalMs));
+    const shouldRestart =
+      this.screenAwakeHeartbeatTimer !== null
+      && this.screenAwakeHeartbeatIntervalMs !== normalizedInterval;
+    this.screenAwakeHeartbeatIntervalMs = normalizedInterval;
+    if (shouldRestart) {
+      clearInterval(this.screenAwakeHeartbeatTimer as ReturnType<typeof setInterval>);
+      this.screenAwakeHeartbeatTimer = null;
+    }
+    if (this.screenAwakeHeartbeatTimer) {
+      return;
+    }
+
+    this.pulseScreenAwake();
+    this.screenAwakeHeartbeatTimer = setInterval(() => {
+      this.pulseScreenAwake();
+    }, this.screenAwakeHeartbeatIntervalMs);
+    if (typeof this.screenAwakeHeartbeatTimer.unref === "function") {
+      this.screenAwakeHeartbeatTimer.unref();
+    }
+  }
+
+  stopScreenAwakeHeartbeat(): void {
+    if (!this.screenAwakeHeartbeatTimer) {
+      return;
+    }
+    clearInterval(this.screenAwakeHeartbeatTimer);
+    this.screenAwakeHeartbeatTimer = null;
   }
 
   private isDisplayInteractive(deviceId: string): boolean | null {
