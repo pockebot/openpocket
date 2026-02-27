@@ -301,6 +301,7 @@ const baseSidebar = [
       { text: "Index", link: "/ops/" },
       { text: "Runbook", link: "/ops/runbook" },
       { text: "Troubleshooting", link: "/ops/troubleshooting" },
+      { text: "Screen Awake Heartbeat", link: "/ops/screen-awake-heartbeat" },
     ],
   },
 ];
