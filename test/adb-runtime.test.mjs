@@ -35,6 +35,10 @@ class FakeEmulator {
     };
   }
 
+  adbBinary() {
+    return "adb";
+  }
+
   runAdb(args) {
     this.calls.push(args);
 
@@ -148,17 +152,6 @@ class FakeEmulator {
     }
     return "";
   }
-}
-
-function countWakeupCalls(calls) {
-  return calls.filter(
-    (args) =>
-      args[0] === "-s"
-      && args[2] === "shell"
-      && args[3] === "input"
-      && args[4] === "keyevent"
-      && args[5] === "KEYCODE_WAKEUP",
-  ).length;
 }
 
 test("AdbRuntime uses clipboard paste for non-ASCII typing", async () => {
@@ -390,16 +383,81 @@ test("AdbRuntime falls back to default PIN when physical PIN is empty", async ()
   }
 });
 
-test("AdbRuntime screen-awake heartbeat sends wakeup pulses independently", async () => {
+test("AdbRuntime screen-awake heartbeat manages worker lifecycle independently", () => {
   const emulator = new FakeEmulator();
-  const runtime = new AdbRuntime(makeConfig(), emulator);
+  const starts = [];
+  const stops = [];
+  const runtime = new AdbRuntime(makeConfig(), emulator, {
+    createScreenAwakeWorker: (params) => {
+      starts.push(params);
+      let stopped = false;
+      return {
+        stop: () => {
+          if (!stopped) {
+            stopped = true;
+            stops.push(params);
+          }
+        },
+      };
+    },
+  });
 
-  runtime.startScreenAwakeHeartbeat("emulator-5554", 20);
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  runtime.startScreenAwakeHeartbeat("emulator-5554", 3000);
+  runtime.startScreenAwakeHeartbeat("emulator-5554", 3000);
+  runtime.startScreenAwakeHeartbeat("emulator-5554", 5000);
+  runtime.stopScreenAwakeHeartbeat();
   runtime.stopScreenAwakeHeartbeat();
 
-  const wakeCalls = countWakeupCalls(emulator.calls);
-  assert.equal(wakeCalls >= 1, true);
+  assert.equal(starts.length, 2);
+  assert.equal(stops.length, 2);
+  assert.deepEqual(starts[0], {
+    adbPath: "adb",
+    preferredDeviceId: "emulator-5554",
+    adbEndpoint: null,
+    targetType: "emulator",
+    intervalMs: 3000,
+  });
+  assert.equal(starts[1].intervalMs, 5000);
+});
+
+test("AdbRuntime screen-awake heartbeat worker normalizes physical target params", () => {
+  const emulator = new FakeEmulator();
+  const starts = [];
+  const stops = [];
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: "USB-DEVICE-1" },
+      target: { type: "physical-phone", adbEndpoint: "192.168.0.15" },
+    },
+    emulator,
+    {
+      createScreenAwakeWorker: (params) => {
+        starts.push(params);
+        let stopped = false;
+        return {
+          stop: () => {
+            if (!stopped) {
+              stopped = true;
+              stops.push(params);
+            }
+          },
+        };
+      },
+    },
+  );
+
+  runtime.startScreenAwakeHeartbeat(undefined, 200);
+  runtime.stopScreenAwakeHeartbeat();
+
+  assert.equal(starts.length, 1);
+  assert.equal(stops.length, 1);
+  assert.deepEqual(starts[0], {
+    adbPath: "adb",
+    preferredDeviceId: "USB-DEVICE-1",
+    adbEndpoint: "192.168.0.15:5555",
+    targetType: "physical-phone",
+    intervalMs: 1000,
+  });
 });
 
 test("extractPackageName parses top resumed activity from activity dump", () => {

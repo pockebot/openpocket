@@ -1,5 +1,8 @@
 import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types.js";
 import { createHash } from "node:crypto";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { nowIso } from "../utils/paths.js";
 import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
 import { sleep } from "../utils/time.js";
@@ -273,17 +276,34 @@ function errorMessage(error: unknown): string {
 const DEFAULT_LOCKSCREEN_PIN = "1234";
 const SCREEN_AWAKE_HEARTBEAT_MS = 3_000;
 
+type ScreenAwakeWorkerParams = {
+  adbPath: string;
+  preferredDeviceId: string | null;
+  adbEndpoint: string | null;
+  targetType: string;
+  intervalMs: number;
+};
+
+type ScreenAwakeWorkerHandle = {
+  stop: () => void;
+};
+
+type AdbRuntimeOptions = {
+  createScreenAwakeWorker?: (params: ScreenAwakeWorkerParams) => ScreenAwakeWorkerHandle;
+};
+
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
   private readonly screenSizeCache = new Map<string, { width: number; height: number; updatedAtMs: number }>();
-  private screenAwakeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private screenAwakeHeartbeatPreferredDeviceId: string | null = null;
-  private screenAwakeHeartbeatIntervalMs = SCREEN_AWAKE_HEARTBEAT_MS;
+  private readonly createScreenAwakeWorker: (params: ScreenAwakeWorkerParams) => ScreenAwakeWorkerHandle;
+  private screenAwakeWorker: ScreenAwakeWorkerHandle | null = null;
+  private screenAwakeWorkerKey = "";
 
-  constructor(config: OpenPocketConfig, emulator: EmulatorManager) {
+  constructor(config: OpenPocketConfig, emulator: EmulatorManager, options?: AdbRuntimeOptions) {
     this.config = config;
     this.emulator = emulator;
+    this.createScreenAwakeWorker = options?.createScreenAwakeWorker ?? ((params) => this.spawnScreenAwakeWorker(params));
   }
 
   private targetType() {
@@ -295,59 +315,88 @@ export class AdbRuntime {
     return targetType === "physical-phone" || targetType === "android-tv";
   }
 
-  private pulseScreenAwake(): void {
-    const preferred =
-      this.screenAwakeHeartbeatPreferredDeviceId !== null
-        ? this.screenAwakeHeartbeatPreferredDeviceId
-        : this.config.agent.deviceId;
-    let deviceId = "";
-    try {
-      deviceId = this.resolveDeviceId(preferred);
-    } catch {
-      return;
+  private normalizeTargetAdbEndpoint(): string | null {
+    const raw = String(this.config.target?.adbEndpoint ?? "").trim();
+    if (!raw) {
+      return null;
     }
-    if (!deviceId) {
-      return;
+    if (raw.includes(":")) {
+      return raw;
     }
-    try {
-      this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_WAKEUP"]);
-    } catch {
-      // Best effort keep-awake pulse.
-    }
+    return `${raw}:5555`;
+  }
+
+  private buildScreenAwakeWorkerParams(
+    preferred?: string | null,
+    intervalMs = SCREEN_AWAKE_HEARTBEAT_MS,
+  ): ScreenAwakeWorkerParams {
+    const normalizedInterval = Math.max(1_000, Math.round(intervalMs));
+    const targetType = this.targetType();
+    return {
+      adbPath: this.emulator.adbBinary(),
+      preferredDeviceId:
+        preferred !== undefined
+          ? preferred
+          : (this.config.agent.deviceId ?? null),
+      adbEndpoint: targetType === "emulator" ? null : this.normalizeTargetAdbEndpoint(),
+      targetType,
+      intervalMs: normalizedInterval,
+    };
+  }
+
+  private spawnScreenAwakeWorker(params: ScreenAwakeWorkerParams): ScreenAwakeWorkerHandle {
+    const workerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "screen-awake-worker.js");
+    const child = spawn(process.execPath, [workerPath, JSON.stringify(params)], {
+      stdio: "ignore",
+      detached: false,
+    });
+    child.unref();
+    return {
+      stop: () => {
+        if (child.killed) {
+          return;
+        }
+        try {
+          child.kill();
+        } catch {
+          // best effort kill
+        }
+      },
+    };
   }
 
   startScreenAwakeHeartbeat(preferred?: string | null, intervalMs = SCREEN_AWAKE_HEARTBEAT_MS): void {
-    if (preferred !== undefined) {
-      this.screenAwakeHeartbeatPreferredDeviceId = preferred;
-    }
-    const normalizedInterval = Math.max(1_000, Math.round(intervalMs));
-    const shouldRestart =
-      this.screenAwakeHeartbeatTimer !== null
-      && this.screenAwakeHeartbeatIntervalMs !== normalizedInterval;
-    this.screenAwakeHeartbeatIntervalMs = normalizedInterval;
-    if (shouldRestart) {
-      clearInterval(this.screenAwakeHeartbeatTimer as ReturnType<typeof setInterval>);
-      this.screenAwakeHeartbeatTimer = null;
-    }
-    if (this.screenAwakeHeartbeatTimer) {
+    let params: ScreenAwakeWorkerParams;
+    try {
+      params = this.buildScreenAwakeWorkerParams(preferred, intervalMs);
+    } catch {
+      // Keep-awake worker is best effort and must not break runtime startup.
       return;
     }
 
-    this.pulseScreenAwake();
-    this.screenAwakeHeartbeatTimer = setInterval(() => {
-      this.pulseScreenAwake();
-    }, this.screenAwakeHeartbeatIntervalMs);
-    if (typeof this.screenAwakeHeartbeatTimer.unref === "function") {
-      this.screenAwakeHeartbeatTimer.unref();
+    const key = JSON.stringify(params);
+    if (this.screenAwakeWorker && this.screenAwakeWorkerKey === key) {
+      return;
+    }
+    this.stopScreenAwakeHeartbeat();
+
+    try {
+      this.screenAwakeWorker = this.createScreenAwakeWorker(params);
+      this.screenAwakeWorkerKey = key;
+    } catch {
+      // Keep-awake worker is best effort.
+      this.screenAwakeWorker = null;
+      this.screenAwakeWorkerKey = "";
     }
   }
 
   stopScreenAwakeHeartbeat(): void {
-    if (!this.screenAwakeHeartbeatTimer) {
+    if (!this.screenAwakeWorker) {
       return;
     }
-    clearInterval(this.screenAwakeHeartbeatTimer);
-    this.screenAwakeHeartbeatTimer = null;
+    this.screenAwakeWorker.stop();
+    this.screenAwakeWorker = null;
+    this.screenAwakeWorkerKey = "";
   }
 
   private isDisplayInteractive(deviceId: string): boolean | null {
