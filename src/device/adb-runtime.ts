@@ -537,22 +537,7 @@ export class AdbRuntime {
     if (keyguardAfterPin === false) {
       return;
     }
-    if (keyguardAfterPin !== true) {
-      // When lock state is unknown, avoid KEYCODE_MENU fallback.
-      // Some launchers map MENU to desktop customization (wallpaper/widgets),
-      // which can disrupt post-unlock automation flow.
-      return;
-    }
-
-    try {
-      this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "KEYCODE_MENU"]);
-    } catch {
-      // Best effort unlock gesture surrogate.
-    }
-    await sleep(180);
-
-    const keyguardAfterMenu = this.isKeyguardShowing(deviceId);
-    if (keyguardAfterMenu === true) {
+    if (keyguardAfterPin === true) {
       throw new Error(
         `Target device '${deviceId}' is locked. Please unlock and keep the screen on, then retry.`,
       );

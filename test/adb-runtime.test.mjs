@@ -344,7 +344,7 @@ test("AdbRuntime fails clearly when physical phone stays locked after unlock att
     emulator.calls.some(
       (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_MENU",
     ),
-    true,
+    false,
   );
 });
 
