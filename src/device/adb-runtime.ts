@@ -276,7 +276,7 @@ function errorMessage(error: unknown): string {
 const DEFAULT_LOCKSCREEN_PIN = "1234";
 const SCREEN_AWAKE_HEARTBEAT_MS = 3_000;
 const PIN_UNLOCK_MAX_ATTEMPTS = 2;
-const PIN_UNLOCK_SETTLE_MS = 1_200;
+const PIN_UNLOCK_SETTLE_MS = 1_500;
 
 type ScreenAwakeWorkerParams = {
   adbPath: string;
