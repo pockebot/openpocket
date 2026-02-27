@@ -82,7 +82,7 @@ Usage:
   openpocket [--config <path>] onboard [--force] [--target <type>]
   openpocket [--config <path>] config-show
   openpocket [--config <path>] target show
-  openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>]
+  openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
   openpocket [--config <path>] emulator status
   openpocket [--config <path>] emulator start
   openpocket [--config <path>] emulator stop
@@ -111,6 +111,7 @@ Examples:
   openpocket onboard --force
   openpocket target set --type physical-phone --pin 1234
   openpocket target set --type emulator --pin 1234
+  openpocket target set --wakeup-interval 3
   openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
   openpocket target set --type physical-phone --device R5CX123456A --pin 1234
   openpocket emulator start
@@ -360,6 +361,18 @@ function normalizeFourDigitPin(raw: string, optionName: string): string {
   return normalized;
 }
 
+function normalizeWakeupIntervalSec(raw: string, optionName: string): number {
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${optionName} expects a number in seconds.`);
+  }
+  const normalized = Math.round(parsed);
+  if (normalized < 1 || normalized > 3600) {
+    throw new Error(`${optionName} must be within 1-3600 seconds.`);
+  }
+  return normalized;
+}
+
 function maskFourDigitPin(raw: string): string {
   const normalized = raw.trim();
   if (!/^\d{4}$/.test(normalized)) {
@@ -374,6 +387,7 @@ function printTargetSummary(cfg: OpenPocketConfig): void {
   printKeyValue("Preferred device", cfg.agent.deviceId?.trim() || "(auto)");
   printKeyValue("ADB endpoint", cfg.target.adbEndpoint.trim() || "(none)");
   printKeyValue("Phone PIN", maskFourDigitPin(cfg.target.pin), "warn");
+  printKeyValue("Wakeup interval", `${Math.max(1, Math.round(cfg.target.wakeupIntervalSec))}s`);
   printKeyValue("Cloud provider", cfg.target.cloudProvider.trim() || "(none)");
 }
 
@@ -509,6 +523,7 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
   const clearDevice = args.includes("--clear-device");
   const clearAdbEndpoint = args.includes("--clear-adb-endpoint");
   const clearPin = args.includes("--clear-pin");
+  const clearWakeupInterval = args.includes("--clear-wakeup-interval");
   // Backward-compatible aliases for older CLI flags.
   const clearVirtualPin = args.includes("--clear-virtual-pin");
   const clearPhysicalPin = args.includes("--clear-physical-pin");
@@ -517,6 +532,7 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
       item !== "--clear-device"
       && item !== "--clear-adb-endpoint"
       && item !== "--clear-pin"
+      && item !== "--clear-wakeup-interval"
       && item !== "--clear-virtual-pin"
       && item !== "--clear-physical-pin",
   );
@@ -526,8 +542,9 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
   const { value: adbEndpointRaw, rest: afterEndpoint } = takeOption(afterDevice, "--adb-endpoint");
   const { value: cloudProviderRaw, rest: afterCloudProvider } = takeOption(afterEndpoint, "--cloud-provider");
   const { value: pinRaw, rest: afterPin } = takeOption(afterCloudProvider, "--pin");
+  const { value: wakeupIntervalRaw, rest: afterWakeupInterval } = takeOption(afterPin, "--wakeup-interval");
   // Backward-compatible aliases for older CLI flags.
-  const { value: virtualPinRaw, rest: afterVirtualPin } = takeOption(afterPin, "--virtual-pin");
+  const { value: virtualPinRaw, rest: afterVirtualPin } = takeOption(afterWakeupInterval, "--virtual-pin");
   const { value: physicalPinRaw, rest } = takeOption(afterVirtualPin, "--physical-pin");
   if (rest.length > 0) {
     throw new Error(`Unexpected target arguments: ${rest.join(" ")}`);
@@ -544,14 +561,16 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
     && !adbEndpointRaw
     && !cloudProviderRaw
     && !effectivePinRaw
+    && !wakeupIntervalRaw
     && !clearDevice
     && !clearAdbEndpoint
     && !clearPin
+    && !clearWakeupInterval
     && !clearVirtualPin
     && !clearPhysicalPin
   ) {
     throw new Error(
-      "No target update provided. Use --type/--device/--adb-endpoint/--cloud-provider/--pin or --clear-device/--clear-adb-endpoint/--clear-pin.",
+      "No target update provided. Use --type/--device/--adb-endpoint/--cloud-provider/--pin/--wakeup-interval or --clear-device/--clear-adb-endpoint/--clear-pin/--clear-wakeup-interval.",
     );
   }
 
@@ -585,6 +604,12 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
   if (clearPin || clearVirtualPin || clearPhysicalPin) {
     cfg.target.pin = "1234";
   }
+  if (wakeupIntervalRaw !== null) {
+    cfg.target.wakeupIntervalSec = normalizeWakeupIntervalSec(wakeupIntervalRaw, "--wakeup-interval");
+  }
+  if (clearWakeupInterval) {
+    cfg.target.wakeupIntervalSec = 3;
+  }
 
   if (isEmulatorTarget(cfg.target.type)) {
     cfg.target.adbEndpoint = "";
@@ -616,7 +641,7 @@ async function runAgentCommand(configPath: string | undefined, args: string[]): 
 
   const cfg = loadConfig(configPath);
   const agent = new AgentRuntime(cfg);
-  agent.startScreenAwakeHeartbeat(5_000);
+  agent.startScreenAwakeHeartbeat(Math.max(1, Math.round(cfg.target.wakeupIntervalSec)) * 1000);
   let result: Awaited<ReturnType<AgentRuntime["runTask"]>>;
   try {
     result = await agent.runTask(task, model ?? undefined);

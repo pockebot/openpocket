@@ -271,7 +271,7 @@ function errorMessage(error: unknown): string {
 }
 
 const DEFAULT_LOCKSCREEN_PIN = "1234";
-const SCREEN_AWAKE_HEARTBEAT_MS = 5_000;
+const SCREEN_AWAKE_HEARTBEAT_MS = 3_000;
 
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;

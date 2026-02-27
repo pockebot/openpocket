@@ -13,6 +13,10 @@ export interface DeviceTargetConfig {
    */
   pin: string;
   /**
+   * Screen keep-awake heartbeat interval in seconds.
+   */
+  wakeupIntervalSec: number;
+  /**
    * Reserved for cloud integrations. Current runtime still uses adb transport.
    */
   cloudProvider: string;

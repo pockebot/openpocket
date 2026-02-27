@@ -39,6 +39,7 @@ test("init creates config and workspace files", () => {
   assert.equal(cfg.defaultModel, "gpt-5.2-codex");
   assert.equal(cfg.target.type, "emulator");
   assert.equal(cfg.target.pin, "1234");
+  assert.equal(cfg.target.wakeupIntervalSec, 3);
 
   const mustFiles = [
     "AGENTS.md",
@@ -396,6 +397,7 @@ test("target show prints deployment target summary", () => {
   assert.match(run.stdout, /Deployment Target/i);
   assert.match(run.stdout, /emulator/i);
   assert.match(run.stdout, /Phone PIN/i);
+  assert.match(run.stdout, /Wakeup interval/i);
 });
 
 test("target set updates config for physical phone deployment", () => {
@@ -428,6 +430,7 @@ test("target set updates config for physical phone deployment", () => {
   assert.equal(cfg.target.type, "physical-phone");
   assert.equal(cfg.target.adbEndpoint, "192.168.50.10:5555");
   assert.equal(cfg.target.pin, "2468");
+  assert.equal(cfg.target.wakeupIntervalSec, 3);
   assert.equal(cfg.agent.deviceId, "R5CX123456A");
 });
 
@@ -455,6 +458,29 @@ test("target set supports updating target PIN", () => {
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(cfg.target.type, "emulator");
   assert.equal(cfg.target.pin, "9876");
+});
+
+test("target set supports updating wakeup interval", () => {
+  const home = makeHome("openpocket-ts-target-set-wakeup-interval-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const setRun = runCli(
+    [
+      "target",
+      "set",
+      "--wakeup-interval",
+      "7",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(setRun.status, 0, setRun.stderr || setRun.stdout);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.wakeupIntervalSec, 7);
 });
 
 test("target set uses default physical phone PIN for physical target", () => {
@@ -498,6 +524,26 @@ test("target set rejects non-4-digit PIN", () => {
   );
   assert.equal(run.status, 1);
   assert.match(run.stderr, /4 digits/i);
+});
+
+test("target set rejects invalid wakeup interval", () => {
+  const home = makeHome("openpocket-ts-target-set-wakeup-invalid-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    [
+      "target",
+      "set",
+      "--wakeup-interval",
+      "0",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /1-3600/i);
 });
 
 test("test permission-app task prints recommended telegram flow", () => {

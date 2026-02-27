@@ -1404,7 +1404,7 @@ export class TelegramGateway {
       }
     }
 
-    this.agent.startScreenAwakeHeartbeat(5_000);
+    this.agent.startScreenAwakeHeartbeat();
     this.heartbeat.start();
     this.cron.start();
     this.log("telegram polling started");

@@ -404,8 +404,12 @@ export class AgentRuntime {
     );
   }
 
-  startScreenAwakeHeartbeat(intervalMs = 5_000): void {
-    this.adb.startScreenAwakeHeartbeat(this.config.agent.deviceId, intervalMs);
+  startScreenAwakeHeartbeat(intervalMs?: number): void {
+    const resolvedMs =
+      intervalMs === undefined
+        ? Math.max(1, Math.round(this.config.target.wakeupIntervalSec)) * 1000
+        : intervalMs;
+    this.adb.startScreenAwakeHeartbeat(this.config.agent.deviceId, resolvedMs);
   }
 
   stopScreenAwakeHeartbeat(): void {
