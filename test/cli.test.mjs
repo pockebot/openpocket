@@ -434,6 +434,35 @@ test("target set updates config for physical phone deployment", () => {
   assert.equal(cfg.agent.deviceId, "R5CX123456A");
 });
 
+test("target set-target alias updates config for Android TV deployment", () => {
+  const home = makeHome("openpocket-ts-target-set-target-alias-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const setRun = runCli(
+    [
+      "target",
+      "set-target",
+      "--type",
+      "android-tv",
+      "--adb-endpoint",
+      "192.168.10.50:5555",
+      "--device",
+      "192.168.10.50:5555",
+    ],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(setRun.status, 0, setRun.stderr || setRun.stdout);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.target.type, "android-tv");
+  assert.equal(cfg.target.adbEndpoint, "192.168.10.50:5555");
+  assert.equal(cfg.agent.deviceId, "192.168.10.50:5555");
+});
+
 test("target set supports updating target PIN", () => {
   const home = makeHome("openpocket-ts-target-set-virtual-pin-");
   const init = runCli(["init"], { OPENPOCKET_HOME: home });

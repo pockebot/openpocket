@@ -32,6 +32,12 @@ import {
   isEmulatorTarget,
   normalizeDeviceTargetType,
 } from "./device/target-types.js";
+import {
+  adbConnectionLabel,
+  filterOnlineTargetAdbDevices,
+  type AdbConnectionType,
+  parseAdbDevicesLongOutput,
+} from "./device/adb-device-discovery.js";
 
 const cliTheme = createCliTheme(output);
 const DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB = 24;
@@ -82,7 +88,7 @@ Usage:
   openpocket [--config <path>] onboard [--force] [--target <type>]
   openpocket [--config <path>] config-show
   openpocket [--config <path>] target show
-  openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
+  openpocket [--config <path>] target set|set-target|config --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
   openpocket [--config <path>] emulator status
   openpocket [--config <path>] emulator start
   openpocket [--config <path>] emulator stop
@@ -110,6 +116,7 @@ Examples:
   openpocket onboard --target physical-phone
   openpocket onboard --force
   openpocket target set --type physical-phone --pin 1234
+  openpocket target set-target --type physical-phone
   openpocket target set --type emulator --pin 1234
   openpocket target set --wakeup-interval 3
   openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
@@ -403,6 +410,8 @@ function ensureGatewayStoppedForTargetSwitch(): void {
 type ConnectedTargetDevice = {
   deviceId: string;
   hint: string;
+  connectionType: AdbConnectionType;
+  endpoint: string | null;
 };
 
 function adbDeviceProp(
@@ -422,49 +431,79 @@ function adbDeviceProp(
 function discoverConnectedTargetDevices(cfg: OpenPocketConfig): ConnectedTargetDevice[] {
   const runtimeConfig = JSON.parse(JSON.stringify(cfg)) as OpenPocketConfig;
   const emulator = new EmulatorManager(runtimeConfig);
-  let status: { devices: string[] };
+  let rawDevices = "";
   try {
-    status = emulator.status();
+    rawDevices = emulator.runAdb(["devices", "-l"], 10_000);
   } catch (error) {
     printWarn(`Unable to query adb device list: ${(error as Error).message}`);
     return [];
   }
-  return status.devices.map((deviceId) => {
-    const manufacturer = adbDeviceProp(emulator, deviceId, "ro.product.manufacturer");
-    const model = adbDeviceProp(emulator, deviceId, "ro.product.model");
-    const release = adbDeviceProp(emulator, deviceId, "ro.build.version.release");
-    const pieces = [manufacturer, model].map((v) => v.trim()).filter(Boolean);
-    const modelText = pieces.length > 0 ? pieces.join(" ") : "Unknown model";
-    const versionText = release ? `Android ${release}` : "Android (unknown)";
-    return {
-      deviceId,
-      hint: `${modelText} | ${versionText}`,
-    };
-  });
+  const targetType = normalizeDeviceTargetType(cfg.target.type);
+  const descriptors = filterOnlineTargetAdbDevices(
+    parseAdbDevicesLongOutput(rawDevices),
+    targetType,
+  );
+  const toOrder = (connectionType: AdbConnectionType): number => {
+    if (connectionType === "usb") return 0;
+    if (connectionType === "wifi") return 1;
+    if (connectionType === "unknown") return 2;
+    return 3;
+  };
+  return descriptors
+    .map((descriptor) => {
+      const deviceId = descriptor.deviceId;
+      const manufacturer = adbDeviceProp(emulator, deviceId, "ro.product.manufacturer");
+      const model = adbDeviceProp(emulator, deviceId, "ro.product.model") || descriptor.model;
+      const release = adbDeviceProp(emulator, deviceId, "ro.build.version.release");
+      const pieces = [manufacturer, model].map((v) => v.trim()).filter(Boolean);
+      const modelText = pieces.length > 0 ? pieces.join(" ") : "Unknown model";
+      const versionText = release ? `Android ${release}` : "Android (unknown)";
+      return {
+        deviceId,
+        hint: `${adbConnectionLabel(descriptor.connectionType)} | ${modelText} | ${versionText}`,
+        connectionType: descriptor.connectionType,
+        endpoint: descriptor.endpoint,
+      };
+    })
+    .sort((a, b) => {
+      const byTransport = toOrder(a.connectionType) - toOrder(b.connectionType);
+      if (byTransport !== 0) {
+        return byTransport;
+      }
+      return a.deviceId.localeCompare(b.deviceId);
+    });
 }
 
 async function chooseTargetDeviceId(
   candidates: ConnectedTargetDevice[],
   configuredDeviceId: string | null,
-): Promise<string | null> {
+): Promise<ConnectedTargetDevice | null> {
+  const configured = configuredDeviceId?.trim() || "";
+  const configuredFallback = configured
+    ? {
+      deviceId: configured,
+      hint: "Configured serial (not currently online)",
+      connectionType: "unknown" as AdbConnectionType,
+      endpoint: null,
+    }
+    : null;
   if (candidates.length === 0) {
     printWarn("No online adb device detected for this target. Keep preferred device as auto mode.");
-    return configuredDeviceId?.trim() ? configuredDeviceId : null;
+    return configuredFallback;
   }
   if (candidates.length === 1) {
     const only = candidates[0];
     printInfo(`Detected one device and selected it automatically: ${only.deviceId} (${only.hint})`);
-    return only.deviceId;
+    return only;
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     printWarn(
       `Detected ${candidates.length} devices, but current shell is non-interactive; keep preferred device as auto mode.`,
     );
-    return configuredDeviceId?.trim() ? configuredDeviceId : null;
+    return candidates.find((item) => item.deviceId === configured) ?? configuredFallback;
   }
 
   const autoValue = "__auto__";
-  const configured = configuredDeviceId?.trim() || "";
   const options: CliSelectOption<string>[] = [
     {
       value: autoValue,
@@ -473,7 +512,7 @@ async function chooseTargetDeviceId(
     },
     ...candidates.map((item) => ({
       value: item.deviceId,
-      label: item.deviceId,
+      label: `[${adbConnectionLabel(item.connectionType)}] ${item.deviceId}`,
       hint: item.hint,
     })),
   ];
@@ -492,7 +531,7 @@ async function chooseTargetDeviceId(
     if (selected === autoValue) {
       return null;
     }
-    return selected;
+    return candidates.find((item) => item.deviceId === selected) ?? null;
   } finally {
     if (input.setRawMode) {
       try {
@@ -507,9 +546,10 @@ async function chooseTargetDeviceId(
 }
 
 async function runTargetCommand(configPath: string | undefined, args: string[]): Promise<number> {
-  const sub = (args[0] ?? "show").trim();
+  const rawSub = (args[0] ?? "show").trim();
+  const sub = rawSub === "set-target" || rawSub === "config" ? "set" : rawSub;
   if (sub !== "show" && sub !== "set") {
-    throw new Error(`Unknown target subcommand: ${sub}. Use: target show|set`);
+    throw new Error(`Unknown target subcommand: ${rawSub}. Use: target show|set|set-target|config`);
   }
 
   const cfg = loadConfig(configPath);
@@ -622,7 +662,17 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
     && (typeRaw !== null || adbEndpointRaw !== null || clearAdbEndpoint);
   if (shouldPromptDeviceSelection) {
     const candidates = discoverConnectedTargetDevices(cfg);
-    cfg.agent.deviceId = await chooseTargetDeviceId(candidates, cfg.agent.deviceId);
+    const selected = await chooseTargetDeviceId(candidates, cfg.agent.deviceId);
+    cfg.agent.deviceId = selected?.deviceId ?? null;
+    if (adbEndpointRaw === null && !clearAdbEndpoint && selected) {
+      if (selected.connectionType === "wifi" && selected.endpoint) {
+        cfg.target.adbEndpoint = normalizeAdbEndpoint(selected.endpoint);
+        printInfo(`Selected WiFi device; updated adb endpoint: ${cfg.target.adbEndpoint}`);
+      } else if (selected.connectionType === "usb" && cfg.target.adbEndpoint.trim()) {
+        cfg.target.adbEndpoint = "";
+        printInfo("Selected USB device; cleared adb endpoint.");
+      }
+    }
   }
 
   saveConfig(cfg);

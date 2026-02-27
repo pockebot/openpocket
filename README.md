@@ -113,7 +113,8 @@ openpocket target set --type physical-phone
 openpocket target show
 ```
 
-When multiple devices are online, `target set` shows an arrow-key selector so you can choose one.
+When multiple devices are online, `target set` shows an arrow-key selector with explicit transport labels (`USB ADB` / `WiFi ADB`) so you can choose the exact device.
+You can also use aliases: `openpocket target set-target ...` or `openpocket target config ...`.
 
 4. Start runtime:
 
