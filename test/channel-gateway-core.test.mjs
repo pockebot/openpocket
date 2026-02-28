@@ -332,3 +332,195 @@ test("GatewayCore: lifecycle start and stop", async () => {
     assert.equal(core.isRunning(), false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Group vs DM access control
+// ---------------------------------------------------------------------------
+
+function createGatewayCoreMulti(home, channelType, { channels = {}, skipOwnerRegistration = false } = {}) {
+  const config = loadConfig();
+  config.channels = config.channels || {};
+  Object.assign(config.channels, channels);
+
+  const router = new DefaultChannelRouter({ log: () => {} });
+  const sessionKeys = new DefaultSessionKeyResolver();
+  const pairingStore = new FilePairingStore({ stateDir: path.join(home, "credentials") });
+  const adapter = createMockAdapter(channelType);
+  router.register(adapter);
+
+  if (!skipOwnerRegistration) {
+    pairingStore.addToAllowlist(channelType, "owner-1");
+  }
+
+  const core = new GatewayCore(config, router, sessionKeys, pairingStore, { logger: () => {} });
+  return { core, config, router, adapter, pairingStore };
+}
+
+test("GatewayCore: group messages skip owner claim (groupPolicy=open)", async () => {
+  await withTempHome("gwcore-group-open-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "pairing", groupPolicy: "open" } },
+      skipOwnerRegistration: true,
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800001111",
+      peerId: "120363001@g.us",
+      peerKind: "group",
+      text: "hello from group",
+    }));
+
+    // With groupPolicy=open, the message should be allowed (no owner claim reply).
+    // Should NOT get an owner claim message since it's a group message.
+    const ownerClaimMsg = adapter.sent.find((m) => m.text.includes("owner") || m.text.includes("auto-registered"));
+    assert.equal(ownerClaimMsg, undefined, "Group messages must not trigger owner claim");
+  });
+});
+
+test("GatewayCore: DM messages DO trigger owner claim", async () => {
+  await withTempHome("gwcore-dm-owner-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "pairing" } },
+      skipOwnerRegistration: true,
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800001111",
+      peerId: "8613800001111",
+      peerKind: "dm",
+      text: "hello",
+    }));
+
+    const ownerClaimMsg = adapter.sent.find((m) =>
+      m.text.includes("owner") || m.text.includes("auto-registered") || m.text.includes("第一个用户"),
+    );
+    assert.ok(ownerClaimMsg, "DM should trigger owner claim");
+  });
+});
+
+test("GatewayCore: group messages blocked when groupPolicy=disabled", async () => {
+  await withTempHome("gwcore-group-disabled-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { groupPolicy: "disabled" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800002222",
+      peerId: "120363001@g.us",
+      peerKind: "group",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 0, "Group messages should be silently dropped when disabled");
+  });
+});
+
+test("GatewayCore: group messages with groupPolicy=allowlist, approved sender passes", async () => {
+  await withTempHome("gwcore-group-allowlist-approved-", async (home) => {
+    const { adapter, core, pairingStore } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { groupPolicy: "allowlist" } },
+    });
+
+    pairingStore.addToAllowlist("whatsapp", "8613800003333");
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800003333",
+      peerId: "120363001@g.us",
+      peerKind: "group",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.ok(adapter.sent.length > 0, "Approved sender in group should be allowed");
+  });
+});
+
+test("GatewayCore: group messages with groupPolicy=allowlist, unknown sender blocked silently", async () => {
+  await withTempHome("gwcore-group-allowlist-blocked-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { groupPolicy: "allowlist" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800009999",
+      peerId: "120363001@g.us",
+      peerKind: "group",
+      text: "hello",
+    }));
+
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    assert.equal(pairingMsg, undefined, "Group messages must NOT issue pairing codes");
+    assert.equal(adapter.sent.length, 0, "Unknown sender in group should be silently blocked");
+  });
+});
+
+test("GatewayCore: DM pairing code issued for unknown sender", async () => {
+  await withTempHome("gwcore-dm-pairing-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "pairing" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800005555",
+      peerId: "8613800005555",
+      peerKind: "dm",
+      text: "hello",
+    }));
+
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    assert.ok(pairingMsg, "DM from unknown sender should issue pairing code");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WhatsApp phone number normalization in allowFrom
+// ---------------------------------------------------------------------------
+
+test("GatewayCore: WhatsApp allowFrom normalizes phone numbers", async () => {
+  await withTempHome("gwcore-wa-normalize-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+86-138-0000-1111"] } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800001111",
+      peerId: "8613800001111",
+      peerKind: "dm",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.ok(adapter.sent.length > 0, "Normalized phone should match allowFrom");
+  });
+});
+
+test("GatewayCore: WhatsApp allowFrom with + prefix matches digits-only sender", async () => {
+  await withTempHome("gwcore-wa-plus-prefix-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+12345678900"] } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "12345678900",
+      peerId: "12345678900",
+      peerKind: "dm",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.ok(adapter.sent.length > 0, "Phone with + prefix should match digits-only sender");
+  });
+});

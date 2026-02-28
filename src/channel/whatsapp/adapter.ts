@@ -360,13 +360,13 @@ export class WhatsAppAdapter implements ChannelAdapter {
     const senderId = msg.key.participant ?? remoteJid;
     const text = this.extractText(msg);
 
-    const normalizedSender = this.jidToId(senderId);
+    const normalizedSender = this.normalizePhoneId(senderId);
 
     if (this.tryResolveInteractivePending(normalizedSender, text)) return;
 
     const isGroup = remoteJid.endsWith("@g.us");
     const peerKind = isGroup ? "group" : "dm";
-    const peerId = this.jidToId(remoteJid);
+    const peerId = isGroup ? this.jidToId(remoteJid) : this.normalizePhoneId(remoteJid);
 
     let command: string | undefined;
     let commandArgs: string | undefined;

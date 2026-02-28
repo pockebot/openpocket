@@ -98,6 +98,7 @@ Usage:
   openpocket [--config <path>] skills list
   openpocket [--config <path>] script run [--file <path> | --text <script>] [--timeout <sec>]
   openpocket [--config <path>] telegram whoami
+  openpocket [--config <path>] whatsapp [whoami|link]
   openpocket [--config <path>] gateway [start|telegram]
   openpocket [--config <path>] dashboard start [--host <host>] [--port <port>]
   openpocket [--config <path>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
@@ -1621,13 +1622,72 @@ async function runPairingCommand(
   return 0;
 }
 
+async function runWhatsAppWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
+  const wa = cfg.channels?.whatsapp;
+  const dmPolicy = wa?.dmPolicy ?? "pairing";
+  const groupPolicy = wa?.groupPolicy ?? "open";
+  const allowFrom = wa?.allowFrom ?? [];
+  const allowGroups = wa?.allowGroups ?? [];
+  const authDir = path.join(cfg.stateDir, "whatsapp-auth");
+
+  printRaw(cliTheme.section("WhatsApp Identity"));
+  printKeyValue("Enabled", wa?.enabled !== false && !!wa ? "yes" : "no");
+  printKeyValue("DM policy", dmPolicy);
+  printKeyValue("Group policy", groupPolicy);
+  printKeyValue(
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
+  );
+  if (allowGroups.length > 0) {
+    printKeyValue("Allow groups", allowGroups.join(", "));
+  }
+  printKeyValue("Text chunk limit", String(wa?.textChunkLimit ?? 4000));
+  printKeyValue("Chunk mode", wa?.chunkMode ?? "newline");
+  printKeyValue("Read receipts", wa?.sendReadReceipts !== false ? "yes" : "no");
+  if (wa?.proxyUrl) {
+    printKeyValue("Proxy", wa.proxyUrl);
+  }
+
+  const hasSession = fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0;
+  printKeyValue("Session", hasSession ? "linked (auth files present)" : "not linked", hasSession ? "success" : "warn");
+
+  if (!hasSession) {
+    printInfo("Run `openpocket whatsapp link` to scan QR code and link your phone.");
+  }
+
+  const credDir = cfg.stateDir;
+  const allowFile = path.join(credDir, "whatsapp-allowFrom.json");
+  if (fs.existsSync(allowFile)) {
+    try {
+      const raw = fs.readFileSync(allowFile, "utf-8").trim();
+      const entries = JSON.parse(raw);
+      if (Array.isArray(entries) && entries.length > 0) {
+        printRaw(cliTheme.section("Approved Senders (via pairing)"));
+        for (const e of entries) {
+          const id = typeof e === "string" ? e : e.senderId;
+          const at = typeof e === "object" && e.approvedAt ? ` (${e.approvedAt})` : "";
+          printRaw(`  - ${id}${at}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  return 0;
+}
+
 async function runWhatsAppCommand(
   configPath: string | undefined,
   args: string[],
 ): Promise<number> {
   const sub = (args[0] ?? "").trim();
+
+  if (sub === "whoami") {
+    const cfg = loadConfig(configPath);
+    return runWhatsAppWhoamiCommand(cfg);
+  }
+
   if (sub !== "link") {
-    throw new Error(`Unknown whatsapp subcommand: ${sub || "(missing)"}. Use: whatsapp link`);
+    throw new Error(`Unknown whatsapp subcommand: ${sub || "(missing)"}. Use: whatsapp link | whatsapp whoami`);
   }
 
   const cfg = loadConfig(configPath);

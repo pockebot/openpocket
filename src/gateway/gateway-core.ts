@@ -29,7 +29,7 @@ import { ChatAssistant } from "./chat-assistant.js";
 import { CronService, type CronRunResult } from "./cron-service.js";
 import { HeartbeatRunner } from "./heartbeat-runner.js";
 import { evaluateDmPolicy } from "../channel/dm-policy.js";
-import type { DmPolicy } from "../channel/types.js";
+import type { DmPolicy, GroupPolicy } from "../channel/types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -435,6 +435,18 @@ export class GatewayCore {
    * Returns true if the message should be processed, false if blocked.
    */
   private async checkAccess(envelope: InboundEnvelope): Promise<boolean> {
+    if (envelope.peerKind === "group") {
+      return this.checkGroupAccess(envelope);
+    }
+    return this.checkDmAccess(envelope);
+  }
+
+  /**
+   * DM access control (aligned with OpenClaw):
+   * 1. Owner claim: first sender auto-approved when no allowFrom and no approved senders.
+   * 2. Otherwise evaluate dmPolicy (pairing / allowlist / open / disabled).
+   */
+  private async checkDmAccess(envelope: InboundEnvelope): Promise<boolean> {
     const dmPolicy = this.resolveDmPolicy(envelope.channelType);
     const allowFrom = this.resolveAllowFrom(envelope.channelType);
 
@@ -472,6 +484,43 @@ export class GatewayCore {
     }
 
     return true;
+  }
+
+  /**
+   * Group access control:
+   * - "open" (default): all group messages allowed
+   * - "allowlist": sender must be in DM allowlist/approved, OR group peerId must be in allowGroups
+   * - "disabled": all group messages blocked
+   *
+   * Groups never trigger owner claim or pairing codes.
+   */
+  private async checkGroupAccess(envelope: InboundEnvelope): Promise<boolean> {
+    const groupPolicy = this.resolveGroupPolicy(envelope.channelType);
+
+    if (groupPolicy === "disabled") {
+      this.log(`group access denied channel=${envelope.channelType} group=${envelope.peerId} sender=${envelope.senderId} reason=group_policy_disabled`);
+      return false;
+    }
+
+    if (groupPolicy === "open") {
+      return true;
+    }
+
+    const allowFrom = this.resolveAllowFrom(envelope.channelType);
+    if (allowFrom.includes("*") || allowFrom.includes(envelope.senderId)) {
+      return true;
+    }
+    if (this.pairingStore.isApproved(envelope.channelType, envelope.senderId)) {
+      return true;
+    }
+
+    const allowGroups = this.resolveAllowGroups(envelope.channelType);
+    if (allowGroups.includes(envelope.peerId)) {
+      return true;
+    }
+
+    this.log(`group access denied channel=${envelope.channelType} group=${envelope.peerId} sender=${envelope.senderId} reason=not_in_group_allowlist`);
+    return false;
   }
 
   private async handlePlainMessage(envelope: InboundEnvelope): Promise<void> {
@@ -904,7 +953,8 @@ export class GatewayCore {
     return `${oneLine.slice(0, Math.max(0, maxChars - 3))}...`;
   }
 
-  private getChannelConfig(channelType: import("../channel/types.js").ChannelType): { dmPolicy?: DmPolicy; allowFrom?: string[] } | undefined {
+  private getChannelConfig(channelType: import("../channel/types.js").ChannelType):
+    { dmPolicy?: DmPolicy; groupPolicy?: GroupPolicy; allowFrom?: string[]; allowGroups?: string[] } | undefined {
     const channels = this.config.channels;
     if (!channels) return undefined;
     switch (channelType) {
@@ -922,8 +972,15 @@ export class GatewayCore {
     return "pairing";
   }
 
+  private resolveGroupPolicy(channelType: import("../channel/types.js").ChannelType): GroupPolicy {
+    const cfg = this.getChannelConfig(channelType);
+    if (cfg?.groupPolicy) return cfg.groupPolicy;
+    if (this.config.channels?.defaults?.groupPolicy) return this.config.channels.defaults.groupPolicy;
+    return "open";
+  }
+
   private resolveAllowFrom(channelType: import("../channel/types.js").ChannelType): string[] {
-    const channelAllowFrom = this.getChannelConfig(channelType)?.allowFrom ?? [];
+    let channelAllowFrom = this.getChannelConfig(channelType)?.allowFrom ?? [];
 
     if (channelType === "telegram" && channelAllowFrom.length === 0) {
       const legacyIds = this.config.telegram?.allowedChatIds;
@@ -932,6 +989,21 @@ export class GatewayCore {
       }
     }
 
+    if (channelType === "whatsapp") {
+      channelAllowFrom = channelAllowFrom.map((id) =>
+        id === "*" ? id : id.replace(/[^0-9]/g, ""),
+      );
+    }
+
     return channelAllowFrom;
+  }
+
+  private resolveAllowGroups(channelType: import("../channel/types.js").ChannelType): string[] {
+    const cfg = this.getChannelConfig(channelType);
+    const groups = (cfg as { allowGroups?: string[] } | undefined)?.allowGroups ?? [];
+    if (channelType === "whatsapp") {
+      return groups.map((g) => g.replace(/[^0-9]/g, ""));
+    }
+    return groups;
   }
 }

@@ -302,6 +302,7 @@ export interface TelegramChannelConfig {
   botToken?: string;
   botTokenEnv?: string;
   dmPolicy?: DmPolicy;
+  groupPolicy?: GroupPolicy;
   allowFrom?: string[];
   pollTimeoutSec?: number;
 }
@@ -311,6 +312,7 @@ export interface DiscordChannelConfig {
   token?: string;
   tokenEnv?: string;
   dmPolicy?: DmPolicy;
+  groupPolicy?: GroupPolicy;
   allowFrom?: string[];
   guilds?: Record<string, DiscordGuildConfig>;
 }
@@ -323,7 +325,10 @@ export interface DiscordGuildConfig {
 export interface WhatsAppChannelConfig {
   enabled?: boolean;
   dmPolicy?: DmPolicy;
+  groupPolicy?: GroupPolicy;
   allowFrom?: string[];
+  /** Allowed group JIDs (digits-only form). When empty + groupPolicy is "open", all groups are allowed. */
+  allowGroups?: string[];
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   sendReadReceipts?: boolean;
