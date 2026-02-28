@@ -187,7 +187,7 @@ function extractHeadingTree(link) {
       item: {
         text,
         link: `${link}#${slug}`,
-        collapsed: false,
+        collapsed: true,
       },
     });
   }
@@ -219,7 +219,7 @@ function withPageHeadings(items) {
     if (item.items && !item.link) {
       return {
         ...item,
-        collapsed: false,
+        collapsed: item.collapsed ?? true,
         items: withPageHeadings(item.items),
       };
     }
@@ -235,7 +235,7 @@ function withPageHeadings(items) {
 
     return {
       ...item,
-      collapsed: false,
+      collapsed: true,
       items: headingItems,
     };
   });
@@ -251,7 +251,7 @@ const baseSidebar = [
   },
   {
     text: "Get Started",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/get-started/" },
       { text: "Quickstart", link: "/get-started/quickstart" },
@@ -262,7 +262,7 @@ const baseSidebar = [
   },
   {
     text: "Concepts",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/concepts/" },
       { text: "Project Blueprint", link: "/concepts/project-blueprint" },
@@ -274,7 +274,7 @@ const baseSidebar = [
   },
   {
     text: "Tools",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/tools/" },
       { text: "Skills", link: "/tools/skills" },
@@ -283,7 +283,7 @@ const baseSidebar = [
   },
   {
     text: "Reference",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/reference/" },
       { text: "Config Defaults", link: "/reference/config-defaults" },
@@ -296,7 +296,7 @@ const baseSidebar = [
   },
   {
     text: "Ops",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/ops/" },
       { text: "Runbook", link: "/ops/runbook" },
