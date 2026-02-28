@@ -1,6 +1,6 @@
 # Project Blueprint
 
-This page describes the product direction of OpenPocket as a **consumer-ready phone-use agent** built around a local Android emulator.
+This page describes the product direction of OpenPocket as a **consumer-ready phone-use agent** built around a local, configurable Agent Phone runtime.
 
 ## Product Vision
 
@@ -15,30 +15,45 @@ The target is not only developer productivity. The core focus is everyday life s
 
 ## Core Principles
 
-### Local Emulator
+### Local Agent Phone Runtime
 
-OpenPocket runs tasks on a local Android emulator instead of the user’s physical phone.
+OpenPocket executes locally through `adb`, but the controlled target is configurable:
 
-Benefits:
+- `emulator` (default)
+- `physical-phone` (USB/Wi-Fi ADB, ready)
+- `android-tv` (in progress)
+- `cloud` (in progress)
 
-- does not consume battery, storage, or runtime resources on the user’s main phone
-- execution state and permissions stay local to the user’s computer
-- no mandatory cloud-hosted phone infrastructure
+Why this matters:
 
-### Local Data
+- users can start quickly with emulator
+- users can switch to a dedicated physical Android phone for production-like behavior
+- no mandatory hosted cloud phone runtime
+
+### Human Phone vs Agent Phone
+
+OpenPocket uses a strict two-device model:
+
+- **Agent Phone**: the controlled execution target (emulator or connected device), treated as clean runtime surface
+- **Human Phone**: the user’s personal phone, used only for approvals and delegated personal data through Human Auth
+
+This separation reduces accidental leakage from personal daily-use devices into automation runtime.
+
+### Local Data + Auditability
 
 OpenPocket is not a cloud execution farm.
 
 - device automation runs locally through `adb`
 - workspace artifacts remain local (`sessions`, `memory`, `scripts`, screenshots)
 - model calls are explicit and configurable; users choose model provider and endpoint
+- human-auth relay state and uploaded artifacts are locally inspectable
 
 ### Dual Control
 
 OpenPocket is designed for both autonomous and manual interaction:
 
-- **Direct local control**: users can directly operate the local emulator window
-- **Agent control**: the agent can operate the same local emulator through planned actions
+- **Direct control**: users can operate the current Agent Phone target themselves
+- **Agent control**: the agent can operate the same target through planned actions
 
 This enables practical handoff between human and agent in one runtime.
 
@@ -50,21 +65,22 @@ Current foundations:
 
 - observable task lifecycle
 - step-by-step persistence and logs
-- explicit command surfaces (`agent`, `gateway`, `emulator`, `script`)
+- explicit command surfaces (`agent`, `gateway`, `emulator`, `script`, `target`)
 - remote auth unblock flow via one-time web approval link and Telegram `/auth` fallback
+- agentic delegation: runtime stores/describes artifacts, and the agent decides how to apply them
 
 Near-term roadmap:
 
-- remote connection from a user’s own phone to the local runtime
-- phone-side controls for pause/resume/approve/retry flows
-- richer human-in-the-loop checkpoints during agent execution
+- richer target-specific hardening (physical phone first)
+- broader Android TV/cloud deployment completion
+- deeper checkpoint UX for long-running real-world tasks
 
 ## Experience Layers
 
-1. **Runtime Layer**: local emulator + `adb` + task loop + persistence.
-2. **Control Layer**: CLI, Telegram gateway, and native panel.
+1. **Runtime Layer**: local target runtime (`adb`) + task loop + persistence.
+2. **Control Layer**: CLI, Telegram gateway, and web dashboard.
 3. **Trust Layer**: local storage, auditable sessions, script guardrails, controlled execution.
-4. **Collaboration Layer**: human and agent can share control over the same mobile runtime.
+4. **Collaboration Layer**: human and agent share control through execution + approval boundaries.
 
 ## User Scenarios
 
@@ -87,8 +103,8 @@ Near-term roadmap:
 
 - not a browser-only desktop automation tool
 - not limited to coding and office productivity tasks
-- not a cloud-only remote device service
+- not a centralized cloud phone execution service
 
 ## Summary
 
-OpenPocket is evolving into a practical personal phone-use system: local, controllable, auditable, and oriented toward real consumer app workflows.
+OpenPocket is evolving into a practical personal phone-use system: local, controllable, auditable, target-configurable, and oriented toward real consumer app workflows.

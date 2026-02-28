@@ -178,6 +178,15 @@ After successful tasks, runtime may generate reusable artifacts:
 - auto skill: `workspace/skills/auto/<timestamp>-<slug>.md`
 - auto replay script: `workspace/scripts/auto/<timestamp>-<slug>.sh`
 
+Auto skill content includes:
+
+- `behavior_fingerprint: <hash>`
+- source session path
+- per-step procedure from trace logs
+- optional `ui_target` semantic hints derived from tap-element context
+
+Runtime may delete older auto artifacts when slug/fingerprint indicates duplicate behavior.
+
 These paths are also returned in `AgentRunResult.skillPath` / `scriptPath`.
 
 ## Human Auth Artifact

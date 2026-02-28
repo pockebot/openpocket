@@ -12,14 +12,14 @@ The primary control surface is the local Web dashboard (`openpocket dashboard st
 
 ## Direction
 
-OpenPocket is a local emulator-first phone-use agent aimed at real consumer scenarios, not only developer workflows.
+OpenPocket is a local device-first phone-use agent aimed at real consumer scenarios, not only developer workflows.
 
-- local emulator execution instead of cloud-hosted phone runtime
-- no resource usage on the user’s main phone during agent runs
+- local execution on configurable Agent Phone targets (`emulator` default, `physical-phone` ready)
+- no mandatory cloud-hosted phone runtime
 - local data and permission boundary by default
 - dual control model: direct human control + agent control
-- remote human-auth approvals from phone (one-time web link + Telegram fallback)
-- broader remote phone control as a next expansion phase
+- remote human-auth approvals from Human Phone (one-time web link + Telegram fallback)
+- capability-probe + agentic delegation for sensitive data flows
 
 ## Doc Hubs
 

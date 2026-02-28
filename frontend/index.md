@@ -118,7 +118,7 @@ function onVideoEnd(e) {
         <p class="op-workflow-step-num">3</p>
         <h3 class="op-workflow-step-title">Act</h3>
       </div>
-      <p>OpenPocket executes on your local emulator.</p>
+      <p>OpenPocket executes on your local Agent Phone target.</p>
     </div>
   </div>
 </section>
@@ -137,7 +137,7 @@ function onVideoEnd(e) {
         <span class="op-arch-arrow op-arch-arrow--down">↓</span>
         <div class="op-arch-node op-arch-node--blue">ADB Runtime</div>
         <span class="op-arch-arrow op-arch-arrow--down">↓</span>
-        <div class="op-arch-node op-arch-node--gray">Android Emulator</div>
+        <div class="op-arch-node op-arch-node--gray">Agent Phone Target</div>
       </div>
       <div class="op-arch-flow op-arch-flow--branch op-arch-flow--vertical">
         <div class="op-arch-node op-arch-node--blue">Gateway</div>

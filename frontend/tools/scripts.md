@@ -63,3 +63,10 @@ After successful tasks, `AutoArtifactBuilder` may create replay scripts at:
 - `workspace/scripts/auto/<timestamp>-<slug>.sh`
 
 Generated scripts convert observed action traces into executable adb commands.
+
+Generation behavior:
+
+- emits only deterministic, replay-friendly action types (`tap`, `swipe`, `type`, `keyevent`, `launch_app`, `wait`, `shell`, `run_script`)
+- supports non-ASCII text replay via clipboard fallback when needed
+- accepts optional target device as first argument (`./script.sh <device-id>`)
+- paired with auto skills through behavior fingerprint deduplication (older equivalent artifacts are pruned)

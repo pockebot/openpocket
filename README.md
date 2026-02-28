@@ -2,7 +2,7 @@
 
 [![Node.js >= 20](https://img.shields.io/badge/node-%3E%3D20-0f766e.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/language-TypeScript-2563eb.svg)](https://www.typescriptlang.org/)
-[![Runtime](https://img.shields.io/badge/runtime-Local--emulator--first-0f172a.svg)](#architecture)
+[![Runtime](https://img.shields.io/badge/runtime-Local--device--first-0f172a.svg)](#architecture)
 [![Docs](https://img.shields.io/badge/docs-VitePress-0a9396.svg)](./frontend/index.md)
 [![OpenPocket CI](https://github.com/SergioChan/openpocket/actions/workflows/node-tests.yml/badge.svg)](https://github.com/SergioChan/openpocket/actions/workflows/node-tests.yml)
 
@@ -15,19 +15,19 @@ Status snapshot (February 2026):
 
 ### Implemented and usable now
 
-- Local Android emulator runtime driven by CLI + Telegram gateway + dashboard.
+- Local target runtime (via `adb`) driven by CLI + Telegram gateway + dashboard.
 - Deployment target abstraction with `emulator` and `physical-phone` ready today (`android-tv` and `cloud` are in progress).
-- Interactive setup (`openpocket onboard`) for consent, model/API key, Telegram, emulator boot, and human-auth mode.
+- Interactive setup (`openpocket onboard`) for consent, model/API key, Telegram, target selection, and human-auth mode.
 - Template-driven prompt system with runtime mode control (`full|minimal|none`) and workspace context budgets.
 - Bootstrap-driven chat onboarding (`BOOTSTRAP.md`, `PROFILE_ONBOARDING.json`) with persisted workspace onboarding state.
 - Model-driven progress and outcome narration (`TASK_PROGRESS_REPORTER.md`, `TASK_OUTCOME_REPORTER.md`) with anti-noise suppression.
 - Coding toolchain in task loop (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`) with workspace/safety constraints.
 - Memory tools in task loop (`memory_search`, `memory_get`) for recall-oriented interactions.
 - Prompt observability via Telegram `/context [list|detail|json]`.
-- Human-authorization relay (manual `/auth`, one-time web link, optional ngrok) with delegation artifact application.
+- Human-authorization relay (manual `/auth`, one-time web link, optional ngrok) with dynamic template pages and agentic delegation artifacts.
 - In-emulator permission dialogs auto-handled locally (no remote auth escalation for Android runtime permission popups).
 - Telegram bot display-name sync from profile identity changes.
-- Automatic reusable artifact generation after successful tasks (`skills/auto`, `scripts/auto`).
+- Automatic reusable artifact generation after successful tasks (`skills/auto`, `scripts/auto`) with behavior fingerprint dedupe and semantic `ui_target` traces.
 - Auditable persistence for sessions, daily memory, screenshots, relay state, and script run artifacts.
 
 ### Active improvement focus
@@ -35,6 +35,35 @@ Status snapshot (February 2026):
 - Long-horizon memory quality (ranking/compaction/freshness).
 - Prompt evaluation and regression coverage for phone-use scenarios.
 - Cross-platform runtime hardening and operational reliability.
+
+## Latest Merged Updates (main)
+
+### 1) PR #77: Multi-target deployment + agentic Human Auth + capability probe
+
+Merged PR: [#77](https://github.com/SergioChan/openpocket/pull/77)
+
+Highlights:
+
+- multi-target framework (`emulator`, `physical-phone`, `android-tv`, `cloud`)
+- USB/Wi-Fi ADB discovery and interactive selection in target flows
+- `openpocket target pair` for Wireless Debugging pairing
+- capability probe utility (`phone-use-util`) for camera/microphone/location/photos/payment signals
+- dynamic Human Auth portal templates (`uiTemplate` / `templatePath`)
+- secure payment path support via UI tree field extraction and delegated form collection
+- step-level timing observability and expanded no-browser human-auth E2E tests
+
+### 2) Auto-Skill Experience Engine (latest commits on main)
+
+Key commits:
+
+- `032fa03` feat(skills): experience engine (active skill injection, UI semantic traces, replay relevance)
+- `c02a870` fix: harden auto-skill prompt and `ui_target` escaping
+
+Highlights:
+
+- runtime now injects **active skill content**, not only compact skill list metadata
+- auto-generated skills include stronger step semantics (`ui_target`) and reusable behavior fingerprints
+- skill loader gating/triggers and escaping hardening improve safety and prompt robustness
 
 ## Quick Start
 
@@ -134,12 +163,6 @@ Or use the built-in pairing wrapper (no manual adb commands):
 
 ```bash
 openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type physical-phone
-```
-
-For Google Streamer / Android TV:
-
-```bash
-openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type android-tv
 ```
 
 Notes:
@@ -341,7 +364,7 @@ bash scripts/smoke/dual-side-smoke.sh
 
 ## Key Capabilities
 
-- **Local emulator-first runtime**: execution stays on your machine via adb, not a hosted cloud phone.
+- **Local device-first runtime**: execution stays on your machine via adb, not a hosted cloud phone.
 - **Always-on agent loop**: model-driven planning + one-step action execution over Android UI primitives.
 - **Prompt system aligned for agent behavior**:
   - prompt modes (`full|minimal|none`)
@@ -355,7 +378,7 @@ bash scripts/smoke/dual-side-smoke.sh
 - **Coding and memory tools inside task loop**:
   - coding: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`
   - memory: `memory_search`, `memory_get`
-- **Dual control modes**: direct user control and agent control on the same emulator runtime.
+- **Dual control modes**: direct user control and agent control on the same target runtime.
 - **Production-style gateway operations**: Telegram command menu bootstrap, heartbeat, cron jobs, restart loop, safe stop.
 - **Script and coding safety controls**: allowlist + deny patterns + timeout + output caps + run artifacts.
 - **Prompt observability**: `/context` command reports actual injected prompt context and budgets.
@@ -506,7 +529,7 @@ Typical scenarios include:
 
 ## Runtime Flow
 
-`Telegram / CLI -> Gateway -> Agent Runtime -> Model Client -> adb -> Android Emulator`
+`Telegram / CLI -> Gateway -> Agent Runtime -> Model Client -> adb -> Agent Phone Target`
 
 ## Architecture
 
@@ -519,7 +542,7 @@ flowchart LR
   A --> S["Script Executor"]
   A --> C["Coding Executor"]
   A --> R["Memory Executor"]
-  D --> E["Android Emulator (Local)"]
+  D --> E["Agent Phone Target (Local)"]
   A --> W["Workspace Store"]
   W --> SS["sessions/*.md"]
   W --> MM["memory/YYYY-MM-DD.md"]

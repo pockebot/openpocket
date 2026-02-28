@@ -8,6 +8,11 @@ Default behavior:
 - During `openpocket onboard`, target selection is always shown and preselected to the current config value (first run: `emulator`).
 - After onboarding, you can switch target any time before `gateway start` (gateway must be stopped).
 
+Recommended practical path today:
+
+- start with `emulator` for quick bring-up
+- use `physical-phone` for production-like task validation
+
 ## Target Types and Status
 
 | Type | Key | Status | Notes |
@@ -121,6 +126,12 @@ This command:
 - runs `adb pair` with the provided endpoint/code,
 - runs `adb connect` for the same host,
 - updates target config (`type`, `preferredDeviceId`, `adbEndpoint`).
+
+Equivalent endpoint-style form:
+
+```bash
+openpocket target pair --pair-endpoint <device-ip:pair-port> --connect-endpoint <device-ip:adb-port> --code <pairing-code> --type physical-phone
+```
 
 ### 3) Optional: specify connect port explicitly
 

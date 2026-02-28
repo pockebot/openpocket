@@ -4,16 +4,16 @@ This page documents the implemented authorization and delegation system used by 
 
 Design goal:
 
-- keep long-running automation inside local emulator task loop
+- keep long-running automation inside local Agent Phone task loop
 - ask user on phone only when true real-world authorization/data is required
 - resume VM flow with auditable, scoped delegation
 - **Agent-driven artifact usage**: runtime only saves and describes artifacts; the Agent decides how to apply them
 
 ## Boundary Policy
 
-### Handled locally in emulator (no human auth)
+### Handled locally on Agent Phone (no human auth)
 
-- Android runtime permission dialogs inside emulator (`permissioncontroller`, `packageinstaller`)
+- Android runtime permission dialogs inside Agent Phone (`permissioncontroller`, `packageinstaller`)
 - runtime auto-detects and taps allow/reject target based on policy
 
 ### Escalated to human auth
@@ -58,7 +58,7 @@ Portal capabilities:
 
 ## Why This Exists
 
-Some flows cannot be completed from emulator-only UI automation:
+Some flows cannot be completed from local UI automation alone:
 
 - identity checks (2FA, OTP)
 - real-world inputs (camera image, QR payload, live location)
@@ -66,7 +66,7 @@ Some flows cannot be completed from emulator-only UI automation:
 
 OpenPocket handles this with split architecture:
 
-- VM side: continuous autonomous execution
+- Agent Phone side: continuous autonomous execution
 - phone side: explicit authorization + optional delegation artifact
 
 ## Architecture
@@ -204,7 +204,7 @@ Remote approval may include optional artifact payload.
 
 ### 2) Permission authorization
 
-- Android runtime permission dialogs inside emulator are handled locally by policy (no remote interrupt).
+- Android runtime permission dialogs inside Agent Phone are handled locally by policy (no remote interrupt).
 - Real-device capability needs (camera, microphone, location, photos) detected by Capability Probe trigger Human Auth automatically.
 - User action: provide delegated data (photo/audio/location/text) and approve/reject.
 - Agent receives: artifact description. Agent reads the relevant skill and decides how to use the data.
@@ -260,7 +260,7 @@ For `sms`/`2fa`, plain code reply (4-10 digits) can resolve pending request dire
 ```bash
 openpocket config-show
 openpocket telegram whoami
-openpocket emulator status
+openpocket target show
 openpocket gateway start
 ```
 
