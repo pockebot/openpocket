@@ -4,6 +4,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 import { loadConfig, saveConfig } from "../config/index.js";
+import { FilePairingStore } from "../channel/pairing.js";
+import type { ChannelType } from "../channel/types.js";
 import { AdbRuntime } from "../device/adb-runtime.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
 import { isWorkspaceOnboardingCompleted, markWorkspaceOnboardingCompleted } from "../memory/workspace.js";
@@ -1956,6 +1958,7 @@ export class DashboardServer {
       <button class="tab-btn" data-tab="onboarding">Onboarding</button>
       <button class="tab-btn" data-tab="permissions">Permissions</button>
       <button class="tab-btn" data-tab="prompts">Agent Prompts</button>
+      <button class="tab-btn" data-tab="channels">Channels</button>
       <button class="tab-btn" data-tab="timeline">Action Timeline</button>
       <button class="tab-btn" data-tab="logs">Logs</button>
     </div>
@@ -2208,6 +2211,17 @@ export class DashboardServer {
       </div>
     </section>
 
+    <section class="tab-panel" data-panel="channels">
+      <div class="card">
+        <div class="row spread">
+          <h3 style="margin:0;">Channel Management</h3>
+          <button class="btn" id="channels-refresh-btn">Refresh</button>
+        </div>
+        <p class="hint">Manage messaging channel connections, access policies, and sender approvals.</p>
+      </div>
+      <div id="channels-container"></div>
+    </section>
+
     <section class="tab-panel" data-panel="logs">
       <div class="card">
         <h3>Dashboard Logs</h3>
@@ -2257,6 +2271,7 @@ export class DashboardServer {
       traceStatusFilter: "all",
       traceSearchFilter: "",
       expandedResults: new Set(),
+      channelsData: null,
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -3398,6 +3413,171 @@ export class DashboardServer {
           }, 3000);
         }
       });
+
+      $("#channels-refresh-btn").addEventListener("click", () => {
+        loadChannels().then(() => setStatus("Channels refreshed.", "ok")).catch((error) => setStatus(error.message, "error"));
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // Channels tab
+    // -------------------------------------------------------------------
+
+    async function loadChannels() {
+      const payload = await api("/api/channels");
+      state.channelsData = payload.channels;
+      renderChannels(payload.channels);
+    }
+
+    function channelIcon(ch) {
+      if (ch === "telegram") return "📨";
+      if (ch === "whatsapp") return "💬";
+      if (ch === "discord") return "🎮";
+      return "📡";
+    }
+
+    function sessionBadge(ch, status) {
+      if (ch === "whatsapp") {
+        return status === "linked"
+          ? '<span class="badge ok" style="font-size:11px;">Session Linked</span>'
+          : '<span class="badge" style="font-size:11px;">Not Linked</span>';
+      }
+      if (ch === "telegram") {
+        return status === "token_configured"
+          ? '<span class="badge ok" style="font-size:11px;">Token OK</span>'
+          : '<span class="badge" style="font-size:11px;">No Token</span>';
+      }
+      return "";
+    }
+
+    function renderChannels(channels) {
+      const container = $("#channels-container");
+      if (!channels || Object.keys(channels).length === 0) {
+        container.innerHTML = '<div class="card"><p class="hint">No channels configured. Edit config.json or run <code>openpocket onboard</code>.</p></div>';
+        return;
+      }
+
+      const order = ["telegram", "whatsapp", "discord"];
+      const sorted = order.filter((k) => channels[k]);
+
+      container.innerHTML = sorted.map((ch) => {
+        const c = channels[ch];
+        const icon = channelIcon(ch);
+        const session = sessionBadge(ch, c.sessionStatus);
+        const enabledBadge = c.enabled
+          ? '<span class="badge ok" style="font-size:11px;">Enabled</span>'
+          : '<span class="badge" style="font-size:11px;">Disabled</span>';
+
+        const allowFromHtml = c.allowFrom.length > 0
+          ? c.allowFrom.map((id) => '<code style="font-size:12px;background:rgba(0,0,0,0.05);padding:2px 6px;border-radius:4px;">' + escHtml(id) + '</code>').join(" ")
+          : '<span class="hint">empty (owner claim on first message)</span>';
+
+        const approvedHtml = c.approved.length > 0
+          ? '<table style="width:100%;border-collapse:collapse;margin-top:6px;"><thead><tr style="text-align:left;border-bottom:1px solid rgba(0,0,0,0.1);"><th style="padding:4px 8px;font-size:12px;">Sender ID</th><th style="padding:4px 8px;font-size:12px;"></th></tr></thead><tbody>'
+            + c.approved.map((id) => '<tr style="border-bottom:1px solid rgba(0,0,0,0.04);"><td style="padding:4px 8px;font-size:13px;font-family:monospace;">' + escHtml(id) + '</td><td style="padding:4px 8px;text-align:right;"></td></tr>').join("")
+            + '</tbody></table>'
+          : '<span class="hint">No approved senders yet.</span>';
+
+        const pendingHtml = c.pending.length > 0
+          ? '<table style="width:100%;border-collapse:collapse;margin-top:6px;"><thead><tr style="text-align:left;border-bottom:1px solid rgba(0,0,0,0.1);"><th style="padding:4px 8px;font-size:12px;">Code</th><th style="padding:4px 8px;font-size:12px;">Sender</th><th style="padding:4px 8px;font-size:12px;">Name</th><th style="padding:4px 8px;font-size:12px;">Expires</th><th style="padding:4px 8px;font-size:12px;">Actions</th></tr></thead><tbody>'
+            + c.pending.map((p) => '<tr style="border-bottom:1px solid rgba(0,0,0,0.04);"><td style="padding:4px 8px;font-size:13px;font-family:monospace;font-weight:600;">' + escHtml(p.code) + '</td><td style="padding:4px 8px;font-size:13px;font-family:monospace;">' + escHtml(p.senderId) + '</td><td style="padding:4px 8px;font-size:13px;">' + escHtml(p.senderName || "-") + '</td><td style="padding:4px 8px;font-size:12px;">' + new Date(p.expiresAt).toLocaleTimeString() + '</td><td style="padding:4px 8px;"><button class="btn primary" style="padding:2px 10px;font-size:11px;" data-pairing-action="approve" data-ch="' + ch + '" data-code="' + escHtml(p.code) + '">Approve</button> <button class="btn warn" style="padding:2px 10px;font-size:11px;" data-pairing-action="reject" data-ch="' + ch + '" data-code="' + escHtml(p.code) + '">Reject</button></td></tr>').join("")
+            + '</tbody></table>'
+          : '<span class="hint">No pending requests.</span>';
+
+        return '<div class="card" style="margin-top:12px;">'
+          + '<div class="row spread" style="align-items:center;">'
+          + '<h3 style="margin:0;">' + icon + ' ' + ch.charAt(0).toUpperCase() + ch.slice(1) + '</h3>'
+          + '<div class="row" style="gap:6px;">' + enabledBadge + session + '</div>'
+          + '</div>'
+          + '<div class="grid cols-2" style="margin-top:12px;gap:16px;">'
+          + '<div>'
+          + '<div class="kv">'
+          + '<div><strong>DM Policy</strong><span>' + escHtml(c.dmPolicy) + '</span></div>'
+          + '<div><strong>Group Policy</strong><span>' + escHtml(c.groupPolicy) + '</span></div>'
+          + '<div><strong>Allow From</strong><span>' + allowFromHtml + '</span></div>'
+          + '</div>'
+          + '</div>'
+          + '<div>'
+          + '<div style="display:flex;gap:8px;margin-bottom:8px;">'
+          + '<select id="dm-policy-select-' + ch + '" style="padding:4px 8px;border-radius:4px;border:1px solid rgba(0,0,0,0.15);font-size:12px;">'
+          + ['pairing','allowlist','open','disabled'].map((p) => '<option value="' + p + '"' + (p === c.dmPolicy ? ' selected' : '') + '>' + p + '</option>').join("")
+          + '</select>'
+          + '<select id="group-policy-select-' + ch + '" style="padding:4px 8px;border-radius:4px;border:1px solid rgba(0,0,0,0.15);font-size:12px;">'
+          + ['open','allowlist','disabled'].map((p) => '<option value="' + p + '"' + (p === c.groupPolicy ? ' selected' : '') + '>' + p + '</option>').join("")
+          + '</select>'
+          + '<button class="btn primary" style="padding:4px 12px;font-size:12px;" data-save-policy="' + ch + '">Save Policy</button>'
+          + '</div>'
+          + '</div>'
+          + '</div>'
+          + '<details style="margin-top:12px;"><summary style="cursor:pointer;font-weight:600;font-size:13px;">Approved Senders (' + c.approved.length + ')</summary>' + approvedHtml
+          + '<div class="row" style="margin-top:8px;gap:6px;">'
+          + '<input type="text" id="add-sender-' + ch + '" placeholder="Sender ID" style="padding:4px 8px;border-radius:4px;border:1px solid rgba(0,0,0,0.15);font-size:12px;width:200px;" />'
+          + '<button class="btn" style="padding:4px 12px;font-size:12px;" data-add-sender="' + ch + '">Add Sender</button>'
+          + '</div>'
+          + '</details>'
+          + '<details style="margin-top:8px;"><summary style="cursor:pointer;font-weight:600;font-size:13px;">Pending Pairing Requests (' + c.pending.length + ')</summary>' + pendingHtml + '</details>'
+          + '</div>';
+      }).join("");
+
+      container.querySelectorAll("[data-pairing-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const action = btn.dataset.pairingAction;
+          const ch = btn.dataset.ch;
+          const code = btn.dataset.code;
+          try {
+            await api("/api/channels/pairing/" + action, {
+              method: "POST",
+              body: JSON.stringify({ channel: ch, code }),
+            });
+            setStatus("Pairing " + code + " " + action + "d on " + ch + ".", "ok");
+            await loadChannels();
+          } catch (error) {
+            setStatus(error.message, "error");
+          }
+        });
+      });
+
+      container.querySelectorAll("[data-save-policy]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const ch = btn.dataset.savePolicy;
+          const dmPolicy = $("#dm-policy-select-" + ch).value;
+          const groupPolicy = $("#group-policy-select-" + ch).value;
+          try {
+            await api("/api/channels/config", {
+              method: "POST",
+              body: JSON.stringify({ channel: ch, config: { dmPolicy, groupPolicy } }),
+            });
+            setStatus(ch + " policy saved.", "ok");
+            await loadChannels();
+          } catch (error) {
+            setStatus(error.message, "error");
+          }
+        });
+      });
+
+      container.querySelectorAll("[data-add-sender]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const ch = btn.dataset.addSender;
+          const input = $("#add-sender-" + ch);
+          const senderId = input.value.trim();
+          if (!senderId) return;
+          try {
+            await api("/api/channels/pairing/add", {
+              method: "POST",
+              body: JSON.stringify({ channel: ch, senderId }),
+            });
+            input.value = "";
+            setStatus("Sender " + senderId + " added to " + ch + ".", "ok");
+            await loadChannels();
+          } catch (error) {
+            setStatus(error.message, "error");
+          }
+        });
+      });
+    }
+
+    function escHtml(str) {
+      return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
 
     async function init() {
@@ -3413,6 +3593,7 @@ export class DashboardServer {
         { label: "permissions", run: () => loadScopedFiles() },
         { label: "logs", run: () => loadLogs() },
         { label: "timeline", run: () => loadTraces() },
+        { label: "channels", run: () => loadChannels() },
       ];
       const failures = [];
 
@@ -3798,6 +3979,142 @@ export class DashboardServer {
         const message = this.emulator.typeText(text, this.config.agent.deviceId ?? undefined);
         this.log(`emulator type length=${text.length}`);
         sendJson(res, 200, { ok: true, message });
+        return;
+      }
+
+      // ---------------------------------------------------------------
+      // Channels API
+      // ---------------------------------------------------------------
+
+      if (method === "GET" && url.pathname === "/api/channels") {
+        const pairingDir = this.config.pairing?.stateDir ?? path.join(this.config.stateDir, "pairing");
+        const store = new FilePairingStore({
+          stateDir: pairingDir,
+          codeLength: this.config.pairing?.codeLength,
+          expiresAfterSec: this.config.pairing?.expiresAfterSec,
+        });
+
+        const channelTypes: ChannelType[] = ["telegram", "whatsapp", "discord"];
+        const channels: Record<string, unknown> = {};
+
+        for (const ch of channelTypes) {
+          const cfg = ch === "telegram" ? this.config.channels?.telegram
+            : ch === "whatsapp" ? this.config.channels?.whatsapp
+            : ch === "discord" ? this.config.channels?.discord
+            : undefined;
+          if (!cfg) continue;
+
+          const approved = store.listApproved(ch);
+          const pending = store.listPending(ch);
+
+          let sessionStatus: string | null = null;
+          if (ch === "whatsapp") {
+            const authDir = path.join(this.config.stateDir, "whatsapp-auth");
+            sessionStatus = fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0 ? "linked" : "not_linked";
+          }
+          if (ch === "telegram") {
+            const tgCfg = this.config.channels?.telegram;
+            const envName = tgCfg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
+            const hasToken = Boolean((tgCfg?.botToken ?? "").trim() || process.env[envName]?.trim());
+            sessionStatus = hasToken ? "token_configured" : "no_token";
+          }
+
+          channels[ch] = {
+            enabled: (cfg as { enabled?: boolean }).enabled !== false,
+            dmPolicy: (cfg as { dmPolicy?: string }).dmPolicy ?? "pairing",
+            groupPolicy: (cfg as { groupPolicy?: string }).groupPolicy ?? "open",
+            allowFrom: (cfg as { allowFrom?: string[] }).allowFrom ?? [],
+            approved,
+            pending: pending.map((p) => ({
+              code: p.code,
+              senderId: p.senderId,
+              senderName: p.senderName,
+              createdAt: p.createdAt,
+              expiresAt: p.expiresAt,
+            })),
+            sessionStatus,
+          };
+        }
+
+        sendJson(res, 200, { channels });
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/channels/pairing/approve") {
+        const body = await readJsonBody(req);
+        if (!isObject(body)) throw new Error("Invalid payload.");
+        const channel = String(body.channel ?? "").trim() as ChannelType;
+        const code = String(body.code ?? "").trim();
+        if (!channel || !code) throw new Error("channel and code are required.");
+
+        const pairingDir = this.config.pairing?.stateDir ?? path.join(this.config.stateDir, "pairing");
+        const store = new FilePairingStore({
+          stateDir: pairingDir,
+          codeLength: this.config.pairing?.codeLength,
+          expiresAfterSec: this.config.pairing?.expiresAfterSec,
+        });
+        const ok = store.approvePairing(channel, code);
+        this.log(`dashboard pairing approve channel=${channel} code=${code} result=${ok}`);
+        sendJson(res, 200, { ok, channel, code });
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/channels/pairing/reject") {
+        const body = await readJsonBody(req);
+        if (!isObject(body)) throw new Error("Invalid payload.");
+        const channel = String(body.channel ?? "").trim() as ChannelType;
+        const code = String(body.code ?? "").trim();
+        if (!channel || !code) throw new Error("channel and code are required.");
+
+        const pairingDir = this.config.pairing?.stateDir ?? path.join(this.config.stateDir, "pairing");
+        const store = new FilePairingStore({
+          stateDir: pairingDir,
+          codeLength: this.config.pairing?.codeLength,
+          expiresAfterSec: this.config.pairing?.expiresAfterSec,
+        });
+        const ok = store.rejectPairing(channel, code);
+        this.log(`dashboard pairing reject channel=${channel} code=${code} result=${ok}`);
+        sendJson(res, 200, { ok, channel, code });
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/channels/pairing/add") {
+        const body = await readJsonBody(req);
+        if (!isObject(body)) throw new Error("Invalid payload.");
+        const channel = String(body.channel ?? "").trim() as ChannelType;
+        const senderId = String(body.senderId ?? "").trim();
+        if (!channel || !senderId) throw new Error("channel and senderId are required.");
+
+        const pairingDir = this.config.pairing?.stateDir ?? path.join(this.config.stateDir, "pairing");
+        const store = new FilePairingStore({
+          stateDir: pairingDir,
+          codeLength: this.config.pairing?.codeLength,
+          expiresAfterSec: this.config.pairing?.expiresAfterSec,
+        });
+        store.addToAllowlist(channel, senderId);
+        this.log(`dashboard pairing add channel=${channel} senderId=${senderId}`);
+        sendJson(res, 200, { ok: true, channel, senderId });
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/channels/config") {
+        const body = await readJsonBody(req);
+        if (!isObject(body)) throw new Error("Invalid payload.");
+        const channel = String(body.channel ?? "").trim();
+        const patch = body.config;
+        if (!channel || !isObject(patch)) throw new Error("channel and config are required.");
+
+        if (!this.config.channels) (this.config as any).channels = {};
+        const channels = this.config.channels as Record<string, unknown>;
+        const existing = (channels[channel] ?? {}) as Record<string, unknown>;
+        channels[channel] = { ...existing, ...patch };
+        saveConfig(this.config);
+
+        this.config = loadConfig(this.config.configPath);
+        this.emulator = new EmulatorManager(this.config);
+        this.adb = new AdbRuntime(this.config, this.emulator);
+        this.log(`dashboard channel config updated channel=${channel}`);
+        sendJson(res, 200, { ok: true, config: channels[channel] });
         return;
       }
 
