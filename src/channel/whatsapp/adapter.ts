@@ -319,7 +319,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
       if (!this.qrDisplayed) {
         this.qrDisplayed = true;
         this.log("whatsapp session not linked. To link, stop the gateway and run:");
-        this.log("    openpocket whatsapp link");
+        this.log("    openpocket channels login --channel whatsapp");
       }
     }
 
@@ -341,7 +341,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
         }, 3000);
       } else if (statusCode === DisconnectReason.loggedOut) {
         this.log("whatsapp session expired or unlinked (401). To re-link, run:");
-        this.log("    openpocket whatsapp link");
+        this.log("    openpocket channels login --channel whatsapp");
       }
     }
   }
