@@ -322,12 +322,8 @@ export default withMermaid(defineConfig({
     siteTitle: "OpenPocket",
     logo: "/openpocket-logo.png",
     nav: [
-      { text: "Home", link: "/" },
-      { text: "Blueprint", link: "/concepts/project-blueprint" },
-      { text: "Get Started", link: "/get-started/" },
-      { text: "Reference", link: "/reference/" },
-      { text: "Runbook", link: "/ops/runbook" },
-      { text: "Doc Hubs", link: "/hubs" },
+      { text: "Setup", link: "/get-started/" },
+      { text: "Docs", link: "/hubs" },
     ],
     socialLinks: [
       { icon: "github", link: "https://github.com/SergioChan/openpocket" },
