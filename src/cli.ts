@@ -97,7 +97,7 @@ Usage:
   openpocket [--config <path>] agent [--model <name>] <task>
   openpocket [--config <path>] skills list
   openpocket [--config <path>] script run [--file <path> | --text <script>] [--timeout <sec>]
-  openpocket [--config <path>] telegram setup|whoami
+  openpocket [--config <path>] telegram whoami
   openpocket [--config <path>] gateway [start|telegram]
   openpocket [--config <path>] dashboard start [--host <host>] [--port <port>]
   openpocket [--config <path>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
@@ -119,7 +119,6 @@ Examples:
   openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
   openpocket skills list
   openpocket script run --text "echo hello"
-  openpocket telegram setup
   openpocket telegram whoami
   openpocket gateway start
   openpocket dashboard start
@@ -576,8 +575,9 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
   }
 
   const tokenSourceLabel = (cfg: ReturnType<typeof loadConfig>): string => {
-    const envName = cfg.telegram.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
-    const hasConfigToken = cfg.telegram.botToken.trim().length > 0;
+    const tg = cfg.channels?.telegram;
+    const envName = tg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
+    const hasConfigToken = (tg?.botToken ?? "").trim().length > 0;
     const hasEnvToken = Boolean(process.env[envName]?.trim());
     if (hasConfigToken) {
       return "config.json";
@@ -626,8 +626,9 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
     start: async () => {
       const cfg = loadConfig(configPath);
       const shortcut = installCliShortcut();
-      const envName = cfg.telegram.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
-      const hasToken = Boolean(cfg.telegram.botToken.trim() || process.env[envName]?.trim());
+      const tgCfg = cfg.channels?.telegram;
+      const envName = tgCfg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
+      const hasToken = Boolean((tgCfg?.botToken ?? "").trim() || process.env[envName]?.trim());
       const hasWhatsApp = cfg.channels?.whatsapp?.enabled !== false && !!cfg.channels?.whatsapp;
       const hasDiscord = (() => {
         const dc = cfg.channels?.discord;
@@ -1083,8 +1084,9 @@ function resolveTelegramTokenSource(cfg: ReturnType<typeof loadConfig>): {
   token: string;
   source: string;
 } {
-  const envName = cfg.telegram.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
-  const configToken = cfg.telegram.botToken.trim();
+  const tg = cfg.channels?.telegram;
+  const envName = tg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
+  const configToken = (tg?.botToken ?? "").trim();
   const envToken = process.env[envName]?.trim() ?? "";
   if (configToken) {
     return { envName, token: configToken, source: "config.json" };
@@ -1103,12 +1105,15 @@ function resolveTelegramChatId(cfg: OpenPocketConfig, chatIdRaw: string | null):
     }
     return Math.trunc(parsed);
   }
-  if (cfg.telegram.allowedChatIds.length === 1) {
-    return cfg.telegram.allowedChatIds[0];
+  const legacyIds = cfg.telegram?.allowedChatIds ?? [];
+  const channelAllowFrom = (cfg.channels?.telegram?.allowFrom ?? []).map(Number).filter(Number.isFinite);
+  const chatIds = channelAllowFrom.length > 0 ? channelAllowFrom : legacyIds;
+  if (chatIds.length === 1) {
+    return chatIds[0];
   }
-  if (cfg.telegram.allowedChatIds.length > 1) {
+  if (chatIds.length > 1) {
     throw new Error(
-      `Multiple allowed chat IDs configured (${cfg.telegram.allowedChatIds.join(", ")}). Use --chat <id>.`,
+      `Multiple allowed chat IDs configured (${chatIds.join(", ")}). Use --chat <id>.`,
     );
   }
   throw new Error("No default chat ID found. Use --chat <id> or configure telegram.allowedChatIds.");
@@ -1299,19 +1304,20 @@ function collectTelegramChatCandidates(update: unknown): TelegramChatCandidate[]
 
 async function runTelegramWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
   const tokenInfo = resolveTelegramTokenSource(cfg);
-  const allow = cfg.telegram.allowedChatIds;
-  const allowPolicy = allow.length > 0 ? "allow_only_listed" : "allow_all";
+  const tg = cfg.channels?.telegram;
+  const allowFrom = tg?.allowFrom ?? [];
+  const dmPolicy = tg?.dmPolicy ?? "pairing";
 
   printRaw(cliTheme.section("Telegram Identity"));
   printKeyValue("Token source", tokenInfo.source, tokenInfo.token ? "success" : "warn");
-  printKeyValue("Allow policy", allowPolicy);
+  printKeyValue("DM policy", dmPolicy);
   printKeyValue(
-    "Allowlist",
-    allow.length > 0 ? allow.map((id) => String(id)).join(", ") : "empty (all chats allowed)",
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
   );
 
   if (!tokenInfo.token) {
-    printWarn(`Telegram token is not configured. Set config.telegram.botToken or env ${tokenInfo.envName}.`);
+    printWarn(`Telegram token is not configured. Set channels.telegram.botToken in config or env ${tokenInfo.envName}.`);
     return 0;
   }
 
@@ -1381,7 +1387,7 @@ async function runTelegramWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Pro
 
     printRaw(cliTheme.section("Discovered Chat IDs"));
     for (const chat of seen.values()) {
-      const allowed = allow.length === 0 || allow.includes(chat.id);
+      const allowed = allowFrom.length === 0 || allowFrom.includes(String(chat.id));
       printRaw(
         `  - ${chat.id} | type=${chat.type} | title=${chat.title} | source=${chat.source} | allowed=${allowed}`,
       );
@@ -1524,11 +1530,13 @@ async function runPairingCommand(
   args: string[],
 ): Promise<number> {
   const sub = (args[0] ?? "").trim();
-  if (!sub || !["list", "approve", "reject"].includes(sub)) {
+  if (!sub || !["list", "approve", "reject", "approved", "add"].includes(sub)) {
     printRaw(cliTheme.section("Pairing Commands"));
     printRaw("  openpocket pairing list [channel]           List pending pairing requests");
+    printRaw("  openpocket pairing approved [channel]       List approved (paired) senders");
     printRaw("  openpocket pairing approve <channel> <code> Approve a pairing request");
     printRaw("  openpocket pairing reject <channel> <code>  Reject a pairing request");
+    printRaw("  openpocket pairing add <channel> <senderId> Manually add sender to allowlist");
     printRaw("");
     printInfo("Channels: telegram, whatsapp, discord");
     return 0;
@@ -1559,6 +1567,27 @@ async function runPairingCommand(
     return 0;
   }
 
+  if (sub === "approved") {
+    const channels: import("./channel/types.js").ChannelType[] = args[1]?.trim()
+      ? [args[1].trim() as import("./channel/types.js").ChannelType]
+      : ["telegram", "discord", "whatsapp"];
+    let total = 0;
+    for (const ch of channels) {
+      const approved = pairingStore.listApproved(ch);
+      if (approved.length > 0) {
+        printRaw(cliTheme.section(`Approved Senders — ${ch} (${approved.length})`));
+        for (const id of approved) {
+          printRaw(`  ${id}`);
+        }
+        total += approved.length;
+      }
+    }
+    if (total === 0) {
+      printInfo("No approved senders found. The first person to message the bot will be auto-registered as owner.");
+    }
+    return 0;
+  }
+
   if (sub === "approve" || sub === "reject") {
     const channel = args[1]?.trim();
     const code = args[2]?.trim();
@@ -1575,6 +1604,18 @@ async function runPairingCommand(
       printWarn(`Pairing code not found: ${code} (channel: ${channel})`);
     }
     return ok ? 0 : 1;
+  }
+
+  if (sub === "add") {
+    const channel = args[1]?.trim();
+    const senderId = args[2]?.trim();
+    if (!channel || !senderId) {
+      printWarn("Usage: openpocket pairing add <channel> <senderId>");
+      return 1;
+    }
+    pairingStore.addToAllowlist(channel as import("./channel/types.js").ChannelType, senderId);
+    printSuccess(`Sender ${senderId} added to ${channel} allowlist.`);
+    return 0;
   }
 
   return 0;
@@ -1732,136 +1773,25 @@ async function runWhatsAppCommand(
   });
 }
 
-async function runTelegramSetupCommand(
+async function runTelegramCommand(
   configPath: string | undefined,
   args: string[],
 ): Promise<number> {
-  const sub = (args[0] ?? "setup").trim();
-  if (sub !== "setup" && sub !== "whoami") {
-    throw new Error(`Unknown telegram subcommand: ${sub}. Use: telegram setup|whoami`);
-  }
-
-  const cfg = loadConfig(configPath);
+  const sub = (args[0] ?? "").trim();
   if (sub === "whoami") {
+    const cfg = loadConfig(configPath);
     return runTelegramWhoamiCommand(cfg);
   }
 
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error("`telegram setup` requires an interactive terminal (TTY).");
-  }
-
-  const rl = createInterface({ input, output });
-  try {
-    printRaw(cliTheme.section("Telegram Setup"));
-    printInfo("Create your bot in Telegram with @BotFather before continuing.");
-
-    const fallbackEnv = "TELEGRAM_BOT_TOKEN";
-    const configuredEnv = cfg.telegram.botTokenEnv || fallbackEnv;
-    const currentEnv = normalizeEnvVarName(configuredEnv, fallbackEnv);
-    if (currentEnv !== configuredEnv) {
-      cfg.telegram.botTokenEnv = currentEnv;
-      printWarn(
-        `[OpenPocket] Invalid botTokenEnv value detected (${configuredEnv}). Reset to ${currentEnv}.`,
-      );
-    }
-    const envToken = process.env[currentEnv]?.trim() ?? "";
-    const configToken = cfg.telegram.botToken.trim();
-    const tokenChoice = await selectByArrowKeys(
-      rl,
-      "Telegram bot token source",
-      [
-        {
-          value: "paste",
-          label: "Paste bot token now",
-        },
-        {
-          value: "env",
-          label: `Use environment variable (${currentEnv})`,
-          hint: envToken ? `detected, length ${envToken.length}` : "not detected",
-        },
-        {
-          value: "keep",
-          label: "Keep current token settings",
-          hint: configToken ? `config token exists (length ${configToken.length})` : "no config token",
-        },
-      ],
-      "paste",
-    );
-
-    if (tokenChoice === "paste") {
-      const token = (await rl.question("Paste Telegram bot token: ")).trim();
-      if (!token) {
-        throw new Error("Telegram bot token cannot be empty.");
-      }
-      cfg.telegram.botToken = token;
-    } else if (tokenChoice === "env") {
-      const envNameRaw = await rl.question(
-        `Environment variable name for Telegram token [${currentEnv}]: `,
-      );
-      const envName = envNameRaw.trim() || currentEnv;
-      cfg.telegram.botTokenEnv = envName;
-      cfg.telegram.botToken = "";
-      const selectedEnvToken = process.env[envName]?.trim() ?? "";
-      if (!selectedEnvToken) {
-        printWarn(
-          `[OpenPocket] Warning: ${envName} is not set in this shell. Gateway start will fail until you export it.`,
-        );
-      }
-    }
-
-    if (!cfg.channels) cfg.channels = {};
-    if (!cfg.channels.telegram) cfg.channels.telegram = {};
-
-    const currentDmPolicy = cfg.channels.telegram.dmPolicy ?? "pairing";
-    const dmPolicyChoice = await selectByArrowKeys(
-      rl,
-      "Telegram DM access policy",
-      [
-        {
-          value: "pairing",
-          label: "Pairing (unknown senders get a code, owner approves)",
-        },
-        {
-          value: "allowlist",
-          label: "Allowlist (only pre-configured chat IDs)",
-        },
-        {
-          value: "open",
-          label: "Open (all messages allowed)",
-        },
-      ],
-      currentDmPolicy,
-    );
-    cfg.channels.telegram.dmPolicy = dmPolicyChoice as "pairing" | "allowlist" | "open";
-
-    if (dmPolicyChoice === "allowlist") {
-      const currentAllow =
-        cfg.telegram.allowedChatIds.length > 0
-          ? cfg.telegram.allowedChatIds.join(", ")
-          : "empty";
-      const allowedInput = await rl.question(
-        `Allowed chat IDs (comma or space separated) [${currentAllow}]: `,
-      );
-      if (allowedInput.trim()) {
-        cfg.telegram.allowedChatIds = parseAllowedChatIds(allowedInput);
-      }
-    }
-
-    saveConfig(cfg);
-    printSuccess("Telegram setup saved.");
-    printInfo("Next: run `openpocket gateway start`.");
-    return 0;
-  } finally {
-    if (input.setRawMode) {
-      try {
-        input.setRawMode(false);
-      } catch {
-        // Ignore raw mode reset errors.
-      }
-    }
-    input.pause();
-    rl.close();
-  }
+  printRaw(cliTheme.section("Telegram Commands"));
+  printRaw("  openpocket telegram whoami    Discover chat IDs from recent bot updates");
+  printRaw("");
+  printInfo("To configure Telegram, edit ~/.openpocket/config.json:");
+  printRaw('  telegram.botToken = "YOUR_TOKEN"');
+  printRaw("  or set env: export TELEGRAM_BOT_TOKEN=YOUR_TOKEN");
+  printRaw("");
+  printInfo("Then start the gateway: openpocket gateway start");
+  return 0;
 }
 
 async function runDashboardCommand(configPath: string | undefined, args: string[]): Promise<number> {
@@ -1999,7 +1929,7 @@ async function runPermissionLabScenario(params: {
 }): Promise<number> {
   const tokenInfo = resolveTelegramTokenSource(params.config);
   if (!tokenInfo.token) {
-    throw new Error(`Telegram bot token is empty. Set config.telegram.botToken or env ${tokenInfo.envName}.`);
+    throw new Error(`Telegram bot token is empty. Set channels.telegram.botToken in config or env ${tokenInfo.envName}.`);
   }
   const chatId = resolveTelegramChatId(params.config, params.chatIdRaw);
 
@@ -2305,7 +2235,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (command === "telegram") {
-    return runTelegramSetupCommand(configPath ?? undefined, rest.slice(1));
+    return runTelegramCommand(configPath ?? undefined, rest.slice(1));
   }
 
   if (command === "whatsapp") {

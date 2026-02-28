@@ -40,10 +40,11 @@ export function evaluateDmPolicy(
     return { allowed: true, reason: "dm_policy_open" };
   }
 
-  const inStaticAllowlist =
-    allowFrom.length === 0 || allowFrom.includes("*") || allowFrom.includes(senderId);
+  if (allowFrom.includes("*")) {
+    return { allowed: true, reason: "allowlist_wildcard" };
+  }
 
-  if (inStaticAllowlist) {
+  if (allowFrom.length > 0 && allowFrom.includes(senderId)) {
     return { allowed: true, reason: "allowlist_match" };
   }
 

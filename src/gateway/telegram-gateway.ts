@@ -163,14 +163,15 @@ export class TelegramGateway {
     };
     this.typingIntervalMs = Math.max(50, Math.round(options?.typingIntervalMs ?? 4000));
 
+    const tg = config.telegram ?? { botToken: "", botTokenEnv: "TELEGRAM_BOT_TOKEN", allowedChatIds: [], pollTimeoutSec: 25 };
     const token =
-      config.telegram.botToken.trim() ||
-      (config.telegram.botTokenEnv ? process.env[config.telegram.botTokenEnv]?.trim() : "") ||
+      tg.botToken.trim() ||
+      (tg.botTokenEnv ? process.env[tg.botTokenEnv]?.trim() : "") ||
       "";
 
     if (!token) {
       throw new Error(
-        `Telegram bot token is empty. Set config.telegram.botToken or env ${config.telegram.botTokenEnv}.`,
+        `Telegram bot token is empty. Set channels.telegram.botToken or env ${tg.botTokenEnv}.`,
       );
     }
 
@@ -178,7 +179,7 @@ export class TelegramGateway {
       polling: {
         interval: 1000,
         params: {
-          timeout: config.telegram.pollTimeoutSec,
+          timeout: tg.pollTimeoutSec,
         },
       },
     });
@@ -1537,7 +1538,7 @@ export class TelegramGateway {
   }
 
   private allowed(chatId: number): boolean {
-    const allow = this.config.telegram.allowedChatIds;
+    const allow = this.config.telegram?.allowedChatIds;
     if (!allow || allow.length === 0) {
       return true;
     }

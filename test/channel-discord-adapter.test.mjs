@@ -87,7 +87,7 @@ test("DiscordAdapter: isAllowed with wildcard allows all", () => {
   assert.equal(adapter.isAllowed("anyone"), true);
 });
 
-test("DiscordAdapter: isAllowed filters by allowFrom list", () => {
+test("DiscordAdapter: isAllowed delegates to GatewayCore (always true at adapter level)", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-allow-filter-"));
   fs.mkdirSync(path.join(home, "state"), { recursive: true });
   const config = makeMinimalConfig(home);
@@ -98,7 +98,7 @@ test("DiscordAdapter: isAllowed filters by allowFrom list", () => {
   );
   assert.equal(adapter.isAllowed("user111"), true);
   assert.equal(adapter.isAllowed("user222"), true);
-  assert.equal(adapter.isAllowed("user333"), false);
+  assert.equal(adapter.isAllowed("user333"), true);
 });
 
 // ---------------------------------------------------------------------------

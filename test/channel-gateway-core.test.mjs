@@ -66,13 +66,17 @@ function createMockAdapter(channelType = "telegram") {
   };
 }
 
-function createGatewayCore(home) {
+function createGatewayCore(home, { skipOwnerRegistration = false } = {}) {
   const config = loadConfig();
   const router = new DefaultChannelRouter({ log: () => {} });
   const sessionKeys = new DefaultSessionKeyResolver();
   const pairingStore = new FilePairingStore({ stateDir: path.join(home, "credentials") });
   const adapter = createMockAdapter("telegram");
   router.register(adapter);
+
+  if (!skipOwnerRegistration) {
+    pairingStore.addToAllowlist("telegram", "user-1");
+  }
 
   const core = new GatewayCore(config, router, sessionKeys, pairingStore, { logger: () => {} });
   return { core, config, router, adapter, pairingStore };

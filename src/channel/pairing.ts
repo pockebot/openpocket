@@ -171,6 +171,14 @@ export class FilePairingStore implements PairingStore {
     this.persistApproved(channelType);
   }
 
+  isAllowlistEmpty(channelType: ChannelType): boolean {
+    return this.getApproved(channelType).size === 0;
+  }
+
+  listApproved(channelType: ChannelType): string[] {
+    return [...this.getApproved(channelType)];
+  }
+
   // --- Internal helpers ---
 
   private pairingFilePath(channelType: ChannelType): string {
@@ -182,17 +190,15 @@ export class FilePairingStore implements PairingStore {
   }
 
   private getPending(channelType: ChannelType): PersistedPairingEntry[] {
-    if (!this.pendingByChannel.has(channelType)) {
-      this.pendingByChannel.set(channelType, this.loadPending(channelType));
-    }
-    return this.pendingByChannel.get(channelType)!;
+    const freshData = this.loadPending(channelType);
+    this.pendingByChannel.set(channelType, freshData);
+    return freshData;
   }
 
   private getApproved(channelType: ChannelType): Set<string> {
-    if (!this.approvedByChannel.has(channelType)) {
-      this.approvedByChannel.set(channelType, this.loadApproved(channelType));
-    }
-    return this.approvedByChannel.get(channelType)!;
+    const freshData = this.loadApproved(channelType);
+    this.approvedByChannel.set(channelType, freshData);
+    return freshData;
   }
 
   private loadPending(channelType: ChannelType): PersistedPairingEntry[] {

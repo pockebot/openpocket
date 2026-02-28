@@ -1285,6 +1285,9 @@ async function runTelegramStep(
   prompter: SetupPrompter,
   state: SetupState,
 ): Promise<void> {
+  if (!config.telegram) {
+    config.telegram = { botToken: "", botTokenEnv: "TELEGRAM_BOT_TOKEN", allowedChatIds: [], pollTimeoutSec: 25 };
+  }
   const fallbackEnv = "TELEGRAM_BOT_TOKEN";
   const configuredEnv = config.telegram.botTokenEnv || fallbackEnv;
   const currentTokenEnv = normalizeEnvVarName(configuredEnv, fallbackEnv);
@@ -1419,6 +1422,18 @@ async function runTelegramStep(
     );
     config.telegram.allowedChatIds = parseAllowedChatIdsInput(input);
   }
+
+  if (!config.channels) {
+    config.channels = {} as import("../channel/types.js").ChannelsConfig;
+  }
+  const tgChannel = (config.channels.telegram ?? {}) as Record<string, unknown>;
+  if (config.telegram!.botToken) tgChannel.botToken = config.telegram!.botToken;
+  if (config.telegram!.botTokenEnv) tgChannel.botTokenEnv = config.telegram!.botTokenEnv;
+  if (config.telegram!.pollTimeoutSec) tgChannel.pollTimeoutSec = config.telegram!.pollTimeoutSec;
+  if (config.telegram!.allowedChatIds.length > 0) {
+    tgChannel.allowFrom = config.telegram!.allowedChatIds.map(String);
+  }
+  config.channels.telegram = tgChannel as import("../channel/types.js").TelegramChannelConfig;
 
   state.telegramConfiguredAt = nowIso();
   saveConfig(config);

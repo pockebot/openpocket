@@ -406,28 +406,7 @@ export class GatewayCore {
   async handleInbound(envelope: InboundEnvelope): Promise<void> {
     this.log(`incoming channel=${envelope.channelType} sender=${envelope.senderId} text=${JSON.stringify(envelope.text)}`);
 
-    const adapter = this.router.getAdapter(envelope.channelType);
-    if (adapter && !adapter.isAllowed(envelope.senderId)) {
-      const dmPolicy = this.resolveDmPolicy(envelope.channelType);
-      const allowFrom = this.resolveAllowFrom(envelope.channelType);
-      const result = evaluateDmPolicy(envelope.senderId, envelope.senderName, {
-        policy: dmPolicy,
-        allowFrom,
-        pairingStore: this.pairingStore,
-        channelType: envelope.channelType,
-      });
-      if (!result.allowed) {
-        if (result.pairingCode) {
-          const locale = this.inferLocale(envelope);
-          const msg = locale === "zh"
-            ? `请将此配对码发给管理员审批：${result.pairingCode}\n（有效期 1 小时）`
-            : `Please send this pairing code to the owner for approval: ${result.pairingCode}\n(Valid for 1 hour)`;
-          await this.router.replyText(envelope, msg);
-        }
-        this.log(`access denied channel=${envelope.channelType} sender=${envelope.senderId} reason=${result.reason}`);
-        return;
-      }
-    }
+    if (!await this.checkAccess(envelope)) return;
 
     if (envelope.command) {
       const handler = this.commandHandlers.get(envelope.command.toLowerCase());
@@ -438,6 +417,61 @@ export class GatewayCore {
     }
 
     await this.handlePlainMessage(envelope);
+  }
+
+  /**
+   * Unified access control for all channels.
+   *
+   * Flow (aligned with OpenClaw):
+   * 1. If the channel has no approved senders AND no static allowFrom,
+   *    the first sender triggers an "owner claim" — they are auto-approved
+   *    as the owner of this channel.
+   * 2. Otherwise, the configured dmPolicy is evaluated:
+   *    - "pairing": unknown senders get a code for owner approval
+   *    - "allowlist": only static allowFrom + approved senders
+   *    - "open": all allowed
+   *    - "disabled": all blocked
+   *
+   * Returns true if the message should be processed, false if blocked.
+   */
+  private async checkAccess(envelope: InboundEnvelope): Promise<boolean> {
+    const dmPolicy = this.resolveDmPolicy(envelope.channelType);
+    const allowFrom = this.resolveAllowFrom(envelope.channelType);
+
+    const noStaticAllowFrom = allowFrom.length === 0;
+    const noApprovedSenders = this.pairingStore.isAllowlistEmpty(envelope.channelType);
+
+    if (noStaticAllowFrom && noApprovedSenders) {
+      this.pairingStore.addToAllowlist(envelope.channelType, envelope.senderId);
+      this.log(`owner claim channel=${envelope.channelType} sender=${envelope.senderId} — first sender auto-approved as owner`);
+      const locale = this.inferLocale(envelope);
+      const msg = locale === "zh"
+        ? "你是此频道的第一个用户，已自动注册为 owner。"
+        : "You are the first user on this channel — auto-registered as owner.";
+      await this.router.replyText(envelope, msg);
+      return true;
+    }
+
+    const result = evaluateDmPolicy(envelope.senderId, envelope.senderName, {
+      policy: dmPolicy,
+      allowFrom,
+      pairingStore: this.pairingStore,
+      channelType: envelope.channelType,
+    });
+
+    if (!result.allowed) {
+      if (result.pairingCode) {
+        const locale = this.inferLocale(envelope);
+        const msg = locale === "zh"
+          ? `请将此配对码发给管理员审批：${result.pairingCode}\n（有效期 1 小时）`
+          : `Please send this pairing code to the owner for approval: ${result.pairingCode}\n(Valid for 1 hour)`;
+        await this.router.replyText(envelope, msg);
+      }
+      this.log(`access denied channel=${envelope.channelType} sender=${envelope.senderId} policy=${dmPolicy} reason=${result.reason}`);
+      return false;
+    }
+
+    return true;
   }
 
   private async handlePlainMessage(envelope: InboundEnvelope): Promise<void> {
@@ -885,10 +919,19 @@ export class GatewayCore {
     const cfg = this.getChannelConfig(channelType);
     if (cfg?.dmPolicy) return cfg.dmPolicy;
     if (this.config.channels?.defaults?.dmPolicy) return this.config.channels.defaults.dmPolicy;
-    return "allowlist";
+    return "pairing";
   }
 
   private resolveAllowFrom(channelType: import("../channel/types.js").ChannelType): string[] {
-    return this.getChannelConfig(channelType)?.allowFrom ?? [];
+    const channelAllowFrom = this.getChannelConfig(channelType)?.allowFrom ?? [];
+
+    if (channelType === "telegram" && channelAllowFrom.length === 0) {
+      const legacyIds = this.config.telegram?.allowedChatIds;
+      if (legacyIds && legacyIds.length > 0) {
+        return legacyIds.map(String);
+      }
+    }
+
+    return channelAllowFrom;
   }
 }

@@ -76,7 +76,7 @@ test("dm policy 'allowlist' blocks sender not in allowFrom", () => {
   });
 });
 
-test("dm policy 'allowlist' with empty allowFrom allows everyone", () => {
+test("dm policy 'allowlist' with empty allowFrom blocks unknown senders", () => {
   withTempDir("dm-policy-allowlist-empty-", (dir) => {
     const store = new FilePairingStore({ stateDir: dir });
     const result = evaluateDmPolicy("anyone", null, {
@@ -85,8 +85,8 @@ test("dm policy 'allowlist' with empty allowFrom allows everyone", () => {
       pairingStore: store,
       channelType: "telegram",
     });
-    assert.equal(result.allowed, true);
-    assert.equal(result.reason, "allowlist_match");
+    assert.equal(result.allowed, false);
+    assert.equal(result.reason, "not_in_allowlist");
   });
 });
 
@@ -100,7 +100,7 @@ test("dm policy 'allowlist' with wildcard allows everyone", () => {
       channelType: "telegram",
     });
     assert.equal(result.allowed, true);
-    assert.equal(result.reason, "allowlist_match");
+    assert.equal(result.reason, "allowlist_wildcard");
   });
 });
 

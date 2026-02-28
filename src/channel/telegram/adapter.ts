@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { OpenPocketConfig, UserDecisionRequest, UserDecisionResponse, UserInputRequest, UserInputResponse } from "../../types.js";
-import type { ChannelAdapter, ChannelCapabilities, InboundEnvelope, InboundHandler, SendOptions } from "../types.js";
+import type { ChannelAdapter, ChannelCapabilities, InboundEnvelope, InboundHandler, SendOptions, TelegramChannelConfig } from "../types.js";
 import { getDefaultCapabilities } from "../capabilities.js";
 import { ChatAssistant } from "../../gateway/chat-assistant.js";
 
@@ -68,6 +68,7 @@ export class TelegramAdapter implements ChannelAdapter {
   readonly channelType = "telegram" as const;
 
   private readonly config: OpenPocketConfig;
+  private readonly tgConfig: TelegramChannelConfig;
   private readonly bot: TelegramBot;
   private readonly writeLogLine: (line: string) => void;
   private readonly typingIntervalMs: number;
@@ -83,26 +84,28 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly botDisplayNameSyncStatePath: string;
   private botDisplayNameRateLimitedUntilMs = 0;
 
-  constructor(config: OpenPocketConfig, options?: TelegramAdapterOptions) {
+  constructor(config: OpenPocketConfig, tgConfig: TelegramChannelConfig, options?: TelegramAdapterOptions) {
     this.config = config;
+    this.tgConfig = tgConfig;
     this.writeLogLine = options?.logger ?? ((line: string) => { console.log(line); });
     this.typingIntervalMs = Math.max(50, Math.round(options?.typingIntervalMs ?? 4000));
 
+    const envName = tgConfig.botTokenEnv || "TELEGRAM_BOT_TOKEN";
     const token =
-      config.telegram.botToken.trim() ||
-      (config.telegram.botTokenEnv ? process.env[config.telegram.botTokenEnv]?.trim() : "") ||
+      (tgConfig.botToken ?? "").trim() ||
+      (process.env[envName]?.trim()) ||
       "";
 
     if (!token) {
       throw new Error(
-        `Telegram bot token is empty. Set config.telegram.botToken or env ${config.telegram.botTokenEnv}.`,
+        `Telegram bot token is empty. Set channels.telegram.botToken in config or env ${envName}.`,
       );
     }
 
     this.bot = new TelegramBot(token, {
       polling: {
         interval: 1000,
-        params: { timeout: config.telegram.pollTimeoutSec },
+        params: { timeout: tgConfig.pollTimeoutSec ?? 25 },
       },
     });
 
@@ -304,10 +307,8 @@ export class TelegramAdapter implements ChannelAdapter {
   // Access control
   // -----------------------------------------------------------------------
 
-  isAllowed(senderId: string): boolean {
-    const allow = this.config.telegram.allowedChatIds;
-    if (!allow || allow.length === 0) return true;
-    return allow.includes(Number(senderId));
+  isAllowed(_senderId: string): boolean {
+    return true;
   }
 
   // -----------------------------------------------------------------------

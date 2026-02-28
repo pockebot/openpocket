@@ -22,6 +22,11 @@ function withTempHome(prefix, fn) {
   }
 }
 
+function clearTelegramToken(config) {
+  if (!config.channels) config.channels = {};
+  config.channels.telegram = { botToken: "", botTokenEnv: "" };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -29,7 +34,8 @@ function withTempHome(prefix, fn) {
 test("createGateway: creates core and router with Telegram adapter when token exists", () => {
   withTempHome("gwfactory-tg-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "FAKE_TOKEN_FOR_TEST";
+    if (!config.channels) config.channels = {};
+    config.channels.telegram = { botToken: "FAKE_TOKEN_FOR_TEST" };
 
     const { core, router } = createGateway(config, { logger: () => {} });
 
@@ -45,8 +51,7 @@ test("createGateway: creates core and router with Telegram adapter when token ex
 test("createGateway: no Telegram adapter when token is empty", () => {
   withTempHome("gwfactory-notg-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
+    clearTelegramToken(config);
 
     const { core, router } = createGateway(config, { logger: () => {} });
 
@@ -59,8 +64,8 @@ test("createGateway: no Telegram adapter when token is empty", () => {
 test("createGateway: no Telegram adapter when channels.telegram.enabled is false", () => {
   withTempHome("gwfactory-disabled-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "FAKE_TOKEN_FOR_TEST";
-    config.channels = { telegram: { enabled: false } };
+    if (!config.channels) config.channels = {};
+    config.channels.telegram = { enabled: false, botToken: "FAKE_TOKEN_FOR_TEST" };
 
     const { core, router } = createGateway(config, { logger: () => {} });
 
@@ -73,8 +78,7 @@ test("createGateway: no Telegram adapter when channels.telegram.enabled is false
 test("createGateway: core lifecycle works", async () => {
   await withTempHome("gwfactory-lifecycle-", async (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
+    clearTelegramToken(config);
 
     const { core } = createGateway(config, { logger: () => {} });
 
@@ -89,8 +93,7 @@ test("createGateway: core lifecycle works", async () => {
 test("createGateway: router has no adapters for unconfigured channel types", () => {
   withTempHome("gwfactory-noadapters-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
+    clearTelegramToken(config);
 
     const { router } = createGateway(config, { logger: () => {} });
 
@@ -106,15 +109,12 @@ test("createGateway: router has no adapters for unconfigured channel types", () 
 test("createGateway: registers Discord adapter when discord config has token", () => {
   withTempHome("gwfactory-discord-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
-    config.channels = {
-      discord: {
-        token: "FAKE_DISCORD_TOKEN",
-        dmPolicy: "pairing",
-        allowFrom: [],
-        guilds: {},
-      },
+    clearTelegramToken(config);
+    config.channels.discord = {
+      token: "FAKE_DISCORD_TOKEN",
+      dmPolicy: "pairing",
+      allowFrom: [],
+      guilds: {},
     };
 
     const { router } = createGateway(config, { logger: () => {} });
@@ -128,13 +128,10 @@ test("createGateway: registers Discord adapter when discord config has token", (
 test("createGateway: no Discord adapter when channels.discord.enabled is false", () => {
   withTempHome("gwfactory-discord-disabled-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
-    config.channels = {
-      discord: {
-        enabled: false,
-        token: "FAKE_DISCORD_TOKEN",
-      },
+    clearTelegramToken(config);
+    config.channels.discord = {
+      enabled: false,
+      token: "FAKE_DISCORD_TOKEN",
     };
 
     const { router } = createGateway(config, { logger: () => {} });
@@ -147,9 +144,7 @@ test("createGateway: no Discord adapter when channels.discord.enabled is false",
 test("createGateway: no Discord adapter when no discord config present", () => {
   withTempHome("gwfactory-discord-noconfig-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
-    config.channels = {};
+    clearTelegramToken(config);
 
     const { router } = createGateway(config, { logger: () => {} });
 
@@ -160,16 +155,13 @@ test("createGateway: no Discord adapter when no discord config present", () => {
 test("createGateway: Discord adapter resolves token from env", () => {
   withTempHome("gwfactory-discord-env-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
+    clearTelegramToken(config);
     const prevEnv = process.env.TEST_DISCORD_FACTORY_TOKEN;
     process.env.TEST_DISCORD_FACTORY_TOKEN = "env-discord-token";
     try {
-      config.channels = {
-        discord: {
-          token: "",
-          tokenEnv: "TEST_DISCORD_FACTORY_TOKEN",
-        },
+      config.channels.discord = {
+        token: "",
+        tokenEnv: "TEST_DISCORD_FACTORY_TOKEN",
       };
 
       const { router } = createGateway(config, { logger: () => {} });
@@ -185,14 +177,11 @@ test("createGateway: Discord adapter resolves token from env", () => {
 test("createGateway: registers WhatsApp adapter when whatsapp config exists", () => {
   withTempHome("gwfactory-whatsapp-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
-    config.channels = {
-      whatsapp: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-        sendReadReceipts: true,
-      },
+    clearTelegramToken(config);
+    config.channels.whatsapp = {
+      dmPolicy: "pairing",
+      allowFrom: [],
+      sendReadReceipts: true,
     };
 
     const { router } = createGateway(config, { logger: () => {} });
@@ -206,13 +195,10 @@ test("createGateway: registers WhatsApp adapter when whatsapp config exists", ()
 test("createGateway: no WhatsApp adapter when channels.whatsapp.enabled is false", () => {
   withTempHome("gwfactory-whatsapp-disabled-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
-    config.channels = {
-      whatsapp: {
-        enabled: false,
-        dmPolicy: "pairing",
-      },
+    clearTelegramToken(config);
+    config.channels.whatsapp = {
+      enabled: false,
+      dmPolicy: "pairing",
     };
 
     const { router } = createGateway(config, { logger: () => {} });
@@ -224,9 +210,7 @@ test("createGateway: no WhatsApp adapter when channels.whatsapp.enabled is false
 test("createGateway: no WhatsApp adapter when no whatsapp config", () => {
   withTempHome("gwfactory-whatsapp-noconfig-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
-    config.channels = {};
+    clearTelegramToken(config);
 
     const { router } = createGateway(config, { logger: () => {} });
 
@@ -237,8 +221,7 @@ test("createGateway: no WhatsApp adapter when no whatsapp config", () => {
 test("createGateway: pairing config is passed through", () => {
   withTempHome("gwfactory-pairing-", (home) => {
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
+    clearTelegramToken(config);
     config.pairing = {
       codeLength: 8,
       expiresAfterSec: 7200,
@@ -254,15 +237,12 @@ test("createGateway: custom logger is used", () => {
   withTempHome("gwfactory-logger-", (home) => {
     const lines = [];
     const config = loadConfig();
-    config.telegram.botToken = "";
-    config.telegram.botTokenEnv = "";
+    clearTelegramToken(config);
 
     const { core } = createGateway(config, {
       logger: (line) => lines.push(line),
     });
 
-    // The router creation logs something when verbose
-    // At minimum, core should be creatable
     assert.ok(core, "core should exist");
   });
 });

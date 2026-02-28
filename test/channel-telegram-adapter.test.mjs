@@ -29,16 +29,22 @@ function makeMinimalConfig(home) {
     workspaceDir: home,
     target: { type: "emulator" },
     models: { "test-model": { provider: "openai", model: "test", apiKey: "fake" } },
-    telegram: {
-      botToken: "FAKE_TOKEN_12345",
-      botTokenEnv: "",
-      pollTimeoutSec: 30,
-      allowedChatIds: [],
+    channels: {
+      telegram: {
+        botToken: "FAKE_TOKEN_12345",
+        botTokenEnv: "",
+        pollTimeoutSec: 30,
+        allowFrom: [],
+      },
     },
     humanAuth: { enabled: false, useLocalRelay: false },
     agent: { deviceId: "" },
     cron: { jobs: [] },
   };
+}
+
+function makeTgConfig(config) {
+  return config.channels?.telegram ?? {};
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +66,7 @@ test("TelegramAdapter: channelType is telegram", () => {
   withTempHome("tg-type-", (home) => {
     fs.mkdirSync(path.join(home, "state"), { recursive: true });
     const config = makeMinimalConfig(home);
-    const adapter = new TelegramAdapter(config, { logger: () => {} });
+    const adapter = new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} });
     assert.equal(adapter.channelType, "telegram");
   });
 });
@@ -69,8 +75,8 @@ test("TelegramAdapter: throws on empty bot token", () => {
   withTempHome("tg-notoken-", (home) => {
     fs.mkdirSync(path.join(home, "state"), { recursive: true });
     const config = makeMinimalConfig(home);
-    config.telegram.botToken = "";
-    assert.throws(() => new TelegramAdapter(config, { logger: () => {} }), /token is empty/i);
+    config.channels.telegram.botToken = "";
+    assert.throws(() => new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} }), /token is empty/i);
   });
 });
 
@@ -78,7 +84,7 @@ test("TelegramAdapter: getCapabilities returns Telegram capabilities", () => {
   withTempHome("tg-caps-", (home) => {
     fs.mkdirSync(path.join(home, "state"), { recursive: true });
     const config = makeMinimalConfig(home);
-    const adapter = new TelegramAdapter(config, { logger: () => {} });
+    const adapter = new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} });
     const caps = adapter.getCapabilities();
     assert.equal(caps.supportsMarkdown, true);
     assert.equal(caps.supportsHtml, true);
@@ -93,22 +99,21 @@ test("TelegramAdapter: isAllowed returns true when no allowlist", () => {
   withTempHome("tg-allow-all-", (home) => {
     fs.mkdirSync(path.join(home, "state"), { recursive: true });
     const config = makeMinimalConfig(home);
-    const adapter = new TelegramAdapter(config, { logger: () => {} });
+    const adapter = new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} });
     assert.equal(adapter.isAllowed("12345"), true);
     assert.equal(adapter.isAllowed("67890"), true);
   });
 });
 
-test("TelegramAdapter: isAllowed filters by allowedChatIds", () => {
+test("TelegramAdapter: isAllowed always returns true (access control in GatewayCore)", () => {
   withTempHome("tg-allow-filter-", (home) => {
     fs.mkdirSync(path.join(home, "state"), { recursive: true });
     const config = makeMinimalConfig(home);
-    config.telegram.allowedChatIds = [111, 222];
-    const adapter = new TelegramAdapter(config, { logger: () => {} });
+    const adapter = new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} });
     assert.equal(adapter.isAllowed("111"), true);
     assert.equal(adapter.isAllowed("222"), true);
-    assert.equal(adapter.isAllowed("333"), false);
-    assert.equal(adapter.isAllowed("999"), false);
+    assert.equal(adapter.isAllowed("333"), true);
+    assert.equal(adapter.isAllowed("999"), true);
   });
 });
 
@@ -116,10 +121,9 @@ test("TelegramAdapter: onInbound stores handler", () => {
   withTempHome("tg-inbound-", (home) => {
     fs.mkdirSync(path.join(home, "state"), { recursive: true });
     const config = makeMinimalConfig(home);
-    const adapter = new TelegramAdapter(config, { logger: () => {} });
+    const adapter = new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} });
     let called = false;
     adapter.onInbound(() => { called = true; });
-    // Handler is stored but not invoked without actual Telegram messages
     assert.equal(called, false);
   });
 });
@@ -129,8 +133,7 @@ test("TelegramAdapter: bot display name sync state path", () => {
     const stateDir = path.join(home, "state");
     fs.mkdirSync(stateDir, { recursive: true });
     const config = makeMinimalConfig(home);
-    const adapter = new TelegramAdapter(config, { logger: () => {} });
-    // Adapter should be created without errors even if state dir is empty
+    const adapter = new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} });
     assert.equal(adapter.channelType, "telegram");
   });
 });
@@ -145,8 +148,7 @@ test("TelegramAdapter: restores bot display name sync state from file", () => {
       retryAfterUntilMs: Date.now() + 999999,
     }), "utf-8");
     const config = makeMinimalConfig(home);
-    const adapter = new TelegramAdapter(config, { logger: () => {} });
-    // Should not throw when reading existing state
+    const adapter = new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} });
     assert.equal(adapter.channelType, "telegram");
   });
 });
@@ -157,8 +159,7 @@ test("TelegramAdapter: handles corrupt sync state gracefully", () => {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(path.join(stateDir, "telegram-bot-name-sync.json"), "not json at all", "utf-8");
     const config = makeMinimalConfig(home);
-    // Should not throw on corrupt state
-    const adapter = new TelegramAdapter(config, { logger: () => {} });
+    const adapter = new TelegramAdapter(config, makeTgConfig(config), { logger: () => {} });
     assert.equal(adapter.channelType, "telegram");
   });
 });

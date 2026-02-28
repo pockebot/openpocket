@@ -89,7 +89,7 @@ test("WhatsAppAdapter: isAllowed with wildcard allows all", () => {
   assert.equal(adapter.isAllowed("anyone"), true);
 });
 
-test("WhatsAppAdapter: isAllowed filters by phone number", () => {
+test("WhatsAppAdapter: isAllowed delegates to GatewayCore (always true at adapter level)", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wa-allow-filter-"));
   fs.mkdirSync(path.join(home, "state"), { recursive: true });
   const config = makeMinimalConfig(home);
@@ -100,10 +100,10 @@ test("WhatsAppAdapter: isAllowed filters by phone number", () => {
   );
   assert.equal(adapter.isAllowed("1234567890"), true);
   assert.equal(adapter.isAllowed("0987654321"), true);
-  assert.equal(adapter.isAllowed("5555555555"), false);
+  assert.equal(adapter.isAllowed("5555555555"), true);
 });
 
-test("WhatsAppAdapter: isAllowed normalizes JID format", () => {
+test("WhatsAppAdapter: isAllowed always true (access control at GatewayCore level)", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wa-allow-jid-"));
   fs.mkdirSync(path.join(home, "state"), { recursive: true });
   const config = makeMinimalConfig(home);
@@ -114,7 +114,7 @@ test("WhatsAppAdapter: isAllowed normalizes JID format", () => {
   );
   assert.equal(adapter.isAllowed("1234567890@s.whatsapp.net"), true);
   assert.equal(adapter.isAllowed("+1234567890"), true);
-  assert.equal(adapter.isAllowed("9999999999@s.whatsapp.net"), false);
+  assert.equal(adapter.isAllowed("9999999999@s.whatsapp.net"), true);
 });
 
 // ---------------------------------------------------------------------------

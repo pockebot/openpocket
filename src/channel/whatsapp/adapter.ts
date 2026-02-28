@@ -247,12 +247,8 @@ export class WhatsAppAdapter implements ChannelAdapter {
   // Access control
   // -----------------------------------------------------------------------
 
-  isAllowed(senderId: string): boolean {
-    const allowFrom = this.waConfig.allowFrom;
-    if (!allowFrom || allowFrom.length === 0) return true;
-    if (allowFrom.includes("*")) return true;
-    const normalized = this.normalizePhoneId(senderId);
-    return allowFrom.some((a) => this.normalizePhoneId(a) === normalized);
+  isAllowed(_senderId: string): boolean {
+    return true;
   }
 
   // -----------------------------------------------------------------------

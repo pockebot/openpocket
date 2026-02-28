@@ -47,7 +47,8 @@ export function createGateway(
   });
 
   if (isTelegramConfigured(config)) {
-    const telegramAdapter = new TelegramAdapter(config, {
+    const tgConfig = config.channels?.telegram ?? {};
+    const telegramAdapter = new TelegramAdapter(config, tgConfig, {
       logger: log,
       typingIntervalMs: options?.typingIntervalMs,
     });
@@ -78,11 +79,14 @@ export function createGateway(
 }
 
 function isTelegramConfigured(config: OpenPocketConfig): boolean {
-  if (config.channels?.telegram?.enabled === false) return false;
+  const tg = config.channels?.telegram;
+  if (!tg) return false;
+  if (tg.enabled === false) return false;
 
+  const envName = tg.botTokenEnv || "TELEGRAM_BOT_TOKEN";
   const token =
-    config.telegram.botToken?.trim() ||
-    (config.telegram.botTokenEnv ? process.env[config.telegram.botTokenEnv]?.trim() : "") ||
+    (tg.botToken ?? "").trim() ||
+    (process.env[envName]?.trim()) ||
     "";
   return token.length > 0;
 }

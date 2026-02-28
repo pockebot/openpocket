@@ -263,6 +263,8 @@ export interface PairingStore {
   listPending(channelType?: ChannelType): PairingRequest[];
   isApproved(channelType: ChannelType, senderId: string): boolean;
   addToAllowlist(channelType: ChannelType, senderId: string): void;
+  isAllowlistEmpty(channelType: ChannelType): boolean;
+  listApproved(channelType: ChannelType): string[];
 }
 
 // ---------------------------------------------------------------------------

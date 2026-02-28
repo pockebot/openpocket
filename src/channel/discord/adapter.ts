@@ -300,11 +300,8 @@ export class DiscordAdapter implements ChannelAdapter {
   // Access control
   // -----------------------------------------------------------------------
 
-  isAllowed(senderId: string): boolean {
-    const allowFrom = this.discordConfig.allowFrom;
-    if (!allowFrom || allowFrom.length === 0) return true;
-    if (allowFrom.includes("*")) return true;
-    return allowFrom.includes(senderId);
+  isAllowed(_senderId: string): boolean {
+    return true;
   }
 
   isGuildAllowed(guildId: string, userId: string): boolean {

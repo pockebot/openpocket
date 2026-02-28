@@ -130,7 +130,9 @@ test("onboard reuses existing config values when --force is not provided", () =>
 
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   cfg.models["gpt-5.2-codex"].apiKey = "sk-existing-openpocket";
-  cfg.telegram.botToken = "telegram-existing-token";
+  if (!cfg.channels) cfg.channels = {};
+  if (!cfg.channels.telegram) cfg.channels.telegram = {};
+  cfg.channels.telegram.botToken = "telegram-existing-token";
   cfg.humanAuth.tunnel.ngrok.authtoken = "ngrok-existing-token";
   cfg.emulator.dataPartitionSizeGb = 64;
   fs.writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf-8");
@@ -146,7 +148,7 @@ test("onboard reuses existing config values when --force is not provided", () =>
 
   const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(saved.models["gpt-5.2-codex"].apiKey, "sk-existing-openpocket");
-  assert.equal(saved.telegram.botToken, "telegram-existing-token");
+  assert.equal(saved.channels?.telegram?.botToken, "telegram-existing-token");
   assert.equal(saved.humanAuth.tunnel.ngrok.authtoken, "ngrok-existing-token");
   assert.equal(saved.emulator.dataPartitionSizeGb, 64);
   assert.equal(fs.existsSync(onboardingPath), true);
@@ -166,7 +168,9 @@ test("onboard --force clears previous config and onboarding state", () => {
 
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   cfg.models["gpt-5.2-codex"].apiKey = "sk-existing-openpocket";
-  cfg.telegram.botToken = "telegram-existing-token";
+  if (!cfg.channels) cfg.channels = {};
+  if (!cfg.channels.telegram) cfg.channels.telegram = {};
+  cfg.channels.telegram.botToken = "telegram-existing-token";
   cfg.humanAuth.tunnel.ngrok.authtoken = "ngrok-existing-token";
   cfg.emulator.dataPartitionSizeGb = 64;
   fs.writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf-8");
@@ -183,7 +187,7 @@ test("onboard --force clears previous config and onboarding state", () => {
 
   const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(saved.models["gpt-5.2-codex"].apiKey, "");
-  assert.equal(saved.telegram.botToken, "");
+  assert.equal(saved.channels?.telegram?.botToken ?? "", "");
   assert.equal(saved.humanAuth.tunnel.ngrok.authtoken, "");
   assert.equal(saved.emulator.dataPartitionSizeGb, 24);
   assert.equal(fs.existsSync(onboardingPath), false);
@@ -309,7 +313,7 @@ test("help output uses onboard as primary command and lists legacy aliases", () 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /install-cli/);
   assert.match(result.stdout, /onboard/);
-  assert.match(result.stdout, /telegram setup/);
+  assert.match(result.stdout, /telegram whoami/);
   assert.match(result.stdout, /Legacy aliases/);
   assert.match(result.stdout, /\binit\b/);
   assert.match(result.stdout, /\bsetup\b/);
@@ -317,19 +321,7 @@ test("help output uses onboard as primary command and lists legacy aliases", () 
   assert.match(result.stdout, /dashboard start/);
 });
 
-test("telegram setup requires interactive terminal", () => {
-  const home = makeHome("openpocket-ts-telegram-setup-");
-  const init = runCli(["init"], { OPENPOCKET_HOME: home });
-  assert.equal(init.status, 0, init.stderr || init.stdout);
-
-  const run = runCli(["telegram", "setup"], {
-    OPENPOCKET_HOME: home,
-  });
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /interactive terminal/i);
-});
-
-test("telegram whoami prints allow policy without requiring token", () => {
+test("telegram whoami prints DM policy without requiring token", () => {
   const home = makeHome("openpocket-ts-telegram-whoami-");
   const init = runCli(["init"], { OPENPOCKET_HOME: home });
   assert.equal(init.status, 0, init.stderr || init.stdout);
@@ -339,28 +331,33 @@ test("telegram whoami prints allow policy without requiring token", () => {
     TELEGRAM_BOT_TOKEN: "",
   });
   assert.equal(run.status, 0, run.stderr || run.stdout);
-  assert.match(run.stdout, /allow policy/i);
-  assert.match(run.stdout, /allow_all/i);
+  assert.match(run.stdout, /DM policy/i);
 });
 
-test("telegram command validates unknown subcommand", () => {
-  const run = runCli(["telegram", "noop"]);
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /Unknown telegram subcommand/);
-  assert.match(run.stderr, /setup\|whoami/);
+test("telegram without subcommand shows help", () => {
+  const home = makeHome("openpocket-ts-telegram-noarg-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(["telegram"], { OPENPOCKET_HOME: home });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.match(run.stdout, /Telegram Commands/);
+  assert.match(run.stdout, /whoami/);
 });
 
-test("gateway start command is accepted (reaches token validation)", () => {
+test("gateway start command is accepted (reaches startup)", () => {
   const home = makeHome("openpocket-ts-gateway-start-");
   const init = runCli(["init"], { OPENPOCKET_HOME: home });
   assert.equal(init.status, 0, init.stderr || init.stdout);
 
-  const run = runCli(["gateway", "start"], {
-    OPENPOCKET_HOME: home,
-    TELEGRAM_BOT_TOKEN: "",
+  const run = spawnSync("node", [cliPath, "gateway", "start"], {
+    cwd: repoRoot,
+    env: { ...process.env, OPENPOCKET_SKIP_ENV_SETUP: "1", OPENPOCKET_HOME: home, TELEGRAM_BOT_TOKEN: "" },
+    encoding: "utf-8",
+    timeout: 5000,
   });
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /Telegram bot token is empty/);
+  // The gateway starts successfully (no unknown command error); it gets killed by timeout
+  assert.doesNotMatch(run.stderr || "", /Unknown.*command/i);
 });
 
 test("gateway defaults to start when subcommand is omitted", () => {
@@ -368,12 +365,13 @@ test("gateway defaults to start when subcommand is omitted", () => {
   const init = runCli(["init"], { OPENPOCKET_HOME: home });
   assert.equal(init.status, 0, init.stderr || init.stdout);
 
-  const run = runCli(["gateway"], {
-    OPENPOCKET_HOME: home,
-    TELEGRAM_BOT_TOKEN: "",
+  const run = spawnSync("node", [cliPath, "gateway"], {
+    cwd: repoRoot,
+    env: { ...process.env, OPENPOCKET_SKIP_ENV_SETUP: "1", OPENPOCKET_HOME: home, TELEGRAM_BOT_TOKEN: "" },
+    encoding: "utf-8",
+    timeout: 5000,
   });
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /Telegram bot token is empty/);
+  assert.doesNotMatch(run.stderr || "", /Unknown.*command/i);
 });
 
 test("dashboard command validates subcommand", () => {

@@ -297,8 +297,8 @@ test("setup wizard can configure Telegram token and allowlist in config", async 
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.telegram.botToken, "telegram-test-token");
-    assert.deepEqual(savedCfg.telegram.allowedChatIds, [123456789, 987654321]);
+    assert.equal(savedCfg.channels?.telegram?.botToken, "telegram-test-token");
+    assert.deepEqual(savedCfg.channels?.telegram?.allowFrom, ["123456789", "987654321"]);
   });
 });
 
@@ -347,6 +347,7 @@ test("setup wizard can keep existing API key from config.json", async () => {
 test("setup wizard can keep existing Telegram token from config.json", async () => {
   await withTempHome("openpocket-setup-telegram-existing-config-", async () => {
     const cfg = loadConfig();
+    if (!cfg.telegram) cfg.telegram = { botToken: "", botTokenEnv: "TELEGRAM_BOT_TOKEN", allowedChatIds: [], pollTimeoutSec: 25 };
     cfg.telegram.botToken = "telegram-existing-token";
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
@@ -359,7 +360,7 @@ test("setup wizard can keep existing Telegram token from config.json", async () 
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.telegram.botToken, "telegram-existing-token");
+    assert.equal(savedCfg.channels?.telegram?.botToken, "telegram-existing-token");
 
     const statePath = path.join(cfg.stateDir, "onboarding.json");
     const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
@@ -425,7 +426,7 @@ test("setup wizard allows skipping Telegram token config after empty secret inpu
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.telegram.botToken, "");
+    assert.equal(savedCfg.channels?.telegram?.botToken ?? "", "");
 
     const statePath = path.join(cfg.stateDir, "onboarding.json");
     const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
@@ -456,6 +457,7 @@ test("setup wizard allows skipping ngrok token config after empty secret input",
 test("setup wizard normalizes invalid telegram botTokenEnv name", async () => {
   await withTempHome("openpocket-setup-telegram-env-normalize-", async () => {
     const cfg = loadConfig();
+    if (!cfg.telegram) cfg.telegram = { botToken: "", botTokenEnv: "TELEGRAM_BOT_TOKEN", allowedChatIds: [], pollTimeoutSec: 25 };
     cfg.telegram.botTokenEnv = "8368685395:AAH-invalid-token-shape";
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
@@ -468,7 +470,7 @@ test("setup wizard normalizes invalid telegram botTokenEnv name", async () => {
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.telegram.botTokenEnv, "TELEGRAM_BOT_TOKEN");
+    assert.equal(savedCfg.channels?.telegram?.botTokenEnv, "TELEGRAM_BOT_TOKEN");
   });
 });
 
