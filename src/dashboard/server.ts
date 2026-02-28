@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
@@ -3433,6 +3434,7 @@ export class DashboardServer {
       if (ch === "telegram") return "📨";
       if (ch === "whatsapp") return "💬";
       if (ch === "discord") return "🎮";
+      if (ch === "imessage") return "🍎";
       return "📡";
     }
 
@@ -3441,6 +3443,11 @@ export class DashboardServer {
         return status === "linked"
           ? '<span class="badge ok" style="font-size:11px;">Session Linked</span>'
           : '<span class="badge" style="font-size:11px;">Not Linked</span>';
+      }
+      if (ch === "imessage") {
+        if (status === "chat_db_found") return '<span class="badge ok" style="font-size:11px;">chat.db OK</span>';
+        if (status === "unsupported_platform") return '<span class="badge" style="font-size:11px;">Not macOS</span>';
+        return '<span class="badge" style="font-size:11px;">chat.db Missing</span>';
       }
       if (ch === "telegram") {
         return status === "token_configured"
@@ -3457,7 +3464,7 @@ export class DashboardServer {
         return;
       }
 
-      const order = ["telegram", "whatsapp", "discord"];
+      const order = ["telegram", "whatsapp", "discord", "imessage"];
       const sorted = order.filter((k) => channels[k]);
 
       container.innerHTML = sorted.map((ch) => {
@@ -3994,13 +4001,14 @@ export class DashboardServer {
           expiresAfterSec: this.config.pairing?.expiresAfterSec,
         });
 
-        const channelTypes: ChannelType[] = ["telegram", "whatsapp", "discord"];
+        const channelTypes: ChannelType[] = ["telegram", "whatsapp", "discord", "imessage"];
         const channels: Record<string, unknown> = {};
 
         for (const ch of channelTypes) {
           const cfg = ch === "telegram" ? this.config.channels?.telegram
             : ch === "whatsapp" ? this.config.channels?.whatsapp
             : ch === "discord" ? this.config.channels?.discord
+            : ch === "imessage" ? this.config.channels?.imessage
             : undefined;
           if (!cfg) continue;
 
@@ -4017,6 +4025,12 @@ export class DashboardServer {
             const envName = tgCfg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
             const hasToken = Boolean((tgCfg?.botToken ?? "").trim() || process.env[envName]?.trim());
             sessionStatus = hasToken ? "token_configured" : "no_token";
+          }
+          if (ch === "imessage") {
+            const chatDbPath = (cfg as { chatDbPath?: string }).chatDbPath
+              ?? path.join(os.homedir(), "Library", "Messages", "chat.db");
+            const hasChatDb = process.platform === "darwin" && fs.existsSync(chatDbPath);
+            sessionStatus = hasChatDb ? "chat_db_found" : (process.platform === "darwin" ? "chat_db_missing" : "unsupported_platform");
           }
 
           channels[ch] = {

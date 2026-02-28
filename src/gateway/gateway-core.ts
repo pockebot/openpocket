@@ -961,6 +961,7 @@ export class GatewayCore {
       case "telegram": return channels.telegram;
       case "discord": return channels.discord;
       case "whatsapp": return channels.whatsapp;
+      case "imessage": return channels.imessage;
       default: return undefined;
     }
   }

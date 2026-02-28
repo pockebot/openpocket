@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawnSync } from "node:child_process";
 import * as readline from "node:readline";
 import { createInterface, type Interface } from "node:readline/promises";
@@ -1698,6 +1699,67 @@ async function runWhatsAppWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Pro
 }
 
 // ---------------------------------------------------------------------------
+// iMessage whoami (macOS-only)
+// ---------------------------------------------------------------------------
+
+async function runIMessageWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
+  const im = cfg.channels?.imessage;
+  const dmPolicy = im?.dmPolicy ?? "pairing";
+  const groupPolicy = im?.groupPolicy ?? "open";
+  const allowFrom = im?.allowFrom ?? [];
+  const chatDbPath = im?.chatDbPath ?? path.join(os.homedir(), "Library", "Messages", "chat.db");
+
+  printRaw(cliTheme.section("iMessage Identity"));
+  printKeyValue("Platform", process.platform === "darwin" ? "macOS (supported)" : `${process.platform} (not supported)`);
+  printKeyValue("Enabled", im?.enabled !== false && !!im ? "yes" : "no");
+  printKeyValue("DM policy", dmPolicy);
+  printKeyValue("Group policy", groupPolicy);
+  printKeyValue(
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
+  );
+  printKeyValue("Poll interval", `${im?.pollIntervalSec ?? 3}s`);
+
+  const chatDbExists = fs.existsSync(chatDbPath);
+  printKeyValue("chat.db", chatDbExists ? `found (${chatDbPath})` : `not found (${chatDbPath})`, chatDbExists ? "success" : "warn");
+
+  const imsgInstalled = (() => {
+    try { return spawnSync("which", ["imsg"], { timeout: 3000 }).status === 0; } catch { return false; }
+  })();
+  printKeyValue("imsg CLI", imsgInstalled ? "installed" : "not found — brew install steipete/tap/imsg", imsgInstalled ? "success" : "warn");
+
+  if (!chatDbExists && process.platform === "darwin") {
+    printInfo("Grant Full Disk Access to your terminal in System Settings > Privacy & Security.");
+  }
+  if (!imsgInstalled) {
+    printInfo("Install imsg for iMessage support: brew install steipete/tap/imsg");
+  }
+  if (process.platform !== "darwin") {
+    printWarn("iMessage is only available on macOS.");
+    return 0;
+  }
+
+  const imPairingDir = cfg.pairing?.stateDir ?? path.join(cfg.stateDir, "pairing");
+  const imAllowFile = path.join(imPairingDir, "imessage-allowFrom.json");
+  if (fs.existsSync(imAllowFile)) {
+    try {
+      const raw = fs.readFileSync(imAllowFile, "utf-8").trim();
+      const entries = JSON.parse(raw);
+      if (Array.isArray(entries) && entries.length > 0) {
+        printRaw(cliTheme.section("Approved Senders (via pairing)"));
+        for (const e of entries) {
+          const id = typeof e === "string" ? e : e.senderId;
+          const at = typeof e === "object" && e.approvedAt ? ` (${e.approvedAt})` : "";
+          printRaw(`  - ${id}${at}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Unified `channels` command (OpenClaw-aligned)
 // ---------------------------------------------------------------------------
 
@@ -1713,9 +1775,10 @@ async function runChannelsCommand(
       printRaw(cliTheme.section("Channels Login"));
       printRaw("Usage: openpocket channels login --channel <name>");
       printRaw("");
-      printInfo("Available channels: whatsapp, telegram");
+      printInfo("Available channels: whatsapp, telegram, imessage");
       printRaw("  --channel whatsapp    Scan QR code to link WhatsApp");
       printRaw("  --channel telegram    Verify Telegram bot token");
+      printRaw("  --channel imessage    Verify iMessage (macOS) setup");
       return 0;
     }
     if (channel === "whatsapp") {
@@ -1725,7 +1788,11 @@ async function runChannelsCommand(
       const cfg = loadConfig(configPath);
       return runTelegramWhoamiCommand(cfg);
     }
-    throw new Error(`Unsupported channel for login: ${channel}. Available: whatsapp, telegram`);
+    if (channel === "imessage") {
+      const cfg = loadConfig(configPath);
+      return runIMessageWhoamiCommand(cfg);
+    }
+    throw new Error(`Unsupported channel for login: ${channel}. Available: whatsapp, telegram, imessage`);
   }
 
   if (sub === "whoami") {
@@ -1742,6 +1809,11 @@ async function runChannelsCommand(
         await runWhatsAppWhoamiCommand(cfg);
         printed = true;
       }
+      if (cfg.channels?.imessage) {
+        if (printed) printRaw("");
+        await runIMessageWhoamiCommand(cfg);
+        printed = true;
+      }
       if (!printed) {
         printWarn("No channels configured. Run `openpocket onboard` first.");
       }
@@ -1753,7 +1825,10 @@ async function runChannelsCommand(
     if (channel === "telegram") {
       return runTelegramWhoamiCommand(cfg);
     }
-    throw new Error(`Unsupported channel for whoami: ${channel}. Available: whatsapp, telegram`);
+    if (channel === "imessage") {
+      return runIMessageWhoamiCommand(cfg);
+    }
+    throw new Error(`Unsupported channel for whoami: ${channel}. Available: whatsapp, telegram, imessage`);
   }
 
   if (sub === "list") {
@@ -1773,7 +1848,12 @@ async function runChannelsCommand(
     if (dc && dc.enabled !== false) {
       printKeyValue("discord", `dmPolicy=${dc.dmPolicy ?? "pairing"}`, "success");
     }
-    if (!tg && !wa && !dc) {
+    const im = cfg.channels?.imessage;
+    if (im && im.enabled !== false) {
+      const chatDbExists = fs.existsSync(im.chatDbPath ?? path.join(os.homedir(), "Library", "Messages", "chat.db"));
+      printKeyValue("imessage", `dmPolicy=${im.dmPolicy ?? "pairing"} chatDb=${chatDbExists ? "found" : "not found"}`, chatDbExists ? "success" : "warn");
+    }
+    if (!tg && !wa && !dc && !im) {
       printWarn("No channels configured.");
     }
     return 0;
@@ -1784,7 +1864,7 @@ async function runChannelsCommand(
   printRaw("  openpocket channels whoami [--channel <name>]  Show channel identity & config");
   printRaw("  openpocket channels list                       List configured channels");
   printRaw("");
-  printInfo("Available channels: telegram, whatsapp, discord");
+  printInfo("Available channels: telegram, whatsapp, discord, imessage");
   return 0;
 }
 

@@ -524,3 +524,105 @@ test("GatewayCore: WhatsApp allowFrom with + prefix matches digits-only sender",
     assert.ok(adapter.sent.length > 0, "Phone with + prefix should match digits-only sender");
   });
 });
+
+// ---------------------------------------------------------------------------
+// iMessage access control
+// ---------------------------------------------------------------------------
+
+test("GatewayCore: iMessage DM owner claim on first message", async () => {
+  await withTempHome("gwcore-im-owner-claim-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { dmPolicy: "pairing" } },
+      skipOwnerRegistration: true,
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "alice@icloud.com",
+      peerId: "alice@icloud.com",
+      peerKind: "dm",
+      text: "hello",
+    }));
+
+    const ownerMsg = adapter.sent.find((m) =>
+      m.text.includes("owner") || m.text.includes("auto-registered") || m.text.includes("第一个用户"),
+    );
+    assert.ok(ownerMsg, "iMessage DM should trigger owner claim");
+  });
+});
+
+test("GatewayCore: iMessage DM pairing code for unknown sender", async () => {
+  await withTempHome("gwcore-im-pairing-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { dmPolicy: "pairing" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "bob@icloud.com",
+      peerId: "bob@icloud.com",
+      peerKind: "dm",
+      text: "hi there",
+    }));
+
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    assert.ok(pairingMsg, "Unknown iMessage sender should get pairing code");
+  });
+});
+
+test("GatewayCore: iMessage allowlist blocks unknown sender", async () => {
+  await withTempHome("gwcore-im-allowlist-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["alice@icloud.com"] } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "eve@icloud.com",
+      peerId: "eve@icloud.com",
+      peerKind: "dm",
+      text: "hey",
+    }));
+
+    assert.equal(adapter.sent.length, 0, "Sender not in allowlist should be silently blocked");
+  });
+});
+
+test("GatewayCore: iMessage allowlist allows configured sender", async () => {
+  await withTempHome("gwcore-im-allowlist-pass-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["alice@icloud.com"] } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "alice@icloud.com",
+      peerId: "alice@icloud.com",
+      peerKind: "dm",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.ok(adapter.sent.length > 0, "Allowlisted sender should be allowed");
+  });
+});
+
+test("GatewayCore: iMessage group open policy allows message", async () => {
+  await withTempHome("gwcore-im-group-open-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { groupPolicy: "open" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "bob@icloud.com",
+      peerId: "chat12345",
+      peerKind: "group",
+      text: "group message",
+    }));
+
+    const ownerClaimMsg = adapter.sent.find((m) => m.text.includes("owner") || m.text.includes("auto-registered"));
+    assert.equal(ownerClaimMsg, undefined, "Group messages must not trigger owner claim");
+  });
+});

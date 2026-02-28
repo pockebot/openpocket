@@ -7,6 +7,7 @@ import { FilePairingStore } from "../channel/pairing.js";
 import { TelegramAdapter } from "../channel/telegram/adapter.js";
 import { DiscordAdapter } from "../channel/discord/adapter.js";
 import { WhatsAppAdapter } from "../channel/whatsapp/adapter.js";
+import { IMessageAdapter } from "../channel/imessage/adapter.js";
 import { GatewayCore } from "./gateway-core.js";
 
 export interface GatewayFactoryResult {
@@ -71,6 +72,14 @@ export function createGateway(
     router.register(whatsappAdapter);
   }
 
+  if (isIMessageConfigured(config)) {
+    const imConfig = config.channels!.imessage!;
+    const imAdapter = new IMessageAdapter(config, imConfig, {
+      logger: log,
+    });
+    router.register(imAdapter);
+  }
+
   const core = new GatewayCore(config, router, sessionKeyResolver, pairingStore, {
     logger: log,
   });
@@ -105,4 +114,11 @@ function isWhatsAppConfigured(config: OpenPocketConfig): boolean {
   if (!wa) return false;
   if (wa.enabled === false) return false;
   return true;
+}
+
+function isIMessageConfigured(config: OpenPocketConfig): boolean {
+  const im = config.channels?.imessage;
+  if (!im) return false;
+  if (im.enabled === false) return false;
+  return process.platform === "darwin";
 }

@@ -15,6 +15,7 @@ export type ChannelType =
   | "telegram"
   | "discord"
   | "whatsapp"
+  | "imessage"
   | "signal"
   | "slack"
   | "wechat"
@@ -336,11 +337,23 @@ export interface WhatsAppChannelConfig {
   proxyUrl?: string;
 }
 
+export interface IMessageChannelConfig {
+  enabled?: boolean;
+  dmPolicy?: DmPolicy;
+  groupPolicy?: GroupPolicy;
+  allowFrom?: string[];
+  /** Polling interval in seconds for checking new messages in chat.db. Default: 3 */
+  pollIntervalSec?: number;
+  /** Path to chat.db. Default: ~/Library/Messages/chat.db */
+  chatDbPath?: string;
+}
+
 export interface ChannelsConfig {
   defaults?: ChannelDefaults;
   telegram?: TelegramChannelConfig;
   discord?: DiscordChannelConfig;
   whatsapp?: WhatsAppChannelConfig;
+  imessage?: IMessageChannelConfig;
 }
 
 export interface PairingConfig {

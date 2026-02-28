@@ -98,10 +98,25 @@ const QQ_CAPABILITIES: ChannelCapabilities = {
   textChunkMode: "length",
 };
 
+const IMESSAGE_CAPABILITIES: ChannelCapabilities = {
+  supportsMarkdown: false,
+  supportsHtml: false,
+  supportsInlineButtons: false,
+  supportsReactions: true,
+  supportsImageUpload: true,
+  supportsTypingIndicator: true,
+  supportsSlashCommands: false,
+  supportsThreads: false,
+  supportsDisplayNameSync: false,
+  maxMessageLength: 20000,
+  textChunkMode: "newline",
+};
+
 const CAPABILITIES_MAP: Record<ChannelType, ChannelCapabilities> = {
   telegram: TELEGRAM_CAPABILITIES,
   discord: DISCORD_CAPABILITIES,
   whatsapp: WHATSAPP_CAPABILITIES,
+  imessage: IMESSAGE_CAPABILITIES,
   signal: SIGNAL_CAPABILITIES,
   slack: SLACK_CAPABILITIES,
   wechat: WECHAT_CAPABILITIES,
