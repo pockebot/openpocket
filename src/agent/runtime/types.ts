@@ -134,6 +134,8 @@ export interface PhoneAgentRunContext {
   /** Rolling window of recent snapshots for multi-frame visual context. */
   recentSnapshotWindow: ScreenSnapshot[];
   lastScreenshotPath: string | null;
+  lastSomScreenshotPath: string | null;
+  lastRecentScreenshotPaths: string[];
   history: string[];
   traces: StepTrace[];
   finishMessage: string | null;

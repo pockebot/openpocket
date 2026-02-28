@@ -183,6 +183,8 @@ export async function runRuntimeAttempt(
       latestSnapshot: null,
       recentSnapshotWindow: [],
       lastScreenshotPath: null,
+      lastSomScreenshotPath: null,
+      lastRecentScreenshotPaths: [],
       history: [],
       traces: [],
       finishMessage: null,
@@ -510,6 +512,35 @@ export async function runRuntimeAttempt(
           } catch {
             ctx.lastScreenshotPath = null;
           }
+          // Save SoM overlay screenshot
+          try {
+            ctx.lastSomScreenshotPath = snapshot.somScreenshotBase64
+              ? deps.screenshotStore.save(
+                  Buffer.from(snapshot.somScreenshotBase64, "base64"),
+                  { sessionId: session.id, step: ctx.stepCount + 1, currentApp: `${snapshot.currentApp}-som` },
+                )
+              : null;
+          } catch {
+            ctx.lastSomScreenshotPath = null;
+          }
+          // Save recent snapshot screenshots (prior frames sent to model).
+          // The model receives SoM if available, otherwise raw — match that exactly.
+          const recentForSave = ctx.recentSnapshotWindow.slice(-2);
+          const recentPaths: string[] = [];
+          for (const recent of recentForSave) {
+            try {
+              const buf = recent.somScreenshotBase64
+                ? Buffer.from(recent.somScreenshotBase64, "base64")
+                : Buffer.from(recent.screenshotBase64, "base64");
+              const suffix = recent.somScreenshotBase64 ? "-recent-som" : "-recent";
+              const p = deps.screenshotStore.save(
+                buf,
+                { sessionId: session.id, step: ctx.stepCount + 1, currentApp: `${recent.currentApp}${suffix}` },
+              );
+              recentPaths.push(p);
+            } catch { /* best-effort */ }
+          }
+          ctx.lastRecentScreenshotPaths = recentPaths;
         }
 
         if (

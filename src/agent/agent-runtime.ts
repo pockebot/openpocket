@@ -295,6 +295,8 @@ interface PhoneAgentRunContext {
   /** Rolling window of recent snapshots for multi-frame visual context. */
   recentSnapshotWindow: ScreenSnapshot[];
   lastScreenshotPath: string | null;
+  lastSomScreenshotPath: string | null;
+  lastRecentScreenshotPaths: string[];
   history: string[];
   traces: StepTrace[];
   finishMessage: string | null;
@@ -2178,6 +2180,7 @@ export class AgentRuntime {
   ): Promise<string> {
     const snapshot = ctx.latestSnapshot!;
     let observedAppAfterAction = snapshot.currentApp || "unknown";
+    let debugScreenshotPath: string | null = null;
 
     // Resolve tap_element to coordinates
     action = this.resolveTapElementAction(action, snapshot);
@@ -2190,7 +2193,7 @@ export class AgentRuntime {
       try {
         const buf = Buffer.from(snapshot.screenshotBase64, "base64");
         const annotated = await drawDebugMarker(buf, action);
-        this.screenshotStore.save(annotated, {
+        debugScreenshotPath = this.screenshotStore.save(annotated, {
           sessionId: ctx.session.id,
           step: ctx.stepCount,
           currentApp: `${snapshot.currentApp}-debug`,
@@ -2291,6 +2294,9 @@ export class AgentRuntime {
     if (this.lastResolvedTapElementContext) {
       const m = this.lastResolvedTapElementContext;
       executionResult += `\ntap_mark id=${m.id} label=${JSON.stringify(m.label)} class=${m.className || "unknown"} clickable=${m.clickable} center=(${m.center.x},${m.center.y}) scaled_center=(${m.scaledCenter.x},${m.scaledCenter.y})`;
+    }
+    if (debugScreenshotPath) {
+      executionResult += `\nlocal_debug_screenshot=${debugScreenshotPath}`;
     }
     if (stateDeltaLine) {
       executionResult += `\n${stateDeltaLine}`;
@@ -2840,12 +2846,20 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
           }
 
+          function buildScreenshotSuffix(): string {
+            let suffix = "";
+            if (ctx.lastScreenshotPath) suffix += `\nlocal_screenshot=${ctx.lastScreenshotPath}`;
+            if (ctx.lastSomScreenshotPath) suffix += `\nlocal_som_screenshot=${ctx.lastSomScreenshotPath}`;
+            for (let i = 0; i < ctx.lastRecentScreenshotPaths.length; i++) {
+              suffix += `\nlocal_recent_screenshot_${i}=${ctx.lastRecentScreenshotPaths[i]}`;
+            }
+            return suffix;
+          }
+
           // ---- batch_actions ----
           if (action.type === "batch_actions") {
             const executionResult = await runtime.executeBatchPhoneActions(action, ctx);
-            const stepResult = ctx.lastScreenshotPath
-              ? `${executionResult}\nlocal_screenshot=${ctx.lastScreenshotPath}`
-              : executionResult;
+            const stepResult = executionResult + buildScreenshotSuffix();
             logStepSection("result", stepResult);
             runtime.workspace.appendStep(
               ctx.session,
@@ -2865,9 +2879,7 @@ export class AgentRuntime {
 
           // ---- all other actions (tap, swipe, type, keyevent, launch_app, shell, run_script, read, write, edit, etc.) ----
           const executionResult = await runtime.executePhoneAction(action, ctx);
-          const stepResult = ctx.lastScreenshotPath
-            ? `${executionResult}\nlocal_screenshot=${ctx.lastScreenshotPath}`
-            : executionResult;
+          const stepResult = executionResult + buildScreenshotSuffix();
           logStepSection("result", stepResult);
 
           runtime.workspace.appendStep(

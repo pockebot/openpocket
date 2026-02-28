@@ -267,7 +267,7 @@ export class TelegramGateway {
       .join("\n");
 
     const redacted = withoutInternalLines
-      .replace(/local_screenshot=\S+/gi, "local_screenshot=[saved locally]")
+      .replace(/local_(?:som_|recent_|debug_)?screenshot(?:_\d+)?=\S+/gi, "[screenshot saved locally]")
       .replace(/runDir=\S+/gi, "runDir=[local-dir]")
       .replace(/\/(?:Users|home|var|tmp)\/[^\s)\]]+/g, "[local-path]")
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
@@ -282,7 +282,7 @@ export class TelegramGateway {
       .join("\n");
 
     const redacted = withoutInternalLines
-      .replace(/local_screenshot=\S+/gi, "local_screenshot=[saved locally]")
+      .replace(/local_(?:som_|recent_|debug_)?screenshot(?:_\d+)?=\S+/gi, "[screenshot saved locally]")
       .replace(/runDir=\S+/gi, "runDir=[local-dir]")
       .replace(/\/(?:Users|home|var|tmp)\/[^\s)\]]+/g, "[local-path]")
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
