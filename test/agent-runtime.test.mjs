@@ -378,6 +378,41 @@ test("AgentRuntime prefers quick observation for post-action state delta when av
   assert.equal(screenCaptureCalls, 2);
 });
 
+test("AgentRuntime executes batch_actions as a single model step", async () => {
+  const executed = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "batch through the current screen",
+        action: {
+          type: "batch_actions",
+          actions: [
+            { type: "tap", x: 120, y: 240 },
+            { type: "type", text: "duolingo" },
+            { type: "wait", durationMs: 25 },
+            { type: "keyevent", keycode: "KEYCODE_ENTER" },
+          ],
+        },
+      },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async (action) => {
+      executed.push(action);
+      return `ok:${action.type}`;
+    },
+  };
+
+  const result = await runtime.runTask("batch current screen actions");
+  assert.equal(result.ok, true);
+  assert.deepEqual(executed.map((item) => item.type), ["tap", "type", "keyevent"]);
+});
+
 test("AgentRuntime keeps workspace tools available for phone-style tasks", async () => {
   let capturedToolNames = [];
   const runtime = setupRuntime({

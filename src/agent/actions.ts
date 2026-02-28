@@ -1,4 +1,4 @@
-import type { AgentAction, HumanAuthCapability } from "../types.js";
+import type { AgentAction, BatchableAgentAction, HumanAuthCapability } from "../types.js";
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -36,6 +36,83 @@ const HUMAN_AUTH_CAPABILITIES = new Set([
   "permission",
   "unknown",
 ]);
+
+function normalizeBatchActionItem(input: unknown): BatchableAgentAction | null {
+  if (!isObject(input)) {
+    return null;
+  }
+  const rawType = String(input.type ?? input.actionType ?? "").trim();
+  const type = rawType === "type_text" ? "type" : rawType;
+
+  if (type === "tap") {
+    let x = toNumber(input.x, NaN);
+    let y = toNumber(input.y, NaN);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      const arr = Array.isArray(input.coordinate) ? input.coordinate
+        : Array.isArray(input.position) ? input.position
+        : null;
+      if (arr && arr.length >= 2) {
+        x = toNumber(arr[0], 0);
+        y = toNumber(arr[1], 0);
+      } else {
+        x = Number.isFinite(x) ? x : 0;
+        y = Number.isFinite(y) ? y : 0;
+      }
+    }
+    return {
+      type,
+      x,
+      y,
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "tap_element") {
+    return {
+      type,
+      elementId: String(input.elementId ?? input.id ?? "").trim(),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "swipe") {
+    return {
+      type,
+      x1: toNumber(input.x1, 0),
+      y1: toNumber(input.y1, 0),
+      x2: toNumber(input.x2, 0),
+      y2: toNumber(input.y2, 0),
+      durationMs: toNumber(input.durationMs, 300),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "type") {
+    return {
+      type,
+      text: String(input.text ?? ""),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "keyevent") {
+    return {
+      type,
+      keycode: String(input.keycode ?? "KEYCODE_ENTER"),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "wait") {
+    return {
+      type,
+      durationMs: toNumber(input.durationMs, 1000),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  return null;
+}
 
 export function normalizeAction(input: unknown): AgentAction {
   if (!isObject(input)) {
@@ -117,6 +194,20 @@ export function normalizeAction(input: unknown): AgentAction {
       type,
       command: String(input.command ?? ""),
       useShellWrap: Boolean(input.useShellWrap),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "batch_actions") {
+    const items = Array.isArray(input.actions)
+      ? input.actions
+        .map((item) => normalizeBatchActionItem(item))
+        .filter((item): item is BatchableAgentAction => item !== null)
+        .slice(0, 6)
+      : [];
+    return {
+      type,
+      actions: items.length > 0 ? items : [{ type: "wait", durationMs: 500, reason: "empty batch" }],
       reason: input.reason ? String(input.reason) : undefined,
     };
   }
@@ -276,7 +367,7 @@ export function normalizeAction(input: unknown): AgentAction {
   }
 
   if (type === "wait") {
-    return {
+    return normalizeBatchActionItem(input) ?? {
       type,
       durationMs: toNumber(input.durationMs, 1000),
       reason: input.reason ? String(input.reason) : undefined,

@@ -6,6 +6,7 @@ import type {
   AgentProgressUpdate,
   AgentRunResult,
   AgentAction,
+  BatchableAgentAction,
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
@@ -2170,6 +2171,10 @@ export class AgentRuntime {
   private async executePhoneAction(
     action: AgentAction,
     ctx: PhoneAgentRunContext,
+    options?: {
+      skipStateObservation?: boolean;
+      skipCapabilityProbe?: boolean;
+    },
   ): Promise<string> {
     const snapshot = ctx.latestSnapshot!;
     let observedAppAfterAction = snapshot.currentApp || "unknown";
@@ -2255,7 +2260,7 @@ export class AgentRuntime {
       }
       // State delta observation
       const deltaTypes = new Set(["tap", "swipe", "type", "keyevent", "launch_app", "shell"]);
-      if (deltaTypes.has(action.type)) {
+      if (!options?.skipStateObservation && deltaTypes.has(action.type)) {
         try {
           const before = this.observeSnapshotState(snapshot);
           const adbWithQuickObservation = this.adb as AdbRuntime & {
@@ -2291,7 +2296,7 @@ export class AgentRuntime {
       executionResult += `\n${stateDeltaLine}`;
     }
     const probeActionTypes = new Set(["tap", "tap_element", "swipe", "type", "keyevent", "launch_app", "shell"]);
-    if (probeActionTypes.has(action.type)) {
+    if (!options?.skipCapabilityProbe && probeActionTypes.has(action.type)) {
       try {
         const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
         const events = this.capabilityProbe.poll({
@@ -2332,6 +2337,45 @@ export class AgentRuntime {
       }
     }
     return executionResult;
+  }
+
+  private async executeBatchPhoneActions(
+    action: Extract<AgentAction, { type: "batch_actions" }>,
+    ctx: PhoneAgentRunContext,
+  ): Promise<string> {
+    const lines = [`batch_actions count=${action.actions.length}`];
+    const terminalActions = new Set<BatchableAgentAction["type"]>(["tap", "tap_element", "swipe", "type", "keyevent"]);
+
+    for (let i = 0; i < action.actions.length; i += 1) {
+      const item = action.actions[i]!;
+      let itemResult = "";
+
+      if (item.type === "wait") {
+        const waitMs = item.durationMs ?? 1000;
+        await sleep(waitMs);
+        itemResult = `Waited ${waitMs}ms`;
+      } else {
+        itemResult = await this.executePhoneAction(item, ctx, {
+          skipStateObservation: true,
+          skipCapabilityProbe: true,
+        });
+      }
+
+      lines.push(`[${i + 1}/${action.actions.length}] ${item.type}: ${itemResult}`);
+      if (/action execution error:/i.test(itemResult)) {
+        lines.push(`batch_aborted_at=${i + 1}`);
+        break;
+      }
+
+      if (i < action.actions.length - 1 && terminalActions.has(item.type)) {
+        const delayMs = this.computePostActionDelayMs(item, itemResult);
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+      }
+    }
+
+    return lines.join("\n");
   }
 
   // =========================================================================
@@ -2376,6 +2420,16 @@ export class AgentRuntime {
           const stepStartedAtMs = Date.now();
           const stepStartedAtHr = process.hrtime.bigint();
           const stepStartedAt = nowIso();
+          const logStepSection = (section: string, text: string): void => {
+            const normalized = String(text ?? "").trim();
+            if (!normalized) {
+              return;
+            }
+            for (const line of normalized.split("\n")) {
+              // eslint-disable-next-line no-console
+              console.log(`[OpenPocket][step ${step}][${section}] ${line}`);
+            }
+          };
           const buildStepTrace = (
             currentApp: string,
             status: "ok" | "error" = "ok",
@@ -2406,11 +2460,11 @@ export class AgentRuntime {
               modelInferenceMs,
               loopDelayMs: runtime.config.agent.loopDelayMs,
             };
-            // eslint-disable-next-line no-console
-            console.log(
-              `[OpenPocket][step ${step}] ts=${trace.endedAt} phase=end tool=${toolName} action=${trace.actionType}` +
-              ` app=${trace.currentApp} status=${trace.status} started_at=${trace.startedAt}` +
-              ` ended_at=${trace.endedAt} duration_ms=${trace.durationMs}`,
+            logStepSection(
+              "end",
+              `tool=${toolName} action=${trace.actionType} app=${trace.currentApp} status=${trace.status}` +
+              ` started_at=${trace.startedAt} ended_at=${trace.endedAt} duration_ms=${trace.durationMs}` +
+              ` screenshot_ms=${trace.screenshotMs} model_inference_ms=${trace.modelInferenceMs}`,
             );
             return trace;
           };
@@ -2434,6 +2488,7 @@ export class AgentRuntime {
           if (!snapshot && action.type !== "finish") {
             const msg = "No screen snapshot available for tool execution.";
             ctx.failMessage = msg;
+            logStepSection("result", msg);
             runtime.workspace.appendStep(
               ctx.session,
               step,
@@ -2446,8 +2501,17 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: msg }], details: {} };
           }
 
-          // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][step ${step}] ts=${stepStartedAt} phase=start tool=${toolName} action=${action.type}`);
+          logStepSection("start", `ts=${stepStartedAt} tool=${toolName} action=${action.type}`);
+          logStepSection(
+            "input",
+            [
+              `app=${snapshot?.currentApp ?? "unknown"}`,
+              `screenshot=${ctx.lastScreenshotPath ?? "(none)"}`,
+              `ui_candidates=${snapshot?.uiElements.length ?? 0}`,
+            ].join(" "),
+          );
+          logStepSection("thought", thought || "(empty)");
+          logStepSection("decision", JSON.stringify(action));
 
           // ---- finish ----
           if (action.type === "finish") {
@@ -2496,6 +2560,7 @@ export class AgentRuntime {
               ]
                 .filter(Boolean)
                 .join("\n");
+              logStepSection("result", resultText);
               runtime.workspace.appendStep(
                 ctx.session,
                 step,
@@ -2516,6 +2581,7 @@ export class AgentRuntime {
             ]
               .filter(Boolean)
               .join("\n");
+            logStepSection("result", resultText);
             runtime.workspace.appendStep(
               ctx.session,
               step,
@@ -2549,6 +2615,7 @@ export class AgentRuntime {
               }
               if (permOnly) {
                 const msg = "permission auto-approved locally (VM policy)";
+                logStepSection("result", msg);
                 runtime.workspace.appendStep(
                   ctx.session,
                   step,
@@ -2566,6 +2633,7 @@ export class AgentRuntime {
             if (!ctx.onHumanAuth) {
               const msg = `Human authorization required (${action.capability}), but no handler configured.`;
               ctx.failMessage = msg;
+              logStepSection("result", msg);
               runtime.workspace.appendStep(
                 ctx.session,
                 step,
@@ -2610,6 +2678,7 @@ export class AgentRuntime {
               decision.artifactPath ? `human_artifact=${decision.artifactPath}` : "",
               delegation?.message ? `delegation=${delegation.message}` : "",
             ].filter(Boolean).join("\n");
+            logStepSection("result", resultText);
             runtime.workspace.appendStep(
               ctx.session,
               step,
@@ -2632,6 +2701,7 @@ export class AgentRuntime {
             if (!ctx.onUserDecision) {
               const msg = "User decision required, but no handler configured.";
               ctx.failMessage = msg;
+              logStepSection("result", msg);
               runtime.workspace.appendStep(
                 ctx.session,
                 step,
@@ -2673,6 +2743,7 @@ export class AgentRuntime {
             const selectedSource = matchedOption ? "listed_option" : "custom_input";
             const resultText =
               `user_decision selected="${selectedForLog}" source=${selectedSource} input_len=${String(decision.rawInput || "").length} at=${decision.resolvedAt}`;
+            logStepSection("result", resultText);
             runtime.workspace.appendStep(
               ctx.session,
               step,
@@ -2691,6 +2762,7 @@ export class AgentRuntime {
             if (!ctx.onUserInput) {
               const msg = "User input required, but no handler configured.";
               ctx.failMessage = msg;
+              logStepSection("result", msg);
               runtime.workspace.appendStep(
                 ctx.session,
                 step,
@@ -2735,6 +2807,7 @@ export class AgentRuntime {
               : nowIso();
             const logResultText = `user_input input_len=${text.length} at=${resolvedAt}`;
             const modelResultText = `user_input value=${JSON.stringify(text)} input_len=${text.length} at=${resolvedAt}`;
+            logStepSection("result", logResultText);
             runtime.workspace.appendStep(
               ctx.session,
               step,
@@ -2753,6 +2826,7 @@ export class AgentRuntime {
             const ms = action.durationMs ?? 1000;
             await sleep(ms);
             const resultText = `Waited ${ms}ms`;
+            logStepSection("result", resultText);
             runtime.workspace.appendStep(
               ctx.session,
               step,
@@ -2766,11 +2840,35 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: resultText }], details: {} };
           }
 
+          // ---- batch_actions ----
+          if (action.type === "batch_actions") {
+            const executionResult = await runtime.executeBatchPhoneActions(action, ctx);
+            const stepResult = ctx.lastScreenshotPath
+              ? `${executionResult}\nlocal_screenshot=${ctx.lastScreenshotPath}`
+              : executionResult;
+            logStepSection("result", stepResult);
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              stepResult,
+              buildStepTrace(
+                snapshot?.currentApp ?? "unknown",
+                /action execution error:/i.test(executionResult) ? "error" : "ok",
+              ),
+            );
+            ctx.traces.push({ step, action, result: stepResult, thought, currentApp: snapshot?.currentApp ?? "unknown", uiContext: buildTraceUiContext() });
+            ctx.history.push(`step ${step}: app=${snapshot?.currentApp ?? "unknown"} action=batch_actions count=${action.actions.length}`);
+            return { content: [{ type: "text" as const, text: stepResult }], details: {} };
+          }
+
           // ---- all other actions (tap, swipe, type, keyevent, launch_app, shell, run_script, read, write, edit, etc.) ----
           const executionResult = await runtime.executePhoneAction(action, ctx);
           const stepResult = ctx.lastScreenshotPath
             ? `${executionResult}\nlocal_screenshot=${ctx.lastScreenshotPath}`
             : executionResult;
+          logStepSection("result", stepResult);
 
           runtime.workspace.appendStep(
             ctx.session,
@@ -2785,11 +2883,6 @@ export class AgentRuntime {
           );
           ctx.traces.push({ step, action, result: stepResult, thought, currentApp: snapshot?.currentApp ?? "unknown", uiContext: buildTraceUiContext() });
           ctx.history.push(`step ${step}: app=${snapshot?.currentApp ?? "unknown"} action=${action.type} result=${executionResult}`);
-
-          if (runtime.config.agent.verbose) {
-            // eslint-disable-next-line no-console
-            console.log(`[OpenPocket][step ${step}] ${action.type}: ${executionResult}`);
-          }
 
           // Progress callback
           if (ctx.onProgress && step % runtime.config.agent.progressReportInterval === 0) {

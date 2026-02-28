@@ -368,7 +368,7 @@ export interface UiElementSnapshot {
   scaledCenter: { x: number; y: number };
 }
 
-export type AgentAction =
+export type BatchableAgentAction =
   | { type: "tap"; x: number; y: number; reason?: string }
   | { type: "tap_element"; elementId: string; reason?: string }
   | {
@@ -382,6 +382,10 @@ export type AgentAction =
     }
   | { type: "type"; text: string; reason?: string }
   | { type: "keyevent"; keycode: string; reason?: string }
+  | { type: "wait"; durationMs?: number; reason?: string };
+
+export type AgentAction =
+  | BatchableAgentAction
   | { type: "launch_app"; packageName: string; reason?: string }
   | {
       type: "shell";
@@ -431,6 +435,11 @@ export type AgentAction =
       lines?: number;
       reason?: string;
     }
+  | {
+      type: "batch_actions";
+      actions: BatchableAgentAction[];
+      reason?: string;
+    }
     | {
       type: "request_human_auth";
       capability: HumanAuthCapability;
@@ -454,7 +463,6 @@ export type AgentAction =
       timeoutSec?: number;
       reason?: string;
     }
-  | { type: "wait"; durationMs?: number; reason?: string }
   | { type: "finish"; message: string };
 
 export interface ModelStepOutput {

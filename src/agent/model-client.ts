@@ -303,7 +303,11 @@ export class ModelClient {
     const actionRaw = { type: actionType, ...actionArgs };
 
     // eslint-disable-next-line no-console
-    console.log(`[OpenPocket][model] parsed action: ${JSON.stringify(actionRaw)}`);
+    console.log(`[OpenPocket][model][decision] tool=${toolCall.toolName} action=${JSON.stringify(actionRaw)}`);
+    if (thought.trim()) {
+      // eslint-disable-next-line no-console
+      console.log(`[OpenPocket][model][thought] ${thought.trim()}`);
+    }
 
     const action: AgentAction = normalizeAction(actionRaw);
     return {

@@ -11,6 +11,7 @@ const TOOL_CATALOG_ORDER = [
   "keyevent",
   "launch_app",
   "shell",
+  "batch_actions",
   "run_script",
   "read",
   "write",
@@ -35,6 +36,7 @@ const TOOL_CATALOG_LINES: Record<(typeof TOOL_CATALOG_ORDER)[number], string> = 
   keyevent: "- keyevent: keyevent(keycode[, reason])",
   launch_app: "- launch_app: launch_app(packageName[, reason])",
   shell: "- shell: shell(command[, reason])",
+  batch_actions: "- batch_actions: batch_actions(actions[, reason])",
   run_script: "- run_script: run_script(script[, timeoutSec, reason])",
   read: "- read: read(path[, from, lines, reason])",
   write: "- write: write(path, content[, append, reason])",
@@ -101,7 +103,7 @@ export function buildSystemPrompt(
   if (mode === "none") {
     return [
       "You are OpenPocket, an Android phone-use agent.",
-      "Call exactly one tool step at a time.",
+      "Call exactly one tool step at a time; batch_actions still counts as one tool call.",
       "Agent Phone = clean/shared device, NO user personal data. Human Phone = user's real phone with their data.",
       "User's personal data (photos, contacts, files, etc.) is ONLY on Human Phone. Call request_human_auth to get it. Never use Agent Phone local files as substitute.",
       "For runtime/device/environment/status/version questions, gather evidence with available tools before answering.",
@@ -110,13 +112,15 @@ export function buildSystemPrompt(
       "If blocked by real-device authorization, use request_human_auth.",
       "For non-sensitive user-provided text required to continue (e.g., vehicle label/plate), use request_user_input.",
       "For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
+      "When 2-6 obvious low-risk UI actions are visible on the current screen and no intermediate re-planning is needed, prefer batch_actions instead of separate tap/type steps.",
+      "Use batch_actions for deterministic same-screen micro-flows like focus -> type -> submit, or a short series of obvious taps.",
       "When the task is complete, call finish with concise results.",
     ].join("\n");
   }
 
   if (mode === "minimal") {
     return [
-      "You are OpenPocket, an Android phone-use agent running one tool step at a time.",
+      "You are OpenPocket, an Android phone-use agent running one tool call per loop.",
       "",
       "## Tooling",
       toolCatalog,
@@ -135,6 +139,9 @@ export function buildSystemPrompt(
       "- For Android in-emulator permission dialogs, tap Allow locally; do not call request_human_auth for these dialogs.",
       "- If blocked by sensitive checkpoints, call request_human_auth.",
       "- For account login/password/passkey/social sign-in walls, call request_human_auth with capability=oauth.",
+      "- Prefer batch_actions when 2-6 obvious low-risk actions can be executed on the current screen without waiting for new information.",
+      "- Use batch_actions for deterministic same-screen micro-flows (for example: focus field -> type -> submit) instead of separate tap/type calls.",
+      "- Do not use batch_actions when the next action depends on a screen change, uncertain navigation, auth wall, or permission dialog.",
       "- Human Auth page uses a fixed shell (remote connection section + context section + top title). Define only the middle input/approve logic via uiTemplate.middleHtml/middleScript/approveScript.",
       "- For custom auth UX, use coding tools to generate template JSON (fields + middle/approve scripts), save in workspace, and pass templatePath in request_human_auth.",
       "- Use request_user_decision only for non-sensitive preference/choice disambiguation.",
@@ -176,7 +183,7 @@ export function buildSystemPrompt(
     "0) DATA SOURCE CHECK (first step only): Does this task need any personal data that lives on the user's Human Phone (photos, contacts, files, audio, location, credentials, etc.)? If yes, your first action MUST be request_human_auth to obtain that data BEFORE touching any app UI. Do NOT use photos/files/media already on the Agent Phone as a substitute — they are not the user's personal data.",
     "1) State the immediate objective in one natural sentence (no meta labels).",
     "2) Infer the current screen state from screenshot metadata + recent history.",
-    "3) Choose one deterministic action that moves the task forward.",
+    "3) If 2-6 obvious low-risk same-screen actions can be predicted confidently, choose batch_actions; otherwise choose one deterministic action that moves the task forward.",
     "4) If the last 2 attempts did not make progress, switch strategy (different navigation path, app surface, or interaction pattern).",
     "5) When enough evidence is collected, finish with a complete summary.",
     "",
@@ -191,6 +198,9 @@ export function buildSystemPrompt(
     "- If UI candidates are provided, prefer tap_element over raw coordinate tap.",
     "- Keep coordinates inside the provided screen bounds.",
     "- Before type_text, ensure the intended input field is focused.",
+    "- Prefer batch_actions for deterministic same-screen micro-flows when 2-6 obvious low-risk actions are already clear from the current screenshot and history.",
+    "- Default to batch_actions instead of separate tap/type steps when all required controls are already visible and no intermediate verification is needed.",
+    "- Do not use batch_actions if the next action depends on the result of the previous action, or if an auth wall, permission dialog, loader, or navigation transition may appear.",
     "- Use launch_app to open or switch apps directly instead of tapping through the home screen or app drawer.",
     "- Input-focus anti-loop: do not tap the same field more than 2 times in a row.",
     "- After one focus tap (or if field likely focused), attempt type_text with intended query instead of more focus taps.",

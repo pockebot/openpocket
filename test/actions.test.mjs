@@ -115,3 +115,19 @@ test("normalizeAction supports shell wrapping flag", () => {
   assert.equal(shell.command, "echo hello && echo world");
   assert.equal(shell.useShellWrap, true);
 });
+
+test("normalizeAction supports batch_actions", () => {
+  const batch = normalizeAction({
+    type: "batch_actions",
+    actions: [
+      { type: "tap", x: "12", y: "24" },
+      { type: "type_text", text: "hello" },
+      { type: "wait", durationMs: "250" },
+    ],
+  });
+  assert.equal(batch.type, "batch_actions");
+  assert.equal(batch.actions.length, 3);
+  assert.deepEqual(batch.actions[0], { type: "tap", x: 12, y: 24, reason: undefined });
+  assert.deepEqual(batch.actions[1], { type: "type", text: "hello", reason: undefined });
+  assert.deepEqual(batch.actions[2], { type: "wait", durationMs: 250, reason: undefined });
+});

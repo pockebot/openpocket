@@ -1054,6 +1054,9 @@ export class AdbRuntime {
       case "request_user_input": {
         return "request_user_input is handled by AgentRuntime via gateway callback.";
       }
+      case "batch_actions": {
+        return "batch_actions is handled by AgentRuntime.";
+      }
       case "wait": {
         const durationMs = Math.max(100, Math.round(action.durationMs ?? 1000));
         await sleep(durationMs);

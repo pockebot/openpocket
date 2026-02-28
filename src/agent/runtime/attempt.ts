@@ -51,6 +51,7 @@ const PHONE_ONLY_TOOL_NAMES = new Set([
   "keyevent",
   "launch_app",
   "shell",
+  "batch_actions",
   "run_script",
   "request_human_auth",
   "request_user_decision",
