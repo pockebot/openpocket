@@ -57,6 +57,16 @@ function compactText(text: string, maxChars = 220): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
+function formatUiTargetField(name: string, value: string | undefined): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  if (!value.trim()) {
+    return "";
+  }
+  return `${name}=${JSON.stringify(value)}`;
+}
+
 function actionSummary(action: AgentAction): string {
   if (action.type === "tap") {
     return `tap(${Math.round(action.x)}, ${Math.round(action.y)})`;
@@ -210,10 +220,10 @@ export class AutoArtifactBuilder {
         const ui = trace.uiContext;
         const uiLine = ui
           ? `   - ui_target: ${[
-              ui.text ? `text="${ui.text}"` : "",
-              ui.resourceId ? `resourceId="${ui.resourceId}"` : "",
-              ui.contentDesc ? `contentDesc="${ui.contentDesc}"` : "",
-              ui.className ? `class=${ui.className}` : "",
+              formatUiTargetField("text", ui.text),
+              formatUiTargetField("resourceId", ui.resourceId),
+              formatUiTargetField("contentDesc", ui.contentDesc),
+              formatUiTargetField("class", ui.className),
               ui.clickable !== undefined ? `clickable=${ui.clickable}` : "",
             ].filter(Boolean).join(" ")}`
           : "";

@@ -61,6 +61,50 @@ test("SkillLoader matches skills and injects active skill content into prompt co
   assert.equal(context.activePromptChars > 0, true);
 });
 
+test("SkillLoader escapes active skill XML attributes safely", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-escape-"));
+  process.env.OPENPOCKET_HOME = home;
+  const cfg = loadConfig();
+
+  const skillsDir = path.join(cfg.workspaceDir, "skills");
+  fs.mkdirSync(skillsDir, { recursive: true });
+
+  const triggerPhrase = "token<&>\"'";
+  const metadata = JSON.stringify({
+    openclaw: {
+      triggers: {
+        any: [triggerPhrase],
+      },
+    },
+  });
+
+  fs.writeFileSync(
+    path.join(skillsDir, "escape-skill.md"),
+    [
+      "---",
+      `metadata: ${metadata}`,
+      "---",
+      "",
+      "# Skill <A&B> \"quote\" 'apos'",
+      "",
+      "Test content body.",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const loader = new SkillLoader(cfg);
+  const context = loader.buildPromptContextForTask(
+    `Please run ${triggerPhrase} flow for Skill <A&B> "quote" 'apos' now.`,
+  );
+
+  assert.equal(context.activeEntries.length > 0, true);
+  assert.match(context.activePromptText, /name="Skill &lt;A&amp;B&gt; &quot;quote&quot; &apos;apos&apos;"/);
+  assert.match(
+    context.activePromptText,
+    /reason="[^"]*name match \(Skill &lt;A&amp;B&gt; &quot;quote&quot; &apos;apos&apos;\)[^"]*"/,
+  );
+});
+
 test("SkillLoader supports SKILL.md directory layout and metadata gating", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-gating-"));
   process.env.OPENPOCKET_HOME = home;

@@ -419,6 +419,15 @@ function summarizeLine(text: string, maxChars = 180): string {
   return `${compact.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
+function escapeXmlAttributeValue(value: string): string {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 function formatSummaryLine(skill: SkillInfo): string {
   return `- name="${skill.name}" source="${skill.source}" location="${skill.path}" description="${skill.description.replace(/"/g, "'")}"`;
 }
@@ -673,10 +682,12 @@ export class SkillLoader {
       if (block.length > entry.contentChars) {
         block = block.slice(0, entry.contentChars).trimEnd() + "\n[...truncated]";
       }
-      const safeName = entry.skill.name.replace(/"/g, "'");
-      const safeReason = (entry.reason || "").replace(/"/g, "'");
+      const safeName = escapeXmlAttributeValue(entry.skill.name);
+      const safeSource = escapeXmlAttributeValue(entry.skill.source);
+      const safeScore = escapeXmlAttributeValue(String(entry.score));
+      const safeReason = escapeXmlAttributeValue(entry.reason || "");
       activeBlocks.push(
-        `<active_skill name="${safeName}" source="${entry.skill.source}" score="${entry.score}" reason="${safeReason}">\n${block}\n</active_skill>`,
+        `<active_skill name="${safeName}" source="${safeSource}" score="${safeScore}" reason="${safeReason}">\n${block}\n</active_skill>`,
       );
     }
     const activePromptText = activeBlocks.length > 0

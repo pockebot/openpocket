@@ -93,3 +93,45 @@ test("AutoArtifactBuilder creates skill and script files", () => {
   assert.match(scriptBody, /cmd clipboard set text/);
   assert.match(scriptBody, /KEYCODE_PASTE/);
 });
+
+test("AutoArtifactBuilder escapes ui_target fields in generated skill draft", () => {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-artifact-ui-escape-"));
+  const builder = new AutoArtifactBuilder({ workspaceDir });
+  const uiText = "line1 \"quoted\"\nline2";
+  const uiResourceId = "id/field<&>\"'";
+  const uiContentDesc = "pick \"photo\" <now> & confirm";
+
+  const out = builder.build({
+    task: "open picker and confirm",
+    sessionPath: "/tmp/session-ui.md",
+    ok: true,
+    finalMessage: "done",
+    traces: [
+      {
+        step: 1,
+        thought: "tap target",
+        currentApp: "com.example",
+        action: { type: "tap_element", elementId: "7", reason: "open picker" },
+        result: "ok",
+        uiContext: {
+          elementId: "7",
+          label: "Picker Button",
+          text: uiText,
+          resourceId: uiResourceId,
+          contentDesc: uiContentDesc,
+          className: "android.widget.TextView",
+          clickable: true,
+        },
+      },
+    ],
+  });
+
+  assert.equal(out.skillPath !== null, true);
+  const skillBody = fs.readFileSync(out.skillPath, "utf-8");
+  assert.match(skillBody, /ui_target:/);
+  assert.match(skillBody, new RegExp(`text=${JSON.stringify(uiText).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(skillBody, new RegExp(`resourceId=${JSON.stringify(uiResourceId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(skillBody, new RegExp(`contentDesc=${JSON.stringify(uiContentDesc).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(skillBody, /class="android\.widget\.TextView"/);
+  assert.match(skillBody, /clickable=true/);
+});
