@@ -12,9 +12,9 @@ OpenPocket skills are markdown instruction files loaded into the agent loop to p
 
 Loader scan order (highest priority first):
 
-1. `workspace/skills` (`source=workspace`)
+1. repository `skills/` (`source=bundled`)
 2. `OPENPOCKET_HOME/skills` (`source=local`)
-3. repository `skills/` (`source=bundled`)
+3. `workspace/skills` (`source=workspace`)
 
 If multiple files have the same skill ID, first source wins.
 

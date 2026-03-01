@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: Location"
+name: "human-auth-location"
 description: "Handle GPS location delegation from Human Phone. Covers coordinate injection on emulators and manual coordinate usage on real devices."
 metadata: {"openclaw":{"triggers":{"any":["location","gps","geolocation","coordinates","latitude","longitude","nearby","map","position"]}}}
 ---

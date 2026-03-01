@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: Biometric"
+name: "human-auth-biometric"
 description: "Handle biometric authentication delegation (fingerprint, face recognition) when the Agent Phone lacks biometric hardware."
 metadata: {"openclaw":{"triggers":{"any":["biometric","fingerprint","face id","face recognition","touch id","biometric auth"]}}}
 ---

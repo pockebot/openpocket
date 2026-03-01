@@ -1,5 +1,5 @@
 ---
-name: "Human Auth Delegation Overview"
+name: "human-auth-delegation"
 description: "Overview of how Human Phone authorization and delegation artifacts work. For specific capability handling, see the individual human-auth-* skills."
 metadata: {"openclaw":{"triggers":{"any":["human_auth","delegation","artifact","authorize"]}}}
 ---

@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: Camera"
+name: "human-auth-camera"
 description: "Handle camera photo capture delegation from Human Phone. Covers single photo capture, push to Agent Phone, and app file picker navigation."
 metadata: {"openclaw":{"triggers":{"any":["camera","photo","capture","take photo","take picture","snap","image capture"]}}}
 ---

@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: Microphone"
+name: "human-auth-microphone"
 description: "Handle microphone audio recording delegation from Human Phone. Covers audio capture, push to Agent Phone, and audio file usage in apps."
 metadata: {"openclaw":{"triggers":{"any":["microphone","audio","record","voice memo","sound","speech","recording"]}}}
 ---

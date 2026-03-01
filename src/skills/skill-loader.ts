@@ -10,9 +10,9 @@ const __dirname = path.dirname(__filename);
 import { ensureDir, openpocketHome } from "../utils/paths.js";
 
 const SOURCE_PRIORITY: Record<SkillInfo["source"], number> = {
-  workspace: 0,
+  bundled: 0,
   local: 1,
-  bundled: 2,
+  workspace: 2,
 };
 
 const DEFAULT_SUMMARY_ITEMS = 20;
@@ -343,9 +343,9 @@ export class SkillLoader {
     const bundledDir = path.resolve(path.join(__dirname, "..", "..", "skills"));
 
     return [
-      { source: "workspace", dir: workspaceDir },
-      { source: "local", dir: localDir },
       { source: "bundled", dir: bundledDir },
+      { source: "local", dir: localDir },
+      { source: "workspace", dir: workspaceDir },
     ];
   }
 

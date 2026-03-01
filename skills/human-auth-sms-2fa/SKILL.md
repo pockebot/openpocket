@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: SMS / 2FA Verification"
+name: "human-auth-sms-2fa"
 description: "Handle SMS verification codes and 2FA TOTP codes from Human Phone. Covers OTP entry, code verification, and multi-factor authentication flows."
 metadata: {"openclaw":{"triggers":{"any":["sms","2fa","otp","verification code","totp","authenticator","verify","one-time","mfa","two-factor","confirmation code"]}}}
 ---

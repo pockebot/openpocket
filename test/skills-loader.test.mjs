@@ -28,6 +28,35 @@ test("SkillLoader loads workspace skills", () => {
   assert.match(summary, /location="/);
 });
 
+test("SkillLoader prefers bundled skills over workspace/local when skill IDs collide", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-priority-"));
+  process.env.OPENPOCKET_HOME = home;
+  const cfg = loadConfig();
+
+  const workspaceSkillsDir = path.join(cfg.workspaceDir, "skills");
+  fs.mkdirSync(workspaceSkillsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(workspaceSkillsDir, "human-auth-location.md"),
+    "# Workspace Override\n\nWorkspace version should not win.",
+    "utf-8",
+  );
+
+  const localSkillsDir = path.join(home, "skills");
+  fs.mkdirSync(localSkillsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(localSkillsDir, "human-auth-location.md"),
+    "# Local Override\n\nLocal version should not win.",
+    "utf-8",
+  );
+
+  const loader = new SkillLoader(cfg);
+  const skill = loader.loadAll().find((s) => s.id === "human-auth-location");
+
+  assert.equal(Boolean(skill), true);
+  assert.equal(skill?.source, "bundled");
+  assert.match(skill?.path || "", /skills[\\/]human-auth-location[\\/]SKILL\.md$/i);
+});
+
 test("SkillLoader exposes skill index and leaves active skill prompt empty", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-active-"));
   process.env.OPENPOCKET_HOME = home;
