@@ -28,7 +28,7 @@ test("SkillLoader loads workspace skills", () => {
   assert.match(summary, /location="/);
 });
 
-test("SkillLoader matches skills and injects active skill content into prompt context", () => {
+test("SkillLoader exposes skill index and leaves active skill prompt empty", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-active-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -56,12 +56,12 @@ test("SkillLoader matches skills and injects active skill content into prompt co
   );
 
   assert.match(context.summaryText, /PayByPhone Nearest Flow/);
-  assert.equal(context.activeEntries.length > 0, true);
-  assert.match(context.activePromptText, /active_skill/);
-  assert.equal(context.activePromptChars > 0, true);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
+  assert.equal(context.activePromptChars, 0);
 });
 
-test("SkillLoader escapes active skill XML attributes safely", () => {
+test("SkillLoader keeps tricky skill names in summary index without auto-loading body", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-escape-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -97,12 +97,9 @@ test("SkillLoader escapes active skill XML attributes safely", () => {
     `Please run ${triggerPhrase} flow for Skill <A&B> "quote" 'apos' now.`,
   );
 
-  assert.equal(context.activeEntries.length > 0, true);
-  assert.match(context.activePromptText, /name="Skill &lt;A&amp;B&gt; &quot;quote&quot; &apos;apos&apos;"/);
-  assert.match(
-    context.activePromptText,
-    /reason="[^"]*name match \(Skill &lt;A&amp;B&gt; &quot;quote&quot; &apos;apos&apos;\)[^"]*"/,
-  );
+  assert.match(context.summaryText, /Skill <A&B>/);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
 });
 
 test("SkillLoader supports SKILL.md directory layout and metadata gating", () => {
@@ -141,7 +138,7 @@ test("SkillLoader supports SKILL.md directory layout and metadata gating", () =>
   assert.match(skill?.path || "", /paybyphone_flow[\\/]+SKILL\.md$/i);
 });
 
-test("SkillLoader boosts matching by generic metadata triggers", () => {
+test("SkillLoader lists all discovered skills in summary regardless task text", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-trigger-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -178,7 +175,7 @@ test("SkillLoader boosts matching by generic metadata triggers", () => {
     "Open X app, login, and fix LoginError.AttestationDenied before posting a tweet.",
   );
 
-  assert.equal(context.activeEntries.length > 0, true);
-  assert.equal(context.activeEntries[0].skill.id, "x-twitter-login-recovery");
-  assert.match(context.activeEntries[0].reason, /metadata\.any/i);
+  assert.match(context.summaryText, /X Twitter Login Recovery/);
+  assert.match(context.summaryText, /Generic Login/);
+  assert.equal(context.activeEntries.length, 0);
 });
