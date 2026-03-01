@@ -2988,27 +2988,38 @@ export class DashboardServer {
         headLeft.appendChild(app);
         head.appendChild(headLeft);
 
+        const totalStepMs = Number(step.durationMs || 0)
+          + Number(step.screenshotMs || 0)
+          + Number(step.modelInferenceMs || 0);
+        const hasBreakdown = Number(step.screenshotMs || 0) > 0 || Number(step.modelInferenceMs || 0) > 0;
+
         const chips = document.createElement("div");
         chips.className = "trace-step-chips";
         chips.appendChild(makeStatusPill(step.status || "ok"));
         const dur = document.createElement("span");
         dur.className = "trace-pill";
-        dur.textContent = formatDuration(step.durationMs);
+        dur.textContent = hasBreakdown
+          ? formatDuration(totalStepMs)
+          : formatDuration(step.durationMs);
         chips.appendChild(dur);
         head.appendChild(chips);
         card.appendChild(head);
 
         const meta = document.createElement("div");
         meta.className = "trace-step-meta";
-        const metaParts = [
+        const metaParts = [];
+        if (hasBreakdown) {
+          metaParts.push(
+            "exec " + formatDuration(step.durationMs) +
+            " · model " + formatDuration(step.modelInferenceMs) +
+            " · screenshot " + formatDuration(step.screenshotMs) +
+            " · delay " + formatDuration(step.loopDelayMs)
+          );
+        }
+        metaParts.push(
           formatTime(step.startedAt) +
-          (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : ""),
-        ];
-        const timingParts = [];
-        if (step.screenshotMs > 0) timingParts.push("screenshot " + formatDuration(step.screenshotMs));
-        if (step.modelInferenceMs > 0) timingParts.push("model " + formatDuration(step.modelInferenceMs));
-        if (step.loopDelayMs > 0) timingParts.push("delay " + formatDuration(step.loopDelayMs));
-        if (timingParts.length > 0) metaParts.push(timingParts.join(" · "));
+          (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : "")
+        );
         meta.textContent = metaParts.join("  |  ");
         card.appendChild(meta);
 
@@ -4213,11 +4224,15 @@ export class DashboardServer {
         if (step.screenshotMs > 0) timing.push("screenshot " + formatDuration(step.screenshotMs));
         if (step.modelInferenceMs > 0) timing.push("model " + formatDuration(step.modelInferenceMs));
         if (step.loopDelayMs > 0) timing.push("delay " + formatDuration(step.loopDelayMs));
+        const inlineTotalMs = Number(step.durationMs || 0)
+          + Number(step.screenshotMs || 0)
+          + Number(step.modelInferenceMs || 0);
+        const inlineHasBreakdown = timing.length > 0;
         metaLine.textContent =
           "App: " + String(step.currentApp || "unknown") +
           " | " + formatTime(step.startedAt) + " → " + formatTime(step.endedAt) +
-          " | exec " + formatDuration(step.durationMs) +
-          (timing.length ? " | " + timing.join(" · ") : "");
+          " | total " + formatDuration(inlineHasBreakdown ? inlineTotalMs : step.durationMs) +
+          (inlineHasBreakdown ? " (exec " + formatDuration(step.durationMs) + " · " + timing.join(" · ") + ")" : "");
         card.appendChild(metaLine);
 
         const mediaRow = document.createElement("div");
