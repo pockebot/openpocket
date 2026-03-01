@@ -31,20 +31,24 @@ function clearTelegramToken(config) {
 // Tests
 // ---------------------------------------------------------------------------
 
-test("createGateway: creates core and router with Telegram adapter when token exists", () => {
-  withTempHome("gwfactory-tg-", (home) => {
+test("createGateway: creates core and router with Telegram adapter when token exists", async () => {
+  await withTempHome("gwfactory-tg-", async (home) => {
     const config = loadConfig();
     if (!config.channels) config.channels = {};
     config.channels.telegram = { botToken: "FAKE_TOKEN_FOR_TEST" };
 
     const { core, router } = createGateway(config, { logger: () => {} });
 
-    assert.ok(core, "core should exist");
-    assert.ok(router, "router should exist");
+    try {
+      assert.ok(core, "core should exist");
+      assert.ok(router, "router should exist");
 
-    const telegramAdapter = router.getAdapter("telegram");
-    assert.ok(telegramAdapter, "telegram adapter should be registered");
-    assert.equal(telegramAdapter.channelType, "telegram");
+      const telegramAdapter = router.getAdapter("telegram");
+      assert.ok(telegramAdapter, "telegram adapter should be registered");
+      assert.equal(telegramAdapter.channelType, "telegram");
+    } finally {
+      await router.stopAll("test-cleanup");
+    }
   });
 });
 
