@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: QR Code"
+name: "human-auth-qr"
 description: "Handle QR code scanning delegation from Human Phone. Covers QR scan result retrieval and application in login, payment, and linking flows."
 metadata: {"openclaw":{"triggers":{"any":["qr","qr code","scan","barcode","scan code","qr login","scan to login"]}}}
 ---

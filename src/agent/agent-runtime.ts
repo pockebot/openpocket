@@ -3176,13 +3176,7 @@ export class AgentRuntime {
     sessionKey?: string,
     onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse,
   ): Promise<AgentRunResult> {
-    const hasSkillMatch = this.skillLoader.buildPromptContextForTask(task, {
-      maxSummaryItems: 1,
-      maxActiveSkills: 1,
-      maxActiveSkillChars: 600,
-      maxActiveTotalChars: 800,
-    }).activeEntries.length > 0;
-    const activeToolNames = this.resolveToolMetasForTask(task, hasSkillMatch).map((item) => item.name);
+    const activeToolNames = this.resolveToolMetasForTask(task).map((item) => item.name);
     const request: RunTaskRequest = {
       task,
       modelName,

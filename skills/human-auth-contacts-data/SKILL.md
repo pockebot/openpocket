@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: Contacts & Data Access"
+name: "human-auth-contacts-data"
 description: "Handle contacts, calendar, files, and notification data delegation from Human Phone. Covers data export, push to Agent Phone, and app import flows."
 metadata: {"openclaw":{"triggers":{"any":["contacts","calendar","files","notification","address book","phone book","schedule","documents","data access","import contacts"]}}}
 ---

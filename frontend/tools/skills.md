@@ -2,23 +2,28 @@
 
 OpenPocket skills are markdown instruction files loaded into the agent loop to provide reusable operational knowledge.
 
+`agent.skillsSpecMode` controls compatibility behavior:
+
+- `legacy`: permissive legacy markdown behavior
+- `mixed`: supports legacy markdown + strict `SKILL.md` (default)
+- `strict`: enforces strict `SKILL.md` layout + validation
+
 ## Source Order
 
 Loader scan order (highest priority first):
 
-1. `workspace/skills` (`source=workspace`)
+1. repository `skills/` (`source=bundled`)
 2. `OPENPOCKET_HOME/skills` (`source=local`)
-3. repository `skills/` (`source=bundled`)
+3. `workspace/skills` (`source=workspace`)
 
 If multiple files have the same skill ID, first source wins.
 
 ## Discovery
 
-Recursive scan under each source root:
-
+- recursive scan under each source root
 - if a directory contains `SKILL.md`, that file is treated as the skill entry
-- otherwise, standalone `*.md` files are discovered
-- `README.md` is excluded
+- in `mixed|legacy`, standalone `*.md` files are also discovered (excluding `README.md`)
+- in `strict`, only `SKILL.md` entries are loaded
 
 This supports both:
 
@@ -69,8 +74,9 @@ Default active injection limits:
 
 On successful tasks, `AutoArtifactBuilder` may generate:
 
-- `workspace/skills/auto/<timestamp>-<slug>.md`
-- `workspace/scripts/auto/<timestamp>-<slug>.sh`
+- `mixed|legacy`: `workspace/skills/auto/<timestamp>-<slug>.md`
+- `strict`: `workspace/skills/auto/<timestamp>-<slug>/SKILL.md`
+- script replay helper: `workspace/scripts/auto/<timestamp>-<slug>.sh`
 
 Generated auto skills include:
 
@@ -98,4 +104,10 @@ Use when user asks to open an app by name.
 - Tap app icon
 ```
 
-Only title and first non-heading line are parsed structurally; remaining sections are free-form operational guidance.
+Only title and first non-heading line are parsed structurally; the rest is free-form guidance for future prompt usage.
+
+Use CLI validation to check strict compatibility:
+
+```bash
+openpocket skills validate --strict
+```

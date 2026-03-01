@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: Payment"
+name: "human-auth-payment"
 description: "Handle payment card delegation from Human Phone. Covers credit/debit card number, expiry, CVC entry in checkout flows."
 metadata: {"openclaw":{"triggers":{"any":["payment","credit card","debit card","card number","checkout","pay","purchase","billing","cvc","cvv","expiry"]}}}
 ---

@@ -24,6 +24,7 @@ import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
 import { buildPiAiModel } from "../model-client.js";
 import { normalizePiSessionEvent } from "../pi-session-events.js";
 import { buildSystemPrompt, buildUserPrompt } from "../prompts.js";
+import { AutoSkillRefiner } from "../../skills/auto-skill-refiner.js";
 import type {
   PhoneAgentRunContext,
   RunTaskAttemptOutcome,
@@ -95,7 +96,34 @@ export async function runRuntimeAttempt(
     profile.model,
     { sessionKey: request.sessionKey },
   );
+  const autoSkillRefiner = new AutoSkillRefiner(deps.config);
   const reusedSessionMessages = session.reused ? loadReusedSessionMessages(session.path) : [];
+  const resolveFinalSkillPath = (skillPath: string | null, finalMessage: string): string | null => {
+    if (!skillPath) {
+      return null;
+    }
+    const refined = autoSkillRefiner.refine({
+      draftSkillPath: skillPath,
+      task: request.task,
+      finalMessage,
+    });
+    if (refined.promotedPath) {
+      if (refined.promotedPath !== skillPath) {
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][artifact] promoted auto skill: ${refined.promotedPath}`);
+      }
+      return refined.promotedPath;
+    }
+    if (refined.issues.length > 0) {
+      const preview = refined.issues
+        .slice(0, 2)
+        .map((issue) => `${issue.code}: ${issue.message}`)
+        .join("; ");
+      // eslint-disable-next-line no-console
+      console.log(`[OpenPocket][artifact] auto skill refine failed: ${preview}`);
+    }
+    return skillPath;
+  };
 
   try {
     const auth = resolveModelAuth(profile);
@@ -409,12 +437,13 @@ export async function runRuntimeAttempt(
           // eslint-disable-next-line no-console
           console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
         }
+        const finalSkillPath = resolveFinalSkillPath(artifacts.skillPath, ctx.finishMessage);
         return {
           result: {
             ok: true,
             message: ctx.finishMessage,
             sessionPath: session.path,
-            skillPath: artifacts.skillPath,
+            skillPath: finalSkillPath,
             scriptPath: artifacts.scriptPath,
           },
           shouldReturnHome,
@@ -767,12 +796,13 @@ export async function runRuntimeAttempt(
         // eslint-disable-next-line no-console
         console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
       }
+      const finalSkillPath = resolveFinalSkillPath(artifacts.skillPath, ctx.finishMessage);
       return {
         result: {
           ok: true,
           message: ctx.finishMessage,
           sessionPath: session.path,
-          skillPath: artifacts.skillPath,
+          skillPath: finalSkillPath,
           scriptPath: artifacts.scriptPath,
         },
         shouldReturnHome,

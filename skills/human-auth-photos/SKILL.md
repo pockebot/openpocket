@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: Photo Album"
+name: "human-auth-photos"
 description: "Handle photo album selection delegation from Human Phone. Covers single and multi-photo selection, push to Agent Phone, and gallery picker navigation."
 metadata: {"openclaw":{"triggers":{"any":["photos","album","gallery","pick photo","select photo","upload photo","image picker"]}}}
 ---

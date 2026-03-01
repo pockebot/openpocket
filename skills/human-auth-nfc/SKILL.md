@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: NFC"
+name: "human-auth-nfc"
 description: "Handle NFC tap and RFID delegation from Human Phone. Covers NFC tag reading, contactless payment verification, and physical access card scenarios."
 metadata: {"openclaw":{"triggers":{"any":["nfc","rfid","contactless","tap card","near field","nfc tag","tap to pay","card reader"]}}}
 ---

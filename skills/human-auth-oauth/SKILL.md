@@ -1,5 +1,5 @@
 ---
-name: "Human Auth: OAuth / Login"
+name: "human-auth-oauth"
 description: "Handle account login credential delegation from Human Phone. Covers username/password entry, social sign-in walls, and multi-step login flows."
 metadata: {"openclaw":{"triggers":{"any":["oauth","login","sign in","credentials","username","password","account","authentication","social login","google sign"]}}}
 ---
