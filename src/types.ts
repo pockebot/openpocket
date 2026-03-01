@@ -313,7 +313,8 @@ export interface OpenPocketConfig {
   defaultModel: string;
   target: DeviceTargetConfig;
   emulator: EmulatorConfig;
-  telegram: TelegramConfig;
+  /** @deprecated Use channels.telegram instead */
+  telegram?: TelegramConfig;
   agent: AgentConfig;
   screenshots: ScreenshotConfig;
   scriptExecutor: ScriptExecutorConfig;
@@ -324,6 +325,8 @@ export interface OpenPocketConfig {
   dashboard: DashboardConfig;
   humanAuth: HumanAuthConfig;
   models: Record<string, ModelProfile>;
+  channels: import("./channel/types.js").ChannelsConfig;
+  pairing?: import("./channel/types.js").PairingConfig;
   configPath: string;
 }
 

@@ -66,6 +66,11 @@ interface SetupState {
   telegramConfiguredAt?: string;
   telegramTokenSource?: "env" | "config" | "skip";
   telegramAllowedChatMode?: "keep" | "open" | "set";
+  channelsConfiguredAt?: string;
+  enabledChannels?: string[];
+  discordConfiguredAt?: string;
+  discordTokenSource?: "env" | "config" | "skip";
+  whatsappConfiguredAt?: string;
   humanAuthEnabledAt?: string;
   humanAuthMode?: "disabled" | "lan" | "ngrok";
   ngrokConfiguredAt?: string;
@@ -791,7 +796,7 @@ function makeConsolePrompter(): SetupPrompter {
           "  2) Deployment target",
           "  3) Model selection",
           "  4) API key setup",
-          "  5) Telegram setup",
+          "  5) Channel setup (Telegram, Discord, WhatsApp)",
           "  6) Device onboarding checks",
         ].join("\n"),
       );
@@ -1434,6 +1439,9 @@ async function runTelegramStep(
   prompter: SetupPrompter,
   state: SetupState,
 ): Promise<void> {
+  if (!config.telegram) {
+    config.telegram = { botToken: "", botTokenEnv: "TELEGRAM_BOT_TOKEN", allowedChatIds: [], pollTimeoutSec: 25 };
+  }
   const fallbackEnv = "TELEGRAM_BOT_TOKEN";
   const configuredEnv = config.telegram.botTokenEnv || fallbackEnv;
   const currentTokenEnv = normalizeEnvVarName(configuredEnv, fallbackEnv);
@@ -1569,8 +1577,518 @@ async function runTelegramStep(
     config.telegram.allowedChatIds = parseAllowedChatIdsInput(input);
   }
 
+  if (!config.channels) {
+    config.channels = {} as import("../channel/types.js").ChannelsConfig;
+  }
+  const tgChannel = (config.channels.telegram ?? {}) as Record<string, unknown>;
+  if (config.telegram!.botToken) tgChannel.botToken = config.telegram!.botToken;
+  if (config.telegram!.botTokenEnv) tgChannel.botTokenEnv = config.telegram!.botTokenEnv;
+  if (config.telegram!.pollTimeoutSec) tgChannel.pollTimeoutSec = config.telegram!.pollTimeoutSec;
+  if (config.telegram!.allowedChatIds.length > 0) {
+    tgChannel.allowFrom = config.telegram!.allowedChatIds.map(String);
+  }
+  config.channels.telegram = tgChannel as import("../channel/types.js").TelegramChannelConfig;
+
   state.telegramConfiguredAt = nowIso();
   saveConfig(config);
+}
+
+async function runDiscordStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  state: SetupState,
+): Promise<void> {
+  const fallbackEnv = "DISCORD_BOT_TOKEN";
+
+  if (!config.channels) config.channels = {};
+  if (!config.channels.discord) config.channels.discord = {};
+  const dc = config.channels.discord;
+
+  const configuredEnv = dc.tokenEnv || fallbackEnv;
+  const envToken = process.env[configuredEnv]?.trim() ?? "";
+  const hasConfigToken = Boolean(dc.token?.trim());
+
+  await prompter.note(
+    "Discord Bot Setup",
+    [
+      "OpenPocket can receive commands from Discord DMs or a guild channel.",
+      "Create a bot at https://discord.com/developers/applications and enable:",
+      "  - MESSAGE CONTENT intent (Privileged Gateway Intents)",
+      "  - bot scope with Send Messages, Read Message History permissions",
+      `Current token env: ${configuredEnv}`,
+      `Current token in config: ${hasConfigToken ? "set" : "empty"}`,
+    ].join("\n"),
+  );
+
+  const tokenOptions: SelectOption<TokenChoice>[] = [
+    {
+      value: "env",
+      label: `Use environment variable ${configuredEnv}`,
+      hint: envToken ? `Detected (length ${envToken.length})` : "Not detected",
+    },
+    {
+      value: "config",
+      label: "Paste token and save to local config.json",
+    },
+    {
+      value: "skip",
+      label: "Skip token setup for now",
+    },
+  ];
+  if (hasConfigToken) {
+    tokenOptions.splice(1, 0, {
+      value: "config-existing",
+      label: "Use existing token from local config.json",
+      hint: `Detected (length ${dc.token!.trim().length})`,
+    });
+  }
+
+  const tokenChoice = await prompter.select<TokenChoice>(
+    "Discord bot token source",
+    tokenOptions,
+    hasConfigToken ? "config-existing" : envToken ? "env" : "config",
+  );
+
+  if (tokenChoice === "env") {
+    dc.tokenEnv = configuredEnv;
+    dc.token = "";
+    state.discordTokenSource = "env";
+    if (!envToken) {
+      await prompter.note(
+        "Discord Setup",
+        `${configuredEnv} is not set in the current shell. Discord channel will not start until it is exported.`,
+      );
+    }
+  } else if (tokenChoice === "config-existing") {
+    state.discordTokenSource = "config";
+  } else if (tokenChoice === "config") {
+    const token = await promptSecretWithRetryOrSkip(prompter, "Enter Discord bot token", "Discord bot token");
+    if (!token) {
+      state.discordTokenSource = "skip";
+    } else {
+      const confirmed = await prompter.confirm(
+        "Confirm writing Discord bot token to local config.json?",
+        true,
+      );
+      if (confirmed) {
+        dc.token = token;
+        state.discordTokenSource = "config";
+      } else {
+        state.discordTokenSource = "skip";
+      }
+    }
+  } else {
+    state.discordTokenSource = "skip";
+  }
+
+  const dmPolicy = await prompter.select(
+    "Discord DM access policy",
+    [
+      { value: "pairing", label: "Pairing (unknown senders get a code, owner approves)" },
+      { value: "allowlist", label: "Allowlist (only pre-configured user IDs)" },
+      { value: "open", label: "Open (all DMs allowed)" },
+    ],
+    (dc.dmPolicy as string) || "pairing",
+  );
+  dc.dmPolicy = dmPolicy as "pairing" | "allowlist" | "open";
+
+  state.discordConfiguredAt = nowIso();
+  saveConfig(config);
+}
+
+async function runWhatsAppStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  state: SetupState,
+): Promise<void> {
+  if (!config.channels) config.channels = {};
+  if (!config.channels.whatsapp) config.channels.whatsapp = {};
+  const wa = config.channels.whatsapp;
+
+  await prompter.note(
+    "WhatsApp Setup",
+    [
+      "OpenPocket uses Baileys (WhatsApp Web protocol) for WhatsApp integration.",
+      "On first gateway start, a QR code will be displayed in the terminal.",
+      "Scan it with your phone (WhatsApp > Settings > Linked Devices > Link a Device).",
+      "",
+      "Recommendations:",
+      "  - Use a dedicated phone number to avoid account restrictions",
+      "  - WhatsApp Web automation is unofficial; use responsibly",
+      "  - Session credentials are stored locally in your state directory",
+    ].join("\n"),
+  );
+
+  const dmPolicy = await prompter.select(
+    "WhatsApp DM access policy",
+    [
+      { value: "pairing", label: "Pairing (unknown senders get a code, owner approves)" },
+      { value: "allowlist", label: "Allowlist (only pre-configured phone numbers)" },
+      { value: "open", label: "Open (all messages allowed)" },
+    ],
+    (wa.dmPolicy as string) || "pairing",
+  );
+  wa.dmPolicy = dmPolicy as "pairing" | "allowlist" | "open";
+
+  const sendReceipts = await prompter.confirm(
+    "Send read receipts when processing messages?",
+    wa.sendReadReceipts ?? true,
+  );
+  wa.sendReadReceipts = sendReceipts;
+
+  const chunkMode = await prompter.select(
+    "Long message chunking mode",
+    [
+      { value: "newline", label: "Split at newlines (natural paragraph breaks)" },
+      { value: "length", label: "Split at character limit" },
+    ],
+    wa.chunkMode || "newline",
+  );
+  wa.chunkMode = chunkMode as "length" | "newline";
+
+  state.whatsappConfiguredAt = nowIso();
+  saveConfig(config);
+
+  const authDir = path.join(config.stateDir, "whatsapp-auth");
+  const alreadyLinked = fs.existsSync(path.join(authDir, "creds.json"));
+
+  if (alreadyLinked) {
+    await prompter.note(
+      "WhatsApp Setup",
+      [
+        "WhatsApp channel configured.",
+        `Existing session found at: ${authDir}`,
+        "Gateway will reconnect automatically on next start.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const linkNow = await prompter.confirm(
+    "Link WhatsApp now? (A QR code will be displayed for you to scan)",
+    true,
+  );
+
+  if (!linkNow) {
+    await prompter.note(
+      "WhatsApp Setup",
+      [
+        "WhatsApp channel configured (linking deferred).",
+        "QR code will be displayed when you run `openpocket gateway start`.",
+        "",
+        "To link later:",
+        "  1) Run `openpocket gateway start`",
+        "  2) Scan the QR code with WhatsApp on your phone:",
+        "     iOS:     Settings > Linked Devices > Link a Device",
+        "     Android: Menu (⋮) > Linked Devices > Link a Device",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  await runWhatsAppQrPairing(config, prompter);
+}
+
+async function runWhatsAppQrPairing(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+): Promise<void> {
+  const authDir = path.join(config.stateDir, "whatsapp-auth");
+  fs.mkdirSync(authDir, { recursive: true });
+
+  const proxyUrl = await detectProxyForWhatsApp(prompter);
+
+  await prompter.note(
+    "WhatsApp QR Pairing",
+    [
+      "Connecting to WhatsApp Web...",
+      proxyUrl ? `  Using proxy: ${proxyUrl}` : "",
+      "A QR code will appear below. On your phone, open:",
+      "  iOS:     WhatsApp > Settings > Linked Devices > Link a Device",
+      "  Android: WhatsApp > Menu (⋮) > Linked Devices > Link a Device",
+      "Then point your camera at the QR code.",
+      "",
+      "The QR code refreshes every ~60 seconds. Total timeout: 2 minutes.",
+    ].filter(Boolean).join("\n"),
+  );
+
+  const baileys = await import("baileys");
+  const makeWASocket = baileys.default;
+  const { useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestWaWebVersion } = baileys;
+  const QRCode = await import("qrcode");
+  const pino = (await import("pino")).default;
+
+  const silentLogger = pino({ level: "silent" }) as any;
+
+  let waVersion: [number, number, number] | undefined;
+  try {
+    const { version } = await fetchLatestWaWebVersion({});
+    waVersion = version;
+    console.log(`  [WhatsApp] Using WA Web version: ${version.join(".")}`);
+  } catch {
+    console.log("  [WhatsApp] Could not fetch latest WA version, using default.");
+  }
+
+  let proxyAgent: any = undefined;
+  if (proxyUrl) {
+    try {
+      const { HttpsProxyAgent } = await import("https-proxy-agent");
+      proxyAgent = new HttpsProxyAgent(proxyUrl);
+    } catch {
+      console.log("  [WhatsApp] Could not create proxy agent, connecting directly.");
+    }
+  }
+
+  let currentSock: ReturnType<typeof makeWASocket> | null = null;
+
+  const result = await new Promise<"linked" | "timeout" | "error">((resolve) => {
+    let resolved = false;
+    const timeoutMs = 120_000;
+    let qrCount = 0;
+    let retryCount = 0;
+    const maxRetries = 5;
+
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        resolve("timeout");
+      }
+    }, timeoutMs);
+
+    async function startSocket(): Promise<void> {
+      if (resolved) return;
+
+      const { state, saveCreds } = await useMultiFileAuthState(authDir);
+
+      const socketOpts: any = {
+        auth: state,
+        browser: Browsers.macOS("Chrome"),
+        logger: silentLogger,
+        ...(waVersion ? { version: waVersion } : {}),
+      };
+      if (proxyAgent) {
+        socketOpts.agent = proxyAgent;
+      }
+
+      const sock = makeWASocket(socketOpts);
+      currentSock = sock;
+
+      sock.ev.on("creds.update", saveCreds);
+
+      sock.ev.on("connection.update", async (update) => {
+        if (resolved) return;
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+          qrCount++;
+          retryCount = 0;
+          console.log("");
+          console.log("  ┌─────────────────────────────────────────┐");
+          console.log(`  │  Scan this QR code with WhatsApp  (${qrCount})    │`);
+          console.log("  └─────────────────────────────────────────┘");
+          console.log("");
+          try {
+            const qrArt = await QRCode.toString(qr, { type: "utf8", errorCorrectionLevel: "L", margin: 2 });
+            for (const line of qrArt.trimEnd().split("\n")) {
+              console.log(`  ${line}`);
+            }
+          } catch {
+            console.log(`  QR data: ${qr}`);
+          }
+          console.log("");
+          console.log("  Waiting for scan...");
+        }
+
+        if (connection === "open") {
+          clearTimeout(timer);
+          if (!resolved) {
+            resolved = true;
+            resolve("linked");
+          }
+        }
+
+        if (connection === "close") {
+          const err = lastDisconnect?.error as any;
+          const statusCode = err?.output?.statusCode as number | undefined;
+          const errMsg = err?.message || err?.output?.payload?.message || "unknown";
+
+          if (statusCode === DisconnectReason.loggedOut) {
+            clearTimeout(timer);
+            if (!resolved) {
+              resolved = true;
+              resolve("error");
+            }
+            return;
+          }
+
+          retryCount++;
+          if (retryCount > maxRetries) {
+            console.log(`  [WhatsApp] Connection failed after ${maxRetries} retries: ${errMsg}`);
+            console.log("  [WhatsApp] This may be a network issue. Check if WhatsApp Web is accessible from your network.");
+            clearTimeout(timer);
+            if (!resolved) {
+              resolved = true;
+              resolve("error");
+            }
+            return;
+          }
+
+          console.log(`  [WhatsApp] Connection closed (${errMsg}), retrying ${retryCount}/${maxRetries}...`);
+          try { sock.end(undefined); } catch { /* ignore */ }
+          const delay = Math.min(2000 * retryCount, 10_000);
+          setTimeout(() => { void startSocket(); }, delay);
+        }
+      });
+    }
+
+    void startSocket();
+  });
+
+  if (currentSock) {
+    try {
+      (currentSock as any).ev?.removeAllListeners();
+      (currentSock as any).end(undefined);
+    } catch { /* ignore */ }
+    currentSock = null;
+  }
+
+  if (result === "linked") {
+    console.log("");
+    await prompter.note(
+      "WhatsApp Pairing",
+      [
+        "WhatsApp linked successfully!",
+        `Session saved to: ${authDir}`,
+        "Gateway will reconnect automatically on subsequent starts.",
+      ].join("\n"),
+    );
+  } else if (result === "timeout") {
+    await prompter.note(
+      "WhatsApp Pairing",
+      [
+        "QR code scan timed out (2 minutes).",
+        "You can pair later when running `openpocket gateway start`.",
+        "A new QR code will be displayed at that time.",
+      ].join("\n"),
+    );
+  } else {
+    await prompter.note(
+      "WhatsApp Pairing",
+      [
+        "WhatsApp pairing failed.",
+        "You can retry later when running `openpocket gateway start`.",
+      ].join("\n"),
+    );
+  }
+}
+
+async function detectProxyForWhatsApp(prompter: SetupPrompter): Promise<string | null> {
+  const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy
+    || process.env.HTTP_PROXY || process.env.http_proxy
+    || process.env.ALL_PROXY || process.env.all_proxy;
+  if (envProxy) return envProxy;
+
+  if (process.platform === "darwin") {
+    try {
+      const { execSync } = await import("node:child_process");
+      const output = execSync("networksetup -getsecurewebproxy Wi-Fi", { timeout: 5000, encoding: "utf-8" });
+      const enabled = /^Enabled:\s*Yes/im.test(output);
+      const serverMatch = output.match(/^Server:\s*(.+)$/im);
+      const portMatch = output.match(/^Port:\s*(\d+)$/im);
+      if (enabled && serverMatch && portMatch) {
+        const url = `http://${serverMatch[1].trim()}:${portMatch[1].trim()}`;
+        const ok = await testProxyConnectivity(url);
+        if (ok) return url;
+      }
+    } catch { /* ignore */ }
+  }
+
+  const commonPorts = [7897, 7890, 1087, 8080, 1080];
+  for (const port of commonPorts) {
+    const url = `http://127.0.0.1:${port}`;
+    const ok = await testProxyConnectivity(url);
+    if (ok) return url;
+  }
+
+  return null;
+}
+
+async function testProxyConnectivity(proxyUrl: string): Promise<boolean> {
+  try {
+    const { HttpsProxyAgent } = await import("https-proxy-agent");
+    const https = await import("node:https");
+    const agent = new HttpsProxyAgent(proxyUrl);
+
+    return new Promise<boolean>((resolve) => {
+      const req = https.get("https://web.whatsapp.com", { agent, timeout: 8000 } as any, (res) => {
+        res.on("data", () => {});
+        res.on("end", () => resolve(res.statusCode === 200));
+      });
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => { req.destroy(); resolve(false); });
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function runChannelSetupStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  state: SetupState,
+): Promise<void> {
+  await prompter.note(
+    "Channel Setup",
+    [
+      "OpenPocket supports multiple messaging channels for task control.",
+      "Select which channels you want to configure.",
+      "You can always add more channels later by rerunning `openpocket onboard`.",
+    ].join("\n"),
+  );
+
+  const channelOptions: SelectOption<string>[] = [
+    { value: "telegram", label: "Telegram", hint: "Bot API polling" },
+    { value: "discord", label: "Discord", hint: "Bot with DMs and guild support" },
+    { value: "whatsapp", label: "WhatsApp", hint: "Via Baileys (WhatsApp Web)" },
+  ];
+
+  const selectedChannels: string[] = [];
+  for (const option of channelOptions) {
+    const enable = await prompter.confirm(
+      `Enable ${option.label}? (${option.hint})`,
+      option.value === "telegram",
+    );
+    if (enable) selectedChannels.push(option.value);
+  }
+
+  state.enabledChannels = selectedChannels;
+  state.channelsConfiguredAt = nowIso();
+
+  if (selectedChannels.length === 0) {
+    await prompter.note(
+      "Channel Setup",
+      "No channels selected. You can configure channels later with `openpocket onboard`.",
+    );
+    return;
+  }
+
+  if (selectedChannels.includes("telegram")) {
+    await runTelegramStep(config, prompter, state);
+  }
+
+  if (selectedChannels.includes("discord")) {
+    await runDiscordStep(config, prompter, state);
+  }
+
+  if (selectedChannels.includes("whatsapp")) {
+    await runWhatsAppStep(config, prompter, state);
+  }
+
+  const summary = selectedChannels.map((ch) => `  - ${ch}`).join("\n");
+  await prompter.note(
+    "Channel Setup Complete",
+    `Configured channels:\n${summary}`,
+  );
 }
 
 function detectCommandVersion(command: string): string {
@@ -1782,19 +2300,26 @@ export async function runSetupWizard(
     await runDeploymentTargetStep(config, prompter, state, emulator);
     const selectedModel = await runModelSelectionStep(config, prompter, state);
     await runApiKeyStep(config, prompter, state, selectedModel, options);
-    await runTelegramStep(config, prompter, state);
+    await runChannelSetupStep(config, prompter, state);
     await runVmStep(config, prompter, state, emulator);
     await runHumanAuthStep(config, prompter, state);
     saveState(config, state);
+
+    const configuredChannels = state.enabledChannels ?? [];
+    const channelHint = configuredChannels.length > 0
+      ? `  2) Send a natural-language task via ${configuredChannels.join(", ")}`
+      : "  2) Configure a channel with `openpocket onboard` to start messaging";
+
     await prompter.outro(
       [
         "Setup completed.",
         `Onboarding state: ${onboardingStatePath(config)}`,
         "Next:",
         "  1) openpocket gateway start",
-        "  2) Send a natural-language task directly in Telegram",
-        "  3) If task is blocked by real-device auth, approve via Telegram link on your phone",
+        channelHint,
+        "  3) If task is blocked by real-device auth, approve via messaging channel link on your phone",
         "Tip: switch deployment target later with `openpocket target set ...` (when gateway is stopped).",
+        "Tip: add more channels later with `openpocket onboard`.",
       ].join("\n"),
     );
   } finally {

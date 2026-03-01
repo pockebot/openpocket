@@ -151,7 +151,7 @@ test("setup wizard configures OpenAI key and records Gmail onboarding state", as
   await withTempHome("openpocket-setup-full-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
-      confirms: [true, true, true],
+      confirms: [true, true, true, false, false, true],
       selects: ["emulator", "gpt-5.2-codex", "config", "skip", "keep", "start", "disabled"],
       texts: ["", "sk-should-not-be-used"],
       secrets: ["sk-test-openpocket"],
@@ -186,7 +186,7 @@ test("setup wizard applies provider key to selected provider only", async () => 
   await withTempHome("openpocket-setup-provider-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
-      confirms: [true, true],
+      confirms: [true, true, true, false, false],
       selects: ["emulator", "autoglm-phone", "config", "skip", "keep", "skip", "disabled"],
       texts: ["", "zai-test-key"],
       pauseCount: 0,
@@ -206,7 +206,7 @@ test("setup wizard can configure physical phone target and skip emulator onboard
   await withTempHome("openpocket-setup-physical-target-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["physical-phone", "usb", "gpt-5.2-codex", "skip", "skip", "keep", "disabled"],
       texts: [""],
       pauseCount: 0,
@@ -233,7 +233,7 @@ test("setup wizard configures local human-auth ngrok mode", async () => {
     const prevToken = process.env.NGROK_AUTHTOKEN;
     process.env.NGROK_AUTHTOKEN = "ngrok-test-token";
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "env"],
       texts: [""],
       pauseCount: 0,
@@ -265,7 +265,7 @@ test("setup wizard includes ngrok setup guide when ngrok CLI is missing", async 
     const cfg = loadConfig();
     cfg.humanAuth.tunnel.ngrok.executable = "missing-ngrok-binary-for-test";
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "skip"],
       texts: [""],
       pauseCount: 0,
@@ -286,7 +286,7 @@ test("setup wizard can configure Telegram token and allowlist in config", async 
   await withTempHome("openpocket-setup-telegram-config-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
-      confirms: [true, true],
+      confirms: [true, true, false, false, true],
       selects: ["emulator", "gpt-5.2-codex", "skip", "config", "set", "skip", "disabled"],
       texts: ["", "123456789, 987654321"],
       secrets: ["telegram-test-token"],
@@ -297,8 +297,8 @@ test("setup wizard can configure Telegram token and allowlist in config", async 
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.telegram.botToken, "telegram-test-token");
-    assert.deepEqual(savedCfg.telegram.allowedChatIds, [123456789, 987654321]);
+    assert.equal(savedCfg.channels?.telegram?.botToken, "telegram-test-token");
+    assert.deepEqual(savedCfg.channels?.telegram?.allowFrom, ["123456789", "987654321"]);
   });
 });
 
@@ -306,7 +306,7 @@ test("setup wizard can configure ngrok authtoken in config using secret input", 
   await withTempHome("openpocket-setup-ngrok-config-token-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
-      confirms: [true, true],
+      confirms: [true, true, false, false, true],
       selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config"],
       texts: [""],
       secrets: ["ngrok-config-token"],
@@ -326,7 +326,7 @@ test("setup wizard can keep existing API key from config.json", async () => {
     const cfg = loadConfig();
     cfg.models["gpt-5.2-codex"].apiKey = "sk-existing-openpocket";
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "config-existing", "skip", "keep", "skip", "disabled"],
       texts: [""],
       pauseCount: 0,
@@ -347,9 +347,10 @@ test("setup wizard can keep existing API key from config.json", async () => {
 test("setup wizard can keep existing Telegram token from config.json", async () => {
   await withTempHome("openpocket-setup-telegram-existing-config-", async () => {
     const cfg = loadConfig();
+    if (!cfg.telegram) cfg.telegram = { botToken: "", botTokenEnv: "TELEGRAM_BOT_TOKEN", allowedChatIds: [], pollTimeoutSec: 25 };
     cfg.telegram.botToken = "telegram-existing-token";
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "skip", "config-existing", "keep", "skip", "disabled"],
       texts: [""],
       pauseCount: 0,
@@ -359,7 +360,7 @@ test("setup wizard can keep existing Telegram token from config.json", async () 
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.telegram.botToken, "telegram-existing-token");
+    assert.equal(savedCfg.channels?.telegram?.botToken, "telegram-existing-token");
 
     const statePath = path.join(cfg.stateDir, "onboarding.json");
     const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
@@ -372,7 +373,7 @@ test("setup wizard can keep existing ngrok token from config.json", async () => 
     const cfg = loadConfig();
     cfg.humanAuth.tunnel.ngrok.authtoken = "ngrok-existing-token";
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config-existing"],
       texts: [""],
       pauseCount: 0,
@@ -391,7 +392,7 @@ test("setup wizard allows skipping API key config after empty secret input", asy
   await withTempHome("openpocket-setup-api-key-empty-skip-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "config", "skip", "skip", "keep", "skip", "disabled"],
       texts: [""],
       secrets: [""],
@@ -414,7 +415,7 @@ test("setup wizard allows skipping Telegram token config after empty secret inpu
   await withTempHome("openpocket-setup-telegram-empty-skip-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "skip", "config", "skip", "keep", "skip", "disabled"],
       texts: [""],
       secrets: [""],
@@ -425,7 +426,7 @@ test("setup wizard allows skipping Telegram token config after empty secret inpu
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.telegram.botToken, "");
+    assert.equal(savedCfg.channels?.telegram?.botToken ?? "", "");
 
     const statePath = path.join(cfg.stateDir, "onboarding.json");
     const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
@@ -437,7 +438,7 @@ test("setup wizard allows skipping ngrok token config after empty secret input",
   await withTempHome("openpocket-setup-ngrok-empty-skip-", async () => {
     const cfg = loadConfig();
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config", "skip"],
       texts: [""],
       secrets: [""],
@@ -456,9 +457,10 @@ test("setup wizard allows skipping ngrok token config after empty secret input",
 test("setup wizard normalizes invalid telegram botTokenEnv name", async () => {
   await withTempHome("openpocket-setup-telegram-env-normalize-", async () => {
     const cfg = loadConfig();
+    if (!cfg.telegram) cfg.telegram = { botToken: "", botTokenEnv: "TELEGRAM_BOT_TOKEN", allowedChatIds: [], pollTimeoutSec: 25 };
     cfg.telegram.botTokenEnv = "8368685395:AAH-invalid-token-shape";
     const prompter = new FakePrompter({
-      confirms: [true],
+      confirms: [true, true, false, false],
       selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "disabled"],
       texts: [""],
       pauseCount: 0,
@@ -468,7 +470,7 @@ test("setup wizard normalizes invalid telegram botTokenEnv name", async () => {
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.telegram.botTokenEnv, "TELEGRAM_BOT_TOKEN");
+    assert.equal(savedCfg.channels?.telegram?.botTokenEnv, "TELEGRAM_BOT_TOKEN");
   });
 });
 
@@ -478,7 +480,7 @@ test("setup wizard supports codex cli auth option in model selection", async () 
       const cfg = loadConfig();
       let loginCalled = 0;
       const prompter = new FakePrompter({
-        confirms: [true],
+        confirms: [true, true, false, false],
         selects: ["emulator", "gpt-5.2-codex::codex-cli", "skip", "keep", "skip", "disabled"],
         texts: [""],
         pauseCount: 0,
@@ -538,7 +540,7 @@ test("setup wizard uses existing codex credential when codex login command fails
       const cfg = loadConfig();
       let loginCalled = 0;
       const prompter = new FakePrompter({
-        confirms: [true],
+        confirms: [true, true, false, false],
         selects: ["emulator", "gpt-5.2-codex::codex-cli", "skip", "keep", "skip", "disabled"],
         texts: [""],
         pauseCount: 0,

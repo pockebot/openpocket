@@ -880,10 +880,50 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       },
     },
     models,
+    channels: migrateTelegramToChannels(
+      telegram,
+      (merged.channels ?? {}) as Record<string, unknown>,
+    ),
+    ...(merged.pairing
+      ? { pairing: merged.pairing as import("../channel/types.js").PairingConfig }
+      : {}),
     configPath,
   };
 
   return cfg;
+}
+
+function migrateTelegramToChannels(
+  legacyTelegram: Record<string, unknown>,
+  rawChannels: Record<string, unknown>,
+): import("../channel/types.js").ChannelsConfig {
+  const channels = { ...rawChannels } as Record<string, unknown>;
+  const tgChannel = (channels.telegram ?? {}) as Record<string, unknown>;
+
+  const botToken = String(legacyTelegram.botToken ?? "").trim();
+  const botTokenEnv = String(legacyTelegram.botTokenEnv ?? "").trim();
+  const pollTimeoutSec = legacyTelegram.pollTimeoutSec;
+  const allowedChatIds = legacyTelegram.allowedChatIds;
+
+  if (botToken && !tgChannel.botToken) {
+    tgChannel.botToken = botToken;
+  }
+  if (botTokenEnv && !tgChannel.botTokenEnv) {
+    tgChannel.botTokenEnv = botTokenEnv;
+  }
+  if (pollTimeoutSec != null && tgChannel.pollTimeoutSec == null) {
+    tgChannel.pollTimeoutSec = Number(pollTimeoutSec);
+  }
+
+  if (Array.isArray(allowedChatIds) && allowedChatIds.length > 0 && !tgChannel.allowFrom) {
+    tgChannel.allowFrom = allowedChatIds.map((id) => String(id));
+  }
+
+  if (Object.keys(tgChannel).length > 0) {
+    channels.telegram = tgChannel;
+  }
+
+  return channels as import("../channel/types.js").ChannelsConfig;
 }
 
 export function loadConfig(configPath?: string): OpenPocketConfig {
@@ -914,7 +954,6 @@ export function saveConfig(config: OpenPocketConfig): void {
     defaultModel: config.defaultModel,
     target: config.target,
     emulator: config.emulator,
-    telegram: config.telegram,
     agent: config.agent,
     screenshots: config.screenshots,
     scriptExecutor: config.scriptExecutor,
@@ -925,6 +964,8 @@ export function saveConfig(config: OpenPocketConfig): void {
     dashboard: config.dashboard,
     humanAuth: config.humanAuth,
     models: config.models,
+    channels: config.channels,
+    ...(config.pairing ? { pairing: config.pairing } : {}),
   };
   fs.writeFileSync(config.configPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
 }

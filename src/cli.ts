@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawnSync } from "node:child_process";
 import * as readline from "node:readline";
 import { createInterface, type Interface } from "node:readline/promises";
@@ -12,6 +13,8 @@ import { AgentRuntime } from "./agent/agent-runtime.js";
 import { loadConfig, saveConfig } from "./config/index.js";
 import { EmulatorManager } from "./device/emulator-manager.js";
 import { TelegramGateway } from "./gateway/telegram-gateway.js";
+import { createGateway } from "./gateway/gateway-factory.js";
+import type { GatewayCore } from "./gateway/gateway-core.js";
 import { runGatewayLoop } from "./gateway/run-loop.js";
 import { DashboardServer, type DashboardGatewayStatus } from "./dashboard/server.js";
 import { HumanAuthBridge } from "./human-auth/bridge.js";
@@ -104,7 +107,9 @@ Usage:
   openpocket [--config <path>] agent [--model <name>] <task>
   openpocket [--config <path>] skills list|validate [--strict]
   openpocket [--config <path>] script run [--file <path> | --text <script>] [--timeout <sec>]
-  openpocket [--config <path>] telegram setup|whoami
+  openpocket [--config <path>] channels login --channel <name>
+  openpocket [--config <path>] channels whoami [--channel <name>]
+  openpocket [--config <path>] channels list
   openpocket [--config <path>] gateway [start|telegram]
   openpocket [--config <path>] dashboard start [--host <host>] [--port <port>]
   openpocket [--config <path>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
@@ -131,8 +136,9 @@ Examples:
   openpocket skills list
   openpocket skills validate --strict
   openpocket script run --text "echo hello"
-  openpocket telegram setup
-  openpocket telegram whoami
+  openpocket channels login --channel whatsapp
+  openpocket channels whoami --channel telegram
+  openpocket channels list
   openpocket gateway start
   openpocket dashboard start
   openpocket test permission-app deploy
@@ -917,8 +923,9 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
   }
 
   const tokenSourceLabel = (cfg: ReturnType<typeof loadConfig>): string => {
-    const envName = cfg.telegram.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
-    const hasConfigToken = cfg.telegram.botToken.trim().length > 0;
+    const tg = cfg.channels?.telegram;
+    const envName = tg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
+    const hasConfigToken = (tg?.botToken ?? "").trim().length > 0;
     const hasEnvToken = Boolean(process.env[envName]?.trim());
     if (hasConfigToken) {
       return "config.json";
@@ -930,7 +937,6 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
   };
 
   const printStartupHeader = (cfg: ReturnType<typeof loadConfig>): void => {
-    const tokenSource = tokenSourceLabel(cfg);
     printRaw(createOpenPocketBanner({ subtitle: "GATEWAY STARTUP", stream: output }));
     printRaw(cliTheme.section("Gateway Startup"));
     printKeyValue("Config", cfg.configPath);
@@ -938,7 +944,15 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
     printKeyValue("Model", cfg.defaultModel, "accent");
     printKeyValue("Target", `${cfg.target.type} (${deviceTargetLabel(cfg.target.type)})`, "accent");
     printKeyValue("Device", cfg.agent.deviceId?.trim() || "(auto)");
-    printKeyValue("Telegram token", tokenSource, tokenSource.startsWith("missing") ? "warn" : "success");
+
+    const tgSource = tokenSourceLabel(cfg);
+    printKeyValue("Telegram", tgSource, tgSource.startsWith("missing") ? "warn" : "success");
+    if (cfg.channels?.discord && cfg.channels.discord.enabled !== false) {
+      printKeyValue("Discord", "configured", "success");
+    }
+    if (cfg.channels?.whatsapp && cfg.channels.whatsapp.enabled !== false) {
+      printKeyValue("WhatsApp", "configured", "success");
+    }
     printKeyValue("Human auth", cfg.humanAuth.enabled ? "enabled" : "disabled");
     printRaw("");
   };
@@ -960,10 +974,23 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
     start: async () => {
       const cfg = loadConfig(configPath);
       const shortcut = installCliShortcut();
-      const envName = cfg.telegram.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
-      const hasToken = Boolean(cfg.telegram.botToken.trim() || process.env[envName]?.trim());
+      const tgCfg = cfg.channels?.telegram;
+      const envName = tgCfg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
+      const hasToken = Boolean((tgCfg?.botToken ?? "").trim() || process.env[envName]?.trim());
+      const hasWhatsApp = cfg.channels?.whatsapp?.enabled !== false && !!cfg.channels?.whatsapp;
+      const hasDiscord = (() => {
+        const dc = cfg.channels?.discord;
+        if (!dc || dc.enabled === false) return false;
+        const t = dc.token?.trim() || (dc.tokenEnv ? process.env[dc.tokenEnv]?.trim() : "") || "";
+        return t.length > 0;
+      })();
+      const channelList = [
+        hasToken ? "telegram" : null,
+        hasDiscord ? "discord" : null,
+        hasWhatsApp ? "whatsapp" : null,
+      ].filter(Boolean);
       const totalSteps = 6;
-      let gateway: TelegramGateway | null = null;
+      let gateway: GatewayCore | null = null;
       let dashboard: DashboardServer | null = null;
 
       printStartupHeader(cfg);
@@ -980,13 +1007,13 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
           "Reload shell profile (or open a new terminal) before using `openpocket` without `./`.",
         );
       }
-      if (!hasToken) {
-        printStartupStep(2, totalSteps, "Validate Telegram token", "failed", "token missing");
+      if (channelList.length === 0) {
+        printStartupStep(2, totalSteps, "Validate channels", "failed", "no channels configured");
         throw new Error(
-          `Telegram bot token is empty. Set config.telegram.botToken or env ${envName}.`,
+          "No messaging channels configured. Run `openpocket onboard` to set up Telegram, Discord, or WhatsApp.",
         );
       }
-      printStartupStep(2, totalSteps, "Validate Telegram token", "ok", tokenSourceLabel(cfg));
+      printStartupStep(2, totalSteps, "Validate channels", "ok", channelList.join(", "));
 
       const emulator = new EmulatorManager(cfg);
       const bootstrapWindowed = process.platform === "darwin";
@@ -1075,15 +1102,15 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
       }
 
       printStartupStep(5, totalSteps, "Initialize gateway runtime", "running", "initializing");
-      gateway = new TelegramGateway(cfg, {
-        logger: (line) => {
-          printRuntimeLine(line);
-        },
-        onLogLine: (line) => {
-          dashboard?.ingestExternalLogLine(line);
-        },
+      const logLine = (line: string) => {
+        printRuntimeLine(line);
+        dashboard?.ingestExternalLogLine(line);
+      };
+      const { core } = createGateway(cfg, {
+        logger: logLine,
       });
-      printStartupStep(5, totalSteps, "Initialize gateway runtime", "ok", "ready");
+      gateway = core;
+      printStartupStep(5, totalSteps, "Initialize gateway runtime", "ok", `ready (${channelList.join(", ")})`);
       printStartupStep(6, totalSteps, "Start services", "running", "starting polling and services");
       await gateway.start();
       printStartupStep(6, totalSteps, "Start services", "ok", "all services online");
@@ -1478,8 +1505,9 @@ function resolveTelegramTokenSource(cfg: ReturnType<typeof loadConfig>): {
   token: string;
   source: string;
 } {
-  const envName = cfg.telegram.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
-  const configToken = cfg.telegram.botToken.trim();
+  const tg = cfg.channels?.telegram;
+  const envName = tg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
+  const configToken = (tg?.botToken ?? "").trim();
   const envToken = process.env[envName]?.trim() ?? "";
   if (configToken) {
     return { envName, token: configToken, source: "config.json" };
@@ -1498,12 +1526,15 @@ function resolveTelegramChatId(cfg: OpenPocketConfig, chatIdRaw: string | null):
     }
     return Math.trunc(parsed);
   }
-  if (cfg.telegram.allowedChatIds.length === 1) {
-    return cfg.telegram.allowedChatIds[0];
+  const legacyIds = cfg.telegram?.allowedChatIds ?? [];
+  const channelAllowFrom = (cfg.channels?.telegram?.allowFrom ?? []).map(Number).filter(Number.isFinite);
+  const chatIds = channelAllowFrom.length > 0 ? channelAllowFrom : legacyIds;
+  if (chatIds.length === 1) {
+    return chatIds[0];
   }
-  if (cfg.telegram.allowedChatIds.length > 1) {
+  if (chatIds.length > 1) {
     throw new Error(
-      `Multiple allowed chat IDs configured (${cfg.telegram.allowedChatIds.join(", ")}). Use --chat <id>.`,
+      `Multiple allowed chat IDs configured (${chatIds.join(", ")}). Use --chat <id>.`,
     );
   }
   throw new Error("No default chat ID found. Use --chat <id> or configure telegram.allowedChatIds.");
@@ -1694,19 +1725,39 @@ function collectTelegramChatCandidates(update: unknown): TelegramChatCandidate[]
 
 async function runTelegramWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
   const tokenInfo = resolveTelegramTokenSource(cfg);
-  const allow = cfg.telegram.allowedChatIds;
-  const allowPolicy = allow.length > 0 ? "allow_only_listed" : "allow_all";
+  const tg = cfg.channels?.telegram;
+  const allowFrom = tg?.allowFrom ?? [];
+  const dmPolicy = tg?.dmPolicy ?? "pairing";
+  const groupPolicy = tg?.groupPolicy ?? "open";
 
   printRaw(cliTheme.section("Telegram Identity"));
   printKeyValue("Token source", tokenInfo.source, tokenInfo.token ? "success" : "warn");
-  printKeyValue("Allow policy", allowPolicy);
+  printKeyValue("DM policy", dmPolicy);
+  printKeyValue("Group policy", groupPolicy);
   printKeyValue(
-    "Allowlist",
-    allow.length > 0 ? allow.map((id) => String(id)).join(", ") : "empty (all chats allowed)",
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
   );
 
+  const pairingDir = cfg.pairing?.stateDir ?? path.join(cfg.stateDir, "pairing");
+  const tgAllowFile = path.join(pairingDir, "telegram-allowFrom.json");
+  if (fs.existsSync(tgAllowFile)) {
+    try {
+      const raw = fs.readFileSync(tgAllowFile, "utf-8").trim();
+      const entries = JSON.parse(raw);
+      if (Array.isArray(entries) && entries.length > 0) {
+        printRaw(cliTheme.section("Approved Senders (via pairing)"));
+        for (const e of entries) {
+          const id = typeof e === "string" ? e : e.senderId;
+          const at = typeof e === "object" && e.approvedAt ? ` (${e.approvedAt})` : "";
+          printRaw(`  - ${id}${at}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
   if (!tokenInfo.token) {
-    printWarn(`Telegram token is not configured. Set config.telegram.botToken or env ${tokenInfo.envName}.`);
+    printWarn(`Telegram token is not configured. Set channels.telegram.botToken in config or env ${tokenInfo.envName}.`);
     return 0;
   }
 
@@ -1770,13 +1821,13 @@ async function runTelegramWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Pro
 
     if (seen.size === 0) {
       printWarn("No chat IDs discovered from recent updates.");
-      printInfo("Send one message to your bot in Telegram, then run `openpocket telegram whoami` again.");
+      printInfo("Send one message to your bot in Telegram, then run `openpocket channels whoami --channel telegram` again.");
       return 0;
     }
 
     printRaw(cliTheme.section("Discovered Chat IDs"));
     for (const chat of seen.values()) {
-      const allowed = allow.length === 0 || allow.includes(chat.id);
+      const allowed = allowFrom.length === 0 || allowFrom.includes(String(chat.id));
       printRaw(
         `  - ${chat.id} | type=${chat.type} | title=${chat.title} | source=${chat.source} | allowed=${allowed}`,
       );
@@ -1914,131 +1965,585 @@ async function selectByArrowKeys<T extends string>(
   });
 }
 
-async function runTelegramSetupCommand(
+async function runPairingCommand(
   configPath: string | undefined,
   args: string[],
 ): Promise<number> {
-  const sub = (args[0] ?? "setup").trim();
-  if (sub !== "setup" && sub !== "whoami") {
-    throw new Error(`Unknown telegram subcommand: ${sub}. Use: telegram setup|whoami`);
+  const sub = (args[0] ?? "").trim();
+  if (!sub || !["list", "approve", "reject", "approved", "add"].includes(sub)) {
+    printRaw(cliTheme.section("Pairing Commands"));
+    printRaw("  openpocket pairing list [channel]           List pending pairing requests");
+    printRaw("  openpocket pairing approved [channel]       List approved (paired) senders");
+    printRaw("  openpocket pairing approve <channel> <code> Approve a pairing request");
+    printRaw("  openpocket pairing reject <channel> <code>  Reject a pairing request");
+    printRaw("  openpocket pairing add <channel> <senderId> Manually add sender to allowlist");
+    printRaw("");
+    printInfo("Channels: telegram, whatsapp, discord");
+    return 0;
   }
 
   const cfg = loadConfig(configPath);
+  const { FilePairingStore } = await import("./channel/pairing.js");
+  const pairingStore = new FilePairingStore({
+    stateDir: cfg.pairing?.stateDir ?? path.join(cfg.stateDir, "pairing"),
+    codeLength: cfg.pairing?.codeLength,
+    expiresAfterSec: cfg.pairing?.expiresAfterSec,
+    maxPendingPerChannel: cfg.pairing?.maxPendingPerChannel,
+  });
+
+  if (sub === "list") {
+    const channelFilter = args[1]?.trim() as import("./channel/types.js").ChannelType | undefined;
+    const pending = pairingStore.listPending(channelFilter);
+    if (pending.length === 0) {
+      printInfo(channelFilter
+        ? `No pending pairing requests for ${channelFilter}.`
+        : "No pending pairing requests.");
+      return 0;
+    }
+    printRaw(cliTheme.section(`Pending Pairings (${pending.length})`));
+    for (const p of pending) {
+      printRaw(`  [${p.channelType}] code=${p.code}  sender=${p.senderId} (${p.senderName ?? "unknown"})  expires=${p.expiresAt}`);
+    }
+    return 0;
+  }
+
+  if (sub === "approved") {
+    const channels: import("./channel/types.js").ChannelType[] = args[1]?.trim()
+      ? [args[1].trim() as import("./channel/types.js").ChannelType]
+      : ["telegram", "discord", "whatsapp"];
+    let total = 0;
+    for (const ch of channels) {
+      const approved = pairingStore.listApproved(ch);
+      if (approved.length > 0) {
+        printRaw(cliTheme.section(`Approved Senders — ${ch} (${approved.length})`));
+        for (const id of approved) {
+          printRaw(`  ${id}`);
+        }
+        total += approved.length;
+      }
+    }
+    if (total === 0) {
+      printInfo("No approved senders found. The first person to message the bot will be auto-registered as owner.");
+    }
+    return 0;
+  }
+
+  if (sub === "approve" || sub === "reject") {
+    const channel = args[1]?.trim();
+    const code = args[2]?.trim();
+    if (!channel || !code) {
+      printWarn(`Usage: openpocket pairing ${sub} <channel> <code>`);
+      return 1;
+    }
+    const ok = sub === "approve"
+      ? pairingStore.approvePairing(channel as import("./channel/types.js").ChannelType, code)
+      : pairingStore.rejectPairing(channel as import("./channel/types.js").ChannelType, code);
+    if (ok) {
+      printSuccess(`Pairing ${code} ${sub === "approve" ? "approved" : "rejected"} on ${channel}.`);
+    } else {
+      printWarn(`Pairing code not found: ${code} (channel: ${channel})`);
+    }
+    return ok ? 0 : 1;
+  }
+
+  if (sub === "add") {
+    const channel = args[1]?.trim();
+    const senderId = args[2]?.trim();
+    if (!channel || !senderId) {
+      printWarn("Usage: openpocket pairing add <channel> <senderId>");
+      return 1;
+    }
+    pairingStore.addToAllowlist(channel as import("./channel/types.js").ChannelType, senderId);
+    printSuccess(`Sender ${senderId} added to ${channel} allowlist.`);
+    return 0;
+  }
+
+  return 0;
+}
+
+async function runWhatsAppWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
+  const wa = cfg.channels?.whatsapp;
+  const dmPolicy = wa?.dmPolicy ?? "pairing";
+  const groupPolicy = wa?.groupPolicy ?? "open";
+  const allowFrom = wa?.allowFrom ?? [];
+  const allowGroups = wa?.allowGroups ?? [];
+  const authDir = path.join(cfg.stateDir, "whatsapp-auth");
+
+  printRaw(cliTheme.section("WhatsApp Identity"));
+  printKeyValue("Enabled", wa?.enabled !== false && !!wa ? "yes" : "no");
+  printKeyValue("DM policy", dmPolicy);
+  printKeyValue("Group policy", groupPolicy);
+  printKeyValue(
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
+  );
+  if (allowGroups.length > 0) {
+    printKeyValue("Allow groups", allowGroups.join(", "));
+  }
+  printKeyValue("Text chunk limit", String(wa?.textChunkLimit ?? 4000));
+  printKeyValue("Chunk mode", wa?.chunkMode ?? "newline");
+  printKeyValue("Read receipts", wa?.sendReadReceipts !== false ? "yes" : "no");
+  if (wa?.proxyUrl) {
+    printKeyValue("Proxy", wa.proxyUrl);
+  }
+
+  const hasSession = fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0;
+  printKeyValue("Session", hasSession ? "linked (auth files present)" : "not linked", hasSession ? "success" : "warn");
+
+  if (!hasSession) {
+    printInfo("Run `openpocket channels login --channel whatsapp` to scan QR code and link your phone.");
+  }
+
+  const waPairingDir = cfg.pairing?.stateDir ?? path.join(cfg.stateDir, "pairing");
+  const waAllowFile = path.join(waPairingDir, "whatsapp-allowFrom.json");
+  if (fs.existsSync(waAllowFile)) {
+    try {
+      const raw = fs.readFileSync(waAllowFile, "utf-8").trim();
+      const entries = JSON.parse(raw);
+      if (Array.isArray(entries) && entries.length > 0) {
+        printRaw(cliTheme.section("Approved Senders (via pairing)"));
+        for (const e of entries) {
+          const id = typeof e === "string" ? e : e.senderId;
+          const at = typeof e === "object" && e.approvedAt ? ` (${e.approvedAt})` : "";
+          printRaw(`  - ${id}${at}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Discord whoami
+// ---------------------------------------------------------------------------
+
+async function runDiscordWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
+  const dc = cfg.channels?.discord;
+  const dmPolicy = dc?.dmPolicy ?? "pairing";
+  const groupPolicy = dc?.groupPolicy ?? "open";
+  const allowFrom = dc?.allowFrom ?? [];
+
+  printRaw(cliTheme.section("Discord Identity"));
+  printKeyValue("Enabled", dc?.enabled !== false && !!dc ? "yes" : "no");
+  printKeyValue("DM policy", dmPolicy);
+  printKeyValue("Group policy", groupPolicy);
+  printKeyValue(
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
+  );
+
+  const hasToken = Boolean(
+    dc?.token?.trim()
+    || (dc?.tokenEnv ? process.env[dc.tokenEnv]?.trim() : "")
+    || process.env.DISCORD_BOT_TOKEN?.trim(),
+  );
+  printKeyValue("Bot token", hasToken ? "configured" : "missing", hasToken ? "success" : "warn");
+  printKeyValue("Ack reaction", dc?.ackReaction ?? "(disabled)");
+  printKeyValue("Slash commands", dc?.slashCommands !== false ? "enabled" : "disabled");
+
+  const guilds = dc?.guilds;
+  if (guilds && Object.keys(guilds).length > 0) {
+    printRaw(cliTheme.section("Guild Allowlist"));
+    for (const [guildId, guildCfg] of Object.entries(guilds)) {
+      const users = guildCfg.users ?? [];
+      const roles = guildCfg.roles ?? [];
+      const mention = guildCfg.requireMention ?? true;
+      const channels = guildCfg.channels ? Object.keys(guildCfg.channels).join(", ") : "all";
+      printRaw(`  Guild ${guildId}:`);
+      printRaw(`    requireMention: ${mention}`);
+      printRaw(`    users: ${users.length > 0 ? users.join(", ") : "(any)"}`);
+      printRaw(`    roles: ${roles.length > 0 ? roles.join(", ") : "(none)"}`);
+      printRaw(`    channels: ${channels}`);
+    }
+  }
+
+  const dcPairingDir = cfg.pairing?.stateDir ?? path.join(cfg.stateDir, "pairing");
+  const dcAllowFile = path.join(dcPairingDir, "discord-allowFrom.json");
+  if (fs.existsSync(dcAllowFile)) {
+    try {
+      const raw = fs.readFileSync(dcAllowFile, "utf-8").trim();
+      const entries = JSON.parse(raw);
+      if (Array.isArray(entries) && entries.length > 0) {
+        printRaw(cliTheme.section("Approved Senders (via pairing)"));
+        for (const e of entries) {
+          const id = typeof e === "string" ? e : e.senderId;
+          const at = typeof e === "object" && e.approvedAt ? ` (${e.approvedAt})` : "";
+          printRaw(`  - ${id}${at}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (!hasToken) {
+    printInfo("Set token: channels.discord.token in config, or env DISCORD_BOT_TOKEN");
+  }
+
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// iMessage whoami (macOS-only)
+// ---------------------------------------------------------------------------
+
+async function runIMessageWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
+  const im = cfg.channels?.imessage;
+  const dmPolicy = im?.dmPolicy ?? "pairing";
+  const groupPolicy = im?.groupPolicy ?? "open";
+  const allowFrom = im?.allowFrom ?? [];
+  const chatDbPath = im?.chatDbPath ?? path.join(os.homedir(), "Library", "Messages", "chat.db");
+
+  printRaw(cliTheme.section("iMessage Identity"));
+  printKeyValue("Platform", process.platform === "darwin" ? "macOS (supported)" : `${process.platform} (not supported)`);
+  printKeyValue("Enabled", im?.enabled !== false && !!im ? "yes" : "no");
+  printKeyValue("DM policy", dmPolicy);
+  printKeyValue("Group policy", groupPolicy);
+  printKeyValue(
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
+  );
+  printKeyValue("Poll interval", `${im?.pollIntervalSec ?? 3}s`);
+
+  const chatDbExists = fs.existsSync(chatDbPath);
+  printKeyValue("chat.db", chatDbExists ? `found (${chatDbPath})` : `not found (${chatDbPath})`, chatDbExists ? "success" : "warn");
+
+  const imsgInstalled = (() => {
+    try { return spawnSync("which", ["imsg"], { timeout: 3000 }).status === 0; } catch { return false; }
+  })();
+  printKeyValue("imsg CLI", imsgInstalled ? "installed" : "not found — brew install steipete/tap/imsg", imsgInstalled ? "success" : "warn");
+
+  if (!chatDbExists && process.platform === "darwin") {
+    printInfo("Grant Full Disk Access to your terminal in System Settings > Privacy & Security.");
+  }
+  if (!imsgInstalled) {
+    printInfo("Install imsg for iMessage support: brew install steipete/tap/imsg");
+  }
+  if (process.platform !== "darwin") {
+    printWarn("iMessage is only available on macOS.");
+    return 0;
+  }
+
+  const imPairingDir = cfg.pairing?.stateDir ?? path.join(cfg.stateDir, "pairing");
+  const imAllowFile = path.join(imPairingDir, "imessage-allowFrom.json");
+  if (fs.existsSync(imAllowFile)) {
+    try {
+      const raw = fs.readFileSync(imAllowFile, "utf-8").trim();
+      const entries = JSON.parse(raw);
+      if (Array.isArray(entries) && entries.length > 0) {
+        printRaw(cliTheme.section("Approved Senders (via pairing)"));
+        for (const e of entries) {
+          const id = typeof e === "string" ? e : e.senderId;
+          const at = typeof e === "object" && e.approvedAt ? ` (${e.approvedAt})` : "";
+          printRaw(`  - ${id}${at}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Unified `channels` command (OpenClaw-aligned)
+// ---------------------------------------------------------------------------
+
+async function runChannelsCommand(
+  configPath: string | undefined,
+  args: string[],
+): Promise<number> {
+  const sub = (args[0] ?? "").trim();
+
+  if (sub === "login") {
+    const channel = extractChannelFlag(args);
+    if (!channel) {
+      printRaw(cliTheme.section("Channels Login"));
+      printRaw("Usage: openpocket channels login --channel <name>");
+      printRaw("");
+      printInfo("Available channels: whatsapp, telegram, imessage");
+      printRaw("  --channel whatsapp    Scan QR code to link WhatsApp");
+      printRaw("  --channel telegram    Verify Telegram bot token");
+      printRaw("  --channel imessage    Verify iMessage (macOS) setup");
+      return 0;
+    }
+    if (channel === "whatsapp") {
+      return runWhatsAppLoginCommand(configPath);
+    }
+    if (channel === "telegram") {
+      const cfg = loadConfig(configPath);
+      return runTelegramWhoamiCommand(cfg);
+    }
+    if (channel === "imessage") {
+      const cfg = loadConfig(configPath);
+      return runIMessageWhoamiCommand(cfg);
+    }
+    if (channel === "discord") {
+      const cfg = loadConfig(configPath);
+      return runDiscordWhoamiCommand(cfg);
+    }
+    throw new Error(`Unsupported channel for login: ${channel}. Available: whatsapp, telegram, imessage, discord`);
+  }
+
   if (sub === "whoami") {
+    const channel = extractChannelFlag(args);
+    const cfg = loadConfig(configPath);
+    if (!channel) {
+      let printed = false;
+      if (cfg.channels?.telegram) {
+        await runTelegramWhoamiCommand(cfg);
+        printed = true;
+      }
+      if (cfg.channels?.discord) {
+        if (printed) printRaw("");
+        await runDiscordWhoamiCommand(cfg);
+        printed = true;
+      }
+      if (cfg.channels?.whatsapp) {
+        if (printed) printRaw("");
+        await runWhatsAppWhoamiCommand(cfg);
+        printed = true;
+      }
+      if (cfg.channels?.imessage) {
+        if (printed) printRaw("");
+        await runIMessageWhoamiCommand(cfg);
+        printed = true;
+      }
+      if (!printed) {
+        printWarn("No channels configured. Run `openpocket onboard` first.");
+      }
+      return 0;
+    }
+    if (channel === "whatsapp") {
+      return runWhatsAppWhoamiCommand(cfg);
+    }
+    if (channel === "telegram") {
+      return runTelegramWhoamiCommand(cfg);
+    }
+    if (channel === "imessage") {
+      return runIMessageWhoamiCommand(cfg);
+    }
+    if (channel === "discord") {
+      return runDiscordWhoamiCommand(cfg);
+    }
+    throw new Error(`Unsupported channel for whoami: ${channel}. Available: whatsapp, telegram, imessage, discord`);
+  }
+
+  if (sub === "list") {
+    const cfg = loadConfig(configPath);
+    printRaw(cliTheme.section("Configured Channels"));
+    const tg = cfg.channels?.telegram;
+    const wa = cfg.channels?.whatsapp;
+    const dc = cfg.channels?.discord;
+    if (tg && tg.enabled !== false) {
+      printKeyValue("telegram", `dmPolicy=${tg.dmPolicy ?? "pairing"}`, "success");
+    }
+    if (wa && wa.enabled !== false) {
+      const authDir = path.join(cfg.stateDir, "whatsapp-auth");
+      const linked = fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0;
+      printKeyValue("whatsapp", `dmPolicy=${wa.dmPolicy ?? "pairing"} session=${linked ? "linked" : "not linked"}`, linked ? "success" : "warn");
+    }
+    if (dc && dc.enabled !== false) {
+      printKeyValue("discord", `dmPolicy=${dc.dmPolicy ?? "pairing"}`, "success");
+    }
+    const im = cfg.channels?.imessage;
+    if (im && im.enabled !== false) {
+      const chatDbExists = fs.existsSync(im.chatDbPath ?? path.join(os.homedir(), "Library", "Messages", "chat.db"));
+      printKeyValue("imessage", `dmPolicy=${im.dmPolicy ?? "pairing"} chatDb=${chatDbExists ? "found" : "not found"}`, chatDbExists ? "success" : "warn");
+    }
+    if (!tg && !wa && !dc && !im) {
+      printWarn("No channels configured.");
+    }
+    return 0;
+  }
+
+  printRaw(cliTheme.section("Channels Commands"));
+  printRaw("  openpocket channels login  --channel <name>   Login / link a channel");
+  printRaw("  openpocket channels whoami [--channel <name>]  Show channel identity & config");
+  printRaw("  openpocket channels list                       List configured channels");
+  printRaw("");
+  printInfo("Available channels: telegram, whatsapp, discord, imessage");
+  return 0;
+}
+
+function extractChannelFlag(args: string[]): string | null {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--channel" && args[i + 1]) {
+      return args[i + 1].trim().toLowerCase();
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp login (extracted from old runWhatsAppCommand)
+// ---------------------------------------------------------------------------
+
+async function runWhatsAppLoginCommand(
+  configPath: string | undefined,
+): Promise<number> {
+  const cfg = loadConfig(configPath);
+  const waConfig = cfg.channels?.whatsapp;
+  if (!waConfig) {
+    throw new Error(
+      "WhatsApp channel is not configured. Run `openpocket onboard` first and enable WhatsApp.",
+    );
+  }
+
+  const authDir = path.join(cfg.stateDir, "whatsapp-auth");
+
+  printRaw(cliTheme.section("WhatsApp Link"));
+  printInfo("Clearing old session and generating a new QR code...");
+
+  if (fs.existsSync(authDir)) {
+    const files = fs.readdirSync(authDir);
+    for (const file of files) {
+      fs.unlinkSync(path.join(authDir, file));
+    }
+    printInfo("Old session files removed.");
+  }
+  fs.mkdirSync(authDir, { recursive: true });
+
+  const baileys = await import("baileys");
+  const makeWASocket = baileys.default;
+  const { useMultiFileAuthState, fetchLatestWaWebVersion, Browsers, DisconnectReason } = baileys;
+  const { Boom } = await import("@hapi/boom");
+  const { default: pino } = await import("pino");
+  const QRCode = await import("qrcode");
+
+  let waVersion: [number, number, number] | undefined;
+  try {
+    const { version } = await fetchLatestWaWebVersion({});
+    waVersion = version;
+    printInfo(`Using WA Web version: ${version.join(".")}`);
+  } catch {
+    printInfo("Could not fetch latest WA version, using default.");
+  }
+
+  const proxyUrl = waConfig.proxyUrl
+    || process.env.HTTPS_PROXY || process.env.https_proxy
+    || process.env.HTTP_PROXY || process.env.http_proxy
+    || process.env.ALL_PROXY || process.env.all_proxy
+    || null;
+
+  let proxyAgent: any = null;
+  if (proxyUrl) {
+    try {
+      const { HttpsProxyAgent } = await import("https-proxy-agent");
+      proxyAgent = new HttpsProxyAgent(proxyUrl);
+      printInfo(`Using proxy: ${proxyUrl}`);
+    } catch { /* ignore */ }
+  }
+
+  const silentLogger = pino({ level: "silent" });
+  const maxRetries = 5;
+  let retryCount = 0;
+  let settled = false;
+
+  return new Promise<number>((resolve) => {
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      printWarn("Timed out waiting for QR scan (120s). Run `openpocket channels login --channel whatsapp` to try again.");
+      resolve(1);
+    }, 120_000);
+
+    async function startSocket(): Promise<void> {
+      if (settled) return;
+
+      const { state, saveCreds } = await useMultiFileAuthState(authDir);
+      const socketOpts: any = {
+        auth: state,
+        browser: Browsers.macOS("Chrome"),
+        logger: silentLogger,
+        ...(waVersion ? { version: waVersion } : {}),
+      };
+      if (proxyAgent) {
+        socketOpts.agent = proxyAgent;
+      }
+
+      const sock = makeWASocket(socketOpts);
+      sock.ev.on("creds.update", saveCreds);
+
+      sock.ev.on("connection.update", async (update) => {
+        if (settled) return;
+
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+          printRaw("");
+          printInfo("Scan this QR code with your phone:");
+          printInfo("  WhatsApp > Settings > Linked Devices > Link a Device");
+          printRaw("");
+          try {
+            const qrArt = await QRCode.toString(qr, { type: "utf8", errorCorrectionLevel: "L", margin: 2 });
+            printRaw(qrArt.trimEnd());
+          } catch {
+            printInfo(`QR data: ${qr}`);
+          }
+          printRaw("");
+        }
+
+        if (connection === "open") {
+          settled = true;
+          clearTimeout(timeout);
+          printSuccess("WhatsApp linked successfully! Session saved.");
+          printInfo("You can now start the gateway with: openpocket gateway start");
+          try { sock.ws.close(); sock.end(undefined); } catch { /* ignore */ }
+          setTimeout(() => process.exit(0), 500);
+          resolve(0);
+        }
+
+        if (connection === "close") {
+          const statusCode = (lastDisconnect?.error as InstanceType<typeof Boom>)?.output?.statusCode;
+          const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+
+          if (isLoggedOut) {
+            settled = true;
+            clearTimeout(timeout);
+            printWarn("WhatsApp rejected the session (logged out). Run `openpocket channels login --channel whatsapp` to try again.");
+            resolve(1);
+            return;
+          }
+
+          retryCount++;
+          if (retryCount > maxRetries) {
+            settled = true;
+            clearTimeout(timeout);
+            printWarn(`Connection failed after ${maxRetries} retries. Run \`openpocket channels login --channel whatsapp\` to try again.`);
+            resolve(1);
+            return;
+          }
+
+          printInfo(`Connection interrupted (status=${statusCode ?? "unknown"}), reconnecting (${retryCount}/${maxRetries})...`);
+          setTimeout(() => { void startSocket(); }, 2000);
+        }
+      });
+    }
+
+    void startSocket();
+  });
+}
+
+async function runTelegramCommand(
+  configPath: string | undefined,
+  args: string[],
+): Promise<number> {
+  const sub = (args[0] ?? "").trim();
+  if (sub === "whoami") {
+    printWarn("`openpocket telegram whoami` is deprecated. Use `openpocket channels whoami --channel telegram`.");
+    const cfg = loadConfig(configPath);
     return runTelegramWhoamiCommand(cfg);
   }
 
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error("`telegram setup` requires an interactive terminal (TTY).");
-  }
-
-  const rl = createInterface({ input, output });
-  try {
-    printRaw(cliTheme.section("Telegram Setup"));
-    printInfo("Create your bot in Telegram with @BotFather before continuing.");
-
-    const fallbackEnv = "TELEGRAM_BOT_TOKEN";
-    const configuredEnv = cfg.telegram.botTokenEnv || fallbackEnv;
-    const currentEnv = normalizeEnvVarName(configuredEnv, fallbackEnv);
-    if (currentEnv !== configuredEnv) {
-      cfg.telegram.botTokenEnv = currentEnv;
-      printWarn(
-        `[OpenPocket] Invalid botTokenEnv value detected (${configuredEnv}). Reset to ${currentEnv}.`,
-      );
-    }
-    const envToken = process.env[currentEnv]?.trim() ?? "";
-    const tokenChoice = await selectByArrowKeys(
-      rl,
-      "Telegram bot token source",
-      [
-        {
-          value: "env",
-          label: `Use environment variable (${currentEnv})`,
-          hint: envToken ? `detected, length ${envToken.length}` : "not detected",
-        },
-        {
-          value: "config",
-          label: "Save token in local config.json",
-        },
-        {
-          value: "keep",
-          label: "Keep current token settings",
-          hint: cfg.telegram.botToken.trim() ? "config token exists" : "no config token",
-        },
-      ],
-      "env",
-    );
-
-    if (tokenChoice === "env") {
-      const envNameRaw = await rl.question(
-        `Environment variable name for Telegram token [${currentEnv}]: `,
-      );
-      const envName = envNameRaw.trim() || currentEnv;
-      cfg.telegram.botTokenEnv = envName;
-      cfg.telegram.botToken = "";
-      const selectedEnvToken = process.env[envName]?.trim() ?? "";
-      if (!selectedEnvToken) {
-        printWarn(
-          `[OpenPocket] Warning: ${envName} is not set in this shell. Gateway start will fail until you export it.`,
-        );
-      }
-    } else if (tokenChoice === "config") {
-      const token = (await rl.question("Enter Telegram bot token: ")).trim();
-      if (!token) {
-        throw new Error("Telegram bot token cannot be empty.");
-      }
-      cfg.telegram.botToken = token;
-    }
-
-    const currentAllow =
-      cfg.telegram.allowedChatIds.length > 0
-        ? cfg.telegram.allowedChatIds.join(", ")
-        : "empty (all chats allowed)";
-    const allowChoice = await selectByArrowKeys(
-      rl,
-      "Telegram chat allowlist policy",
-      [
-        {
-          value: "keep",
-          label: "Keep current allowlist",
-          hint: currentAllow,
-        },
-        {
-          value: "open",
-          label: "Allow all chats (clear allowlist)",
-        },
-        {
-          value: "set",
-          label: "Set allowlist manually (chat IDs)",
-        },
-      ],
-      "keep",
-    );
-
-    if (allowChoice === "open") {
-      cfg.telegram.allowedChatIds = [];
-    } else if (allowChoice === "set") {
-      const allowedInput = await rl.question(
-        "Enter allowed chat IDs (comma or space separated): ",
-      );
-      cfg.telegram.allowedChatIds = parseAllowedChatIds(allowedInput);
-    }
-
-    saveConfig(cfg);
-    printSuccess("Telegram setup saved.");
-    printInfo("Next: run `openpocket gateway start`.");
-    return 0;
-  } finally {
-    if (input.setRawMode) {
-      try {
-        input.setRawMode(false);
-      } catch {
-        // Ignore raw mode reset errors.
-      }
-    }
-    input.pause();
-    rl.close();
-  }
+  printRaw(cliTheme.section("Telegram Commands (deprecated — use `openpocket channels`)"));
+  printRaw("  openpocket channels whoami --channel telegram    Show Telegram identity");
+  printRaw("  openpocket channels login  --channel telegram    Verify bot token");
+  printRaw("");
+  printInfo("To configure Telegram, edit ~/.openpocket/config.json:");
+  printRaw('  channels.telegram.botToken = "YOUR_TOKEN"');
+  printRaw("  or set env: export TELEGRAM_BOT_TOKEN=YOUR_TOKEN");
+  printRaw("");
+  printInfo("Then start the gateway: openpocket gateway start");
+  return 0;
 }
 
 async function runDashboardCommand(configPath: string | undefined, args: string[]): Promise<number> {
@@ -2176,7 +2681,7 @@ async function runPermissionLabScenario(params: {
 }): Promise<number> {
   const tokenInfo = resolveTelegramTokenSource(params.config);
   if (!tokenInfo.token) {
-    throw new Error(`Telegram bot token is empty. Set config.telegram.botToken or env ${tokenInfo.envName}.`);
+    throw new Error(`Telegram bot token is empty. Set channels.telegram.botToken in config or env ${tokenInfo.envName}.`);
   }
   const chatId = resolveTelegramChatId(params.config, params.chatIdRaw);
 
@@ -2481,8 +2986,31 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return runGatewayCommand(configPath ?? undefined, rest.slice(1));
   }
 
+  if (command === "channels") {
+    return runChannelsCommand(configPath ?? undefined, rest.slice(1));
+  }
+
   if (command === "telegram") {
-    return runTelegramSetupCommand(configPath ?? undefined, rest.slice(1));
+    return runTelegramCommand(configPath ?? undefined, rest.slice(1));
+  }
+
+  if (command === "whatsapp") {
+    const sub = (rest[1] ?? "").trim();
+    if (sub === "link") {
+      printWarn("`openpocket whatsapp link` is deprecated. Use `openpocket channels login --channel whatsapp`.");
+      return runWhatsAppLoginCommand(configPath ?? undefined);
+    }
+    if (sub === "whoami") {
+      printWarn("`openpocket whatsapp whoami` is deprecated. Use `openpocket channels whoami --channel whatsapp`.");
+      const cfg = loadConfig(configPath ?? undefined);
+      return runWhatsAppWhoamiCommand(cfg);
+    }
+    printWarn("`openpocket whatsapp` is deprecated. Use `openpocket channels` instead.");
+    return runChannelsCommand(configPath ?? undefined, []);
+  }
+
+  if (command === "pairing") {
+    return runPairingCommand(configPath ?? undefined, rest.slice(1));
   }
 
   if (command === "dashboard") {

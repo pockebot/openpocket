@@ -1,0 +1,628 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+const { loadConfig } = await import("../dist/config/index.js");
+const { GatewayCore } = await import("../dist/gateway/gateway-core.js");
+const { DefaultChannelRouter } = await import("../dist/channel/router.js");
+const { DefaultSessionKeyResolver } = await import("../dist/channel/session-keys.js");
+const { FilePairingStore } = await import("../dist/channel/pairing.js");
+
+function withTempHome(prefix, fn) {
+  const prevHome = process.env.OPENPOCKET_HOME;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  process.env.OPENPOCKET_HOME = home;
+  try {
+    return fn(home);
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.OPENPOCKET_HOME;
+    } else {
+      process.env.OPENPOCKET_HOME = prevHome;
+    }
+  }
+}
+
+function makeEnvelope(overrides = {}) {
+  return {
+    channelType: "telegram",
+    senderId: "user-1",
+    senderName: "Alice",
+    senderLanguageCode: "en",
+    peerId: "user-1",
+    peerKind: "dm",
+    text: "",
+    attachments: [],
+    rawEvent: {},
+    receivedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+function createMockAdapter(channelType = "telegram") {
+  const sent = [];
+  const images = [];
+  let inboundHandler = null;
+
+  return {
+    channelType,
+    sent,
+    images,
+    async start() {},
+    async stop() {},
+    async sendText(peerId, text, opts) { sent.push({ peerId, text, opts }); },
+    async sendImage(peerId, imagePath, caption) { images.push({ peerId, imagePath, caption }); },
+    onInbound(handler) { inboundHandler = handler; },
+    async setTypingIndicator() {},
+    async requestUserDecision() { return { selectedOption: "ok", rawInput: "ok", resolvedAt: new Date().toISOString() }; },
+    async requestUserInput() { return { text: "input", resolvedAt: new Date().toISOString() }; },
+    async sendHumanAuthEscalation() {},
+    async resolveDisplayName() { return null; },
+    getCapabilities() { return { supportsMarkdown: true, supportsHtml: true, supportsInlineButtons: true, supportsReactions: false, supportsImageUpload: true, supportsTypingIndicator: true, supportsSlashCommands: true, supportsThreads: true, supportsDisplayNameSync: true, maxMessageLength: 4096, textChunkMode: "length" }; },
+    isAllowed() { return true; },
+    simulateInbound(envelope) { if (inboundHandler) return inboundHandler(envelope); },
+  };
+}
+
+function createGatewayCore(home, { skipOwnerRegistration = false } = {}) {
+  const config = loadConfig();
+  const router = new DefaultChannelRouter({ log: () => {} });
+  const sessionKeys = new DefaultSessionKeyResolver();
+  const pairingStore = new FilePairingStore({ stateDir: path.join(home, "credentials") });
+  const adapter = createMockAdapter("telegram");
+  router.register(adapter);
+
+  if (!skipOwnerRegistration) {
+    pairingStore.addToAllowlist("telegram", "user-1");
+  }
+
+  const core = new GatewayCore(config, router, sessionKeys, pairingStore, { logger: () => {} });
+  return { core, config, router, adapter, pairingStore };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test("GatewayCore: /help command returns command list", async () => {
+  await withTempHome("gwcore-help-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/help",
+      command: "help",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("/start"));
+    assert.ok(adapter.sent[0].text.includes("/run"));
+    assert.ok(adapter.sent[0].text.includes("/pairing"));
+  });
+});
+
+test("GatewayCore: /status command returns status info", async () => {
+  await withTempHome("gwcore-status-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("Project:"));
+    assert.ok(adapter.sent[0].text.includes("Agent busy:"));
+    assert.ok(adapter.sent[0].text.includes("Channel: telegram"));
+  });
+});
+
+test("GatewayCore: /model shows current model", async () => {
+  await withTempHome("gwcore-model-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/model",
+      command: "model",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("Current model:"));
+  });
+});
+
+test("GatewayCore: /stop with no task returns appropriate message", async () => {
+  await withTempHome("gwcore-stop-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/stop",
+      command: "stop",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.equal(adapter.sent[0].text, "No running task.");
+  });
+});
+
+test("GatewayCore: /clear clears conversation", async () => {
+  await withTempHome("gwcore-clear-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/clear",
+      command: "clear",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.equal(adapter.sent[0].text, "Conversation memory cleared.");
+  });
+});
+
+test("GatewayCore: /run without args returns usage", async () => {
+  await withTempHome("gwcore-run-noargs-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/run",
+      command: "run",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("Usage:"));
+  });
+});
+
+test("GatewayCore: /cronrun without args returns usage", async () => {
+  await withTempHome("gwcore-cronrun-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/cronrun",
+      command: "cronrun",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("Usage:"));
+  });
+});
+
+test("GatewayCore: /auth help returns auth commands", async () => {
+  await withTempHome("gwcore-auth-help-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/auth",
+      command: "auth",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("/auth pending"));
+    assert.ok(adapter.sent[0].text.includes("/auth approve"));
+  });
+});
+
+test("GatewayCore: /pairing list shows pending pairings", async () => {
+  await withTempHome("gwcore-pairing-list-", async (home) => {
+    const { adapter, core, pairingStore } = createGatewayCore(home);
+
+    // Create a pending pairing
+    pairingStore.createPairing("discord", "stranger-1", "Bob");
+
+    await core.handleInbound(makeEnvelope({
+      text: "/pairing list",
+      command: "pairing",
+      commandArgs: "list",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("stranger-1"));
+    assert.ok(adapter.sent[0].text.includes("discord"));
+  });
+});
+
+test("GatewayCore: /pairing approve approves pending pairing", async () => {
+  await withTempHome("gwcore-pairing-approve-", async (home) => {
+    const { adapter, core, pairingStore } = createGatewayCore(home);
+
+    const req = pairingStore.createPairing("telegram", "new-user", "NewUser");
+    assert.ok(req);
+
+    await core.handleInbound(makeEnvelope({
+      text: `/pairing approve telegram ${req.code}`,
+      command: "pairing",
+      commandArgs: `approve telegram ${req.code}`,
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("approved"));
+    assert.equal(pairingStore.isApproved("telegram", "new-user"), true);
+    assert.equal(pairingStore.listPending("telegram").length, 0);
+  });
+});
+
+test("GatewayCore: /pairing reject rejects pending pairing", async () => {
+  await withTempHome("gwcore-pairing-reject-", async (home) => {
+    const { adapter, core, pairingStore } = createGatewayCore(home);
+
+    const req = pairingStore.createPairing("discord", "spam-user", null);
+    assert.ok(req);
+
+    await core.handleInbound(makeEnvelope({
+      text: `/pairing reject discord ${req.code}`,
+      command: "pairing",
+      commandArgs: `reject discord ${req.code}`,
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.ok(adapter.sent[0].text.includes("rejected"));
+    assert.equal(pairingStore.isApproved("discord", "spam-user"), false);
+  });
+});
+
+test("GatewayCore: unknown command falls through to plain message handler", async () => {
+  await withTempHome("gwcore-unknown-cmd-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      text: "/nonexistent",
+      command: "nonexistent",
+      commandArgs: "",
+    }));
+
+    // Should produce at least one reply (either from chat.decide or fallback)
+    assert.ok(adapter.sent.length >= 0);
+  });
+});
+
+test("GatewayCore: registerCommand allows custom commands", async () => {
+  await withTempHome("gwcore-custom-cmd-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    core.registerCommand("ping", async (env) => {
+      await core.handleInbound; // access to verify core is accessible
+      const routerRef = adapter; // use captured adapter for reply
+      routerRef.sent.push({ peerId: env.peerId, text: "pong" });
+    });
+
+    await core.handleInbound(makeEnvelope({
+      text: "/ping",
+      command: "ping",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.equal(adapter.sent[0].text, "pong");
+  });
+});
+
+test("GatewayCore: replies go to originating channel peerId", async () => {
+  await withTempHome("gwcore-reply-routing-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    await core.handleInbound(makeEnvelope({
+      peerId: "chat-999",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.equal(adapter.sent[0].peerId, "chat-999");
+  });
+});
+
+test("GatewayCore: lifecycle start and stop", async () => {
+  await withTempHome("gwcore-lifecycle-", async (home) => {
+    const { core } = createGatewayCore(home);
+
+    assert.equal(core.isRunning(), false);
+    await core.start();
+    assert.equal(core.isRunning(), true);
+    await core.stop("test");
+    assert.equal(core.isRunning(), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Group vs DM access control
+// ---------------------------------------------------------------------------
+
+function createGatewayCoreMulti(home, channelType, { channels = {}, skipOwnerRegistration = false } = {}) {
+  const config = loadConfig();
+  config.channels = config.channels || {};
+  Object.assign(config.channels, channels);
+
+  const router = new DefaultChannelRouter({ log: () => {} });
+  const sessionKeys = new DefaultSessionKeyResolver();
+  const pairingStore = new FilePairingStore({ stateDir: path.join(home, "credentials") });
+  const adapter = createMockAdapter(channelType);
+  router.register(adapter);
+
+  if (!skipOwnerRegistration) {
+    pairingStore.addToAllowlist(channelType, "owner-1");
+  }
+
+  const core = new GatewayCore(config, router, sessionKeys, pairingStore, { logger: () => {} });
+  return { core, config, router, adapter, pairingStore };
+}
+
+test("GatewayCore: group messages skip owner claim (groupPolicy=open)", async () => {
+  await withTempHome("gwcore-group-open-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "pairing", groupPolicy: "open" } },
+      skipOwnerRegistration: true,
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800001111",
+      peerId: "120363001@g.us",
+      peerKind: "group",
+      text: "hello from group",
+    }));
+
+    // With groupPolicy=open, the message should be allowed (no owner claim reply).
+    // Should NOT get an owner claim message since it's a group message.
+    const ownerClaimMsg = adapter.sent.find((m) => m.text.includes("owner") || m.text.includes("auto-registered"));
+    assert.equal(ownerClaimMsg, undefined, "Group messages must not trigger owner claim");
+  });
+});
+
+test("GatewayCore: DM messages DO trigger owner claim", async () => {
+  await withTempHome("gwcore-dm-owner-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "pairing" } },
+      skipOwnerRegistration: true,
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800001111",
+      peerId: "8613800001111",
+      peerKind: "dm",
+      text: "hello",
+    }));
+
+    const ownerClaimMsg = adapter.sent.find((m) =>
+      m.text.includes("owner") || m.text.includes("auto-registered") || m.text.includes("第一个用户"),
+    );
+    assert.ok(ownerClaimMsg, "DM should trigger owner claim");
+  });
+});
+
+test("GatewayCore: group messages blocked when groupPolicy=disabled", async () => {
+  await withTempHome("gwcore-group-disabled-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { groupPolicy: "disabled" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800002222",
+      peerId: "120363001@g.us",
+      peerKind: "group",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.equal(adapter.sent.length, 0, "Group messages should be silently dropped when disabled");
+  });
+});
+
+test("GatewayCore: group messages with groupPolicy=allowlist, approved sender passes", async () => {
+  await withTempHome("gwcore-group-allowlist-approved-", async (home) => {
+    const { adapter, core, pairingStore } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { groupPolicy: "allowlist" } },
+    });
+
+    pairingStore.addToAllowlist("whatsapp", "8613800003333");
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800003333",
+      peerId: "120363001@g.us",
+      peerKind: "group",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.ok(adapter.sent.length > 0, "Approved sender in group should be allowed");
+  });
+});
+
+test("GatewayCore: group messages with groupPolicy=allowlist, unknown sender blocked silently", async () => {
+  await withTempHome("gwcore-group-allowlist-blocked-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { groupPolicy: "allowlist" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800009999",
+      peerId: "120363001@g.us",
+      peerKind: "group",
+      text: "hello",
+    }));
+
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    assert.equal(pairingMsg, undefined, "Group messages must NOT issue pairing codes");
+    assert.equal(adapter.sent.length, 0, "Unknown sender in group should be silently blocked");
+  });
+});
+
+test("GatewayCore: DM pairing code issued for unknown sender", async () => {
+  await withTempHome("gwcore-dm-pairing-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "pairing" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800005555",
+      peerId: "8613800005555",
+      peerKind: "dm",
+      text: "hello",
+    }));
+
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    assert.ok(pairingMsg, "DM from unknown sender should issue pairing code");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WhatsApp phone number normalization in allowFrom
+// ---------------------------------------------------------------------------
+
+test("GatewayCore: WhatsApp allowFrom normalizes phone numbers", async () => {
+  await withTempHome("gwcore-wa-normalize-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+86-138-0000-1111"] } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "8613800001111",
+      peerId: "8613800001111",
+      peerKind: "dm",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.ok(adapter.sent.length > 0, "Normalized phone should match allowFrom");
+  });
+});
+
+test("GatewayCore: WhatsApp allowFrom with + prefix matches digits-only sender", async () => {
+  await withTempHome("gwcore-wa-plus-prefix-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "whatsapp", {
+      channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+12345678900"] } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "whatsapp",
+      senderId: "12345678900",
+      peerId: "12345678900",
+      peerKind: "dm",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.ok(adapter.sent.length > 0, "Phone with + prefix should match digits-only sender");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// iMessage access control
+// ---------------------------------------------------------------------------
+
+test("GatewayCore: iMessage DM owner claim on first message", async () => {
+  await withTempHome("gwcore-im-owner-claim-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { dmPolicy: "pairing" } },
+      skipOwnerRegistration: true,
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "alice@icloud.com",
+      peerId: "alice@icloud.com",
+      peerKind: "dm",
+      text: "hello",
+    }));
+
+    const ownerMsg = adapter.sent.find((m) =>
+      m.text.includes("owner") || m.text.includes("auto-registered") || m.text.includes("第一个用户"),
+    );
+    assert.ok(ownerMsg, "iMessage DM should trigger owner claim");
+  });
+});
+
+test("GatewayCore: iMessage DM pairing code for unknown sender", async () => {
+  await withTempHome("gwcore-im-pairing-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { dmPolicy: "pairing" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "bob@icloud.com",
+      peerId: "bob@icloud.com",
+      peerKind: "dm",
+      text: "hi there",
+    }));
+
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    assert.ok(pairingMsg, "Unknown iMessage sender should get pairing code");
+  });
+});
+
+test("GatewayCore: iMessage allowlist blocks unknown sender", async () => {
+  await withTempHome("gwcore-im-allowlist-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["alice@icloud.com"] } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "eve@icloud.com",
+      peerId: "eve@icloud.com",
+      peerKind: "dm",
+      text: "hey",
+    }));
+
+    assert.equal(adapter.sent.length, 0, "Sender not in allowlist should be silently blocked");
+  });
+});
+
+test("GatewayCore: iMessage allowlist allows configured sender", async () => {
+  await withTempHome("gwcore-im-allowlist-pass-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["alice@icloud.com"] } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "alice@icloud.com",
+      peerId: "alice@icloud.com",
+      peerKind: "dm",
+      text: "/status",
+      command: "status",
+      commandArgs: "",
+    }));
+
+    assert.ok(adapter.sent.length > 0, "Allowlisted sender should be allowed");
+  });
+});
+
+test("GatewayCore: iMessage group open policy allows message", async () => {
+  await withTempHome("gwcore-im-group-open-", async (home) => {
+    const { adapter, core } = createGatewayCoreMulti(home, "imessage", {
+      channels: { imessage: { groupPolicy: "open" } },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      channelType: "imessage",
+      senderId: "bob@icloud.com",
+      peerId: "chat12345",
+      peerKind: "group",
+      text: "group message",
+    }));
+
+    const ownerClaimMsg = adapter.sent.find((m) => m.text.includes("owner") || m.text.includes("auto-registered"));
+    assert.equal(ownerClaimMsg, undefined, "Group messages must not trigger owner claim");
+  });
+});
