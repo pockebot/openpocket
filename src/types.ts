@@ -46,6 +46,13 @@ export interface AgentConfig {
   returnHomeOnTaskEnd: boolean;
   /** Enable automatic post-task artifact generation (skills/auto + scripts/auto). */
   autoArtifactsEnabled: boolean;
+  /**
+   * Skill format compatibility mode:
+   * - `legacy`: permissive legacy markdown behavior
+   * - `mixed`: support legacy + strict layouts (rollout default)
+   * - `strict`: enforce strict Agent Skills-compatible layout/validation
+   */
+  skillsSpecMode: "legacy" | "mixed" | "strict";
   systemPromptMode: "full" | "minimal" | "none";
   /** Maximum total chars for workspace prompt context injection.
    *  Defaults to 150 000. Lower this for models with small context windows. */

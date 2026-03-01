@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import * as readline from "node:readline";
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { AgentRuntime } from "./agent/agent-runtime.js";
 import { loadConfig, saveConfig } from "./config/index.js";
@@ -19,12 +19,14 @@ import { LocalHumanAuthStack } from "./human-auth/local-stack.js";
 import { HumanAuthRelayServer } from "./human-auth/relay-server.js";
 import { LocalHumanAuthTakeoverRuntime } from "./human-auth/takeover-runtime.js";
 import { SkillLoader } from "./skills/skill-loader.js";
+import { validateSkillPath } from "./skills/spec-validator.js";
 import { ScriptExecutor } from "./tools/script-executor.js";
 import { runSetupWizard } from "./onboarding/setup-wizard.js";
 import { installCliShortcut } from "./install/cli-shortcut.js";
 import { ensureAndroidPrerequisites } from "./environment/android-prerequisites.js";
 import { PermissionLabManager } from "./test/permission-lab.js";
 import { createCliTheme, createOpenPocketBanner, type CliStepStatus, type CliTone } from "./utils/cli-theme.js";
+import { openpocketHome } from "./utils/paths.js";
 import type { OpenPocketConfig } from "./types.js";
 import {
   deviceTargetLabel,
@@ -100,7 +102,7 @@ Usage:
   openpocket [--config <path>] emulator tap --x <int> --y <int> [--device <id>]
   openpocket [--config <path>] emulator type --text <text> [--device <id>]
   openpocket [--config <path>] agent [--model <name>] <task>
-  openpocket [--config <path>] skills list
+  openpocket [--config <path>] skills list|validate [--strict]
   openpocket [--config <path>] script run [--file <path> | --text <script>] [--timeout <sec>]
   openpocket [--config <path>] telegram setup|whoami
   openpocket [--config <path>] gateway [start|telegram]
@@ -127,6 +129,7 @@ Examples:
   openpocket emulator tap --x 120 --y 300
   openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
   openpocket skills list
+  openpocket skills validate --strict
   openpocket script run --text "echo hello"
   openpocket telegram setup
   openpocket telegram whoami
@@ -1310,8 +1313,81 @@ async function runInstallCliCommand(): Promise<number> {
 
 async function runSkillsCommand(configPath: string | undefined, args: string[]): Promise<number> {
   const sub = args[0];
-  if (sub !== "list") {
+  if (sub !== "list" && sub !== "validate") {
     throw new Error(`Unknown skills subcommand: ${sub ?? "(missing)"}`);
+  }
+
+  if (sub === "validate") {
+    const strictFlag = args.includes("--strict");
+    const unknownArgs = args.slice(1).filter((item) => item !== "--strict");
+    if (unknownArgs.length > 0) {
+      throw new Error(`Unknown skills validate option(s): ${unknownArgs.join(" ")}`);
+    }
+
+    const cfg = loadConfig(configPath);
+    const strict = strictFlag || cfg.agent.skillsSpecMode === "strict";
+    const cliDir = path.dirname(fileURLToPath(import.meta.url));
+    const roots = [
+      path.join(cfg.workspaceDir, "skills"),
+      path.join(openpocketHome(), "skills"),
+      path.resolve(path.join(cliDir, "..", "skills")),
+    ];
+    const files = new Set<string>();
+    const stack = [...roots];
+    while (stack.length > 0) {
+      const dir = stack.pop();
+      if (!dir || !fs.existsSync(dir)) {
+        continue;
+      }
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+        if (!entry.isFile()) {
+          continue;
+        }
+        if (!entry.name.toLowerCase().endsWith(".md")) {
+          continue;
+        }
+        if (entry.name.toLowerCase() === "readme.md") {
+          continue;
+        }
+        files.add(fullPath);
+      }
+    }
+
+    if (files.size === 0) {
+      printWarn("No skill markdown files found.");
+      return 0;
+    }
+
+    let valid = 0;
+    let invalid = 0;
+    printRaw(cliTheme.section(`Skill Validation (${strict ? "strict" : "non-strict"})`));
+    for (const filePath of [...files].sort()) {
+      const result = validateSkillPath(filePath, { strict });
+      if (result.ok) {
+        valid += 1;
+        printRaw(cliTheme.emphasize(`PASS ${filePath}`, "success"));
+        continue;
+      }
+      invalid += 1;
+      printRaw(cliTheme.emphasize(`FAIL ${filePath}`, "error"));
+      for (const issue of result.issues) {
+        printRaw(`  - [${issue.severity}] ${issue.code}: ${issue.message}`);
+      }
+    }
+    printRaw("");
+    printInfo(`Validation summary: valid=${valid} invalid=${invalid} total=${valid + invalid}`);
+    return invalid > 0 ? 1 : 0;
   }
 
   const cfg = loadConfig(configPath);

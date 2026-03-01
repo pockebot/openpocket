@@ -1,0 +1,19 @@
+{
+  "updatedAt": "2026-02-23T19:57:53.675Z",
+  "packages": [
+    {
+      "name": "@mariozechner/pi-ai",
+      "version": "0.54.1",
+      "registry": "npm",
+      "path": "repos/github.com/badlogic/pi-mono/packages/ai",
+      "fetchedAt": "2026-02-23T19:57:53.674Z"
+    },
+    {
+      "name": "@mariozechner/pi-agent-core",
+      "version": "0.54.1",
+      "registry": "npm",
+      "path": "repos/github.com/badlogic/pi-mono/packages/agent",
+      "fetchedAt": "2026-02-23T19:57:53.674Z"
+    }
+  ]
+}

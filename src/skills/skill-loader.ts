@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { OpenPocketConfig, SkillInfo } from "../types.js";
+import { validateSkillPath } from "./spec-validator.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -104,7 +105,17 @@ type SkillTriggers = {
   none: string[];
 };
 
-function listSkillMarkdownFilesRecursive(root: string): string[] {
+type SkillsSpecMode = OpenPocketConfig["agent"]["skillsSpecMode"];
+
+function normalizeSkillsSpecMode(mode: unknown): SkillsSpecMode {
+  const normalized = String(mode ?? "").toLowerCase().trim();
+  if (normalized === "legacy" || normalized === "strict") {
+    return normalized;
+  }
+  return "mixed";
+}
+
+function listSkillMarkdownFilesRecursive(root: string, mode: SkillsSpecMode): string[] {
   if (!fs.existsSync(root)) {
     return [];
   }
@@ -115,6 +126,25 @@ function listSkillMarkdownFilesRecursive(root: string): string[] {
   while (stack.length > 0) {
     const dir = stack.pop() as string;
     const entries = fs.readdirSync(dir, { withFileTypes: true });
+    if (mode === "strict") {
+      for (const entry of entries) {
+        if (!entry.isFile()) {
+          continue;
+        }
+        if (entry.name.toLowerCase() !== "skill.md") {
+          continue;
+        }
+        out.push(path.join(dir, entry.name));
+      }
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+        }
+      }
+      continue;
+    }
+
     const skillMd = entries.find((entry) => entry.isFile() && entry.name.toLowerCase() === "skill.md");
     if (skillMd) {
       out.push(path.join(dir, skillMd.name));
@@ -469,10 +499,17 @@ export class SkillLoader {
 
   loadDetailedAll(): LoadedSkill[] {
     const selected = new Map<string, LoadedSkill>();
+    const skillsSpecMode = normalizeSkillsSpecMode(this.config.agent.skillsSpecMode);
 
     for (const sourceDir of this.sourceDirs()) {
-      const files = listSkillMarkdownFilesRecursive(sourceDir.dir);
+      const files = listSkillMarkdownFilesRecursive(sourceDir.dir, skillsSpecMode);
       for (const filePath of files) {
+        if (skillsSpecMode === "strict") {
+          const validation = validateSkillPath(filePath, { strict: true });
+          if (!validation.ok) {
+            continue;
+          }
+        }
         const skill = parseLoadedSkill(filePath, sourceDir.source);
         const requirements = parseSkillRequirements(skill.metadata);
         if (!satisfiesRequirements(this.config, requirements)) {

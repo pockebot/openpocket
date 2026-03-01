@@ -561,6 +561,18 @@ Example config template:
 
 - [`openpocket.config.example.json`](./openpocket.config.example.json)
 
+Skill compatibility mode:
+
+- `agent.skillsSpecMode = "legacy" | "mixed" | "strict"`
+- default is `mixed` (legacy + strict-compatible loading)
+- use `strict` to enforce directory-based `SKILL.md` validation
+
+Skill validation command:
+
+```bash
+openpocket skills validate --strict
+```
+
 Coding runtime migration note:
 
 - `agent.legacyCodingExecutor` is now **off by default**.
@@ -625,6 +637,7 @@ Command prefix by install mode:
 ./openpocket telegram setup
 ./openpocket telegram whoami
 ./openpocket skills list
+./openpocket skills validate --strict
 ./openpocket gateway start
 ./openpocket dashboard start
 ./openpocket test permission-app deploy

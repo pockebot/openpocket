@@ -53,6 +53,7 @@ function defaultConfigObject() {
       progressReportInterval: 1,
       returnHomeOnTaskEnd: true,
       autoArtifactsEnabled: true,
+      skillsSpecMode: "mixed" as const,
       systemPromptMode: "full" as const,
       contextBudgetChars: 150_000,
       lang: "en" as const,
@@ -406,6 +407,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     progress_report_interval: "progressReportInterval",
     return_home_on_task_end: "returnHomeOnTaskEnd",
     auto_artifacts_enabled: "autoArtifactsEnabled",
+    skills_spec_mode: "skillsSpecMode",
     system_prompt_mode: "systemPromptMode",
     context_budget_chars: "contextBudgetChars",
     device_id: "deviceId",
@@ -690,6 +692,12 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
   const systemPromptMode = systemPromptModeRaw === "minimal" || systemPromptModeRaw === "none"
     ? systemPromptModeRaw
     : "full";
+  const skillsSpecModeRaw = String(agent.skillsSpecMode ?? agent.skills_spec_mode ?? "mixed")
+    .toLowerCase()
+    .trim();
+  const skillsSpecMode = skillsSpecModeRaw === "legacy" || skillsSpecModeRaw === "strict"
+    ? skillsSpecModeRaw
+    : "mixed";
 
   const cfg: OpenPocketConfig = {
     projectName: String(merged.projectName),
@@ -747,6 +755,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       progressReportInterval: Math.max(1, Number(agent.progressReportInterval ?? 1)),
       returnHomeOnTaskEnd: Boolean(agent.returnHomeOnTaskEnd ?? true),
       autoArtifactsEnabled: Boolean(agent.autoArtifactsEnabled ?? true),
+      skillsSpecMode,
       systemPromptMode,
       contextBudgetChars: Math.max(
         10_000,
