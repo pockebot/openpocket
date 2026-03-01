@@ -24,6 +24,7 @@ import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
 import { buildPiAiModel } from "../model-client.js";
 import { normalizePiSessionEvent } from "../pi-session-events.js";
 import { buildSystemPrompt, buildUserPrompt } from "../prompts.js";
+import { AutoSkillRefiner } from "../../skills/auto-skill-refiner.js";
 import type {
   PhoneAgentRunContext,
   RunTaskAttemptOutcome,
@@ -51,6 +52,7 @@ const PHONE_ONLY_TOOL_NAMES = new Set([
   "keyevent",
   "launch_app",
   "shell",
+  "batch_actions",
   "run_script",
   "request_human_auth",
   "request_user_decision",
@@ -94,7 +96,34 @@ export async function runRuntimeAttempt(
     profile.model,
     { sessionKey: request.sessionKey },
   );
+  const autoSkillRefiner = new AutoSkillRefiner(deps.config);
   const reusedSessionMessages = session.reused ? loadReusedSessionMessages(session.path) : [];
+  const resolveFinalSkillPath = (skillPath: string | null, finalMessage: string): string | null => {
+    if (!skillPath) {
+      return null;
+    }
+    const refined = autoSkillRefiner.refine({
+      draftSkillPath: skillPath,
+      task: request.task,
+      finalMessage,
+    });
+    if (refined.promotedPath) {
+      if (refined.promotedPath !== skillPath) {
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][artifact] promoted auto skill: ${refined.promotedPath}`);
+      }
+      return refined.promotedPath;
+    }
+    if (refined.issues.length > 0) {
+      const preview = refined.issues
+        .slice(0, 2)
+        .map((issue) => `${issue.code}: ${issue.message}`)
+        .join("; ");
+      // eslint-disable-next-line no-console
+      console.log(`[OpenPocket][artifact] auto skill refine failed: ${preview}`);
+    }
+    return skillPath;
+  };
 
   try {
     const auth = resolveModelAuth(profile);
@@ -182,6 +211,8 @@ export async function runRuntimeAttempt(
       latestSnapshot: null,
       recentSnapshotWindow: [],
       lastScreenshotPath: null,
+      lastSomScreenshotPath: null,
+      lastRecentScreenshotPaths: [],
       history: [],
       traces: [],
       finishMessage: null,
@@ -191,6 +222,7 @@ export async function runRuntimeAttempt(
       lastScreenshotStartMs: 0,
       lastScreenshotEndMs: 0,
       lastModelInferenceStartMs: 0,
+      capabilityProbeApprovalByKey: new Map(),
       launchablePackages,
       effectivePromptMode,
       systemPrompt,
@@ -405,12 +437,13 @@ export async function runRuntimeAttempt(
           // eslint-disable-next-line no-console
           console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
         }
+        const finalSkillPath = resolveFinalSkillPath(artifacts.skillPath, ctx.finishMessage);
         return {
           result: {
             ok: true,
             message: ctx.finishMessage,
             sessionPath: session.path,
-            skillPath: artifacts.skillPath,
+            skillPath: finalSkillPath,
             scriptPath: artifacts.scriptPath,
           },
           shouldReturnHome,
@@ -508,6 +541,35 @@ export async function runRuntimeAttempt(
           } catch {
             ctx.lastScreenshotPath = null;
           }
+          // Save SoM overlay screenshot
+          try {
+            ctx.lastSomScreenshotPath = snapshot.somScreenshotBase64
+              ? deps.screenshotStore.save(
+                  Buffer.from(snapshot.somScreenshotBase64, "base64"),
+                  { sessionId: session.id, step: ctx.stepCount + 1, currentApp: `${snapshot.currentApp}-som` },
+                )
+              : null;
+          } catch {
+            ctx.lastSomScreenshotPath = null;
+          }
+          // Save recent snapshot screenshots (prior frames sent to model).
+          // The model receives SoM if available, otherwise raw — match that exactly.
+          const recentForSave = ctx.recentSnapshotWindow.slice(-2);
+          const recentPaths: string[] = [];
+          for (const recent of recentForSave) {
+            try {
+              const buf = recent.somScreenshotBase64
+                ? Buffer.from(recent.somScreenshotBase64, "base64")
+                : Buffer.from(recent.screenshotBase64, "base64");
+              const suffix = recent.somScreenshotBase64 ? "-recent-som" : "-recent";
+              const p = deps.screenshotStore.save(
+                buf,
+                { sessionId: session.id, step: ctx.stepCount + 1, currentApp: `${recent.currentApp}${suffix}` },
+              );
+              recentPaths.push(p);
+            } catch { /* best-effort */ }
+          }
+          ctx.lastRecentScreenshotPaths = recentPaths;
         }
 
         if (
@@ -734,12 +796,13 @@ export async function runRuntimeAttempt(
         // eslint-disable-next-line no-console
         console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
       }
+      const finalSkillPath = resolveFinalSkillPath(artifacts.skillPath, ctx.finishMessage);
       return {
         result: {
           ok: true,
           message: ctx.finishMessage,
           sessionPath: session.path,
-          skillPath: artifacts.skillPath,
+          skillPath: finalSkillPath,
           scriptPath: artifacts.scriptPath,
         },
         shouldReturnHome,

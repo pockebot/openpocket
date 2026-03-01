@@ -1,8 +1,19 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 import type { AgentAction, OpenPocketConfig } from "../types.js";
 import { ensureDir, nowForFilename } from "../utils/paths.js";
+
+export interface StepTraceUiContext {
+  elementId?: string;
+  label?: string;
+  resourceId?: string;
+  text?: string;
+  contentDesc?: string;
+  className?: string;
+  clickable?: boolean;
+}
 
 export interface StepTrace {
   step: number;
@@ -10,6 +21,7 @@ export interface StepTrace {
   result: string;
   thought: string;
   currentApp: string;
+  uiContext?: StepTraceUiContext;
 }
 
 function slugify(input: string): string {
@@ -17,6 +29,15 @@ function slugify(input: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
     .replace(/^-+|-+$/g, "")
+    .slice(0, 42) || "task";
+}
+
+function strictSlugify(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-")
     .slice(0, 42) || "task";
 }
 
@@ -43,6 +64,16 @@ function compactText(text: string, maxChars = 220): string {
     return normalized;
   }
   return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function formatUiTargetField(name: string, value: string | undefined): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  if (!value.trim()) {
+    return "";
+  }
+  return `${name}=${JSON.stringify(value)}`;
 }
 
 function actionSummary(action: AgentAction): string {
@@ -100,7 +131,7 @@ export class AutoArtifactBuilder {
     sessionPath: string;
     ok: boolean;
     finalMessage: string;
-    traces: StepTrace[];
+  traces: StepTrace[];
   }): { skillPath: string | null; scriptPath: string | null } {
     const artifactsEnabled = (this.config as { agent?: { autoArtifactsEnabled?: boolean } })
       .agent?.autoArtifactsEnabled ?? true;
@@ -110,23 +141,121 @@ export class AutoArtifactBuilder {
 
     const stamp = nowForFilename();
     const slug = slugify(params.task);
-    const skillPath = this.writeSkill(stamp, slug, params);
+    const strictSlug = strictSlugify(params.task);
+    const strictSkillName = strictSlug;
+    const skillsSpecMode = (this.config.agent?.skillsSpecMode ?? "mixed");
+    const strictLayout = skillsSpecMode === "strict";
+    const fingerprint = AutoArtifactBuilder.behaviorFingerprint(params.traces);
+    this.removeExistingAutoArtifacts(slug, strictSlug, fingerprint);
+    const skillPath = this.writeSkill(stamp, slug, strictSkillName, fingerprint, params, strictLayout);
     const scriptPath = this.writeScript(stamp, slug, params.traces);
     return { skillPath, scriptPath };
+  }
+
+  private static behaviorFingerprint(traces: StepTrace[]): string {
+    const steps = traces.slice(0, 25).map((t) => {
+      const action = t.action;
+      let detail: string = action.type;
+      if (action.type === "launch_app") {
+        detail = `launch_app:${action.packageName}`;
+      } else if (action.type === "request_human_auth") {
+        detail = `request_human_auth:${action.capability}`;
+      }
+      return `${t.currentApp || "?"}:${detail}`;
+    });
+    return crypto.createHash("sha256").update(steps.join("|")).digest("hex").slice(0, 12);
+  }
+
+  private removeExistingAutoArtifacts(slug: string, strictSlug: string, fingerprint: string): void {
+    const skillDir = path.join(this.config.workspaceDir, "skills", "auto");
+    const scriptDir = path.join(this.config.workspaceDir, "scripts", "auto");
+
+    const removeByBasename = (basename: string): void => {
+      try { fs.unlinkSync(path.join(skillDir, `${basename}.md`)); } catch { /* may not exist */ }
+      try { fs.unlinkSync(path.join(scriptDir, `${basename}.sh`)); } catch { /* may not exist */ }
+    };
+    const removeByDirName = (dirName: string): void => {
+      try { fs.rmSync(path.join(skillDir, dirName), { recursive: true, force: true }); } catch { /* may not exist */ }
+      try { fs.unlinkSync(path.join(scriptDir, `${dirName}.sh`)); } catch { /* may not exist */ }
+    };
+
+    if (!fs.existsSync(skillDir)) {
+      return;
+    }
+
+    try {
+      for (const entry of fs.readdirSync(skillDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          const dirName = entry.name;
+          const fileSuffix = dirName.replace(/^\d{8}-\d{6}-/, "");
+          if (fileSuffix === slug || fileSuffix === strictSlug) {
+            removeByDirName(dirName);
+            continue;
+          }
+          const skillPath = path.join(skillDir, dirName, "SKILL.md");
+          if (!fs.existsSync(skillPath)) {
+            continue;
+          }
+          try {
+            const content = fs.readFileSync(skillPath, "utf-8");
+            const fpMatch = content.match(/behavior_fingerprint:\s*([a-f0-9]+)/);
+            if (fpMatch && fpMatch[1] === fingerprint) {
+              removeByDirName(dirName);
+            }
+          } catch {
+            // Skip unreadable files.
+          }
+          continue;
+        }
+        if (!entry.isFile()) {
+          continue;
+        }
+        const file = entry.name;
+        if (!file.endsWith(".md")) {
+          continue;
+        }
+        const basename = file.replace(/\.md$/, "");
+        const fileSuffix = basename.replace(/^\d{8}-\d{6}-/, "");
+
+        if (fileSuffix === slug || fileSuffix === strictSlug) {
+          removeByBasename(basename);
+          continue;
+        }
+
+        try {
+          const content = fs.readFileSync(path.join(skillDir, file), "utf-8");
+          const fpMatch = content.match(/behavior_fingerprint:\s*([a-f0-9]+)/);
+          if (fpMatch && fpMatch[1] === fingerprint) {
+            removeByBasename(basename);
+          }
+        } catch {
+          // Skip unreadable files.
+        }
+      }
+    } catch {
+      // Best-effort cleanup.
+    }
   }
 
   private writeSkill(
     stamp: string,
     slug: string,
+    strictSkillName: string,
+    fingerprint: string,
     params: {
       task: string;
       sessionPath: string;
       finalMessage: string;
       traces: StepTrace[];
     },
+    strictLayout: boolean,
   ): string {
-    const dir = ensureDir(path.join(this.config.workspaceDir, "skills", "auto"));
-    const filePath = path.join(dir, `${stamp}-${slug}.md`);
+    const dir = strictLayout
+      ? ensureDir(path.join(this.config.workspaceDir, "skills", "auto", `${stamp}-${strictSkillName}`))
+      : ensureDir(path.join(this.config.workspaceDir, "skills", "auto"));
+    const filePath = strictLayout
+      ? path.join(dir, "SKILL.md")
+      : path.join(dir, `${stamp}-${slug}.md`);
 
     const shortTask = compactText(params.task, 180);
     const traceSlice = params.traces.slice(0, 25);
@@ -137,21 +266,46 @@ export class AutoArtifactBuilder {
         const stepLine = `${index + 1}. ${actionSummary(trace.action)} (app=${trace.currentApp || "unknown"})`;
         const thought = compactText(trace.thought, 160);
         const result = compactText(trace.result, 180);
+        const ui = trace.uiContext;
+        const uiLine = ui
+          ? `   - ui_target: ${[
+              formatUiTargetField("text", ui.text),
+              formatUiTargetField("resourceId", ui.resourceId),
+              formatUiTargetField("contentDesc", ui.contentDesc),
+              formatUiTargetField("class", ui.className),
+              ui.clickable !== undefined ? `clickable=${ui.clickable}` : "",
+            ].filter(Boolean).join(" ")}`
+          : "";
         const details = [
           thought ? `   - intent: ${thought}` : "",
+          uiLine || "",
           result ? `   - observed: ${result}` : "",
         ].filter(Boolean);
         return [stepLine, ...details].join("\n");
       })
       .join("\n");
 
-    const content = [
+    const usedHumanAuth = traceSlice.some((trace) => trace.action.type === "request_human_auth");
+    const hadCapabilityProbe = traceSlice.some((trace) => {
+      const result = String(trace.result || "");
+      return result.includes("capability_probe") || result.includes("human_auth_probe");
+    });
+    const missingHumanAuthWarning = !usedHumanAuth && hadCapabilityProbe;
+
+    const body = [
       `# Skill Draft: ${shortTask}`,
       "",
       `- Status: draft (auto-generated, needs review)`,
       `- Confidence: ${confidence}`,
       `- Generated: ${new Date().toISOString()}`,
       `- Source session: ${params.sessionPath}`,
+      `- behavior_fingerprint: ${fingerprint}`,
+      ...(missingHumanAuthWarning ? [
+        "",
+        "⚠️ **WARNING: This skill accessed media/photos on Agent Phone without Human Auth.**",
+        "If the task involves the user's personal photos/files/contacts, the procedure below is WRONG.",
+        "The correct flow should call `request_human_auth` first to obtain data from Human Phone.",
+      ] : []),
       "",
       "## When To Use",
       "",
@@ -162,6 +316,7 @@ export class AutoArtifactBuilder {
       "",
       "- Emulator/device is online and controllable.",
       "- Required account/login state from source session is still valid.",
+      "- If the task involves user's personal data (photos, contacts, files, location), call `request_human_auth` FIRST — Agent Phone has no user personal data.",
       "- If sensitive data/auth is needed, call `request_human_auth` instead of guessing.",
       "",
       "## Procedure (Draft)",
@@ -184,6 +339,28 @@ export class AutoArtifactBuilder {
       "- Validate on at least one fresh run before promoting out of `skills/auto`.",
       "",
     ].join("\n");
+
+    const content = strictLayout
+      ? [
+        "---",
+        `name: ${strictSkillName}`,
+        `description: ${JSON.stringify(`Auto-generated draft for: ${shortTask}`)}`,
+        `metadata: ${JSON.stringify({
+          openclaw: {
+            generated: {
+              kind: "auto_skill_draft",
+              source_session: params.sessionPath,
+            },
+            triggers: {
+              any: [shortTask],
+            },
+          },
+        })}`,
+        "---",
+        "",
+        body,
+      ].join("\n")
+      : body;
 
     fs.writeFileSync(filePath, content, "utf-8");
     return filePath;

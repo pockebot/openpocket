@@ -96,6 +96,12 @@ export type DelegationApplyLike = {
   action?: AgentAction | null;
 };
 
+export type CapabilityProbeApprovalRecord = {
+  decision: HumanAuthDecision;
+  delegationMessage: string | null;
+  templateHint: string | null;
+};
+
 export interface RuntimeAttemptDependencies {
   config: OpenPocketConfig;
   workspace: WorkspaceStore;
@@ -128,6 +134,8 @@ export interface PhoneAgentRunContext {
   /** Rolling window of recent snapshots for multi-frame visual context. */
   recentSnapshotWindow: ScreenSnapshot[];
   lastScreenshotPath: string | null;
+  lastSomScreenshotPath: string | null;
+  lastRecentScreenshotPaths: string[];
   history: string[];
   traces: StepTrace[];
   finishMessage: string | null;
@@ -144,6 +152,7 @@ export interface PhoneAgentRunContext {
   lastScreenshotStartMs: number;
   lastScreenshotEndMs: number;
   lastModelInferenceStartMs: number;
+  capabilityProbeApprovalByKey: Map<string, CapabilityProbeApprovalRecord>;
 }
 
 export type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {

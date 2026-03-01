@@ -62,14 +62,14 @@ const rawSiteUrl =
   process.env.VERCEL_URL?.trim() ||
   defaultSiteUrl;
 const siteUrl = normalizeSiteUrl(rawSiteUrl);
-const faviconPath = withAssetVersion(withDocsBase("/favicon.ico"));
+const faviconPath = withAssetVersion(withDocsBase("/openpocket-logo.png"));
 const canonicalPath = normalizedBase;
 const canonicalUrl = toAbsoluteUrl(siteUrl, canonicalPath);
 const twitterSite = process.env.DOCS_TWITTER_SITE?.trim() ?? "";
 const twitterCreator = process.env.DOCS_TWITTER_CREATOR?.trim() ?? "";
 const siteHead = [
-  ["link", { rel: "icon", href: faviconPath, type: "image/x-icon", sizes: "any" }],
-  ["link", { rel: "shortcut icon", href: faviconPath, type: "image/x-icon" }],
+  ["link", { rel: "icon", href: faviconPath, type: "image/png", sizes: "64x64" }],
+  ["link", { rel: "shortcut icon", href: faviconPath, type: "image/png" }],
   ["link", { rel: "canonical", href: canonicalUrl }],
   ["meta", { name: "application-name", content: siteTitle }],
   ["meta", { name: "apple-mobile-web-app-title", content: siteTitle }],
@@ -187,7 +187,7 @@ function extractHeadingTree(link) {
       item: {
         text,
         link: `${link}#${slug}`,
-        collapsed: false,
+        collapsed: true,
       },
     });
   }
@@ -219,7 +219,7 @@ function withPageHeadings(items) {
     if (item.items && !item.link) {
       return {
         ...item,
-        collapsed: false,
+        collapsed: item.collapsed ?? true,
         items: withPageHeadings(item.items),
       };
     }
@@ -235,7 +235,7 @@ function withPageHeadings(items) {
 
     return {
       ...item,
-      collapsed: false,
+      collapsed: true,
       items: headingItems,
     };
   });
@@ -251,7 +251,7 @@ const baseSidebar = [
   },
   {
     text: "Get Started",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/get-started/" },
       { text: "Quickstart", link: "/get-started/quickstart" },
@@ -262,7 +262,7 @@ const baseSidebar = [
   },
   {
     text: "Concepts",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/concepts/" },
       { text: "Project Blueprint", link: "/concepts/project-blueprint" },
@@ -274,7 +274,7 @@ const baseSidebar = [
   },
   {
     text: "Tools",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/tools/" },
       { text: "Skills", link: "/tools/skills" },
@@ -283,7 +283,7 @@ const baseSidebar = [
   },
   {
     text: "Reference",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/reference/" },
       { text: "Config Defaults", link: "/reference/config-defaults" },
@@ -296,11 +296,12 @@ const baseSidebar = [
   },
   {
     text: "Ops",
-    collapsed: false,
+    collapsed: true,
     items: [
       { text: "Index", link: "/ops/" },
       { text: "Runbook", link: "/ops/runbook" },
       { text: "Troubleshooting", link: "/ops/troubleshooting" },
+      { text: "Screen Awake Heartbeat", link: "/ops/screen-awake-heartbeat" },
     ],
   },
 ];
@@ -321,12 +322,8 @@ export default withMermaid(defineConfig({
     siteTitle: "OpenPocket",
     logo: "/openpocket-logo.png",
     nav: [
-      { text: "Home", link: "/" },
-      { text: "Blueprint", link: "/concepts/project-blueprint" },
-      { text: "Get Started", link: "/get-started/" },
-      { text: "Reference", link: "/reference/" },
-      { text: "Runbook", link: "/ops/runbook" },
-      { text: "Doc Hubs", link: "/hubs" },
+      { text: "Setup", link: "/get-started/" },
+      { text: "Docs", link: "/hubs" },
     ],
     socialLinks: [
       { icon: "github", link: "https://github.com/SergioChan/openpocket" },

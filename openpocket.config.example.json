@@ -11,6 +11,8 @@
   "target": {
     "type": "emulator",
     "adbEndpoint": "",
+    "pin": "1234",
+    "wakeupIntervalSec": 3,
     "cloudProvider": ""
   },
   "emulator": {
@@ -33,6 +35,7 @@
     "progressReportInterval": 1,
     "returnHomeOnTaskEnd": true,
     "autoArtifactsEnabled": true,
+    "skillsSpecMode": "mixed",
     "systemPromptMode": "full",
     "contextBudgetChars": 150000,
     "lang": "en",

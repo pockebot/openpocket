@@ -5,7 +5,7 @@ This page gets OpenPocket running locally with the current Node.js + TypeScript 
 OpenPocket controls a configurable Agent Phone target through `adb`.
 
 - Default target: `emulator`
-- Optional target: `physical-phone` (USB/Wi-Fi ADB)
+- Recommended production-like target: `physical-phone` (USB/Wi-Fi ADB)
 - `android-tv` and `cloud` targets are currently in progress
 
 For target-specific setup, see [Device Targets](./device-targets.md).
@@ -116,13 +116,26 @@ Keep default emulator:
 openpocket target set --type emulator
 ```
 
-Use a connected physical phone:
+Use a connected physical phone (interactive device picker when multiple are online):
 
 ```bash
 openpocket target set --type physical-phone
 ```
 
-If multiple ADB devices are online, CLI will show an arrow-key selector.
+If multiple ADB devices are online, CLI shows an arrow-key selector with transport labels (`USB ADB` / `WiFi ADB`).
+
+For Android 11+ Wireless debugging pairing, you can run:
+
+```bash
+openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type physical-phone
+```
+
+Then verify:
+
+```bash
+openpocket target show
+adb devices -l
+```
 
 ## Run a Task (CLI)
 

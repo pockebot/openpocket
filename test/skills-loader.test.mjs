@@ -28,7 +28,36 @@ test("SkillLoader loads workspace skills", () => {
   assert.match(summary, /location="/);
 });
 
-test("SkillLoader matches skills for task while keeping body out of prompt context", () => {
+test("SkillLoader prefers bundled skills over workspace/local when skill IDs collide", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-priority-"));
+  process.env.OPENPOCKET_HOME = home;
+  const cfg = loadConfig();
+
+  const workspaceSkillsDir = path.join(cfg.workspaceDir, "skills");
+  fs.mkdirSync(workspaceSkillsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(workspaceSkillsDir, "human-auth-location.md"),
+    "# Workspace Override\n\nWorkspace version should not win.",
+    "utf-8",
+  );
+
+  const localSkillsDir = path.join(home, "skills");
+  fs.mkdirSync(localSkillsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(localSkillsDir, "human-auth-location.md"),
+    "# Local Override\n\nLocal version should not win.",
+    "utf-8",
+  );
+
+  const loader = new SkillLoader(cfg);
+  const skill = loader.loadAll().find((s) => s.id === "human-auth-location");
+
+  assert.equal(Boolean(skill), true);
+  assert.equal(skill?.source, "bundled");
+  assert.match(skill?.path || "", /skills[\\/]human-auth-location[\\/]SKILL\.md$/i);
+});
+
+test("SkillLoader exposes skill index and leaves active skill prompt empty", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-active-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -56,9 +85,50 @@ test("SkillLoader matches skills for task while keeping body out of prompt conte
   );
 
   assert.match(context.summaryText, /PayByPhone Nearest Flow/);
-  assert.equal(context.activeEntries.length > 0, true);
+  assert.equal(context.activeEntries.length, 0);
   assert.equal(context.activePromptText, "");
   assert.equal(context.activePromptChars, 0);
+});
+
+test("SkillLoader keeps tricky skill names in summary index without auto-loading body", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-escape-"));
+  process.env.OPENPOCKET_HOME = home;
+  const cfg = loadConfig();
+
+  const skillsDir = path.join(cfg.workspaceDir, "skills");
+  fs.mkdirSync(skillsDir, { recursive: true });
+
+  const triggerPhrase = "token<&>\"'";
+  const metadata = JSON.stringify({
+    openclaw: {
+      triggers: {
+        any: [triggerPhrase],
+      },
+    },
+  });
+
+  fs.writeFileSync(
+    path.join(skillsDir, "escape-skill.md"),
+    [
+      "---",
+      `metadata: ${metadata}`,
+      "---",
+      "",
+      "# Skill <A&B> \"quote\" 'apos'",
+      "",
+      "Test content body.",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const loader = new SkillLoader(cfg);
+  const context = loader.buildPromptContextForTask(
+    `Please run ${triggerPhrase} flow for Skill <A&B> "quote" 'apos' now.`,
+  );
+
+  assert.match(context.summaryText, /Skill <A&B>/);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
 });
 
 test("SkillLoader supports SKILL.md directory layout and metadata gating", () => {
@@ -97,7 +167,7 @@ test("SkillLoader supports SKILL.md directory layout and metadata gating", () =>
   assert.match(skill?.path || "", /paybyphone_flow[\\/]+SKILL\.md$/i);
 });
 
-test("SkillLoader boosts matching by generic metadata triggers", () => {
+test("SkillLoader lists all discovered skills in summary regardless task text", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-trigger-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -134,7 +204,7 @@ test("SkillLoader boosts matching by generic metadata triggers", () => {
     "Open X app, login, and fix LoginError.AttestationDenied before posting a tweet.",
   );
 
-  assert.equal(context.activeEntries.length > 0, true);
-  assert.equal(context.activeEntries[0].skill.id, "x-twitter-login-recovery");
-  assert.match(context.activeEntries[0].reason, /metadata\.any/i);
+  assert.match(context.summaryText, /X Twitter Login Recovery/);
+  assert.match(context.summaryText, /Generic Login/);
+  assert.equal(context.activeEntries.length, 0);
 });

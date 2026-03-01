@@ -268,12 +268,12 @@ export class TelegramGateway {
       .join("\n");
 
     const redacted = withoutInternalLines
-      .replace(/local_screenshot=\S+/gi, "local_screenshot=[saved locally]")
+      .replace(/local_(?:som_|recent_|debug_)?screenshot(?:_\d+)?=\S+/gi, "[screenshot saved locally]")
       .replace(/runDir=\S+/gi, "runDir=[local-dir]")
       .replace(/\/(?:Users|home|var|tmp)\/[^\s)\]]+/g, "[local-path]")
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
 
-    return this.compact(redacted, maxChars);
+    return this.compact(this.normalizeWhitespace(redacted), maxChars);
   }
 
   private sanitizeForChatMultiline(text: string, maxChars: number): string {
@@ -283,12 +283,33 @@ export class TelegramGateway {
       .join("\n");
 
     const redacted = withoutInternalLines
-      .replace(/local_screenshot=\S+/gi, "local_screenshot=[saved locally]")
+      .replace(/local_(?:som_|recent_|debug_)?screenshot(?:_\d+)?=\S+/gi, "[screenshot saved locally]")
       .replace(/runDir=\S+/gi, "runDir=[local-dir]")
       .replace(/\/(?:Users|home|var|tmp)\/[^\s)\]]+/g, "[local-path]")
       .replace(/[A-Za-z]:\\[^\s)\]]+/g, "[local-path]");
 
-    return this.compactMultiline(redacted, maxChars);
+    return this.compactMultiline(
+      this.normalizeWhitespace(redacted, { preserveNewlines: true }),
+      maxChars,
+    );
+  }
+
+  private normalizeWhitespace(
+    text: string,
+    options?: { preserveNewlines?: boolean },
+  ): string {
+    if (options?.preserveNewlines) {
+      return String(text || "")
+        .replace(/\r\n?/g, "\n")
+        .split("\n")
+        .map((line) => line.replace(/[ \t]+/g, " ").trim())
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    }
+    return String(text || "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private escapeTelegramHtml(text: string): string {
@@ -1217,11 +1238,51 @@ export class TelegramGateway {
     return false;
   }
 
-  private renderTaskAcceptedMessage(task: string, locale: "zh" | "en"): string {
+  private renderAgentLoopStartMessage(
+    task: string,
+    locale: "zh" | "en",
+    progress: AgentProgressUpdate,
+  ): string {
+    const action = String(progress.actionType || "unknown").toLowerCase().trim();
+    const app = String(progress.currentApp || "unknown").trim();
+    const appSuffix = app && app.toLowerCase() !== "unknown"
+      ? (locale === "zh" ? `（${app}）` : ` (${app})`)
+      : "";
+    const zhActionLineMap: Record<string, string> = {
+      launch_app: `我正在打开目标应用并确认页面状态${appSuffix}。`,
+      tap: `我正在执行界面操作并确认下一步入口${appSuffix}。`,
+      tap_element: `我正在点击关键控件并推进流程${appSuffix}。`,
+      swipe: `我正在浏览当前页面并定位目标区域${appSuffix}。`,
+      type_text: `我正在填写必要信息并继续流程${appSuffix}。`,
+      keyevent: `我正在执行系统导航操作${appSuffix}。`,
+      read: `我正在读取必要上下文并规划下一步${appSuffix}。`,
+      wait: `我正在等待页面加载完成${appSuffix}。`,
+      request_human_auth: `我已触发授权流程，等待你确认${appSuffix}。`,
+      request_user_input: "我正在等待你的补充信息后继续执行。",
+      request_user_decision: "我正在等待你的决策后继续执行。",
+      finish: `我正在整理执行结果${appSuffix}。`,
+    };
+    const enActionLineMap: Record<string, string> = {
+      launch_app: `Opening the target app and confirming the screen state${appSuffix}.`,
+      tap: `Performing a UI action and locating the next entry point${appSuffix}.`,
+      tap_element: `Tapping a key control to move the flow forward${appSuffix}.`,
+      swipe: `Scanning the current screen to locate the target area${appSuffix}.`,
+      type_text: `Filling required text and continuing the flow${appSuffix}.`,
+      keyevent: `Sending a system navigation input${appSuffix}.`,
+      read: `Reading required context before the next step${appSuffix}.`,
+      wait: `Waiting for the screen to finish loading${appSuffix}.`,
+      request_human_auth: `Human authorization is now required and waiting for your approval${appSuffix}.`,
+      request_user_input: "Waiting for your additional input before continuing.",
+      request_user_decision: "Waiting for your decision before continuing.",
+      finish: `Finalizing the task result${appSuffix}.`,
+    };
+    const actionLine = locale === "zh"
+      ? (zhActionLineMap[action] ?? `我正在执行任务第一步${appSuffix}。`)
+      : (enActionLineMap[action] ?? `Executing the first task step${appSuffix}.`);
     if (locale === "zh") {
-      return `收到，我先处理这个任务：${task}\n有明确进展我会及时告诉你。`;
+      return `已开始执行任务：${task}\n${actionLine}`;
     }
-    return `On it: ${task}\nI'll update you when there's meaningful progress.`;
+    return `Task started: ${task}\n${actionLine}`;
   }
 
   private renderTaskQueuedMessage(position: number, locale: "zh" | "en"): string {
@@ -1245,6 +1306,15 @@ export class TelegramGateway {
     const remain = this.pendingChatTasks.filter((item) => item.chatId !== chatId);
     this.pendingChatTasks.splice(0, this.pendingChatTasks.length, ...remain);
     return before - remain.length;
+  }
+
+  private clearAllQueuedTasks(): number {
+    if (this.pendingChatTasks.length === 0) {
+      return 0;
+    }
+    const count = this.pendingChatTasks.length;
+    this.pendingChatTasks.splice(0, this.pendingChatTasks.length);
+    return count;
   }
 
   private async drainQueuedChatTasks(): Promise<void> {
@@ -1396,6 +1466,7 @@ export class TelegramGateway {
       }
     }
 
+    this.agent.startScreenAwakeHeartbeat();
     this.heartbeat.start();
     this.cron.start();
     this.log("telegram polling started");
@@ -1407,6 +1478,13 @@ export class TelegramGateway {
       return;
     }
     this.running = false;
+    this.agent.stopCurrentTask();
+    this.agent.stopScreenAwakeHeartbeat();
+    const droppedQueued = this.clearAllQueuedTasks();
+    const cancelledWaits = this.cancelAllPendingUserWaits("Task stopped by gateway shutdown.");
+    if (droppedQueued > 0 || cancelledWaits > 0) {
+      this.log(`stop cleanup queued_cleared=${droppedQueued} pending_cancelled=${cancelledWaits}`);
+    }
     this.bot.removeListener("message", this.handleMessage);
     this.bot.removeListener("polling_error", this.handlePollingError);
     this.heartbeat.stop();
@@ -1551,6 +1629,104 @@ export class TelegramGateway {
 
   private isCodeBasedHumanAuthCapability(capability: string): boolean {
     return capability === "sms" || capability === "2fa";
+  }
+
+  private isStopIntentText(text: string): boolean {
+    const normalized = String(text || "").trim();
+    if (!normalized) {
+      return false;
+    }
+    if (/^\/stop(?:@\w+)?$/i.test(normalized)) {
+      return true;
+    }
+    if (normalized.startsWith("/")) {
+      return false;
+    }
+    if (/\b(stop|cancel|abort|terminate|halt)\b/i.test(normalized)) {
+      return true;
+    }
+    if (/(停止|终止|取消(?:当前)?任务|停一下|停下|结束当前任务)/.test(normalized)) {
+      return true;
+    }
+    return false;
+  }
+
+  private hasPendingHumanAuthForChat(chatId: number): boolean {
+    return this.humanAuth.listPending().some((item) => item.chatId === chatId);
+  }
+
+  private hasStopTargetForChat(chatId: number): boolean {
+    return this.agent.isBusy()
+      || this.pendingUserDecisions.has(chatId)
+      || this.pendingUserInputs.has(chatId)
+      || this.pendingChatTasks.some((item) => item.chatId === chatId)
+      || this.hasPendingHumanAuthForChat(chatId);
+  }
+
+  private cancelPendingUserDecisionWait(chatId: number, reason: string): boolean {
+    const pending = this.pendingUserDecisions.get(chatId);
+    if (!pending) {
+      return false;
+    }
+    clearTimeout(pending.timeout);
+    this.pendingUserDecisions.delete(chatId);
+    try {
+      pending.reject(new Error(reason));
+    } catch {
+      // Ignore rejection handler failures during forced stop.
+    }
+    return true;
+  }
+
+  private cancelPendingUserInputWait(chatId: number, reason: string): boolean {
+    const pending = this.pendingUserInputs.get(chatId);
+    if (!pending) {
+      return false;
+    }
+    clearTimeout(pending.timeout);
+    this.pendingUserInputs.delete(chatId);
+    try {
+      pending.reject(new Error(reason));
+    } catch {
+      // Ignore rejection handler failures during forced stop.
+    }
+    return true;
+  }
+
+  private requestStopForChat(
+    chatId: number,
+    options?: {
+      reason?: string;
+      clearQueue?: boolean;
+    },
+  ): { accepted: boolean; cancelledWaits: number; droppedQueued: number } {
+    const reason = options?.reason ?? "Task stopped by user.";
+    const accepted = this.agent.stopCurrentTask();
+    const droppedQueued = options?.clearQueue ? this.clearQueuedTasksForChat(chatId) : 0;
+    const cancelledDecision = this.cancelPendingUserDecisionWait(chatId, reason) ? 1 : 0;
+    const cancelledInput = this.cancelPendingUserInputWait(chatId, reason) ? 1 : 0;
+    const cancelledHumanAuth = this.humanAuth.cancelPendingForChat(chatId, reason);
+    return {
+      accepted,
+      cancelledWaits: cancelledDecision + cancelledInput + cancelledHumanAuth,
+      droppedQueued,
+    };
+  }
+
+  private cancelAllPendingUserWaits(reason: string): number {
+    let cancelled = 0;
+    for (const chatId of [...this.pendingUserDecisions.keys()]) {
+      if (this.cancelPendingUserDecisionWait(chatId, reason)) {
+        cancelled += 1;
+      }
+    }
+    for (const chatId of [...this.pendingUserInputs.keys()]) {
+      if (this.cancelPendingUserInputWait(chatId, reason)) {
+        cancelled += 1;
+      }
+    }
+    cancelled += this.humanAuth.cancelAllPending(reason);
+    return cancelled;
   }
 
   private normalizeOtpCode(text: string): string | null {
@@ -1803,6 +1979,18 @@ export class TelegramGateway {
       return;
     }
 
+    if (this.isStopIntentText(text) && this.hasStopTargetForChat(chatId)) {
+      const stop = this.requestStopForChat(chatId, {
+        reason: "Task stopped by user.",
+        clearQueue: true,
+      });
+      if (stop.droppedQueued > 0) {
+        this.log(`cleared queued tasks chat=${chatId} count=${stop.droppedQueued} reason=stop-intent`);
+      }
+      await this.bot.sendMessage(chatId, "Stop requested.");
+      return;
+    }
+
     if (!text.startsWith("/") && await this.tryResolvePendingUserInput(chatId, text)) {
       return;
     }
@@ -2036,9 +2224,14 @@ export class TelegramGateway {
       if (droppedQueued > 0) {
         this.log(`cleared queued tasks chat=${chatId} count=${droppedQueued} reason=/reset`);
       }
-      const accepted = this.agent.stopCurrentTask();
+      const stop = this.requestStopForChat(chatId, {
+        reason: "Task stopped by user.",
+      });
+      if (stop.cancelledWaits > 0) {
+        this.log(`cleared pending waits chat=${chatId} count=${stop.cancelledWaits} reason=/reset`);
+      }
       const locale = this.inferLocale(message);
-      const resetSummary = accepted
+      const resetSummary = (stop.accepted || stop.cancelledWaits > 0)
         ? "Conversation memory cleared. Stop requested for the running task."
         : "Conversation memory cleared. No running task to stop.";
       await this.bot.sendMessage(chatId, resetSummary);
@@ -2051,9 +2244,16 @@ export class TelegramGateway {
       return;
     }
 
-    if (text === "/stop") {
-      const accepted = this.agent.stopCurrentTask();
-      await this.bot.sendMessage(chatId, accepted ? "Stop requested." : "No running task.");
+    if (/^\/stop(?:@\w+)?$/i.test(text)) {
+      const stop = this.requestStopForChat(chatId, {
+        reason: "Task stopped by user.",
+        clearQueue: true,
+      });
+      if (stop.droppedQueued > 0) {
+        this.log(`cleared queued tasks chat=${chatId} count=${stop.droppedQueued} reason=/stop`);
+      }
+      const stoppedAnything = stop.accepted || stop.cancelledWaits > 0 || stop.droppedQueued > 0;
+      await this.bot.sendMessage(chatId, stoppedAnything ? "Stop requested." : "No running task.");
       return;
     }
 
@@ -2184,16 +2384,14 @@ export class TelegramGateway {
       skipAcceptedMessage?: boolean;
     },
   ): Promise<boolean> {
-    const locale = this.inferTaskLocale(task);
     const isIdle = !this.drainingChatTaskQueue && !this.agent.isBusy() && this.pendingChatTasks.length === 0;
     const queuePosition = this.pendingChatTasks.length + 1;
     if (!options?.skipAcceptedMessage) {
-      const ackMessage = isIdle
-        ? this.renderTaskAcceptedMessage(task, locale)
-        : this.renderTaskQueuedMessage(queuePosition, locale);
-      await this.bot.sendMessage(chatId, ackMessage);
-      this.chat.appendExternalTurn(chatId, "assistant", ackMessage);
       if (!isIdle) {
+        const locale = this.inferTaskLocale(task);
+        const queuedMessage = this.renderTaskQueuedMessage(queuePosition, locale);
+        await this.bot.sendMessage(chatId, queuedMessage);
+        this.chat.appendExternalTurn(chatId, "assistant", queuedMessage);
         this.log(`task queued busy chat=${chatId} position=${queuePosition} task=${JSON.stringify(task)}`);
       }
     }
@@ -2270,38 +2468,45 @@ export class TelegramGateway {
               );
               const recentProgress = [...progressNarrationState.recentProgress, progress].slice(-8);
               progressNarrationState.allProgress = [...progressNarrationState.allProgress, progress].slice(-16);
+              const isFirstProgress =
+                progressNarrationState.lastNotifiedProgress === null && progress.step === 1;
 
               // Determine if this step qualifies for LLM narration or should use
               // the cheaper rule-based fallback instead.
               const action = String(progress.actionType || "").toLowerCase();
               const isHighSignal =
-                progress.step === 1
-                || action === "finish"
+                action === "finish"
                 || action === "request_human_auth"
                 || action === "request_user_input"
                 || /(error|failed|timeout|interrupted|rejected)/i.test(
                   `${progress.message} ${progress.thought}`,
                 );
               const isIntervalStep = progressNarrationState.skippedSteps >= NARRATION_LLM_INTERVAL;
-              const useLlm = isHighSignal || isIntervalStep;
+              const useLlm = !isFirstProgress && (isHighSignal || isIntervalStep);
 
-              const decision = useLlm
-                ? await this.chat.narrateTaskProgress({
-                  task,
-                  locale: progressLocale,
-                  progress,
-                  recentProgress,
-                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                  skippedSteps: progressNarrationState.skippedSteps,
-                })
-                : this.chat.fallbackTaskProgressNarration({
-                  task,
-                  locale: progressLocale,
-                  progress,
-                  recentProgress,
-                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
-                  skippedSteps: progressNarrationState.skippedSteps,
-                });
+              const decision = isFirstProgress
+                ? {
+                  notify: true,
+                  message: this.renderAgentLoopStartMessage(task, progressLocale, progress),
+                  reason: "agent_loop_start",
+                }
+                : useLlm
+                  ? await this.chat.narrateTaskProgress({
+                    task,
+                    locale: progressLocale,
+                    progress,
+                    recentProgress,
+                    lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                    skippedSteps: progressNarrationState.skippedSteps,
+                  })
+                  : this.chat.fallbackTaskProgressNarration({
+                    task,
+                    locale: progressLocale,
+                    progress,
+                    recentProgress,
+                    lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                    skippedSteps: progressNarrationState.skippedSteps,
+                  });
 
               if (!decision.notify) {
                 progressNarrationState.skippedSteps += 1;

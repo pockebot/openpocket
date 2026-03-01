@@ -8,6 +8,15 @@ export interface DeviceTargetConfig {
    */
   adbEndpoint: string;
   /**
+   * Lock-screen PIN used for target auto-unlock.
+   * Must be 4 digits when set.
+   */
+  pin: string;
+  /**
+   * Screen keep-awake heartbeat interval in seconds.
+   */
+  wakeupIntervalSec: number;
+  /**
    * Reserved for cloud integrations. Current runtime still uses adb transport.
    */
   cloudProvider: string;
@@ -37,6 +46,13 @@ export interface AgentConfig {
   returnHomeOnTaskEnd: boolean;
   /** Enable automatic post-task artifact generation (skills/auto + scripts/auto). */
   autoArtifactsEnabled: boolean;
+  /**
+   * Skill format compatibility mode:
+   * - `legacy`: permissive legacy markdown behavior
+   * - `mixed`: support legacy + strict layouts (rollout default)
+   * - `strict`: enforce strict Agent Skills-compatible layout/validation
+   */
+  skillsSpecMode: "legacy" | "mixed" | "strict";
   systemPromptMode: "full" | "minimal" | "none";
   /** Maximum total chars for workspace prompt context injection.
    *  Defaults to 150 000. Lower this for models with small context windows. */
@@ -160,6 +176,67 @@ export type HumanAuthCapability =
   | "permission"
   | "unknown";
 
+export type HumanAuthUiFieldType =
+  | "text"
+  | "textarea"
+  | "password"
+  | "email"
+  | "number"
+  | "date"
+  | "select"
+  | "otp"
+  | "card-number"
+  | "expiry"
+  | "cvc";
+
+export interface HumanAuthUiFieldOption {
+  label: string;
+  value: string;
+}
+
+export interface HumanAuthUiField {
+  id: string;
+  label: string;
+  type: HumanAuthUiFieldType;
+  placeholder?: string;
+  required?: boolean;
+  helperText?: string;
+  options?: HumanAuthUiFieldOption[];
+  autocomplete?: string;
+  artifactKey?: string;
+}
+
+export interface HumanAuthUiStyle {
+  brandColor?: string;
+  backgroundCss?: string;
+  fontFamily?: string;
+}
+
+export interface HumanAuthUiTemplate {
+  templateId?: string;
+  title?: string;
+  summary?: string;
+  capabilityHint?: string;
+  artifactKind?: "auto" | "credentials" | "payment_card" | "form";
+  requireArtifactOnApprove?: boolean;
+  allowTextAttachment?: boolean;
+  allowLocationAttachment?: boolean;
+  allowPhotoAttachment?: boolean;
+  allowAudioAttachment?: boolean;
+  allowFileAttachment?: boolean;
+  fileAccept?: string;
+  fields?: HumanAuthUiField[];
+  middleHtml?: string;
+  middleCss?: string;
+  middleScript?: string;
+  approveScript?: string;
+  approveLabel?: string;
+  rejectLabel?: string;
+  noteLabel?: string;
+  notePlaceholder?: string;
+  style?: HumanAuthUiStyle;
+}
+
 export interface HumanAuthRequest {
   sessionId: string;
   sessionPath: string;
@@ -171,6 +248,7 @@ export interface HumanAuthRequest {
   timeoutSec: number;
   currentApp: string;
   screenshotPath: string | null;
+  uiTemplate?: HumanAuthUiTemplate;
 }
 
 export interface HumanAuthDecision {
@@ -300,7 +378,7 @@ export interface UiElementSnapshot {
   scaledCenter: { x: number; y: number };
 }
 
-export type AgentAction =
+export type BatchableAgentAction =
   | { type: "tap"; x: number; y: number; reason?: string }
   | { type: "tap_element"; elementId: string; reason?: string }
   | {
@@ -314,6 +392,10 @@ export type AgentAction =
     }
   | { type: "type"; text: string; reason?: string }
   | { type: "keyevent"; keycode: string; reason?: string }
+  | { type: "wait"; durationMs?: number; reason?: string };
+
+export type AgentAction =
+  | BatchableAgentAction
   | { type: "launch_app"; packageName: string; reason?: string }
   | {
       type: "shell";
@@ -364,11 +446,18 @@ export type AgentAction =
       reason?: string;
     }
   | {
+      type: "batch_actions";
+      actions: BatchableAgentAction[];
+      reason?: string;
+    }
+    | {
       type: "request_human_auth";
       capability: HumanAuthCapability;
       instruction: string;
       timeoutSec?: number;
       reason?: string;
+      uiTemplate?: HumanAuthUiTemplate;
+      templatePath?: string;
     }
   | {
       type: "request_user_decision";
@@ -384,7 +473,6 @@ export type AgentAction =
       timeoutSec?: number;
       reason?: string;
     }
-  | { type: "wait"; durationMs?: number; reason?: string }
   | { type: "finish"; message: string };
 
 export interface ModelStepOutput {

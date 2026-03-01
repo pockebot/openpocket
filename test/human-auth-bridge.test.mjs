@@ -85,3 +85,20 @@ test("HumanAuthBridge times out when unresolved", async () => {
     assert.match(decision.message, /timed out/i);
   });
 });
+
+test("HumanAuthBridge saves audio artifacts with audio extension", async () => {
+  await withTempHome("openpocket-auth-bridge-audio-artifact-", async () => {
+    const cfg = loadConfig();
+    cfg.humanAuth.enabled = false;
+
+    const bridge = new HumanAuthBridge(cfg);
+    const outPath = bridge.saveArtifact("req-audio-ext", {
+      mimeType: "audio/webm;codecs=opus",
+      base64: Buffer.from("audio-bytes").toString("base64"),
+    });
+
+    assert.equal(Boolean(outPath), true);
+    assert.equal(path.extname(outPath), ".webm");
+    assert.equal(fs.existsSync(outPath), true);
+  });
+});

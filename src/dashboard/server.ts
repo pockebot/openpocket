@@ -48,6 +48,12 @@ interface PreviewSnapshot {
 }
 
 interface DashboardTraceAction {
+  batchDebugItems: Array<{
+    index: number;
+    actionType: string;
+    summary: string;
+    imagePath: string;
+  }>;
   stepNo: number;
   actionType: string;
   currentApp: string;
@@ -59,7 +65,12 @@ interface DashboardTraceAction {
   modelInferenceMs: number;
   loopDelayMs: number;
   reasoning: string;
+  decisionJson: string;
   result: string;
+  inputScreenshotPath: string | null;
+  debugScreenshotPath: string | null;
+  somScreenshotPath: string | null;
+  recentScreenshotPaths: string[];
 }
 
 interface DashboardTraceRun {
@@ -119,6 +130,12 @@ function sendText(res: http.ServerResponse, status: number, body: string): void 
 function sendHtml(res: http.ServerResponse, status: number, body: string): void {
   res.statusCode = status;
   res.setHeader("content-type", "text/html; charset=utf-8");
+  res.end(body);
+}
+
+function sendBinary(res: http.ServerResponse, status: number, body: Buffer, contentType: string): void {
+  res.statusCode = status;
+  res.setHeader("content-type", contentType);
   res.end(body);
 }
 
@@ -331,6 +348,103 @@ export class DashboardServer {
     return "ok";
   }
 
+  private extractLocalScreenshotPath(text: string): string | null {
+    const matched = String(text || "").match(/(?:^|\n)local_screenshot=(.+?)(?:\n|$)/);
+    if (!matched?.[1]) {
+      return null;
+    }
+    const resolved = resolvePath(matched[1].trim());
+    return resolved || null;
+  }
+
+  private extractLocalDebugScreenshotPath(text: string): string | null {
+    const matched = String(text || "").match(/(?:^|\n)local_debug_screenshot=(.+?)(?:\n|$)/);
+    if (!matched?.[1]) {
+      return null;
+    }
+    const resolved = resolvePath(matched[1].trim());
+    return resolved || null;
+  }
+
+  private extractLocalSomScreenshotPath(text: string): string | null {
+    const matched = String(text || "").match(/(?:^|\n)local_som_screenshot=(.+?)(?:\n|$)/);
+    if (!matched?.[1]) {
+      return null;
+    }
+    const resolved = resolvePath(matched[1].trim());
+    return resolved || null;
+  }
+
+  private extractLocalRecentScreenshotPaths(text: string): string[] {
+    const paths: string[] = [];
+    const regex = /(?:^|\n)local_recent_screenshot_\d+=(.+?)(?=\n|$)/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(String(text || ""))) !== null) {
+      const resolved = resolvePath(match[1].trim());
+      if (resolved) paths.push(resolved);
+    }
+    return paths;
+  }
+
+  private extractBatchDebugItems(text: string): Array<{
+    index: number;
+    actionType: string;
+    summary: string;
+    imagePath: string;
+  }> {
+    const lines = String(text || "").split("\n");
+    const items: Array<{
+      index: number;
+      actionType: string;
+      summary: string;
+      imagePath: string;
+    }> = [];
+    let currentIndex = 0;
+    let currentActionType = "unknown";
+    let currentSummary = "";
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      const batchMatch = line.match(/^\[(\d+)\/\d+\]\s+([a-z_]+):\s*(.+)$/i);
+      if (batchMatch) {
+        currentIndex = Math.max(1, Math.round(Number(batchMatch[1] || "0")));
+        currentActionType = String(batchMatch[2] || "unknown").trim() || "unknown";
+        currentSummary = String(batchMatch[3] || "").trim();
+        continue;
+      }
+      const debugMatch = line.match(/^local_debug_screenshot=(.+)$/);
+      if (debugMatch?.[1]) {
+        if (currentIndex <= 0) {
+          continue;
+        }
+        const resolved = resolvePath(debugMatch[1].trim());
+        if (resolved) {
+          items.push({
+            index: currentIndex > 0 ? currentIndex : items.length + 1,
+            actionType: currentActionType,
+            summary: currentSummary,
+            imagePath: resolved,
+          });
+        }
+      }
+    }
+
+    return items;
+  }
+
+  private stripLocalScreenshotLine(text: string): string {
+    return String(text || "")
+      .replace(/(?:^|\n)local_screenshot=.+?(?=\n|$)/g, "")
+      .replace(/(?:^|\n)local_debug_screenshot=.+?(?=\n|$)/g, "")
+      .replace(/(?:^|\n)local_som_screenshot=.+?(?=\n|$)/g, "")
+      .replace(/(?:^|\n)local_recent_screenshot_\d+=.+?(?=\n|$)/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
   private parseFallbackStepContent(raw: string): DashboardTraceAction | null {
     const text = String(raw || "");
     if (!text.trim()) {
@@ -353,8 +467,10 @@ export class DashboardServer {
     }
 
     let actionType = "unknown";
+    let decisionJson = "";
     if (actionStart >= 0 && resultStart > actionStart) {
       const actionJson = text.slice(actionStart + "\naction_json:\n".length, resultStart).trim();
+      decisionJson = actionJson;
       try {
         const parsed = JSON.parse(actionJson) as { type?: unknown };
         if (typeof parsed.type === "string" && parsed.type.trim()) {
@@ -365,12 +481,19 @@ export class DashboardServer {
       }
     }
 
-    const result = resultStart >= 0
+    const rawResult = resultStart >= 0
       ? text.slice(resultStart + "\nexecution_result:\n".length).trim()
       : "";
+    const inputScreenshotPath = this.extractLocalScreenshotPath(rawResult);
+    const debugScreenshotPath = this.extractLocalDebugScreenshotPath(rawResult);
+    const somScreenshotPath = this.extractLocalSomScreenshotPath(rawResult);
+    const recentScreenshotPaths = this.extractLocalRecentScreenshotPaths(rawResult);
+    const batchDebugItems = this.extractBatchDebugItems(rawResult);
+    const result = this.stripLocalScreenshotLine(rawResult);
 
     return {
       stepNo,
+      batchDebugItems,
       actionType,
       currentApp: "unknown",
       status: this.parseTraceStatus(undefined, result),
@@ -381,7 +504,12 @@ export class DashboardServer {
       modelInferenceMs: 0,
       loopDelayMs: 0,
       reasoning,
+      decisionJson,
       result,
+      inputScreenshotPath,
+      debugScreenshotPath,
+      somScreenshotPath,
+      recentScreenshotPaths,
     };
   }
 
@@ -559,14 +687,21 @@ export class DashboardServer {
         const reasoning = typeof details.reasoning === "string"
           ? details.reasoning
           : this.extractTextBlocks(message.content);
-        const result = typeof details.result === "string"
+        const rawResult = typeof details.result === "string"
           ? details.result
           : "";
+        const result = this.stripLocalScreenshotLine(rawResult);
+        const inputScreenshotPath = this.extractLocalScreenshotPath(rawResult);
+        const debugScreenshotPath = this.extractLocalDebugScreenshotPath(rawResult);
+        const somScreenshotPath = this.extractLocalSomScreenshotPath(rawResult);
+        const recentScreenshotPaths = this.extractLocalRecentScreenshotPaths(rawResult);
+        const batchDebugItems = this.extractBatchDebugItems(rawResult);
         const screenshotMsRaw = Number(details.screenshotMs ?? 0);
         const modelInferenceMsRaw = Number(details.modelInferenceMs ?? 0);
         const loopDelayMsRaw = Number(details.loopDelayMs ?? 0);
         current.actionTraceByStep.set(stepNo, {
           stepNo,
+          batchDebugItems,
           actionType,
           currentApp,
           status: this.parseTraceStatus(details.status, result),
@@ -577,7 +712,12 @@ export class DashboardServer {
           modelInferenceMs: Number.isFinite(modelInferenceMsRaw) ? Math.max(0, Math.round(modelInferenceMsRaw)) : 0,
           loopDelayMs: Number.isFinite(loopDelayMsRaw) ? Math.max(0, Math.round(loopDelayMsRaw)) : 0,
           reasoning,
+          decisionJson: typeof details.actionJson === "string" ? details.actionJson : "",
           result,
+          inputScreenshotPath,
+          debugScreenshotPath,
+          somScreenshotPath,
+          recentScreenshotPaths,
         });
         continue;
       }
@@ -639,7 +779,17 @@ export class DashboardServer {
 
       const mergedActions = new Map<number, DashboardTraceAction>(run.fallbackStepByStep);
       for (const [stepNo, action] of run.actionTraceByStep.entries()) {
-        mergedActions.set(stepNo, action);
+        const fallback = mergedActions.get(stepNo);
+        mergedActions.set(stepNo, {
+          ...fallback,
+          ...action,
+          batchDebugItems: action.batchDebugItems?.length ? action.batchDebugItems : (fallback?.batchDebugItems || []),
+          decisionJson: action.decisionJson || fallback?.decisionJson || "",
+          inputScreenshotPath: action.inputScreenshotPath || fallback?.inputScreenshotPath || null,
+          debugScreenshotPath: action.debugScreenshotPath || fallback?.debugScreenshotPath || null,
+          somScreenshotPath: action.somScreenshotPath || fallback?.somScreenshotPath || null,
+          recentScreenshotPaths: action.recentScreenshotPaths?.length ? action.recentScreenshotPaths : (fallback?.recentScreenshotPaths || []),
+        });
       }
       const actions = Array.from(mergedActions.values()).sort((a, b) => a.stepNo - b.stepNo);
 
@@ -1015,6 +1165,40 @@ export class DashboardServer {
     const resolved = resolvePath(promptPath);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     fs.writeFileSync(resolved, content, "utf-8");
+  }
+
+  private readTraceScreenshotFile(filePath: string): { content: Buffer; contentType: string; path: string } {
+    const resolved = resolvePath(filePath);
+    if (!resolved || !fs.existsSync(resolved)) {
+      throw new Error("Trace screenshot not found.");
+    }
+
+    const allowedRoots = new Set<string>([
+      resolvePath(this.config.workspaceDir),
+      resolvePath(this.config.screenshots.directory),
+    ]);
+    const stateScreenshots = path.join(resolvePath(this.config.stateDir), "screenshots");
+    allowedRoots.add(resolvePath(stateScreenshots));
+
+    const allowed = Array.from(allowedRoots).some((root) => root && pathWithin(root, resolved));
+    if (!allowed) {
+      throw new Error("Trace screenshot path is outside allowed roots.");
+    }
+
+    const stat = fs.statSync(resolved);
+    if (stat.size > 10_000_000) {
+      throw new Error(`Trace screenshot too large (${stat.size} bytes).`);
+    }
+
+    const ext = path.extname(resolved).toLowerCase();
+    const contentType = ext === ".jpg" || ext === ".jpeg"
+      ? "image/jpeg"
+      : "image/png";
+    return {
+      content: fs.readFileSync(resolved),
+      contentType,
+      path: resolved,
+    };
   }
 
   private applyOnboarding(input: unknown): { onboarding: OnboardingStateFile; config: OpenPocketConfig } {
@@ -1476,6 +1660,12 @@ export class DashboardServer {
       display: grid;
       gap: 14px;
       box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      cursor: pointer;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+    .trace-run-card:hover {
+      border-color: #cbd5e1;
+      box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
     }
     .trace-run-head {
       display: flex;
@@ -1913,6 +2103,60 @@ export class DashboardServer {
       color: #94a3b8;
       margin-bottom: 3px;
     }
+    .trace-screenshot-wrap {
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      background: #f8fafc;
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+    }
+    .trace-screenshot-image {
+      display: block;
+      width: 100%;
+      max-height: 280px;
+      object-fit: contain;
+      border-radius: 4px;
+      background: #e2e8f0;
+    }
+    .trace-screenshot-path {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: #64748b;
+      word-break: break-all;
+    }
+    .trace-batch-strip {
+      display: grid;
+      gap: 8px;
+    }
+    .trace-batch-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+    }
+    .trace-batch-item {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #fff;
+      padding: 6px;
+      display: grid;
+      gap: 5px;
+    }
+    .trace-batch-thumb {
+      width: 100%;
+      height: 120px;
+      object-fit: contain;
+      border-radius: 6px;
+      background: #e2e8f0;
+      display: block;
+    }
+    .trace-batch-caption {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: #475569;
+      line-height: 1.4;
+      word-break: break-word;
+    }
     @media (max-width: 980px) {
       .grid.cols-2 {
         grid-template-columns: 1fr;
@@ -2262,6 +2506,7 @@ export class DashboardServer {
       runtimeTimer: null,
       logsTimer: null,
       timelineTimer: null,
+      tracePanelTimer: null,
       emulatorActionPending: false,
       credentialStatus: {},
       traceRuns: [],
@@ -2273,6 +2518,8 @@ export class DashboardServer {
       traceSearchFilter: "",
       expandedResults: new Set(),
       channelsData: null,
+      openTraceRunSessionId: "",
+      openTraceStepNo: null,
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -2674,6 +2921,59 @@ export class DashboardServer {
       return pill;
     }
 
+    function traceScreenshotUrl(filePath) {
+      return "/api/trace-screenshot?path=" + encodeURIComponent(String(filePath || ""));
+    }
+
+    function traceRunPageUrl(sessionId, stepNo) {
+      const params = new URLSearchParams();
+      params.set("session", String(sessionId || ""));
+      if (stepNo != null && Number.isFinite(Number(stepNo))) {
+        params.set("step", String(Math.round(Number(stepNo))));
+      }
+      return "/trace?" + params.toString();
+    }
+
+    function buildTracePanelTitle(run) {
+      const actions = Array.isArray(run?.actions) ? run.actions : [];
+      const totalStepDur = actions.reduce((sum, item) => sum + Number(item.durationMs || 0), 0);
+      return (run?.task || "Steps").slice(0, 60) +
+        " \\u2014 " +
+        actions.length + " steps" +
+        " \\u2014 " +
+        formatDuration(totalStepDur);
+    }
+
+    function openTraceRun(run, scrollToStep) {
+      if (!run) return;
+      const url = traceRunPageUrl(run.sessionId, scrollToStep);
+      window.open(url, "_blank", "noopener");
+    }
+
+    function syncOpenTracePanel() {
+      if (!state.openTraceRunSessionId) {
+        return;
+      }
+      const overlay = $("#trace-panel-overlay");
+      if (!overlay.classList.contains("open")) {
+        state.openTraceRunSessionId = "";
+        state.openTraceStepNo = null;
+        return;
+      }
+      const run = Array.isArray(state.traceRuns)
+        ? state.traceRuns.find((item) => String(item.sessionId || "") === state.openTraceRunSessionId)
+        : null;
+      if (!run) {
+        closeTracePanel();
+        return;
+      }
+      openTracePanel(
+        buildTracePanelTitle(run),
+        Array.isArray(run.actions) ? run.actions : [],
+        null,
+      );
+    }
+
     function openTracePanel(title, steps, scrollToStep) {
       const overlay = $("#trace-panel-overlay");
       $("#trace-panel-title").textContent = title;
@@ -2704,27 +3004,38 @@ export class DashboardServer {
         headLeft.appendChild(app);
         head.appendChild(headLeft);
 
+        const totalStepMs = Number(step.durationMs || 0)
+          + Number(step.screenshotMs || 0)
+          + Number(step.modelInferenceMs || 0);
+        const hasBreakdown = Number(step.screenshotMs || 0) > 0 || Number(step.modelInferenceMs || 0) > 0;
+
         const chips = document.createElement("div");
         chips.className = "trace-step-chips";
         chips.appendChild(makeStatusPill(step.status || "ok"));
         const dur = document.createElement("span");
         dur.className = "trace-pill";
-        dur.textContent = formatDuration(step.durationMs);
+        dur.textContent = hasBreakdown
+          ? formatDuration(totalStepMs)
+          : formatDuration(step.durationMs);
         chips.appendChild(dur);
         head.appendChild(chips);
         card.appendChild(head);
 
         const meta = document.createElement("div");
         meta.className = "trace-step-meta";
-        const metaParts = [
+        const metaParts = [];
+        if (hasBreakdown) {
+          metaParts.push(
+            "exec " + formatDuration(step.durationMs) +
+            " · model " + formatDuration(step.modelInferenceMs) +
+            " · screenshot " + formatDuration(step.screenshotMs) +
+            " · delay " + formatDuration(step.loopDelayMs)
+          );
+        }
+        metaParts.push(
           formatTime(step.startedAt) +
-          (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : ""),
-        ];
-        const timingParts = [];
-        if (step.screenshotMs > 0) timingParts.push("screenshot " + formatDuration(step.screenshotMs));
-        if (step.modelInferenceMs > 0) timingParts.push("model " + formatDuration(step.modelInferenceMs));
-        if (step.loopDelayMs > 0) timingParts.push("delay " + formatDuration(step.loopDelayMs));
-        if (timingParts.length > 0) metaParts.push(timingParts.join(" · "));
+          (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : "")
+        );
         meta.textContent = metaParts.join("  |  ");
         card.appendChild(meta);
 
@@ -2733,10 +3044,81 @@ export class DashboardServer {
           block.className = "trace-block";
           const label = document.createElement("span");
           label.className = "trace-block-label";
-          label.textContent = "Reasoning";
+          label.textContent = "Thought Process";
           block.appendChild(label);
           block.appendChild(document.createTextNode(String(step.reasoning)));
           card.appendChild(block);
+        }
+
+        if (step.decisionJson && step.decisionJson !== "(empty)") {
+          const block = document.createElement("div");
+          block.className = "trace-block";
+          const label = document.createElement("span");
+          label.className = "trace-block-label";
+          label.textContent = "Decision";
+          block.appendChild(label);
+          block.appendChild(document.createTextNode(String(step.decisionJson)));
+          card.appendChild(block);
+        }
+
+        function addPanelShot(labelText, filePath) {
+          if (!filePath) return;
+          const wrap = document.createElement("div");
+          wrap.className = "trace-screenshot-wrap";
+          const label = document.createElement("span");
+          label.className = "trace-block-label";
+          label.textContent = labelText;
+          wrap.appendChild(label);
+          const image = document.createElement("img");
+          image.className = "trace-screenshot-image";
+          image.loading = "lazy";
+          image.alt = labelText;
+          image.src = traceScreenshotUrl(filePath);
+          wrap.appendChild(image);
+          const pathMeta = document.createElement("div");
+          pathMeta.className = "trace-screenshot-path";
+          pathMeta.textContent = String(filePath);
+          wrap.appendChild(pathMeta);
+          card.appendChild(wrap);
+        }
+        if (Array.isArray(step.recentScreenshotPaths)) {
+          for (let ri = 0; ri < step.recentScreenshotPaths.length; ri++) {
+            addPanelShot("Recent Frame " + (ri + 1), step.recentScreenshotPaths[ri]);
+          }
+        }
+        addPanelShot("Input Screenshot", step.inputScreenshotPath);
+        addPanelShot("SoM Overlay", step.somScreenshotPath);
+        addPanelShot("Click Overlay", step.debugScreenshotPath);
+
+        if (Array.isArray(step.batchDebugItems) && step.batchDebugItems.length > 0) {
+          const wrap = document.createElement("div");
+          wrap.className = "trace-batch-strip";
+          const label = document.createElement("span");
+          label.className = "trace-block-label";
+          label.textContent = "Batch Action Locations";
+          wrap.appendChild(label);
+          const grid = document.createElement("div");
+          grid.className = "trace-batch-grid";
+          for (const item of step.batchDebugItems) {
+            const box = document.createElement("div");
+            box.className = "trace-batch-item";
+            const img = document.createElement("img");
+            img.className = "trace-batch-thumb";
+            img.loading = "lazy";
+            img.alt = "Batch action " + String(item.index || "");
+            img.src = traceScreenshotUrl(item.imagePath);
+            box.appendChild(img);
+            const caption = document.createElement("div");
+            caption.className = "trace-batch-caption";
+            caption.textContent =
+              "#" + String(item.index || "?") +
+              " " + String(item.actionType || "unknown") +
+              (item.summary ? " · " + String(item.summary) : "");
+            box.appendChild(caption);
+            grid.appendChild(box);
+          }
+          wrap.appendChild(grid);
+          card.appendChild(wrap);
         }
 
         if (step.result && step.result !== "(empty)") {
@@ -2761,6 +3143,12 @@ export class DashboardServer {
     }
 
     function closeTracePanel() {
+      state.openTraceRunSessionId = "";
+      state.openTraceStepNo = null;
+      if (state.tracePanelTimer) {
+        clearInterval(state.tracePanelTimer);
+        state.tracePanelTimer = null;
+      }
       $("#trace-panel-overlay").classList.remove("open");
       document.body.classList.remove("panel-open");
     }
@@ -2818,6 +3206,9 @@ export class DashboardServer {
       for (const run of pageRuns) {
         const card = document.createElement("article");
         card.className = "trace-run-card";
+        card.addEventListener("click", () => {
+          openTraceRun(run, null);
+        });
 
         const head = document.createElement("div");
         head.className = "trace-run-head";
@@ -2991,14 +3382,12 @@ export class DashboardServer {
             row.appendChild(arrowCell);
 
             const firstStepOfGroup = group.firstStepNo;
-            row.addEventListener("click", () => {
-              const panelTitle =
-                (run.task || "Steps").slice(0, 60) +
-                " \\u2014 " +
-                allStepsSorted.length + " steps" +
-                " \\u2014 " +
-                formatDuration(totalStepDur);
-              openTracePanel(panelTitle, allStepsSorted, firstStepOfGroup);
+            row.addEventListener("click", (e) => {
+              e.stopPropagation();
+              openTraceRun({
+                ...run,
+                actions: allStepsSorted,
+              }, firstStepOfGroup);
             });
 
             list.appendChild(row);
@@ -3075,6 +3464,7 @@ export class DashboardServer {
       state.traceSkippedFiles = skipped;
       state.traceTruncatedFiles = truncated;
       renderTraces(runs);
+      syncOpenTracePanel();
       if (!silent) {
         setStatus("Action timeline refreshed.", "ok");
       }
@@ -3408,7 +3798,9 @@ export class DashboardServer {
         }
         if (enabled) {
           state.timelineTimer = setInterval(() => {
-            if (document.querySelector('[data-panel="timeline"]').classList.contains("active")) {
+            const timelineActive = document.querySelector('[data-panel="timeline"]').classList.contains("active");
+            const traceOpen = $("#trace-panel-overlay").classList.contains("open");
+            if (timelineActive || traceOpen) {
               loadTraces({ silent: true }).catch(() => {});
             }
           }, 3000);
@@ -3626,7 +4018,572 @@ export class DashboardServer {
 
     init();
   </script>
-  </body>
+</body>
+</html>`;
+  }
+
+  private traceDetailShell(sessionId: string, scrollToStep: number | null): string {
+    const safeSessionId = JSON.stringify(sessionId);
+    const safeStepNo = Number.isFinite(scrollToStep ?? Number.NaN) ? Math.max(1, Math.round(scrollToStep as number)) : null;
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenPocket Trace Detail</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --line: #dbe4ee;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --ok: #22c55e;
+      --err: #ef4444;
+      --mono: "SF Mono", "Menlo", "Consolas", monospace;
+      --sans: "Avenir Next", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: linear-gradient(180deg, #eef4fb, #f8fafc);
+      color: var(--ink);
+    }
+    .layout {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    .head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .title {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 800;
+    }
+    .sub {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 8px 12px;
+      background: #fff;
+      color: #0f172a;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 5px 10px;
+      border: 1px solid #cbd5e1;
+      font-size: 12px;
+      background: #f8fafc;
+      color: #475569;
+    }
+    .pill.ok { background: #f0fdf4; color: #166534; border-color: #86efac; }
+    .pill.failed { background: #fef2f2; color: #991b1b; border-color: #fca5a5; }
+    .pill.running { background: #f5f3ff; color: #5b21b6; border-color: #c4b5fd; }
+    .steps {
+      display: grid;
+      gap: 14px;
+    }
+    .step {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--ok);
+      border-radius: 12px;
+      background: #fff;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .step.error { border-left-color: var(--err); }
+    .step-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .step-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .block, .shot {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 10px;
+    }
+    .media-row {
+      display: flex;
+      gap: 10px;
+      align-items: start;
+      overflow-x: auto;
+      overflow-y: hidden;
+      width: 100%;
+      min-width: 0;
+      padding-bottom: 4px;
+      overscroll-behavior-x: contain;
+      scrollbar-width: thin;
+    }
+    .media-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      flex: 0 0 320px;
+      width: 320px;
+      min-width: 320px;
+      max-width: 320px;
+      overflow: hidden;
+    }
+    .media-card img {
+      display: block;
+      width: 100%;
+      max-height: 320px;
+      object-fit: contain;
+      border-radius: 8px;
+      background: #e2e8f0;
+    }
+    .label {
+      display: block;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+    .block {
+      white-space: pre-wrap;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+      color: #334155;
+    }
+    .shot img {
+      display: block;
+      width: 100%;
+      height: 320px;
+      max-height: 320px;
+      object-fit: contain;
+      border-radius: 8px;
+      background: #e2e8f0;
+    }
+    .shot .path {
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .batch-strip {
+      display: grid;
+      gap: 8px;
+    }
+    .batch-carousel {
+      position: relative;
+    }
+    .batch-viewport {
+      overflow: hidden;
+      border-radius: 10px;
+    }
+    .batch-item {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+    }
+    .batch-item img {
+      display: block;
+      width: 100%;
+      max-height: 280px;
+      object-fit: contain;
+      border-radius: 8px;
+      background: #e2e8f0;
+    }
+    .batch-cap {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .batch-arrow {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 1px solid #cbd5e1;
+      background: #fff;
+      color: #334155;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      z-index: 2;
+    }
+    .batch-arrow:hover { background: #f1f5f9; }
+    .batch-arrow:disabled { opacity: 0.3; cursor: default; }
+    .batch-arrow.left { left: -14px; }
+    .batch-arrow.right { right: -14px; }
+    .batch-counter {
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .empty {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    @media (max-width: 900px) {
+      .media-card {
+        width: 280px;
+        min-width: 280px;
+        max-width: 280px;
+        flex-basis: 280px;
+      }
+      .media-card img {
+        max-height: 280px;
+      }
+      .shot img {
+        height: 280px;
+        max-height: 280px;
+      }
+      .batch-item img {
+        max-height: 240px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <section class="card">
+      <div class="head">
+        <div>
+          <h1 class="title">Trace Detail</h1>
+          <div class="sub" id="run-meta">Loading trace…</div>
+        </div>
+        <div class="row">
+          <a class="btn" href="/">Back to Dashboard</a>
+          <button class="btn" id="refresh-btn">Refresh</button>
+          <span class="pill" id="status-pill">loading</span>
+        </div>
+      </div>
+    </section>
+    <section class="steps" id="steps-host">
+      <div class="card empty">Loading…</div>
+    </section>
+  </div>
+  <script>
+    const sessionId = ${safeSessionId};
+    const initialStep = ${safeStepNo === null ? "null" : String(safeStepNo)};
+    let latestRun = null;
+
+    function formatDuration(ms) {
+      const n = Number(ms || 0);
+      if (!Number.isFinite(n) || n <= 0) return "0ms";
+      if (n < 1000) return n + "ms";
+      const s = n / 1000;
+      if (s < 60) return (s >= 10 ? s.toFixed(1) : s.toFixed(1)) + "s";
+      const mins = Math.floor(s / 60);
+      const secs = Math.round(s - mins * 60);
+      return mins + "m " + secs + "s";
+    }
+
+    function formatTime(value) {
+      const parsed = Date.parse(String(value || ""));
+      return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : "n/a";
+    }
+
+    function traceScreenshotUrl(filePath) {
+      return "/api/trace-screenshot?path=" + encodeURIComponent(String(filePath || ""));
+    }
+
+    async function api(path) {
+      const res = await fetch(path, { headers: { "content-type": "application/json" } });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || res.statusText || "Request failed");
+      return payload;
+    }
+
+    function renderRun(run) {
+      latestRun = run;
+      const meta = document.getElementById("run-meta");
+      const statusPill = document.getElementById("status-pill");
+      const host = document.getElementById("steps-host");
+      host.textContent = "";
+
+      if (!run) {
+        meta.textContent = "Run not found for session " + sessionId;
+        statusPill.textContent = "missing";
+        statusPill.className = "pill";
+        const empty = document.createElement("section");
+        empty.className = "card empty";
+        empty.textContent = "No run found.";
+        host.appendChild(empty);
+        return;
+      }
+
+      meta.textContent =
+        (run.task || "(no task)") + " | Session: " + (run.sessionId || "unknown") +
+        " | Model: " + (run.modelProfile || "unknown") + " (" + (run.modelName || "unknown") + ")" +
+        " | Started: " + formatTime(run.startedAt) +
+        " | Ended: " + (run.endedAt ? formatTime(run.endedAt) : "running");
+
+      statusPill.textContent = String(run.status || "unknown");
+      statusPill.className = "pill " + String(run.status || "");
+
+      const steps = Array.isArray(run.actions) ? run.actions : [];
+      if (steps.length === 0) {
+        const empty = document.createElement("section");
+        empty.className = "card empty";
+        empty.textContent = "No completed actions recorded.";
+        host.appendChild(empty);
+        return;
+      }
+
+      let scrollTarget = null;
+      for (const step of steps) {
+        const card = document.createElement("section");
+        card.className = "step " + String(step.status || "ok");
+        if (initialStep != null && Number(step.stepNo) === Number(initialStep) && !scrollTarget) {
+          scrollTarget = card;
+        }
+
+        const head = document.createElement("div");
+        head.className = "step-head";
+        const title = document.createElement("h2");
+        title.className = "step-title";
+        title.textContent = "Step " + String(step.stepNo || "?") + " · " + String(step.actionType || "unknown");
+        head.appendChild(title);
+        const pill = document.createElement("span");
+        pill.className = "pill " + String(step.status || "");
+        pill.textContent = String(step.status || "");
+        head.appendChild(pill);
+        card.appendChild(head);
+
+        const metaLine = document.createElement("div");
+        metaLine.className = "meta";
+        const timing = [];
+        if (step.screenshotMs > 0) timing.push("screenshot " + formatDuration(step.screenshotMs));
+        if (step.modelInferenceMs > 0) timing.push("model " + formatDuration(step.modelInferenceMs));
+        if (step.loopDelayMs > 0) timing.push("delay " + formatDuration(step.loopDelayMs));
+        const inlineTotalMs = Number(step.durationMs || 0)
+          + Number(step.screenshotMs || 0)
+          + Number(step.modelInferenceMs || 0);
+        const inlineHasBreakdown = timing.length > 0;
+        metaLine.textContent =
+          "App: " + String(step.currentApp || "unknown") +
+          " | " + formatTime(step.startedAt) + " → " + formatTime(step.endedAt) +
+          " | total " + formatDuration(inlineHasBreakdown ? inlineTotalMs : step.durationMs) +
+          (inlineHasBreakdown ? " (exec " + formatDuration(step.durationMs) + " · " + timing.join(" · ") + ")" : "");
+        card.appendChild(metaLine);
+
+        const mediaRow = document.createElement("div");
+        mediaRow.className = "media-row";
+        let hasMedia = false;
+
+        function addBlock(labelText, value) {
+          if (!value || value === "(empty)") return;
+          const block = document.createElement("div");
+          block.className = "block";
+          const label = document.createElement("span");
+          label.className = "label";
+          label.textContent = labelText;
+          block.appendChild(label);
+          block.appendChild(document.createTextNode(String(value)));
+          card.appendChild(block);
+        }
+
+        function addShot(labelText, filePath) {
+          if (!filePath) return;
+          hasMedia = true;
+          const wrap = document.createElement("div");
+          wrap.className = "media-card";
+          const label = document.createElement("span");
+          label.className = "label";
+          label.textContent = labelText;
+          wrap.appendChild(label);
+          const img = document.createElement("img");
+          img.loading = "lazy";
+          img.alt = labelText;
+          img.src = traceScreenshotUrl(filePath);
+          wrap.appendChild(img);
+          const path = document.createElement("div");
+          path.className = "path";
+          path.textContent = String(filePath);
+          wrap.appendChild(path);
+          mediaRow.appendChild(wrap);
+        }
+
+        function addBatchStrip(items) {
+          if (!Array.isArray(items) || items.length === 0) return;
+          hasMedia = true;
+          const wrap = document.createElement("div");
+          wrap.className = "media-card batch-strip";
+          const label = document.createElement("span");
+          label.className = "label";
+          label.textContent = "Batch Action Locations";
+          wrap.appendChild(label);
+
+          const carousel = document.createElement("div");
+          carousel.className = "batch-carousel";
+          const viewport = document.createElement("div");
+          viewport.className = "batch-viewport";
+
+          const slides = [];
+          for (const item of items) {
+            const box = document.createElement("div");
+            box.className = "batch-item";
+            const img = document.createElement("img");
+            img.loading = "lazy";
+            img.alt = "Batch action " + String(item.index || "");
+            img.src = traceScreenshotUrl(item.imagePath);
+            box.appendChild(img);
+            const cap = document.createElement("div");
+            cap.className = "batch-cap";
+            cap.textContent =
+              "#" + String(item.index || "?") +
+              " " + String(item.actionType || "unknown") +
+              (item.summary ? " · " + String(item.summary) : "");
+            box.appendChild(cap);
+            slides.push(box);
+          }
+
+          let cur = 0;
+          function show(i) {
+            cur = i;
+            viewport.textContent = "";
+            viewport.appendChild(slides[cur]);
+            leftBtn.disabled = cur === 0;
+            rightBtn.disabled = cur === slides.length - 1;
+            counter.textContent = (cur + 1) + " / " + slides.length;
+          }
+
+          const leftBtn = document.createElement("button");
+          leftBtn.className = "batch-arrow left";
+          leftBtn.innerHTML = "&#8249;";
+          leftBtn.onclick = function() { if (cur > 0) show(cur - 1); };
+
+          const rightBtn = document.createElement("button");
+          rightBtn.className = "batch-arrow right";
+          rightBtn.innerHTML = "&#8250;";
+          rightBtn.onclick = function() { if (cur < slides.length - 1) show(cur + 1); };
+
+          carousel.appendChild(leftBtn);
+          carousel.appendChild(viewport);
+          carousel.appendChild(rightBtn);
+          wrap.appendChild(carousel);
+
+          const counter = document.createElement("div");
+          counter.className = "batch-counter";
+          wrap.appendChild(counter);
+
+          show(0);
+          mediaRow.appendChild(wrap);
+        }
+
+        if (Array.isArray(step.recentScreenshotPaths)) {
+          for (let ri = 0; ri < step.recentScreenshotPaths.length; ri++) {
+            addShot("Recent Frame " + (ri + 1), step.recentScreenshotPaths[ri]);
+          }
+        }
+        addShot("Input Screenshot", step.inputScreenshotPath);
+        addShot("SoM Overlay", step.somScreenshotPath);
+        addShot("Click Overlay", step.debugScreenshotPath);
+        addBatchStrip(step.batchDebugItems);
+        if (hasMedia) {
+          card.appendChild(mediaRow);
+        }
+        addBlock("Thought Process", step.reasoning);
+        addBlock("Decision", step.decisionJson);
+        addBlock("Outcome", step.result);
+
+        host.appendChild(card);
+      }
+
+      if (scrollTarget) {
+        requestAnimationFrame(() => scrollTarget.scrollIntoView({ behavior: "smooth", block: "start" }));
+      }
+    }
+
+    let lastFingerprint = "";
+    function runFingerprint(run) {
+      if (!run) return "null";
+      const actions = Array.isArray(run.actions) ? run.actions : [];
+      return String(run.status || "") + ":" + actions.length + ":" + String(run.endedAt || "");
+    }
+
+    async function load(force) {
+      const payload = await api("/api/traces?limit=100");
+      const runs = Array.isArray(payload.runs) ? payload.runs : [];
+      const run = runs.find((item) => String(item.sessionId || "") === sessionId) || null;
+      const fp = runFingerprint(run);
+      if (!force && fp === lastFingerprint) return;
+      lastFingerprint = fp;
+      const scrollY = window.scrollY;
+      renderRun(run);
+      requestAnimationFrame(() => window.scrollTo(0, scrollY));
+    }
+
+    document.getElementById("refresh-btn").addEventListener("click", () => {
+      load(true).catch((error) => {
+        document.getElementById("run-meta").textContent = error.message;
+      });
+    });
+
+    load(true).catch((error) => {
+      document.getElementById("run-meta").textContent = error.message;
+    });
+    setInterval(() => {
+      load(false).catch(() => {});
+    }, 2000);
+  </script>
+</body>
 </html>`;
   }
 
@@ -3637,6 +4594,17 @@ export class DashboardServer {
     try {
       if (method === "GET" && url.pathname === "/") {
         sendHtml(res, 200, this.htmlShell());
+        return;
+      }
+
+      if (method === "GET" && url.pathname === "/trace") {
+        const sessionId = String(url.searchParams.get("session") ?? "").trim();
+        if (!sessionId) {
+          throw new Error("Missing trace session id.");
+        }
+        const stepRaw = Number(url.searchParams.get("step") ?? "");
+        const stepNo = Number.isFinite(stepRaw) && stepRaw > 0 ? Math.round(stepRaw) : null;
+        sendHtml(res, 200, this.traceDetailShell(sessionId, stepNo));
         return;
       }
 
@@ -3667,6 +4635,16 @@ export class DashboardServer {
           truncatedFiles: traceResult.truncatedFiles,
           fetchedAt: nowIso(),
         });
+        return;
+      }
+
+      if (method === "GET" && url.pathname === "/api/trace-screenshot") {
+        const filePath = String(url.searchParams.get("path") ?? "").trim();
+        if (!filePath) {
+          throw new Error("Missing trace screenshot path.");
+        }
+        const screenshot = this.readTraceScreenshotFile(filePath);
+        sendBinary(res, 200, screenshot.content, screenshot.contentType);
         return;
       }
 

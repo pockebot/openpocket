@@ -35,6 +35,10 @@ class FakeEmulator {
     };
   }
 
+  adbBinary() {
+    return "adb";
+  }
+
   runAdb(args) {
     this.calls.push(args);
 
@@ -250,7 +254,7 @@ test("AdbRuntime wakes and dismisses keyguard before interactive action on physi
   const runtime = new AdbRuntime(
     {
       agent: { deviceId: null },
-      target: { type: "physical-phone" },
+      target: { type: "physical-phone", pin: "1234" },
     },
     emulator,
   );
@@ -269,10 +273,57 @@ test("AdbRuntime wakes and dismisses keyguard before interactive action on physi
   );
 });
 
+test("AdbRuntime inputs default PIN when device remains locked after dismiss attempt", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", pin: "1234" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 100, y: 220 });
+  assert.match(result, /Tapped at/i);
+  assert.equal(
+    emulator.calls.some(
+      (args) =>
+        args[0] === "-s"
+        && args[2] === "shell"
+        && args[3] === "input"
+        && args[4] === "swipe",
+    ),
+    true,
+  );
+  for (const keycode of ["8", "9", "10", "11", "66"]) {
+    assert.equal(
+      emulator.calls.some(
+        (args) =>
+          args[0] === "-s"
+          && args[2] === "shell"
+          && args[3] === "input"
+          && args[4] === "keyevent"
+          && args[5] === keycode,
+      ),
+      true,
+      `missing keyevent ${keycode}`,
+    );
+  }
+});
+
 test("AdbRuntime fails clearly when physical phone stays locked after unlock attempts", async () => {
   const emulator = new FakeEmulator({
     powerDumps: ["mInteractive=true"],
     policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
       "isStatusBarKeyguard=true",
@@ -281,7 +332,7 @@ test("AdbRuntime fails clearly when physical phone stays locked after unlock att
   const runtime = new AdbRuntime(
     {
       agent: { deviceId: null },
-      target: { type: "physical-phone" },
+      target: { type: "physical-phone", pin: "1234" },
     },
     emulator,
   );
@@ -294,8 +345,210 @@ test("AdbRuntime fails clearly when physical phone stays locked after unlock att
     emulator.calls.some(
       (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_MENU",
     ),
-    true,
+    false,
   );
+});
+
+test("AdbRuntime avoids KEYCODE_MENU fallback when lock state is unknown after PIN unlock", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "unable to resolve keyguard state",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", pin: "1234" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 140, y: 320 });
+  assert.match(result, /Tapped at/i);
+  assert.equal(
+    emulator.calls.some(
+      (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "input" && args[4] === "keyevent" && args[5] === "KEYCODE_MENU",
+    ),
+    false,
+  );
+});
+
+test("AdbRuntime retries PIN unlock once when first attempt still reports locked", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", pin: "1234" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 160, y: 360 });
+  assert.match(result, /Tapped at/i);
+  const digitOneCount = emulator.calls.filter(
+    (args) =>
+      args[0] === "-s"
+      && args[2] === "shell"
+      && args[3] === "input"
+      && args[4] === "keyevent"
+      && args[5] === "8",
+  ).length;
+  assert.equal(digitOneCount, 2);
+});
+
+test("AdbRuntime avoids second PIN entry when lock clears after settle delay", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", pin: "1234" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 180, y: 420 });
+  assert.match(result, /Tapped at/i);
+  const digitOneCount = emulator.calls.filter(
+    (args) =>
+      args[0] === "-s"
+      && args[2] === "shell"
+      && args[3] === "input"
+      && args[4] === "keyevent"
+      && args[5] === "8",
+  ).length;
+  assert.equal(digitOneCount, 1);
+});
+
+test("AdbRuntime falls back to default PIN when physical PIN is empty", async () => {
+  const emulator = new FakeEmulator({
+    powerDumps: ["mInteractive=true"],
+    policyDumps: [
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=true",
+      "isStatusBarKeyguard=false",
+    ],
+  });
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: null },
+      target: { type: "physical-phone", pin: "" },
+    },
+    emulator,
+  );
+
+  const result = await runtime.executeAction({ type: "tap", x: 90, y: 180 });
+  assert.match(result, /Tapped at/i);
+  for (const keycode of ["8", "9", "10", "11", "66"]) {
+    assert.equal(
+      emulator.calls.some(
+        (args) =>
+          args[0] === "-s"
+          && args[2] === "shell"
+          && args[3] === "input"
+          && args[4] === "keyevent"
+          && args[5] === keycode,
+      ),
+      true,
+      `missing keyevent ${keycode}`,
+    );
+  }
+});
+
+test("AdbRuntime screen-awake heartbeat manages worker lifecycle independently", () => {
+  const emulator = new FakeEmulator();
+  const starts = [];
+  const stops = [];
+  const runtime = new AdbRuntime(makeConfig(), emulator, {
+    createScreenAwakeWorker: (params) => {
+      starts.push(params);
+      let stopped = false;
+      return {
+        stop: () => {
+          if (!stopped) {
+            stopped = true;
+            stops.push(params);
+          }
+        },
+      };
+    },
+  });
+
+  runtime.startScreenAwakeHeartbeat("emulator-5554", 3000);
+  runtime.startScreenAwakeHeartbeat("emulator-5554", 3000);
+  runtime.startScreenAwakeHeartbeat("emulator-5554", 5000);
+  runtime.stopScreenAwakeHeartbeat();
+  runtime.stopScreenAwakeHeartbeat();
+
+  assert.equal(starts.length, 2);
+  assert.equal(stops.length, 2);
+  assert.deepEqual(starts[0], {
+    adbPath: "adb",
+    preferredDeviceId: "emulator-5554",
+    adbEndpoint: null,
+    targetType: "emulator",
+    intervalMs: 3000,
+  });
+  assert.equal(starts[1].intervalMs, 5000);
+});
+
+test("AdbRuntime screen-awake heartbeat worker normalizes physical target params", () => {
+  const emulator = new FakeEmulator();
+  const starts = [];
+  const stops = [];
+  const runtime = new AdbRuntime(
+    {
+      agent: { deviceId: "USB-DEVICE-1" },
+      target: { type: "physical-phone", adbEndpoint: "192.168.0.15" },
+    },
+    emulator,
+    {
+      createScreenAwakeWorker: (params) => {
+        starts.push(params);
+        let stopped = false;
+        return {
+          stop: () => {
+            if (!stopped) {
+              stopped = true;
+              stops.push(params);
+            }
+          },
+        };
+      },
+    },
+  );
+
+  runtime.startScreenAwakeHeartbeat(undefined, 200);
+  runtime.stopScreenAwakeHeartbeat();
+
+  assert.equal(starts.length, 1);
+  assert.equal(stops.length, 1);
+  assert.deepEqual(starts[0], {
+    adbPath: "adb",
+    preferredDeviceId: "USB-DEVICE-1",
+    adbEndpoint: "192.168.0.15:5555",
+    targetType: "physical-phone",
+    intervalMs: 1000,
+  });
 });
 
 test("extractPackageName parses top resumed activity from activity dump", () => {

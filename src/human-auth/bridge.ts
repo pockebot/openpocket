@@ -59,6 +59,30 @@ function mimeToExtension(mimeType: string): string {
   if (normalized.includes("webp")) {
     return "webp";
   }
+  if (normalized.includes("webm")) {
+    return "webm";
+  }
+  if (normalized.includes("ogg")) {
+    return "ogg";
+  }
+  if (normalized.includes("wav") || normalized.includes("wave")) {
+    return "wav";
+  }
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) {
+    return "mp3";
+  }
+  if (normalized.includes("m4a") || normalized.includes("mp4")) {
+    return "m4a";
+  }
+  if (normalized.includes("aac")) {
+    return "aac";
+  }
+  if (normalized.includes("opus")) {
+    return "opus";
+  }
+  if (normalized.includes("flac")) {
+    return "flac";
+  }
   if (normalized.includes("json")) {
     return "json";
   }
@@ -116,6 +140,48 @@ export class HumanAuthBridge {
         expiresAt: new Date(entry.expiresAtMs).toISOString(),
         relayEnabled: Boolean(entry.pollToken),
       }));
+  }
+
+  cancelPendingForChat(chatId: number, reason = "Task stopped by user."): number {
+    if (!Number.isFinite(chatId)) {
+      return 0;
+    }
+    let cancelled = 0;
+    for (const entry of [...this.pending.values()]) {
+      if (entry.chatId !== chatId) {
+        continue;
+      }
+      const ok = this.settleEntry(entry, {
+        requestId: entry.id,
+        approved: false,
+        status: "rejected",
+        message: reason,
+        decidedAt: nowIso(),
+        artifactPath: null,
+      });
+      if (ok) {
+        cancelled += 1;
+      }
+    }
+    return cancelled;
+  }
+
+  cancelAllPending(reason = "Task stopped by gateway shutdown."): number {
+    let cancelled = 0;
+    for (const entry of [...this.pending.values()]) {
+      const ok = this.settleEntry(entry, {
+        requestId: entry.id,
+        approved: false,
+        status: "rejected",
+        message: reason,
+        decidedAt: nowIso(),
+        artifactPath: null,
+      });
+      if (ok) {
+        cancelled += 1;
+      }
+    }
+    return cancelled;
   }
 
   resolvePending(requestId: string, approved: boolean, note?: string, actor = "manual"): boolean {
@@ -260,6 +326,7 @@ export class HumanAuthBridge {
         timeoutSec: entry.request.timeoutSec,
         currentApp: entry.request.currentApp,
         screenshotPath: entry.request.screenshotPath,
+        uiTemplate: entry.request.uiTemplate,
         publicBaseUrl: this.config.humanAuth.publicBaseUrl || undefined,
       }),
     });
@@ -288,11 +355,104 @@ export class HumanAuthBridge {
     return { requestId, openUrl, pollToken, expiresAt };
   }
 
+  private handleRelayPollResponse(entry: PendingEntry, parsed: RelayPollResponse): boolean {
+    if (parsed.status === "approved" || parsed.status === "rejected" || parsed.status === "timeout") {
+      const artifactPath = parsed.artifact ? this.saveArtifact(entry.id, parsed.artifact) : null;
+      void this.settleEntry(entry, {
+        requestId: entry.id,
+        approved: parsed.status === "approved",
+        status: parsed.status,
+        message:
+          parsed.note?.trim() ||
+          (parsed.status === "approved"
+            ? "Approved from web link."
+            : parsed.status === "rejected"
+              ? "Rejected from web link."
+              : "Human authorization timed out."),
+        decidedAt: parsed.decidedAt || nowIso(),
+        artifactPath,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  private async trySSEDecision(entry: PendingEntry): Promise<boolean> {
+    if (!entry.pollToken) {
+      return false;
+    }
+    const sseUrl =
+      `${this.config.humanAuth.relayBaseUrl}/v1/human-auth/requests/${encodeURIComponent(entry.id)}/events` +
+      `?pollToken=${encodeURIComponent(entry.pollToken)}`;
+    const apiKey = this.resolveRelayApiKey();
+    const headers: Record<string, string> = { accept: "text/event-stream" };
+    if (apiKey) {
+      headers.authorization = `Bearer ${apiKey}`;
+    }
+
+    try {
+      const remainingMs = Math.max(5_000, entry.expiresAtMs - Date.now() + 5_000);
+      const controller = new AbortController();
+      // Single timeout covering the entire SSE lifecycle (connect + stream read).
+      const timeoutId = setTimeout(() => controller.abort(), remainingMs);
+
+      const response = await fetch(sseUrl, { method: "GET", headers, signal: controller.signal });
+
+      if (!response.ok || !response.body) {
+        clearTimeout(timeoutId);
+        return false;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (!entry.closed) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const parsed = JSON.parse(line.slice(6)) as RelayPollResponse;
+                if (this.handleRelayPollResponse(entry, parsed)) {
+                  reader.cancel().catch(() => {});
+                  clearTimeout(timeoutId);
+                  return true;
+                }
+              } catch {
+                // Ignore malformed SSE data.
+              }
+            }
+          }
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        reader.cancel().catch(() => {});
+      }
+    } catch {
+      // SSE connection failed or timed out — caller falls back to polling.
+    }
+    return false;
+  }
+
   private async pollRemoteDecision(entry: PendingEntry): Promise<void> {
     if (!entry.pollToken) {
       return;
     }
 
+    // Try SSE first for instant notification.
+    const sseResolved = await this.trySSEDecision(entry);
+    if (sseResolved || entry.closed) {
+      return;
+    }
+
+    // Fallback to traditional polling.
     const apiKey = this.resolveRelayApiKey();
     const headers: Record<string, string> = {};
     if (apiKey) {
@@ -324,22 +484,7 @@ export class HumanAuthBridge {
 
         if (response.ok) {
           const parsed = (await response.json()) as RelayPollResponse;
-          if (parsed.status === "approved" || parsed.status === "rejected" || parsed.status === "timeout") {
-            const artifactPath = parsed.artifact ? this.saveArtifact(entry.id, parsed.artifact) : null;
-            void this.settleEntry(entry, {
-              requestId: entry.id,
-              approved: parsed.status === "approved",
-              status: parsed.status,
-              message:
-                parsed.note?.trim() ||
-                (parsed.status === "approved"
-                  ? "Approved from web link."
-                  : parsed.status === "rejected"
-                    ? "Rejected from web link."
-                    : "Human authorization timed out."),
-              decidedAt: parsed.decidedAt || nowIso(),
-              artifactPath,
-            });
+          if (this.handleRelayPollResponse(entry, parsed)) {
             return;
           }
         }

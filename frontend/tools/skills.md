@@ -1,45 +1,94 @@
 # Skills
 
-OpenPocket skills are markdown documents discovered from configured source directories.
+OpenPocket skills are markdown instruction files loaded into the agent loop to provide reusable operational knowledge.
+
+`agent.skillsSpecMode` controls compatibility behavior:
+
+- `legacy`: permissive legacy markdown behavior
+- `mixed`: supports legacy markdown + strict `SKILL.md` (default)
+- `strict`: enforces strict `SKILL.md` layout + validation
 
 ## Source Order
 
 Loader scan order (highest priority first):
 
-1. `workspace/skills` (`source=workspace`)
+1. repository `skills/` (`source=bundled`)
 2. `OPENPOCKET_HOME/skills` (`source=local`)
-3. repository `skills/` (`source=bundled`)
+3. `workspace/skills` (`source=workspace`)
 
 If multiple files have the same skill ID, first source wins.
 
 ## Discovery
 
 - recursive scan under each source root
-- include `*.md` files
-- exclude `README.md`
+- if a directory contains `SKILL.md`, that file is treated as the skill entry
+- in `mixed|legacy`, standalone `*.md` files are also discovered (excluding `README.md`)
+- in `strict`, only `SKILL.md` entries are loaded
 
-## Skill Metadata
+This supports both:
 
-From each markdown file:
+- single-file skills (`foo.md`)
+- folderized skills (`foo/SKILL.md` + optional assets/references)
 
-- `id`: file basename without `.md`
-- `name`: first level-1 heading (`# ...`) if present, else `id`
-- `description`: first non-empty non-heading line, truncated to 180 chars
+## Metadata Parsing
+
+For each skill, loader derives:
+
+- `id`: file basename (or `SKILL` parent directory name)
+- `name`: frontmatter `name`, else first level-1 heading, else `id`
+- `description`: frontmatter `description`, else first non-heading line (<=180 chars)
 - `source`: `workspace | local | bundled`
 - `path`: absolute file path
 
-## Injection Format
+Optional frontmatter metadata supports runtime gating:
 
-Runtime injects a summarized list into system prompt:
+- `openclaw.requires.bins`: required binaries
+- `openclaw.requires.env`: required env vars
+- `openclaw.requires.config`: required config keys
+- `openclaw.os`: allowed platforms
+- `openclaw.triggers.any|all|none`: lexical trigger hints
 
-```text
-- [workspace] Skill Name: one line description
-- [local] Another Skill: one line description
-```
+Skills that fail gating are not considered active candidates.
 
-If no skill exists, summary text is `(no skills loaded)`.
+## Prompt Injection Model
 
-## Workspace Template
+Runtime injects two blocks:
+
+1. **Skill summary index** (compact list for discovery)
+2. **Active skill blocks** (full text snippets for top-ranked relevant skills)
+
+Active skill selection uses:
+
+- task text relevance
+- current app context
+- recent action trace keywords
+- metadata trigger/gating checks
+
+Default active injection limits:
+
+- max active skills: 3
+- max chars per active skill: 7000
+- max chars total active block: 18000
+
+## Auto-Skill Experience Engine
+
+On successful tasks, `AutoArtifactBuilder` may generate:
+
+- `mixed|legacy`: `workspace/skills/auto/<timestamp>-<slug>.md`
+- `strict`: `workspace/skills/auto/<timestamp>-<slug>/SKILL.md`
+- script replay helper: `workspace/scripts/auto/<timestamp>-<slug>.sh`
+
+Generated auto skills include:
+
+- source session path
+- behavior fingerprint (`behavior_fingerprint`)
+- procedure reconstructed from step traces
+- semantic `ui_target` hints (text/resource/content-desc/class/clickable)
+- warning marker when capability probe indicates user-data risk but no Human Auth step occurred
+
+Duplicate cleanup is fingerprint-aware to avoid accumulating identical replay drafts.
+
+## Authoring Template
 
 ```md
 # Search App
@@ -57,10 +106,8 @@ Use when user asks to open an app by name.
 
 Only title and first non-heading line are parsed structurally; the rest is free-form guidance for future prompt usage.
 
-## Generated Skills
+Use CLI validation to check strict compatibility:
 
-After successful tasks, `AutoArtifactBuilder` may create:
-
-- `workspace/skills/auto/<timestamp>-<slug>.md`
-
-Generated file includes trigger, execution outline, final result, and source session path.
+```bash
+openpocket skills validate --strict
+```

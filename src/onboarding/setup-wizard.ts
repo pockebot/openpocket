@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 
-import type { EmulatorStatus, ModelProfile, OpenPocketConfig } from "../types.js";
+import type { DeviceTargetType, EmulatorStatus, ModelProfile, OpenPocketConfig } from "../types.js";
 import { saveConfig } from "../config/index.js";
 import { readCodexCliCredential } from "../config/codex-cli.js";
 import { ensureDir, nowIso } from "../utils/paths.js";
@@ -17,6 +17,12 @@ import {
   isEmulatorTarget,
   normalizeDeviceTargetType,
 } from "../device/target-types.js";
+import {
+  adbConnectionLabel,
+  filterOnlineTargetAdbDevices,
+  type AdbConnectionType,
+  parseAdbDevicesLongOutput,
+} from "../device/adb-device-discovery.js";
 
 const require = createRequire(import.meta.url);
 const pkgJson = require("../../package.json") as { version: string; license: string };
@@ -909,10 +915,56 @@ function normalizeAdbEndpoint(value: string): string {
   return `${trimmed}:5555`;
 }
 
+type SetupConnectedTargetDevice = {
+  deviceId: string;
+  hint: string;
+  connectionType: AdbConnectionType;
+  endpoint: string | null;
+};
+
+function discoverConnectedTargetDevicesForSetup(
+  emulator: SetupEmulator,
+  targetType: DeviceTargetType,
+): SetupConnectedTargetDevice[] {
+  try {
+    const output = emulator.runAdb(["devices", "-l"], 10_000);
+    const descriptors = filterOnlineTargetAdbDevices(parseAdbDevicesLongOutput(output), targetType);
+    const connectionOrder = (connectionType: AdbConnectionType): number => {
+      if (connectionType === "usb") return 0;
+      if (connectionType === "wifi") return 1;
+      if (connectionType === "unknown") return 2;
+      return 3;
+    };
+    return descriptors
+      .map((descriptor) => {
+        const modelParts = [descriptor.attributes.manufacturer, descriptor.model]
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean);
+        const modelText = modelParts.length > 0 ? modelParts.join(" ") : "Unknown model";
+        return {
+          deviceId: descriptor.deviceId,
+          hint: `${adbConnectionLabel(descriptor.connectionType)} | ${modelText}`,
+          connectionType: descriptor.connectionType,
+          endpoint: descriptor.endpoint,
+        };
+      })
+      .sort((a, b) => {
+        const byConnection = connectionOrder(a.connectionType) - connectionOrder(b.connectionType);
+        if (byConnection !== 0) {
+          return byConnection;
+        }
+        return a.deviceId.localeCompare(b.deviceId);
+      });
+  } catch {
+    return [];
+  }
+}
+
 async function runDeploymentTargetStep(
   config: OpenPocketConfig,
   prompter: SetupPrompter,
   state: SetupState,
+  emulator: SetupEmulator,
 ): Promise<void> {
   const currentType = normalizeDeviceTargetType(config.target.type);
   const targetType = await prompter.select(
@@ -929,33 +981,136 @@ async function runDeploymentTargetStep(
   config.target.type = targetType;
   state.targetType = targetType;
   state.targetConfiguredAt = nowIso();
+  const connectedCandidates = discoverConnectedTargetDevicesForSetup(emulator, targetType);
+  const usbCandidates = connectedCandidates.filter((item) => item.connectionType === "usb");
+  const wifiCandidates = connectedCandidates.filter((item) => item.connectionType === "wifi");
 
   if (isEmulatorTarget(targetType)) {
     config.target.adbEndpoint = "";
+    const preferredDeviceId = await prompter.text(
+      "Preferred adb device ID (optional, leave empty for auto-select)",
+      config.agent.deviceId ?? "",
+      () => null,
+    );
+    config.agent.deviceId = preferredDeviceId.trim() ? preferredDeviceId.trim() : null;
   } else if (targetType === "physical-phone" || targetType === "android-tv") {
     const connectionMode = await prompter.select(
       "How will this device connect to your local runtime?",
       [
-        { value: "usb", label: "USB (direct cable, recommended first)" },
-        { value: "wifi", label: "Wi-Fi (wireless debugging endpoint)" },
+        {
+          value: "usb",
+          label:
+            usbCandidates.length > 0
+              ? `USB (detected ${usbCandidates.length} online device${usbCandidates.length > 1 ? "s" : ""})`
+              : "USB (direct cable, recommended first)",
+        },
+        {
+          value: "wifi",
+          label:
+            wifiCandidates.length > 0
+              ? `Wi-Fi (detected ${wifiCandidates.length} online device${wifiCandidates.length > 1 ? "s" : ""})`
+              : "Wi-Fi (wireless debugging endpoint)",
+        },
       ],
       config.target.adbEndpoint.trim() ? "wifi" : "usb",
     );
     state.targetConnectionMode = connectionMode;
+    let preferredCandidates = connectionMode === "wifi" ? wifiCandidates : usbCandidates;
     if (connectionMode === "wifi") {
-      const endpoint = await prompter.text(
-        "Wireless debugging endpoint (IP or host, optional :port)",
-        config.target.adbEndpoint.trim(),
-        (inputText) => {
-          if (!inputText.trim()) {
-            return "Endpoint cannot be empty for Wi-Fi mode.";
-          }
-          return null;
-        },
+      if (wifiCandidates.length > 0) {
+        const manualValue = "__manual__";
+        const endpointOptions: SelectOption<string>[] = [
+          ...wifiCandidates.map((item) => ({
+            value: item.deviceId,
+            label: item.deviceId,
+            hint: item.hint,
+          })),
+          {
+            value: manualValue,
+            label: "Enter endpoint manually",
+            hint: "Use when your Wi-Fi device is not shown yet",
+          },
+        ];
+        const normalizedConfiguredEndpoint = normalizeAdbEndpoint(config.target.adbEndpoint.trim());
+        const initialEndpointChoice =
+          wifiCandidates.find((item) => item.deviceId === normalizedConfiguredEndpoint)?.deviceId
+          ?? manualValue;
+        const endpointChoice = await prompter.select(
+          "Choose Wi-Fi ADB endpoint",
+          endpointOptions,
+          initialEndpointChoice,
+        );
+        if (endpointChoice === manualValue) {
+          const endpoint = await prompter.text(
+            "Wireless debugging endpoint (IP or host, optional :port)",
+            config.target.adbEndpoint.trim(),
+            (inputText) => {
+              if (!inputText.trim()) {
+                return "Endpoint cannot be empty for Wi-Fi mode.";
+              }
+              return null;
+            },
+          );
+          config.target.adbEndpoint = normalizeAdbEndpoint(endpoint);
+        } else {
+          config.target.adbEndpoint = normalizeAdbEndpoint(endpointChoice);
+        }
+      } else {
+        const endpoint = await prompter.text(
+          "Wireless debugging endpoint (IP or host, optional :port)",
+          config.target.adbEndpoint.trim(),
+          (inputText) => {
+            if (!inputText.trim()) {
+              return "Endpoint cannot be empty for Wi-Fi mode.";
+            }
+            return null;
+          },
+        );
+        config.target.adbEndpoint = normalizeAdbEndpoint(endpoint);
+      }
+      try {
+        emulator.runAdb(["connect", config.target.adbEndpoint], 8_000);
+      } catch {
+        // Continue setup; endpoint can be reachable later when gateway starts.
+      }
+      preferredCandidates = discoverConnectedTargetDevicesForSetup(emulator, targetType).filter(
+        (item) => item.connectionType === "wifi",
       );
-      config.target.adbEndpoint = normalizeAdbEndpoint(endpoint);
     } else {
       config.target.adbEndpoint = "";
+    }
+
+    if (preferredCandidates.length > 0) {
+      const autoValue = "__auto__";
+      const configuredPreferred = config.agent.deviceId?.trim() || "";
+      const preferredOptions: SelectOption<string>[] = [
+        {
+          value: autoValue,
+          label: "Auto-select device at runtime",
+          hint: "No fixed serial in config",
+        },
+        ...preferredCandidates.map((item) => ({
+          value: item.deviceId,
+          label: item.deviceId,
+          hint: item.hint,
+        })),
+      ];
+      const initialPreferred = preferredCandidates.some((item) => item.deviceId === configuredPreferred)
+        ? configuredPreferred
+        : autoValue;
+      const preferredChoice = await prompter.select(
+        "Preferred adb device (optional)",
+        preferredOptions,
+        initialPreferred,
+      );
+      config.agent.deviceId = preferredChoice === autoValue ? null : preferredChoice;
+    } else {
+      const preferredDeviceId = await prompter.text(
+        "Preferred adb device ID (optional, leave empty for auto-select)",
+        config.agent.deviceId ?? "",
+        () => null,
+      );
+      config.agent.deviceId = preferredDeviceId.trim() ? preferredDeviceId.trim() : null;
     }
   } else {
     const cloudProvider = await prompter.text(
@@ -970,14 +1125,13 @@ async function runDeploymentTargetStep(
       () => null,
     );
     config.target.adbEndpoint = normalizeAdbEndpoint(endpointRaw);
+    const preferredDeviceId = await prompter.text(
+      "Preferred adb device ID (optional, leave empty for auto-select)",
+      config.agent.deviceId ?? "",
+      () => null,
+    );
+    config.agent.deviceId = preferredDeviceId.trim() ? preferredDeviceId.trim() : null;
   }
-
-  const preferredDeviceId = await prompter.text(
-    "Preferred adb device ID (optional, leave empty for auto-select)",
-    config.agent.deviceId ?? "",
-    () => null,
-  );
-  config.agent.deviceId = preferredDeviceId.trim() ? preferredDeviceId.trim() : null;
 
   state.targetAdbEndpoint = config.target.adbEndpoint;
   state.targetCloudProvider = config.target.cloudProvider;
@@ -2143,7 +2297,7 @@ export async function runSetupWizard(
     }
     await prompter.intro("OpenPocket onboarding");
     await runConsentStep(prompter, state);
-    await runDeploymentTargetStep(config, prompter, state);
+    await runDeploymentTargetStep(config, prompter, state, emulator);
     const selectedModel = await runModelSelectionStep(config, prompter, state);
     await runApiKeyStep(config, prompter, state, selectedModel, options);
     await runChannelSetupStep(config, prompter, state);

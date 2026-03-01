@@ -7,7 +7,8 @@ openpocket [--config <path>] install-cli
 openpocket [--config <path>] onboard
 openpocket [--config <path>] config-show
 openpocket [--config <path>] target show
-openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--cloud-provider <name>] [--clear-device] [--clear-adb-endpoint]
+openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--cloud-provider <name>] [--pin <4-digit>] [--wakeup-interval <sec>] [--clear-device] [--clear-adb-endpoint] [--clear-pin] [--clear-wakeup-interval]
+openpocket [--config <path>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
 openpocket [--config <path>] emulator status|start|stop|hide|show|list-avds|screenshot [--out <path>] [--device <id>]
 openpocket [--config <path>] emulator tap --x <int> --y <int> [--device <id>]
 openpocket [--config <path>] emulator type --text <text> [--device <id>]
@@ -47,10 +48,41 @@ Local clone launcher:
 - runs interactive setup wizard (consent/model/API key/Telegram/human-auth mode)
 - when target is `emulator`, includes emulator startup + Play Store/Gmail check
 - when target is non-emulator, skips emulator onboarding and asks to verify adb connectivity
+- for physical phone / Android TV, supports later Wi-Fi pairing via `target pair`
 
 Wizard persistence:
 
 - `state/onboarding.json`
+
+## `target set`
+
+- updates deployment target type and runtime device preferences
+- when setting `physical-phone` or `android-tv` without `--device`, OpenPocket discovers online ADB devices and:
+  - auto-selects when exactly one online candidate exists
+  - otherwise opens an arrow-key selector with connection labels (`USB ADB` / `WiFi ADB`)
+- setting `--pin` updates target auto-unlock PIN (`target.pin`)
+- setting `--wakeup-interval` updates keep-awake heartbeat interval (`target.wakeupIntervalSec`)
+
+## `target pair`
+
+Use this wrapper for Android Wireless Debugging pairing without typing raw `adb pair` / `adb connect`.
+
+Non-interactive example:
+
+```bash
+openpocket target pair \
+  --host <device-ip> \
+  --pair-port <pair-port> \
+  --code <pairing-code> \
+  --type physical-phone
+```
+
+Behavior:
+
+- runs `adb pair <host:pair-port> <code>`
+- runs `adb connect <host:connect-port>` (default connect port: `5555`)
+- updates config target endpoint and preferred device id
+- supports `--dry-run` for command preview without changing device state
 
 ## `install-cli`
 

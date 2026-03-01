@@ -2,7 +2,7 @@
 
 [![Node.js >= 20](https://img.shields.io/badge/node-%3E%3D20-0f766e.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/language-TypeScript-2563eb.svg)](https://www.typescriptlang.org/)
-[![Runtime](https://img.shields.io/badge/runtime-Local--emulator--first-0f172a.svg)](#architecture)
+[![Runtime](https://img.shields.io/badge/runtime-Local--device--first-0f172a.svg)](#architecture)
 [![Docs](https://img.shields.io/badge/docs-VitePress-0a9396.svg)](./frontend/index.md)
 [![OpenPocket CI](https://github.com/SergioChan/openpocket/actions/workflows/node-tests.yml/badge.svg)](https://github.com/SergioChan/openpocket/actions/workflows/node-tests.yml)
 
@@ -15,19 +15,19 @@ Status snapshot (February 2026):
 
 ### Implemented and usable now
 
-- Local Android emulator runtime driven by CLI + Telegram gateway + dashboard.
+- Local target runtime (via `adb`) driven by CLI + Telegram gateway + dashboard.
 - Deployment target abstraction with `emulator` and `physical-phone` ready today (`android-tv` and `cloud` are in progress).
-- Interactive setup (`openpocket onboard`) for consent, model/API key, Telegram, emulator boot, and human-auth mode.
+- Interactive setup (`openpocket onboard`) for consent, model/API key, Telegram, target selection, and human-auth mode.
 - Template-driven prompt system with runtime mode control (`full|minimal|none`) and workspace context budgets.
 - Bootstrap-driven chat onboarding (`BOOTSTRAP.md`, `PROFILE_ONBOARDING.json`) with persisted workspace onboarding state.
 - Model-driven progress and outcome narration (`TASK_PROGRESS_REPORTER.md`, `TASK_OUTCOME_REPORTER.md`) with anti-noise suppression.
 - Coding toolchain in task loop (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`) with workspace/safety constraints.
 - Memory tools in task loop (`memory_search`, `memory_get`) for recall-oriented interactions.
 - Prompt observability via Telegram `/context [list|detail|json]`.
-- Human-authorization relay (manual `/auth`, one-time web link, optional ngrok) with delegation artifact application.
+- Human-authorization relay (manual `/auth`, one-time web link, optional ngrok) with dynamic template pages and agentic delegation artifacts.
 - In-emulator permission dialogs auto-handled locally (no remote auth escalation for Android runtime permission popups).
 - Telegram bot display-name sync from profile identity changes.
-- Automatic reusable artifact generation after successful tasks (`skills/auto`, `scripts/auto`).
+- Automatic reusable artifact generation after successful tasks (`skills/auto`, `scripts/auto`) with behavior fingerprint dedupe and semantic `ui_target` traces.
 - Auditable persistence for sessions, daily memory, screenshots, relay state, and script run artifacts.
 
 ### Active improvement focus
@@ -35,6 +35,35 @@ Status snapshot (February 2026):
 - Long-horizon memory quality (ranking/compaction/freshness).
 - Prompt evaluation and regression coverage for phone-use scenarios.
 - Cross-platform runtime hardening and operational reliability.
+
+## Latest Merged Updates (main)
+
+### 1) PR #77: Multi-target deployment + agentic Human Auth + capability probe
+
+Merged PR: [#77](https://github.com/SergioChan/openpocket/pull/77)
+
+Highlights:
+
+- multi-target framework (`emulator`, `physical-phone`, `android-tv`, `cloud`)
+- USB/Wi-Fi ADB discovery and interactive selection in target flows
+- `openpocket target pair` for Wireless Debugging pairing
+- capability probe utility (`phone-use-util`) for camera/microphone/location/photos/payment signals
+- dynamic Human Auth portal templates (`uiTemplate` / `templatePath`)
+- secure payment path support via UI tree field extraction and delegated form collection
+- step-level timing observability and expanded no-browser human-auth E2E tests
+
+### 2) Auto-Skill Experience Engine (latest commits on main)
+
+Key commits:
+
+- `032fa03` feat(skills): experience engine (active skill injection, UI semantic traces, replay relevance)
+- `c02a870` fix: harden auto-skill prompt and `ui_target` escaping
+
+Highlights:
+
+- runtime now injects **active skill content**, not only compact skill list metadata
+- auto-generated skills include stronger step semantics (`ui_target`) and reusable behavior fingerprints
+- skill loader gating/triggers and escaping hardening improve safety and prompt robustness
 
 ## Quick Start
 
@@ -116,7 +145,8 @@ openpocket target set --type physical-phone
 openpocket target show
 ```
 
-When multiple devices are online, `target set` shows an arrow-key selector so you can choose one.
+When multiple devices are online, `target set` shows an arrow-key selector with explicit transport labels (`USB ADB` / `WiFi ADB`) so you can choose the exact device.
+You can also use aliases: `openpocket target set-target ...` or `openpocket target config ...`.
 
 4. Start runtime:
 
@@ -130,6 +160,12 @@ Optional Wi-Fi ADB:
 adb tcpip 5555
 adb connect <phone-ip>:5555
 openpocket target set --type physical-phone --adb-endpoint <phone-ip>:5555
+```
+
+Or use the built-in pairing wrapper (no manual adb commands):
+
+```bash
+openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type physical-phone
 ```
 
 Notes:
@@ -331,7 +367,7 @@ bash scripts/smoke/dual-side-smoke.sh
 
 ## Key Capabilities
 
-- **Local emulator-first runtime**: execution stays on your machine via adb, not a hosted cloud phone.
+- **Local device-first runtime**: execution stays on your machine via adb, not a hosted cloud phone.
 - **Always-on agent loop**: model-driven planning + one-step action execution over Android UI primitives.
 - **Prompt system aligned for agent behavior**:
   - prompt modes (`full|minimal|none`)
@@ -345,7 +381,7 @@ bash scripts/smoke/dual-side-smoke.sh
 - **Coding and memory tools inside task loop**:
   - coding: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`
   - memory: `memory_search`, `memory_get`
-- **Dual control modes**: direct user control and agent control on the same emulator runtime.
+- **Dual control modes**: direct user control and agent control on the same target runtime.
 - **Production-style gateway operations**: Telegram command menu bootstrap, heartbeat, cron jobs, restart loop, safe stop.
 - **Script and coding safety controls**: allowlist + deny patterns + timeout + output caps + run artifacts.
 - **Prompt observability**: `/context` command reports actual injected prompt context and budgets.
@@ -496,7 +532,7 @@ Typical scenarios include:
 
 ## Runtime Flow
 
-`Telegram / CLI -> Gateway -> Agent Runtime -> Model Client -> adb -> Android Emulator`
+`Telegram / CLI -> Gateway -> Agent Runtime -> Model Client -> adb -> Agent Phone Target`
 
 ## Architecture
 
@@ -509,7 +545,7 @@ flowchart LR
   A --> S["Script Executor"]
   A --> C["Coding Executor"]
   A --> R["Memory Executor"]
-  D --> E["Android Emulator (Local)"]
+  D --> E["Agent Phone Target (Local)"]
   A --> W["Workspace Store"]
   W --> SS["sessions/*.md"]
   W --> MM["memory/YYYY-MM-DD.md"]
@@ -527,6 +563,18 @@ Primary config file:
 Example config template:
 
 - [`openpocket.config.example.json`](./openpocket.config.example.json)
+
+Skill compatibility mode:
+
+- `agent.skillsSpecMode = "legacy" | "mixed" | "strict"`
+- default is `mixed` (legacy + strict-compatible loading)
+- use `strict` to enforce directory-based `SKILL.md` validation
+
+Skill validation command:
+
+```bash
+openpocket skills validate --strict
+```
 
 Coding runtime migration note:
 
@@ -592,6 +640,7 @@ Command prefix by install mode:
 ./openpocket telegram setup
 ./openpocket telegram whoami
 ./openpocket skills list
+./openpocket skills validate --strict
 ./openpocket gateway start
 ./openpocket dashboard start
 ./openpocket test permission-app deploy
@@ -653,8 +702,49 @@ When the agent emits `request_human_auth`, Telegram users can:
 - or run fallback commands:
   - `/auth approve <request-id> [note]`
   - `/auth reject <request-id> [note]`
-- for `oauth` login walls, use dedicated credential inputs on the Human Auth page
-  (or optional live remote takeover), then approve/reject
+- for any auth wall, use the request-specific Human Auth page generated from `uiTemplate`
+  (optional live remote takeover is still available), then approve/reject
+
+### Dynamic Human Auth Portal Templates
+
+`request_human_auth` now supports an optional `uiTemplate` payload so each authorization page can be customized per request instead of using one fixed form.
+
+Supported template controls include:
+
+- title/summary/capability hint text
+- theme style (`brandColor`, `backgroundCss`, `fontFamily`)
+- structured form fields (`text`, `textarea`, `email`, `password`, `otp`, `card-number`, `expiry`, `cvc`, `select`, ...)
+- agent-generated middle-section code (`middleHtml`, `middleCss`, `middleScript`)
+- agent-generated approval logic (`approveScript`)
+- reusable template file path from Agent Loop coding tools (`templatePath`, JSON in workspace)
+- delegation toggles (text/location/photo/audio/file attachments)
+- artifact policy (`artifactKind`, `requireArtifactOnApprove`)
+
+Portal shell invariants (always present, not generated by template):
+
+- remote connection section (live takeover controls)
+- full context section (`Show Full Context`)
+- top title area
+- middle input/approve area (this part is generated/customized by `uiTemplate`)
+
+This enables capability-specific flows such as:
+
+- OAuth login (`credentials`)
+- payment card confirmation (`payment_card`)
+- camera/photo delegation
+- microphone/audio delegation
+- location delegation
+- album/file selection delegation
+
+High-level runtime behavior:
+
+1. agent emits `request_human_auth` with `capability` and optional `uiTemplate`
+   (or `templatePath` generated via coding tools in the same Agent Loop)
+2. relay renders a fixed secure shell (remote connection, context, title) plus request-specific middle/approve content from sanitized `uiTemplate`
+3. human approves/rejects and optionally uploads/enters delegated artifact
+4. bridge returns decision/artifact to runtime and task continues
+
+Important: current implementation is **delegation-based** (explicit artifact handoff after approve), not direct remote hardware passthrough from human phone sensors into Agent Phone OS APIs.
 
 Credential security notes:
 

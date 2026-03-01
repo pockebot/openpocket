@@ -9,6 +9,12 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /Planning Loop/);
   assert.match(prompt, /deterministic action/);
   assert.match(prompt, /Human Authorization Policy/);
+  assert.match(prompt, /Device Ownership Model/);
+  assert.match(prompt, /Agent Phone/);
+  assert.match(prompt, /Human Phone/);
+  assert.match(prompt, /Capability must be chosen by the agent/i);
+  assert.match(prompt, /Do not apply fixed capability priority/i);
+  assert.match(prompt, /Never emit meta labels\/tags in thought/i);
   assert.match(prompt, /Available Skills/);
   assert.match(prompt, /<available_skills>/);
   assert.match(prompt, /Skill Selection Protocol/);
@@ -36,14 +42,15 @@ test("buildSystemPrompt includes workspace context when provided", () => {
   assert.match(prompt, /AGENTS\.md/);
 });
 
-test("buildSystemPrompt keeps available-skills index when activeSkillsText is provided", () => {
+test("buildSystemPrompt injects active skills content when activeSkillsText is provided", () => {
   const prompt = buildSystemPrompt("- skill-a", "", {
     mode: "full",
-    activeSkillsText: "### [workspace] Skill A\nReason: explicit id match\nPath: /tmp/skill-a.md\n# SKILL BODY",
+    activeSkillsText: "<active_skill name=\"Skill A\" source=\"workspace\" score=\"120\" reason=\"explicit id match\">\n# SKILL BODY\n</active_skill>",
   });
   assert.match(prompt, /<available_skills>/);
-  assert.match(prompt, /Use read\(location\) to load full SKILL.md/i);
-  assert.doesNotMatch(prompt, /SKILL BODY/);
+  assert.match(prompt, /Active Skills/);
+  assert.match(prompt, /SKILL BODY/);
+  assert.match(prompt, /no need to read\(\)/i);
 });
 
 test("buildSystemPrompt supports minimal mode", () => {
@@ -54,6 +61,10 @@ test("buildSystemPrompt supports minimal mode", () => {
   assert.match(prompt, /Use request_user_decision only for non-sensitive preference\/choice disambiguation/i);
   assert.match(prompt, /Use request_user_input for non-sensitive short text values/i);
   assert.match(prompt, /Never use request_user_decision to collect credentials\/OTP\/payment/i);
+  assert.match(prompt, /Do not use fixed capability priority rules/i);
+  assert.match(prompt, /Agent Phone.*clean.*shared/i);
+  assert.match(prompt, /Human Phone.*personal/i);
+  assert.match(prompt, /request_human_auth/i);
   assert.match(prompt, /already injected in this prompt/i);
   assert.match(prompt, /Workspace Prompt Context/);
   assert.match(prompt, /Tooling/);
@@ -76,6 +87,8 @@ test("buildSystemPrompt filters tool catalog when availableToolNames is provided
 test("buildSystemPrompt supports none mode", () => {
   const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A", { mode: "none" });
   assert.match(prompt, /Call exactly one tool step at a time/);
+  assert.match(prompt, /Agent Phone.*clean.*shared/i);
+  assert.match(prompt, /Do not rely on fixed capability priority/i);
   assert.match(prompt, /permission dialogs/i);
   assert.doesNotMatch(prompt, /Workspace Prompt Context/);
   assert.doesNotMatch(prompt, /Available Skills/);
