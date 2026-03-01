@@ -148,6 +148,131 @@ test("DiscordAdapter: isGuildAllowed returns false when no guilds config", () =>
 });
 
 // ---------------------------------------------------------------------------
+// Role-based access control (OpenClaw-aligned)
+// ---------------------------------------------------------------------------
+
+test("DiscordAdapter: isGuildAllowed allows user matching role", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-guild-role-"));
+  fs.mkdirSync(path.join(home, "state"), { recursive: true });
+  const config = makeMinimalConfig(home);
+  const adapter = new DiscordAdapter(
+    config,
+    makeDiscordConfig({ guilds: { guild1: { roles: ["role-admin"] } } }),
+    { logger: () => {} },
+  );
+  const mockMember = { roles: { cache: new Map([["role-admin", {}]]) } };
+  assert.equal(adapter.isGuildAllowed("guild1", "user1", mockMember), true);
+});
+
+test("DiscordAdapter: isGuildAllowed rejects user without matching role", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-guild-role-reject-"));
+  fs.mkdirSync(path.join(home, "state"), { recursive: true });
+  const config = makeMinimalConfig(home);
+  const adapter = new DiscordAdapter(
+    config,
+    makeDiscordConfig({ guilds: { guild1: { roles: ["role-admin"] } } }),
+    { logger: () => {} },
+  );
+  const mockMember = { roles: { cache: new Map([["role-member", {}]]) } };
+  assert.equal(adapter.isGuildAllowed("guild1", "user1", mockMember), false);
+});
+
+test("DiscordAdapter: isGuildAllowed users OR roles (user match)", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-guild-or-user-"));
+  fs.mkdirSync(path.join(home, "state"), { recursive: true });
+  const config = makeMinimalConfig(home);
+  const adapter = new DiscordAdapter(
+    config,
+    makeDiscordConfig({ guilds: { guild1: { users: ["user1"], roles: ["role-admin"] } } }),
+    { logger: () => {} },
+  );
+  const mockMember = { roles: { cache: new Map() } };
+  assert.equal(adapter.isGuildAllowed("guild1", "user1", mockMember), true);
+});
+
+// ---------------------------------------------------------------------------
+// Channel allowlist
+// ---------------------------------------------------------------------------
+
+test("DiscordAdapter: isChannelAllowed returns true when no channels config", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-ch-nolist-"));
+  fs.mkdirSync(path.join(home, "state"), { recursive: true });
+  const config = makeMinimalConfig(home);
+  const adapter = new DiscordAdapter(
+    config,
+    makeDiscordConfig({ guilds: { guild1: {} } }),
+    { logger: () => {} },
+  );
+  assert.equal(adapter.isChannelAllowed("guild1", "any-channel"), true);
+});
+
+test("DiscordAdapter: isChannelAllowed blocks unlisted channel", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-ch-block-"));
+  fs.mkdirSync(path.join(home, "state"), { recursive: true });
+  const config = makeMinimalConfig(home);
+  const adapter = new DiscordAdapter(
+    config,
+    makeDiscordConfig({ guilds: { guild1: { channels: { "ch-1": { allow: true } } } } }),
+    { logger: () => {} },
+  );
+  assert.equal(adapter.isChannelAllowed("guild1", "ch-1"), true);
+  assert.equal(adapter.isChannelAllowed("guild1", "ch-2"), true); // not in list → default allowed
+});
+
+test("DiscordAdapter: isChannelAllowed respects allow: false", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-ch-deny-"));
+  fs.mkdirSync(path.join(home, "state"), { recursive: true });
+  const config = makeMinimalConfig(home);
+  const adapter = new DiscordAdapter(
+    config,
+    makeDiscordConfig({ guilds: { guild1: { channels: { "ch-blocked": { allow: false } } } } }),
+    { logger: () => {} },
+  );
+  assert.equal(adapter.isChannelAllowed("guild1", "ch-blocked"), false);
+});
+
+// ---------------------------------------------------------------------------
+// Per-channel requireMention override
+// ---------------------------------------------------------------------------
+
+test("DiscordAdapter: shouldRequireMention per-channel override", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-mention-ch-"));
+  fs.mkdirSync(path.join(home, "state"), { recursive: true });
+  const config = makeMinimalConfig(home);
+  const adapter = new DiscordAdapter(
+    config,
+    makeDiscordConfig({ guilds: { guild1: { requireMention: true, channels: { "ch-free": { requireMention: false } } } } }),
+    { logger: () => {} },
+  );
+  assert.equal(adapter.shouldRequireMention("guild1"), true);
+  assert.equal(adapter.shouldRequireMention("guild1", "ch-free"), false);
+  assert.equal(adapter.shouldRequireMention("guild1", "ch-other"), true);
+});
+
+// ---------------------------------------------------------------------------
+// DISCORD_BOT_TOKEN env fallback
+// ---------------------------------------------------------------------------
+
+test("DiscordAdapter: resolves token from DISCORD_BOT_TOKEN env", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "discord-env-default-"));
+  fs.mkdirSync(path.join(home, "state"), { recursive: true });
+  const config = makeMinimalConfig(home);
+  const prevEnv = process.env.DISCORD_BOT_TOKEN;
+  process.env.DISCORD_BOT_TOKEN = "env-default-token";
+  try {
+    const adapter = new DiscordAdapter(
+      config,
+      makeDiscordConfig({ token: "", tokenEnv: "" }),
+      { logger: () => {} },
+    );
+    assert.equal(adapter.channelType, "discord");
+  } finally {
+    if (prevEnv === undefined) delete process.env.DISCORD_BOT_TOKEN;
+    else process.env.DISCORD_BOT_TOKEN = prevEnv;
+  }
+});
+
+// ---------------------------------------------------------------------------
 // shouldRequireMention
 // ---------------------------------------------------------------------------
 

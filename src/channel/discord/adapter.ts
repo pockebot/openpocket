@@ -8,12 +8,16 @@ import {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
+  SlashCommandBuilder,
+  REST,
+  Routes,
   type Message as DjsMessage,
   type Interaction,
   type DMChannel,
   type TextChannel,
   type PublicThreadChannel,
   type PrivateThreadChannel,
+  type GuildMember,
 } from "discord.js";
 import fs from "node:fs";
 
@@ -35,6 +39,24 @@ import type {
 import { getDefaultCapabilities } from "../capabilities.js";
 
 type SendableChannel = DMChannel | TextChannel | PublicThreadChannel | PrivateThreadChannel;
+
+// ---------------------------------------------------------------------------
+// Slash command definitions (OpenClaw-aligned)
+// ---------------------------------------------------------------------------
+
+const SLASH_COMMANDS = [
+  new SlashCommandBuilder().setName("status").setDescription("Show gateway and device status"),
+  new SlashCommandBuilder().setName("help").setDescription("Show command help"),
+  new SlashCommandBuilder()
+    .setName("model")
+    .setDescription("Show or switch model profile")
+    .addStringOption((opt) => opt.setName("name").setDescription("Model name to switch to").setRequired(false)),
+  new SlashCommandBuilder().setName("skills").setDescription("List loaded skills"),
+  new SlashCommandBuilder().setName("clear").setDescription("Clear chat memory only"),
+  new SlashCommandBuilder().setName("new").setDescription("Start a new task session"),
+  new SlashCommandBuilder().setName("stop").setDescription("Stop current running task"),
+  new SlashCommandBuilder().setName("screen").setDescription("Capture manual screenshot"),
+];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,6 +108,7 @@ export class DiscordAdapter implements ChannelAdapter {
       intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.MessageContent,
       ],
@@ -104,7 +127,7 @@ export class DiscordAdapter implements ChannelAdapter {
     const token = this.resolveToken();
     if (!token) {
       throw new Error(
-        "Discord bot token is empty. Set channels.discord.token or env variable via channels.discord.tokenEnv.",
+        "Discord bot token is empty. Set channels.discord.token, env DISCORD_BOT_TOKEN, or channels.discord.tokenEnv.",
       );
     }
 
@@ -122,6 +145,11 @@ export class DiscordAdapter implements ChannelAdapter {
 
     await this.client.login(token);
     await readyPromise;
+
+    if (this.discordConfig.slashCommands !== false) {
+      await this.registerSlashCommands(token);
+    }
+
     this.log("discord adapter started");
   }
 
@@ -134,6 +162,24 @@ export class DiscordAdapter implements ChannelAdapter {
     this.clearPending();
     try { await this.client.destroy(); } catch { /* ignore */ }
     this.log(`discord adapter stopped reason=${reason ?? "unknown"}`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Slash command registration
+  // -----------------------------------------------------------------------
+
+  private async registerSlashCommands(token: string): Promise<void> {
+    const appId = this.client.user?.id;
+    if (!appId) return;
+
+    try {
+      const rest = new REST({ version: "10" }).setToken(token);
+      const body = SLASH_COMMANDS.map((cmd) => cmd.toJSON());
+      await rest.put(Routes.applicationCommands(appId), { body });
+      this.log(`registered ${body.length} global slash commands`);
+    } catch (error) {
+      this.log(`slash command registration failed: ${(error as Error).message}`);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -296,6 +342,21 @@ export class DiscordAdapter implements ChannelAdapter {
     return getDefaultCapabilities("discord");
   }
 
+  /** Bot user tag (e.g. "OpenPocket#1234") — available after start(). */
+  getBotTag(): string | null {
+    return this.client.user?.tag ?? null;
+  }
+
+  /** Bot user ID — available after start(). */
+  getBotId(): string | null {
+    return this.client.user?.id ?? null;
+  }
+
+  /** Number of guilds the bot is currently in. */
+  getGuildCount(): number {
+    return this.client.guilds.cache.size;
+  }
+
   // -----------------------------------------------------------------------
   // Access control
   // -----------------------------------------------------------------------
@@ -304,21 +365,42 @@ export class DiscordAdapter implements ChannelAdapter {
     return true;
   }
 
-  isGuildAllowed(guildId: string, userId: string): boolean {
+  isGuildAllowed(guildId: string, userId: string, member?: GuildMember | null): boolean {
     const guilds = this.discordConfig.guilds;
     if (!guilds) return false;
 
     const guildConfig = guilds[guildId];
     if (!guildConfig) return false;
 
-    if (guildConfig.users && guildConfig.users.length > 0) {
-      return guildConfig.users.includes(userId);
+    const hasUsers = guildConfig.users && guildConfig.users.length > 0;
+    const hasRoles = guildConfig.roles && guildConfig.roles.length > 0;
+
+    if (!hasUsers && !hasRoles) return true;
+
+    if (hasUsers && guildConfig.users!.includes(userId)) return true;
+
+    if (hasRoles && member) {
+      const memberRoles = member.roles.cache;
+      if (guildConfig.roles!.some((roleId) => memberRoles.has(roleId))) return true;
     }
-    return true;
+
+    return false;
   }
 
-  shouldRequireMention(guildId: string): boolean {
-    return this.discordConfig.guilds?.[guildId]?.requireMention ?? true;
+  isChannelAllowed(guildId: string, channelId: string): boolean {
+    const guildConfig = this.discordConfig.guilds?.[guildId];
+    if (!guildConfig?.channels) return true;
+    const channelEntry = guildConfig.channels[channelId];
+    return channelEntry?.allow !== false;
+  }
+
+  shouldRequireMention(guildId: string, channelId?: string): boolean {
+    const guildConfig = this.discordConfig.guilds?.[guildId];
+    if (channelId && guildConfig?.channels?.[channelId]) {
+      const channelMention = guildConfig.channels[channelId].requireMention;
+      if (channelMention !== undefined) return channelMention;
+    }
+    return guildConfig?.requireMention ?? true;
   }
 
   // -----------------------------------------------------------------------
@@ -343,13 +425,18 @@ export class DiscordAdapter implements ChannelAdapter {
     if (isDM && this.tryResolveInteractivePending(userId, text)) return;
 
     if (isGuild && message.guildId) {
-      if (!this.isGuildAllowed(message.guildId, userId)) return;
+      if (!this.isChannelAllowed(message.guildId, message.channel.id)) return;
 
-      if (this.shouldRequireMention(message.guildId)) {
+      const member = message.member ?? null;
+      if (!this.isGuildAllowed(message.guildId, userId, member)) return;
+
+      if (this.shouldRequireMention(message.guildId, message.channel.id)) {
         const botId = this.client.user?.id;
         if (!botId || !message.mentions.has(botId)) return;
       }
     }
+
+    await this.sendAckReaction(message);
 
     const envelope = this.discordMessageToEnvelope(message);
     try {
@@ -363,6 +450,11 @@ export class DiscordAdapter implements ChannelAdapter {
   };
 
   private readonly handleInteraction = async (interaction: Interaction): Promise<void> => {
+    if (interaction.isChatInputCommand()) {
+      await this.handleSlashCommand(interaction);
+      return;
+    }
+
     if (!interaction.isButton()) return;
 
     const customId = interaction.customId;
@@ -394,6 +486,63 @@ export class DiscordAdapter implements ChannelAdapter {
       });
     } catch { /* ignore */ }
   };
+
+  private async handleSlashCommand(interaction: any): Promise<void> {
+    const commandName = interaction.commandName as string;
+    const userId = interaction.user.id as string;
+    const isDM = !interaction.guildId;
+
+    if (!isDM && interaction.guildId) {
+      const member = interaction.member as GuildMember | null;
+      if (!this.isGuildAllowed(interaction.guildId, userId, member)) {
+        try { await interaction.reply({ content: "Not authorized.", ephemeral: true }); } catch { /* ignore */ }
+        return;
+      }
+    }
+
+    const peerId = isDM ? userId : (interaction.channel?.id ?? userId) as string;
+    const args = (interaction.options?.getString?.("name") ?? "") as string;
+
+    let deferred = false;
+    try {
+      await interaction.deferReply();
+      deferred = true;
+    } catch { /* ignore */ }
+
+    const peerKind: "dm" | "group" = isDM ? "dm" : "group";
+    const envelope: InboundEnvelope = {
+      channelType: "discord",
+      senderId: userId,
+      senderName: interaction.user.displayName ?? interaction.user.username,
+      senderLanguageCode: null,
+      peerId,
+      peerKind,
+      text: `/${commandName}${args ? ` ${args}` : ""}`,
+      command: commandName,
+      commandArgs: args,
+      attachments: [],
+      rawEvent: interaction,
+      receivedAt: new Date().toISOString(),
+      adapterPreAuthorized: peerKind === "group",
+    };
+
+    try {
+      if (this.inboundHandler) {
+        await this.inboundHandler(envelope);
+      }
+    } catch (error) {
+      const errMsg = `OpenPocket error: ${(error as Error).message}`;
+      try {
+        if (deferred) await interaction.editReply(errMsg);
+        else await interaction.reply(errMsg);
+      } catch { /* ignore */ }
+      return;
+    }
+
+    if (deferred) {
+      try { await interaction.deleteReply(); } catch { /* ignore */ }
+    }
+  }
 
   private tryResolveInteractivePending(userId: string, text: string): boolean {
     if (text.startsWith("/") || text.startsWith("!")) return false;
@@ -427,6 +576,24 @@ export class DiscordAdapter implements ChannelAdapter {
 
     return false;
   }
+
+  // -----------------------------------------------------------------------
+  // Ack reaction (OpenClaw-aligned)
+  // -----------------------------------------------------------------------
+
+  private async sendAckReaction(message: DjsMessage): Promise<void> {
+    const emoji = this.discordConfig.ackReaction;
+    if (emoji === "" || emoji === undefined) return;
+    try {
+      await message.react(emoji);
+    } catch {
+      this.log(`ack reaction failed emoji=${emoji}`);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Message → Envelope
+  // -----------------------------------------------------------------------
 
   private discordMessageToEnvelope(message: DjsMessage): InboundEnvelope {
     const text = message.content?.trim() ?? "";
@@ -506,6 +673,7 @@ export class DiscordAdapter implements ChannelAdapter {
         : undefined,
       rawEvent: message,
       receivedAt: new Date().toISOString(),
+      adapterPreAuthorized: peerKind === "group" || peerKind === "thread",
     };
   }
 
@@ -522,6 +690,10 @@ export class DiscordAdapter implements ChannelAdapter {
       const envVal = process.env[envKey]?.trim();
       if (envVal) return envVal;
     }
+
+    const defaultEnv = process.env.DISCORD_BOT_TOKEN?.trim();
+    if (defaultEnv) return defaultEnv;
+
     return "";
   }
 
@@ -529,12 +701,14 @@ export class DiscordAdapter implements ChannelAdapter {
     try {
       const channel = await this.client.channels.fetch(peerId);
       if (channel && this.isSendable(channel)) return channel;
+    } catch { /* not a channel ID, try as user ID */ }
 
+    try {
       const user = await this.client.users.fetch(peerId);
       if (user) return await user.createDM();
-    } catch {
-      this.log(`failed to resolve channel peerId=${peerId}`);
-    }
+    } catch { /* ignore */ }
+
+    this.log(`failed to resolve channel peerId=${peerId}`);
     return null;
   }
 

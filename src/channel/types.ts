@@ -80,6 +80,13 @@ export interface InboundEnvelope {
   /** The original platform SDK event object, for adapter-specific logic. */
   rawEvent: unknown;
   receivedAt: string;
+
+  /**
+   * When true, the adapter has already validated group/guild access
+   * (e.g. Discord guild allowlist + role check). GatewayCore should
+   * skip its own group policy check for this envelope.
+   */
+  adapterPreAuthorized?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,11 +323,20 @@ export interface DiscordChannelConfig {
   groupPolicy?: GroupPolicy;
   allowFrom?: string[];
   guilds?: Record<string, DiscordGuildConfig>;
+  /** Emoji sent as ack when a message is received (e.g. "👀"). Empty string disables. */
+  ackReaction?: string;
+  /** Register native slash commands on startup. Default: true when token is present. */
+  slashCommands?: boolean;
 }
 
 export interface DiscordGuildConfig {
   requireMention?: boolean;
+  /** Allowed user IDs. If set, only these users can interact in this guild. */
   users?: string[];
+  /** Allowed role IDs. If set, users with any of these roles are allowed. Checked OR with users[]. */
+  roles?: string[];
+  /** Per-channel allowlist. If set, only listed channels are allowed. Key is channel ID. */
+  channels?: Record<string, { allow?: boolean; requireMention?: boolean }>;
 }
 
 export interface WhatsAppChannelConfig {

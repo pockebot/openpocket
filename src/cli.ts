@@ -1699,6 +1699,74 @@ async function runWhatsAppWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Pro
 }
 
 // ---------------------------------------------------------------------------
+// Discord whoami
+// ---------------------------------------------------------------------------
+
+async function runDiscordWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
+  const dc = cfg.channels?.discord;
+  const dmPolicy = dc?.dmPolicy ?? "pairing";
+  const groupPolicy = dc?.groupPolicy ?? "open";
+  const allowFrom = dc?.allowFrom ?? [];
+
+  printRaw(cliTheme.section("Discord Identity"));
+  printKeyValue("Enabled", dc?.enabled !== false && !!dc ? "yes" : "no");
+  printKeyValue("DM policy", dmPolicy);
+  printKeyValue("Group policy", groupPolicy);
+  printKeyValue(
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
+  );
+
+  const hasToken = Boolean(
+    dc?.token?.trim()
+    || (dc?.tokenEnv ? process.env[dc.tokenEnv]?.trim() : "")
+    || process.env.DISCORD_BOT_TOKEN?.trim(),
+  );
+  printKeyValue("Bot token", hasToken ? "configured" : "missing", hasToken ? "success" : "warn");
+  printKeyValue("Ack reaction", dc?.ackReaction ?? "(disabled)");
+  printKeyValue("Slash commands", dc?.slashCommands !== false ? "enabled" : "disabled");
+
+  const guilds = dc?.guilds;
+  if (guilds && Object.keys(guilds).length > 0) {
+    printRaw(cliTheme.section("Guild Allowlist"));
+    for (const [guildId, guildCfg] of Object.entries(guilds)) {
+      const users = guildCfg.users ?? [];
+      const roles = guildCfg.roles ?? [];
+      const mention = guildCfg.requireMention ?? true;
+      const channels = guildCfg.channels ? Object.keys(guildCfg.channels).join(", ") : "all";
+      printRaw(`  Guild ${guildId}:`);
+      printRaw(`    requireMention: ${mention}`);
+      printRaw(`    users: ${users.length > 0 ? users.join(", ") : "(any)"}`);
+      printRaw(`    roles: ${roles.length > 0 ? roles.join(", ") : "(none)"}`);
+      printRaw(`    channels: ${channels}`);
+    }
+  }
+
+  const dcPairingDir = cfg.pairing?.stateDir ?? path.join(cfg.stateDir, "pairing");
+  const dcAllowFile = path.join(dcPairingDir, "discord-allowFrom.json");
+  if (fs.existsSync(dcAllowFile)) {
+    try {
+      const raw = fs.readFileSync(dcAllowFile, "utf-8").trim();
+      const entries = JSON.parse(raw);
+      if (Array.isArray(entries) && entries.length > 0) {
+        printRaw(cliTheme.section("Approved Senders (via pairing)"));
+        for (const e of entries) {
+          const id = typeof e === "string" ? e : e.senderId;
+          const at = typeof e === "object" && e.approvedAt ? ` (${e.approvedAt})` : "";
+          printRaw(`  - ${id}${at}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (!hasToken) {
+    printInfo("Set token: channels.discord.token in config, or env DISCORD_BOT_TOKEN");
+  }
+
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // iMessage whoami (macOS-only)
 // ---------------------------------------------------------------------------
 
@@ -1792,7 +1860,11 @@ async function runChannelsCommand(
       const cfg = loadConfig(configPath);
       return runIMessageWhoamiCommand(cfg);
     }
-    throw new Error(`Unsupported channel for login: ${channel}. Available: whatsapp, telegram, imessage`);
+    if (channel === "discord") {
+      const cfg = loadConfig(configPath);
+      return runDiscordWhoamiCommand(cfg);
+    }
+    throw new Error(`Unsupported channel for login: ${channel}. Available: whatsapp, telegram, imessage, discord`);
   }
 
   if (sub === "whoami") {
@@ -1802,6 +1874,11 @@ async function runChannelsCommand(
       let printed = false;
       if (cfg.channels?.telegram) {
         await runTelegramWhoamiCommand(cfg);
+        printed = true;
+      }
+      if (cfg.channels?.discord) {
+        if (printed) printRaw("");
+        await runDiscordWhoamiCommand(cfg);
         printed = true;
       }
       if (cfg.channels?.whatsapp) {
@@ -1828,7 +1905,10 @@ async function runChannelsCommand(
     if (channel === "imessage") {
       return runIMessageWhoamiCommand(cfg);
     }
-    throw new Error(`Unsupported channel for whoami: ${channel}. Available: whatsapp, telegram, imessage`);
+    if (channel === "discord") {
+      return runDiscordWhoamiCommand(cfg);
+    }
+    throw new Error(`Unsupported channel for whoami: ${channel}. Available: whatsapp, telegram, imessage, discord`);
   }
 
   if (sub === "list") {

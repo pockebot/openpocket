@@ -495,6 +495,10 @@ export class GatewayCore {
    * Groups never trigger owner claim or pairing codes.
    */
   private async checkGroupAccess(envelope: InboundEnvelope): Promise<boolean> {
+    if (envelope.adapterPreAuthorized) {
+      return true;
+    }
+
     const groupPolicy = this.resolveGroupPolicy(envelope.channelType);
 
     if (groupPolicy === "disabled") {
