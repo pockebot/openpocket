@@ -19,3 +19,8 @@ debug_screen_*.png
 
 # local databases
 *.sqlite
+
+# local planning / research snapshots
+docs/plan/
+docs/plans/
+opensrc/
