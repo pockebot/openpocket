@@ -1349,6 +1349,7 @@ export class DashboardServer {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenPocket Dashboard</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <style>
     :root {
       --bg-0: #f6f2eb;
@@ -3823,11 +3824,11 @@ export class DashboardServer {
     }
 
     function channelIcon(ch) {
-      if (ch === "telegram") return "📨";
-      if (ch === "whatsapp") return "💬";
-      if (ch === "discord") return "🎮";
-      if (ch === "imessage") return "🍎";
-      return "📡";
+      if (ch === "telegram") return '<i class="fa-brands fa-telegram" style="color:#2AABEE;font-size:20px;vertical-align:middle;"></i>';
+      if (ch === "whatsapp") return '<i class="fa-brands fa-whatsapp" style="color:#25D366;font-size:20px;vertical-align:middle;"></i>';
+      if (ch === "discord") return '<i class="fa-brands fa-discord" style="color:#5865F2;font-size:20px;vertical-align:middle;"></i>';
+      if (ch === "imessage") return '<i class="fa-brands fa-apple" style="color:#555;font-size:20px;vertical-align:middle;"></i>';
+      return '<i class="fa-solid fa-globe" style="color:#888;font-size:20px;vertical-align:middle;"></i>';
     }
 
     function sessionBadge(ch, status) {
