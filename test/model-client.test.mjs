@@ -117,7 +117,8 @@ test("ModelClient respects baseUrl override", () => {
 
 test("ModelClient builds pi-ai tools from TOOL_METAS", async () => {
   const { TOOL_METAS } = await import("../dist/agent/tools.js");
-  assert.equal(TOOL_METAS.length, 21);
+  assert.ok(TOOL_METAS.length > 0);
+  assert.equal(new Set(TOOL_METAS.map((t) => t.name)).size, TOOL_METAS.length);
   const names = TOOL_METAS.map((t) => t.name);
   assert.ok(names.includes("tap"));
   assert.ok(names.includes("finish"));

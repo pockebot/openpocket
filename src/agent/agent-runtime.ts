@@ -2513,7 +2513,7 @@ export class AgentRuntime {
             [
               `app=${snapshot?.currentApp ?? "unknown"}`,
               `screenshot=${ctx.lastScreenshotPath ?? "(none)"}`,
-              `ui_candidates=${snapshot?.uiElements.length ?? 0}`,
+              `ui_candidates=${snapshot?.uiElements?.length ?? 0}`,
             ].join(" "),
           );
           logStepSection("thought", thought || "(empty)");
