@@ -234,6 +234,42 @@
       "maxTokens": 3000,
       "reasoningEffort": null,
       "temperature": null
+    },
+    "kimi-k2-turbo-preview": {
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2-turbo-preview",
+      "apiKey": "",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "kimi-k2.5": {
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2.5",
+      "apiKey": "",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "kimi-k2-thinking": {
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2-thinking",
+      "apiKey": "",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": "medium",
+      "temperature": null
+    },
+    "kimi-coding/k2p5": {
+      "baseUrl": "https://api.kimi.com/coding",
+      "model": "k2p5",
+      "apiKey": "",
+      "apiKeyEnv": "KIMI_API_KEY",
+      "maxTokens": 32768,
+      "reasoningEffort": "medium",
+      "temperature": null
     }
   }
 }

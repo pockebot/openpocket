@@ -85,6 +85,12 @@ export function providerLabel(baseUrl: string): string {
   if (lower.includes("api.z.ai")) {
     return "AutoGLM";
   }
+  if (lower.includes("api.kimi.com")) {
+    return "Kimi Code";
+  }
+  if (lower.includes("moonshot.cn")) {
+    return "Moonshot AI";
+  }
   const host = (() => {
     try {
       return new URL(baseUrl).host;

@@ -204,6 +204,12 @@ function providerFromBaseUrl(baseUrl: string): string {
   if (lower.includes("api.z.ai")) {
     return "AutoGLM";
   }
+  if (lower.includes("api.kimi.com")) {
+    return "Kimi Code";
+  }
+  if (lower.includes("moonshot.cn") || lower.includes("moonshot.ai")) {
+    return "Moonshot AI";
+  }
   try {
     const host = new URL(baseUrl).host;
     return host || "custom";
@@ -254,6 +260,18 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   }
   if (profileKey === "autoglm-phone") {
     return "AutoGLM Phone (Z.ai)";
+  }
+  if (profileKey === "kimi-k2-turbo-preview") {
+    return "Kimi K2 Turbo Preview (Moonshot AI)";
+  }
+  if (profileKey === "kimi-k2.5") {
+    return "Kimi K2.5 (Moonshot AI)";
+  }
+  if (profileKey === "kimi-k2-thinking") {
+    return "Kimi K2 Thinking (Moonshot AI)";
+  }
+  if (profileKey === "kimi-coding/k2p5") {
+    return "Kimi K2.5 for Coding (Kimi Code)";
   }
   return `${profile.model} (${providerFromBaseUrl(profile.baseUrl)})`;
 }

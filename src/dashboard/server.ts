@@ -2655,6 +2655,12 @@ export class DashboardServer {
         if (text.includes("api.z.ai")) {
           return "AutoGLM";
         }
+        if (text.includes("api.kimi.com")) {
+          return "Kimi Code";
+        }
+        if (text.includes("moonshot.cn")) {
+          return "Moonshot AI";
+        }
         try {
           return new URL(baseUrl).host || "custom";
         } catch {
