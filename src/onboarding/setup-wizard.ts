@@ -291,11 +291,11 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   if (profileKey === "kimi-k2-thinking-turbo") {
     return "Kimi K2 Thinking Turbo (Moonshot AI)";
   }
-  if (profileKey === "deepseek-chat") {
-    return "DeepSeek Chat V3.2 (DeepSeek)";
+  if (profileKey === "deepseek-v3") {
+    return "DeepSeek V3 (DeepSeek)";
   }
-  if (profileKey === "deepseek-reasoner") {
-    return "DeepSeek Reasoner V3.2 (DeepSeek)";
+  if (profileKey === "deepseek-r1") {
+    return "DeepSeek R1 (DeepSeek)";
   }
   if (profileKey === "qwen-max") {
     return "Qwen Max (DashScope)";

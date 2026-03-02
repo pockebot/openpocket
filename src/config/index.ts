@@ -298,7 +298,7 @@ function defaultConfigObject() {
         reasoningEffort: "medium" as const,
         temperature: null,
       },
-      "deepseek-chat": {
+      "deepseek-v3": {
         baseUrl: "https://api.deepseek.com",
         model: "deepseek-chat",
         apiKey: "",
@@ -307,7 +307,7 @@ function defaultConfigObject() {
         reasoningEffort: null,
         temperature: null,
       },
-      "deepseek-reasoner": {
+      "deepseek-r1": {
         baseUrl: "https://api.deepseek.com",
         model: "deepseek-reasoner",
         apiKey: "",
