@@ -1991,6 +1991,10 @@ type CliSelectOption<T extends string> = {
   hint?: string;
 };
 
+function isCtrlCKeypress(char: string, key: { name?: string; ctrl?: boolean; sequence?: string }): boolean {
+  return (key.ctrl && key.name === "c") || char === "\u0003" || key.sequence === "\u0003";
+}
+
 async function selectByArrowKeys<T extends string>(
   rl: Interface,
   message: string,
@@ -2054,8 +2058,8 @@ async function selectByArrowKeys<T extends string>(
       rl.resume();
     };
 
-    const onKeypress = (_char: string, key: { name?: string; ctrl?: boolean }) => {
-      if (key.ctrl && key.name === "c") {
+    const onKeypress = (char: string, key: { name?: string; ctrl?: boolean; sequence?: string }) => {
+      if (isCtrlCKeypress(char, key)) {
         cleanup();
         output.write("\n");
         reject(new Error("Setup cancelled by user."));
@@ -2159,8 +2163,8 @@ async function selectManyByArrowKeys<T extends string>(
       }
     };
 
-    const onKeypress = (char: string, key: { name?: string; ctrl?: boolean }) => {
-      if (key.ctrl && key.name === "c") {
+    const onKeypress = (char: string, key: { name?: string; ctrl?: boolean; sequence?: string }) => {
+      if (isCtrlCKeypress(char, key)) {
         cleanup();
         output.write("\n");
         reject(new Error("Setup cancelled by user."));
