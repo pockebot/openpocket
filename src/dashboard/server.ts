@@ -2205,6 +2205,7 @@ export class DashboardServer {
       <button class="tab-btn" data-tab="permissions">Permissions</button>
       <button class="tab-btn" data-tab="prompts">Agent Prompts</button>
       <button class="tab-btn" data-tab="channels">Channels</button>
+      <button class="tab-btn" data-tab="models">Models</button>
       <button class="tab-btn" data-tab="timeline">Action Timeline</button>
       <button class="tab-btn" data-tab="logs">Logs</button>
     </div>
@@ -2466,6 +2467,17 @@ export class DashboardServer {
         <p class="hint">Manage messaging channel connections, access policies, and sender approvals.</p>
       </div>
       <div id="channels-container"></div>
+    </section>
+
+    <section class="tab-panel" data-panel="models">
+      <div class="card">
+        <div class="row spread">
+          <h3 style="margin:0;">Model Profiles</h3>
+          <button class="btn" id="models-refresh-btn">Refresh</button>
+        </div>
+        <p class="hint">All configured model profiles and their credential status. The active default model is highlighted.</p>
+      </div>
+      <div id="models-container"></div>
     </section>
 
     <section class="tab-panel" data-panel="logs">
@@ -3621,6 +3633,9 @@ export class DashboardServer {
             renderPromptList();
             readPromptContent().catch(() => {});
           }
+          if (tab === "models") {
+            loadModels().catch(() => {});
+          }
         });
       });
 
@@ -3817,6 +3832,10 @@ export class DashboardServer {
       $("#channels-refresh-btn").addEventListener("click", () => {
         loadChannels().then(() => setStatus("Channels refreshed.", "ok")).catch((error) => setStatus(error.message, "error"));
       });
+
+      $("#models-refresh-btn").addEventListener("click", () => {
+        loadModels().then(() => setStatus("Models refreshed.", "ok")).catch((error) => setStatus(error.message, "error"));
+      });
     }
 
     // -------------------------------------------------------------------
@@ -3982,6 +4001,115 @@ export class DashboardServer {
       });
     }
 
+    // -------------------------------------------------------------------
+    // Models tab
+    // -------------------------------------------------------------------
+
+    async function loadModels() {
+      const payload = await api("/api/config");
+      state.config = payload.config;
+      state.credentialStatus = payload.credentialStatus || {};
+      renderModels();
+    }
+
+    function modelsProviderLabel(baseUrl) {
+      const text = String(baseUrl || "").toLowerCase();
+      if (text.includes("api.openai.com")) return "OpenAI";
+      if (text.includes("openrouter.ai")) return "OpenRouter";
+      if (text.includes("blockrun.ai")) return "BlockRun";
+      if (text.includes("api.z.ai")) return "AutoGLM";
+      if (text.includes("api.kimi.com")) return "Kimi Code";
+      if (text.includes("moonshot.cn")) return "Moonshot AI";
+      if (text.includes("anthropic.com")) return "Anthropic";
+      if (text.includes("googleapis.com")) return "Google";
+      try { return new URL(baseUrl).host || "custom"; } catch { return "custom"; }
+    }
+
+    function modelsProviderIcon(label) {
+      if (label === "OpenAI") return '<i class="fa-solid fa-robot" style="color:#10a37f;"></i>';
+      if (label === "OpenRouter") return '<i class="fa-solid fa-route" style="color:#6366f1;"></i>';
+      if (label === "Anthropic") return '<i class="fa-solid fa-brain" style="color:#d97706;"></i>';
+      if (label === "Google") return '<i class="fa-brands fa-google" style="color:#4285f4;"></i>';
+      if (label === "Moonshot AI") return '<i class="fa-solid fa-moon" style="color:#6366f1;"></i>';
+      if (label === "Kimi Code") return '<i class="fa-solid fa-code" style="color:#06b6d4;"></i>';
+      if (label === "AutoGLM") return '<i class="fa-solid fa-wand-magic-sparkles" style="color:#8b5cf6;"></i>';
+      if (label === "BlockRun") return '<i class="fa-solid fa-cube" style="color:#f59e0b;"></i>';
+      return '<i class="fa-solid fa-server" style="color:#888;"></i>';
+    }
+
+    function renderModels() {
+      const container = $("#models-container");
+      const config = state.config;
+      if (!config || !config.models) {
+        container.innerHTML = '<div class="card"><p class="hint">No models configured.</p></div>';
+        return;
+      }
+
+      const models = config.models;
+      const defaultModel = config.defaultModel || "";
+      const keys = Object.keys(models).sort();
+
+      const byProvider = {};
+      keys.forEach(function(key) {
+        const profile = models[key];
+        const label = modelsProviderLabel(profile.baseUrl);
+        if (!byProvider[label]) byProvider[label] = [];
+        byProvider[label].push({ key: key, profile: profile });
+      });
+
+      const providerOrder = Object.keys(byProvider).sort();
+
+      container.innerHTML = providerOrder.map(function(provider) {
+        const group = byProvider[provider];
+        const icon = modelsProviderIcon(provider);
+
+        var rows = group.map(function(item) {
+          var p = item.profile;
+          var isDefault = item.key === defaultModel;
+          var cred = state.credentialStatus[item.key] || "";
+          var hasKey = cred.indexOf("detected") !== -1;
+          var credBadge = hasKey
+            ? '<span class="badge ok" style="font-size:11px;">Key OK</span>'
+            : '<span class="badge" style="font-size:11px;background:#fff3cd;color:#856404;border-color:#ffc107;">No Key</span>';
+          var defaultBadge = isDefault
+            ? '<span class="badge ok" style="font-size:11px;background:#dbeafe;color:#1e40af;border-color:#93c5fd;">Default</span>'
+            : '';
+
+          var reasoningText = p.reasoningEffort ? p.reasoningEffort : "off";
+          var tempText = p.temperature !== null && p.temperature !== undefined ? String(p.temperature) : "default";
+
+          return '<tr style="border-bottom:1px solid rgba(0,0,0,0.05);">'
+            + '<td style="padding:8px 12px;font-weight:500;">'
+            + '<code style="font-size:13px;">' + escHtml(item.key) + '</code>'
+            + (isDefault ? ' ' + defaultBadge : '')
+            + '</td>'
+            + '<td style="padding:8px 12px;"><code style="font-size:12px;">' + escHtml(p.model) + '</code></td>'
+            + '<td style="padding:8px 12px;font-size:12px;">' + escHtml(p.apiKeyEnv || "N/A") + '</td>'
+            + '<td style="padding:8px 12px;">' + credBadge + '</td>'
+            + '<td style="padding:8px 12px;font-size:12px;">' + escHtml(String(p.maxTokens)) + '</td>'
+            + '<td style="padding:8px 12px;font-size:12px;">' + escHtml(reasoningText) + '</td>'
+            + '<td style="padding:8px 12px;font-size:12px;">' + escHtml(tempText) + '</td>'
+            + '</tr>';
+        }).join("");
+
+        return '<div class="card" style="margin-top:12px;">'
+          + '<h3 style="margin:0 0 12px 0;">' + icon + ' ' + escHtml(provider) + ' <span class="hint" style="font-weight:normal;">(' + group.length + ' model' + (group.length > 1 ? 's' : '') + ')</span></h3>'
+          + '<div style="overflow-x:auto;">'
+          + '<table style="width:100%;border-collapse:collapse;">'
+          + '<thead><tr style="text-align:left;border-bottom:2px solid rgba(0,0,0,0.1);">'
+          + '<th style="padding:6px 12px;font-size:12px;color:#666;">Profile</th>'
+          + '<th style="padding:6px 12px;font-size:12px;color:#666;">Model ID</th>'
+          + '<th style="padding:6px 12px;font-size:12px;color:#666;">API Key Env</th>'
+          + '<th style="padding:6px 12px;font-size:12px;color:#666;">Status</th>'
+          + '<th style="padding:6px 12px;font-size:12px;color:#666;">Max Tokens</th>'
+          + '<th style="padding:6px 12px;font-size:12px;color:#666;">Reasoning</th>'
+          + '<th style="padding:6px 12px;font-size:12px;color:#666;">Temperature</th>'
+          + '</tr></thead><tbody>' + rows + '</tbody></table>'
+          + '</div>'
+          + '</div>';
+      }).join("");
+    }
+
     function escHtml(str) {
       return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
@@ -4000,6 +4128,7 @@ export class DashboardServer {
         { label: "logs", run: () => loadLogs() },
         { label: "timeline", run: () => loadTraces() },
         { label: "channels", run: () => loadChannels() },
+        { label: "models", run: () => renderModels() },
       ];
       const failures = [];
 
