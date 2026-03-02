@@ -693,13 +693,20 @@ h1, h2, h3, h4, h5, h6,
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   width: 100%;
+  align-items: center;
+  justify-items: start;
 }
 
 .op-model-logo {
   width: 100%;
   max-width: 220px;
-  height: auto;
+  height: 72px;
   display: block;
+  object-fit: contain;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.12);
 }
 
 /* ============================================
@@ -988,6 +995,7 @@ h1, h2, h3, h4, h5, h6,
 .dark .op-support-item h3        { color: #ffb347 !important; }
 .dark .op-support-pill           { background: rgba(241, 245, 249, 0.08); border-color: rgba(241, 245, 249, 0.16); color: #f1f5f9; }
 .dark .op-support-pill-soon      { background: rgba(255, 179, 71, 0.12); border-color: rgba(255, 179, 71, 0.45); color: #ffd9a3; }
+.dark .op-model-logo             { background: #ffffff; border-color: rgba(255, 255, 255, 0.22); }
 
 .dark .op-footer-animation video { background: rgba(255, 255, 255, 0.05) !important; }
 
