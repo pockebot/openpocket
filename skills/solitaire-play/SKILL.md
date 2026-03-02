@@ -30,10 +30,11 @@ Use available phone actions to emulate card interactions:
 - Single-card quick move:
   - Prefer `tap` on card if app supports auto-move to foundation/tableau.
 - Precise move (card/stack relocation):
-  - Use `swipe(x1, y1, x2, y2, durationMs)` as drag.
+  - Prefer `drag(x1, y1, x2, y2, durationMs)`.
   - Recommended `durationMs`: `250-450`.
 - Long press (if app requires hold before drag):
-  - Use `swipe(x, y, x, y, 600)` first, then drag with another `swipe`.
+  - Use `long_press_drag(x1, y1, x2, y2, holdMs, durationMs)`.
+  - Recommended `holdMs`: `400-700`; `durationMs`: `220-380`.
 - Scrolling within menus/history:
   - Use `swipe` with long vertical distance.
 - Never rely on random gestures. Keep start/end points centered on visible card bodies.
@@ -74,7 +75,7 @@ Apply this priority order each turn:
 - If drag misses target:
   - Retry once with more centered coordinates and slightly longer duration (`+100ms`).
 - If app does not support tap auto-move:
-  - Switch to explicit drag-only flow using `swipe`.
+  - Switch to explicit drag-only flow using `drag` / `long_press_drag`.
 - If animation blocks actions:
   - Use a short `wait` before next move.
 - If board recognition is uncertain (overlap, tiny cards, occlusion):
