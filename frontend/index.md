@@ -28,7 +28,7 @@ function onVideoEnd(e) {
         <span class="regular">That Never Sleeps</span>
       </h1>
       <p class="op-hero-desc">
-        OpenPocket runs an always-on agent phone locally, with privacy first.
+        OpenPocket is an open source phone use agent framework that runs locally, with privacy first.
       </p>
     </div>
     <div class="op-hero-npm">
@@ -51,25 +51,20 @@ function onVideoEnd(e) {
 <!-- Why OpenPocket? -->
 <section class="op-why">
   <p class="op-section-label">Why OpenPocket?</p>
-  <div class="op-why-grid">
-    <div class="op-why-item">
-      <h3>Local Runtime</h3>
-      <p>Execute mobile workflows on your own machine. No expensive cloud subscriptions, no data leaks.</p>
-    </div>
-    <div class="op-why-item">
-      <h3>Human + Agent</h3>
-      <p>The perfect hybrid. Manual control when you want it, agent automation when you don't.</p>
-    </div>
-    <div class="op-why-item">
-      <h3>Auditable &amp; Private</h3>
-      <p>All sessions and memory stay visible and local. Your data, your rules.</p>
-    </div>
+  <div class="op-why-list">
+    <article class="op-why-item">
+      <h3>Permission Isolation</h3>
+      <p><strong>Human Phone and Agent Phone are fully isolated.</strong> The agent runs on a local sandbox target and has <strong>no direct access</strong> to your personal phone. Any sensitive step requires <strong>human authorization</strong> through remote approval.</p>
+    </article>
+    <article class="op-why-item">
+      <h3>Local-First Privacy</h3>
+      <p><strong>All sensitive data stays local</strong>, including accounts, credentials, runtime state, and Agent Phone artifacts. The authorization relay server also runs <strong>on your own machine</strong>, so private traffic remains inside your environment.</p>
+    </article>
+    <article class="op-why-item">
+      <h3>Open &amp; Flexible Framework</h3>
+      <p>OpenPocket follows extension-friendly standards and supports fast integration through <strong>one <code>SKILL.md</code></strong>. Developers can move from <strong>Mobile App to Agent App</strong> without changing existing app code.</p>
+    </article>
   </div>
-</section>
-
-<!-- OpenPocket Tagline -->
-<section class="op-tagline">
-  <p class="op-section-desc"><img class="op-desc-logo" :src="withBase('/openpocket-logo.png')" alt="" /><span class="op-desc-brand">OpenPocket</span> helps users automate real mobile app tasks,<br/><span class="op-underline-dotted">without</span> sending execution control to a cloud phone runtime.</p>
 </section>
 
 <!-- Use Cases -->
@@ -123,36 +118,9 @@ function onVideoEnd(e) {
   </div>
 </section>
 
-<!-- Architecture -->
-<section class="op-arch">
-  <p class="op-section-label">Architecture Behind OpenPocket</p>
-  <div class="op-arch-with-video">
-    <div class="op-arch-simple op-arch-group">
-      <div class="op-arch-flow op-arch-flow--vertical">
-        <div class="op-arch-node op-arch-node--gray">User</div>
-        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
-        <div class="op-arch-node op-arch-node--blue">Gateway</div>
-        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
-        <div class="op-arch-node op-arch-node--orange">Agent Runtime</div>
-        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
-        <div class="op-arch-node op-arch-node--blue">ADB Runtime</div>
-        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
-        <div class="op-arch-node op-arch-node--gray">Agent Phone Target</div>
-      </div>
-      <div class="op-arch-flow op-arch-flow--branch op-arch-flow--vertical">
-        <div class="op-arch-node op-arch-node--blue">Gateway</div>
-        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
-        <div class="op-arch-node op-arch-node--blue">Auth Relay</div>
-        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
-        <div class="op-arch-node op-arch-node--orange">Agent Runtime</div>
-        <span class="op-arch-arrow op-arch-arrow--down">↓</span>
-        <div class="op-arch-node op-arch-node--gray">User Interface</div>
-      </div>
-    </div>
-    <div class="op-arch-video">
-      <video autoplay muted playsinline :src="withBase('/hamster-architecture.mp4')" @ended="onVideoEnd"></video>
-    </div>
-  </div>
+<!-- Footer Animation -->
+<section class="op-footer-animation">
+  <video autoplay muted playsinline preload="auto" :src="withBase('/hamster-architecture.mp4')" @ended="onVideoEnd"></video>
 </section>
 
 </div>

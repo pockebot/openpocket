@@ -424,75 +424,54 @@ h1, h2, h3, h4, h5, h6,
 }
 
 /* ============================================
-   TAGLINE
-   ============================================ */
-.op-tagline {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  width: 100%;
-}
-
-.op-tagline .op-section-desc {
-  margin: 0;
-  line-height: 64px !important;
-}
-
-/* ============================================
    WHY OPENPOCKET
    ============================================ */
 .op-why {
   display: flex;
   flex-direction: column;
-  gap: 40px;
+  gap: 28px;
   width: 100%;
 }
 
-.op-why-grid {
+.op-why-list {
   display: flex;
-  gap: 48px;
+  flex-direction: column;
+  gap: 0;
   width: 100%;
 }
 
 .op-why-item {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  position: relative;
-  padding-bottom: 16px;
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+  padding: 24px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
 }
 
-.op-why-item::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 0;
-  height: 1px;
-  background: #ff8a00;
-  transition: width 0.3s ease;
-}
-
-.op-why-item:hover::after {
-  width: 100%;
+.op-why-item:last-child {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
 }
 
 .op-why-item h3 {
-  font-size: 32px;
-  line-height: 28px;
+  font-size: 28px;
+  line-height: 34px;
   font-weight: 500;
   color: #ff8a00;
   margin: 0;
 }
 
 .op-why-item p {
-  font-size: 14px;
-  line-height: 20px;
+  font-size: 16px;
+  line-height: 26px;
   font-weight: 400;
   color: #000;
   margin: 0;
+}
+
+.op-why-item strong {
+  font-weight: 600;
+  color: #0f172a;
 }
 
 /* ============================================
@@ -642,6 +621,25 @@ h1, h2, h3, h4, h5, h6,
   font-weight: 400;
   color: #000;
   margin: 0;
+}
+
+/* ============================================
+   FOOTER ANIMATION
+   ============================================ */
+.op-footer-animation {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+}
+
+.op-footer-animation video {
+  width: min(100%, 420px);
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.04);
 }
 
 /* ============================================
@@ -890,6 +888,8 @@ h1, h2, h3, h4, h5, h6,
 /* Why OpenPocket */
 .dark .op-why-item h3            { color: #ffb347 !important; }
 .dark .op-why-item p             { color: #c8cdd8 !important; }
+.dark .op-why-item               { border-color: rgba(255, 255, 255, 0.16); }
+.dark .op-why-item strong        { color: #f1f5f9 !important; }
 
 /* Use Cases */
 .dark .op-usecase-card           { background: rgba(251, 242, 233, 0.15) !important; border-color: rgba(245, 198, 163, 0.5) !important; }
@@ -904,6 +904,8 @@ h1, h2, h3, h4, h5, h6,
 .dark .op-workflow-step-num      { color: #ffb347 !important; }
 .dark .op-workflow-step-title    { color: #ffb347 !important; }
 .dark .op-workflow-step p        { color: #c8cdd8 !important; }
+
+.dark .op-footer-animation video { background: rgba(255, 255, 255, 0.05) !important; }
 
 /* Architecture */
 .dark .op-arch-simple            { background: rgba(255, 255, 255, 0.02) !important; border-color: rgba(255, 255, 255, 0.15) !important; }
@@ -949,12 +951,10 @@ h1, h2, h3, h4, h5, h6,
 .op-hero-right,
 .op-why,
 .op-why-item,
-.op-tagline,
 .op-usecases,
 .op-workflow,
 .op-workflow-step,
-.op-arch,
-.op-arch-group {
+.op-footer-animation {
   opacity: 0;
 }
 
@@ -966,8 +966,6 @@ h1, h2, h3, h4, h5, h6,
 .op-why-item.visible:nth-child(2) { animation: op-fade-up 0.5s ease 0.22s both; }
 .op-why-item.visible:nth-child(3) { animation: op-fade-up 0.5s ease 0.34s both; }
 
-.op-tagline.visible    { animation: op-fade-up 0.6s ease both; }
-
 .op-usecases.visible   { animation: op-fade-up 0.6s ease both; }
 
 .op-workflow.visible    { animation: op-fade-up 0.6s ease both; }
@@ -975,18 +973,7 @@ h1, h2, h3, h4, h5, h6,
 .op-workflow-step.visible:nth-child(2) { animation: op-fade-up 0.5s ease 0.25s both; }
 .op-workflow-step.visible:nth-child(3) { animation: op-fade-up 0.5s ease 0.4s both; }
 
-.op-arch.visible       { animation: op-fade-up 0.6s ease both; }
-.op-arch-group.visible { animation: op-scale-in 0.45s ease both; }
-.op-arch-video.visible  { animation: op-fade-up 0.5s ease both; }
-.op-arch-group.visible:nth-child(1) { animation-delay: 0.05s; }
-.op-arch-group.visible:nth-child(2) { animation-delay: 0.12s; }
-.op-arch-group.visible:nth-child(3) { animation-delay: 0.19s; }
-.op-arch-group.visible:nth-child(4) { animation-delay: 0.26s; }
-.op-arch-group.visible:nth-child(5) { animation-delay: 0.33s; }
-.op-arch-group.visible:nth-child(6) { animation-delay: 0.40s; }
-.op-arch-group.visible:nth-child(7) { animation-delay: 0.47s; }
-.op-arch-group.visible:nth-child(8) { animation-delay: 0.54s; }
-.op-arch-group.visible:nth-child(9) { animation-delay: 0.61s; }
+.op-footer-animation.visible { animation: op-fade-up 0.6s ease both; }
 
 /* ============================================
    RESPONSIVE
@@ -1000,7 +987,8 @@ h1, h2, h3, h4, h5, h6,
   .op-hero-right { max-width: 480px; }
   .op-hero-desc,
   .op-hero-npm   { width: 100%; }
-  .op-section-desc { font-size: 40px !important; line-height: 64px !important; }
+  .op-why-item h3 { font-size: 26px; line-height: 32px; }
+  .op-why-item p  { font-size: 15px; line-height: 24px; }
 }
 
 /* Tablet landscape */
@@ -1012,20 +1000,13 @@ h1, h2, h3, h4, h5, h6,
   .op-hero-desc,
   .op-hero-npm            { width: 100%; }
   .op-hero-title          { font-size: 44px !important; line-height: 52px !important; }
-  .op-section-desc        { font-size: 32px !important; line-height: 56px !important; }
-  .op-desc-logo           { width: 36px; height: 36px; }
-  .op-why-grid            { gap: 32px; }
-  .op-why-item h3         { font-size: 26px; }
+  .op-why-item            { grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 20px; }
+  .op-why-item h3         { font-size: 24px; line-height: 30px; }
+  .op-why-item p          { font-size: 15px; line-height: 24px; }
   .op-workflow-step-title { font-size: 44px !important; line-height: 52px !important; }
   .op-workflow-step-num   { font-size: 26px !important; }
   .op-workflow-grid       { gap: 32px; }
-  .op-tagline             { padding: 0 16px; }
-  .op-tagline .op-section-desc { line-height: 56px !important; }
-  .op-arch-with-video     { flex-direction: column; align-items: stretch; }
-  .op-arch-with-video .op-arch-simple { width: 100%; flex-direction: row; flex-wrap: wrap; }
-  .op-arch-video          { width: 100%; max-width: 360px; align-self: center; height: auto; }
-  .op-arch-simple         { padding: 12px; }
-  .op-arch-flow           { justify-content: flex-start; }
+  .op-footer-animation video { max-width: 360px; }
   .VPNavBar > .wrapper > .container { padding: 0 32px !important; }
 }
 
@@ -1040,20 +1021,13 @@ h1, h2, h3, h4, h5, h6,
   .op-landing             { padding: 48px 28px; gap: 64px; }
   .op-hero-title          { font-size: 36px !important; line-height: 44px !important; }
   .op-hero-desc           { font-size: 16px; }
-  .op-section-desc        { font-size: 26px !important; line-height: 48px !important; }
-  .op-desc-logo           { width: 28px; height: 28px; }
-  .op-why-grid            { flex-direction: column; gap: 0; }
-  .op-why-item            { padding: 16px 0; }
+  .op-why-item            { grid-template-columns: 1fr; gap: 10px; padding: 18px 0; }
   .op-why-item h3         { font-size: 22px; }
+  .op-why-item p          { font-size: 14px; line-height: 22px; }
   .op-workflow-grid       { flex-direction: column; gap: 28px; }
   .op-workflow-step-title { font-size: 36px !important; line-height: 44px !important; }
   .op-workflow-step-num   { font-size: 22px !important; }
-  .op-tagline             { padding: 0 8px; }
-  .op-tagline .op-section-desc { line-height: 48px !important; }
-  .op-arch-flow           { flex-direction: column; align-items: flex-start; gap: 10px; }
-  .op-arch-arrow          { font-size: 0; }
-  .op-arch-arrow::after   { content: '\2193'; font-size: 16px; }
-  .op-arch-flow--branch   { margin-top: 2px; }
+  .op-footer-animation video { max-width: 320px; }
   .op-hero-actions        { flex-wrap: wrap; }
 }
 
@@ -1067,8 +1041,6 @@ h1, h2, h3, h4, h5, h6,
   .op-landing             { padding: 40px 16px; gap: 48px; }
   .op-hero-title          { font-size: 28px !important; line-height: 36px !important; }
   .op-hero-desc           { font-size: 15px; line-height: 22px; }
-  .op-section-desc        { font-size: 22px !important; line-height: 40px !important; }
-  .op-desc-logo           { width: 24px; height: 24px; margin-right: 4px; }
   .op-section-label       { font-size: 15px; }
   .op-hero-npm            { padding: 12px 16px !important; }
   .op-hero-npm-code       { font-size: 14px !important; }
@@ -1079,15 +1051,9 @@ h1, h2, h3, h4, h5, h6,
   .op-workflow-step-title { font-size: 28px !important; line-height: 36px !important; }
   .op-workflow-step-num   { font-size: 20px !important; }
   .op-workflow-step p     { font-size: 13px; line-height: 18px; }
-  .op-tagline             { padding: 0 4px; }
-  .op-tagline .op-section-desc { line-height: 40px !important; }
   .op-usecase-card        { padding: 12px 14px !important; font-size: 14px !important; }
   .op-usecase-icon        { width: 32px !important; height: 32px !important; min-width: 32px; min-height: 32px; }
-  .op-arch-video          { width: 100%; max-width: 280px; }
-  .op-arch-simple         { padding: 10px; border-radius: 12px; }
-  .op-arch-node           { padding: 8px 12px !important; font-size: 12px !important; line-height: 18px !important; height: 34px !important; }
-  .op-arch-node--compact  { padding: 8px 12px !important; font-size: 12px !important; line-height: 18px !important; height: 34px !important; }
-  .op-arch-arrow::after   { font-size: 14px; }
+  .op-footer-animation video { max-width: 280px; border-radius: 10px; }
   .VPNavBar > .wrapper > .container { padding: 0 16px !important; }
 }
 
