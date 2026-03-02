@@ -33,7 +33,11 @@ class FakePrompter {
     return this.script.selects.shift();
   }
 
-  async confirm() {
+  async confirm(message) {
+    // macOS adds an extra iMessage channel confirmation; tests are scripted for Linux CI flow.
+    if (typeof message === "string" && message.startsWith("Enable iMessage?")) {
+      return false;
+    }
     if (this.script.confirms.length === 0) {
       throw new Error("No scripted confirm value.");
     }
@@ -152,7 +156,7 @@ test("setup wizard configures OpenAI key and records Gmail onboarding state", as
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, true, false, false, true],
-      selects: ["emulator", "gpt-5.2-codex", "config", "skip", "keep", "start", "disabled"],
+      selects: ["emulator", "gpt-5.2-codex", "config", "skip", "pairing", "start", "disabled"],
       texts: ["", "sk-should-not-be-used"],
       secrets: ["sk-test-openpocket"],
       pauseCount: 1,
@@ -187,7 +191,7 @@ test("setup wizard applies provider key to selected provider only", async () => 
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, true, false, false],
-      selects: ["emulator", "autoglm-phone", "config", "skip", "keep", "skip", "disabled"],
+      selects: ["emulator", "autoglm-phone", "config", "skip", "pairing", "skip", "disabled"],
       texts: ["", "zai-test-key"],
       pauseCount: 0,
     });
@@ -207,7 +211,7 @@ test("setup wizard can configure physical phone target and skip emulator onboard
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["physical-phone", "usb", "gpt-5.2-codex", "skip", "skip", "keep", "disabled"],
+      selects: ["physical-phone", "usb", "gpt-5.2-codex", "skip", "skip", "pairing", "disabled"],
       texts: [""],
       pauseCount: 0,
     });
@@ -234,7 +238,7 @@ test("setup wizard configures local human-auth ngrok mode", async () => {
     process.env.NGROK_AUTHTOKEN = "ngrok-test-token";
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "env"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "pairing", "skip", "ngrok", "env"],
       texts: [""],
       pauseCount: 0,
     });
@@ -266,7 +270,7 @@ test("setup wizard includes ngrok setup guide when ngrok CLI is missing", async 
     cfg.humanAuth.tunnel.ngrok.executable = "missing-ngrok-binary-for-test";
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "skip"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "pairing", "skip", "ngrok", "skip"],
       texts: [""],
       pauseCount: 0,
     });
@@ -287,7 +291,7 @@ test("setup wizard can configure Telegram token and allowlist in config", async 
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, false, false, true],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "config", "set", "skip", "disabled"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "config", "allowlist", "skip", "disabled"],
       texts: ["", "123456789, 987654321"],
       secrets: ["telegram-test-token"],
       pauseCount: 0,
@@ -307,7 +311,7 @@ test("setup wizard can configure ngrok authtoken in config using secret input", 
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, false, false, true],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "pairing", "skip", "ngrok", "config"],
       texts: [""],
       secrets: ["ngrok-config-token"],
       pauseCount: 0,
@@ -327,7 +331,7 @@ test("setup wizard can keep existing API key from config.json", async () => {
     cfg.models["gpt-5.2-codex"].apiKey = "sk-existing-openpocket";
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "config-existing", "skip", "keep", "skip", "disabled"],
+      selects: ["emulator", "gpt-5.2-codex", "config-existing", "skip", "pairing", "skip", "disabled"],
       texts: [""],
       pauseCount: 0,
     });
@@ -351,7 +355,7 @@ test("setup wizard can keep existing Telegram token from config.json", async () 
     cfg.telegram.botToken = "telegram-existing-token";
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "config-existing", "keep", "skip", "disabled"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "config-existing", "pairing", "skip", "disabled"],
       texts: [""],
       pauseCount: 0,
     });
@@ -374,7 +378,7 @@ test("setup wizard can keep existing ngrok token from config.json", async () => 
     cfg.humanAuth.tunnel.ngrok.authtoken = "ngrok-existing-token";
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config-existing"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "pairing", "skip", "ngrok", "config-existing"],
       texts: [""],
       pauseCount: 0,
     });
@@ -393,7 +397,7 @@ test("setup wizard allows skipping API key config after empty secret input", asy
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "config", "skip", "skip", "keep", "skip", "disabled"],
+      selects: ["emulator", "gpt-5.2-codex", "config", "skip", "skip", "pairing", "skip", "disabled"],
       texts: [""],
       secrets: [""],
       pauseCount: 0,
@@ -416,7 +420,7 @@ test("setup wizard allows skipping Telegram token config after empty secret inpu
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "config", "skip", "keep", "skip", "disabled"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "config", "skip", "pairing", "skip", "disabled"],
       texts: [""],
       secrets: [""],
       pauseCount: 0,
@@ -439,7 +443,7 @@ test("setup wizard allows skipping ngrok token config after empty secret input",
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "ngrok", "config", "skip"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "pairing", "skip", "ngrok", "config", "skip"],
       texts: [""],
       secrets: [""],
       pauseCount: 0,
@@ -461,7 +465,7 @@ test("setup wizard normalizes invalid telegram botTokenEnv name", async () => {
     cfg.telegram.botTokenEnv = "8368685395:AAH-invalid-token-shape";
     const prompter = new FakePrompter({
       confirms: [true, true, false, false],
-      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "keep", "skip", "disabled"],
+      selects: ["emulator", "gpt-5.2-codex", "skip", "skip", "pairing", "skip", "disabled"],
       texts: [""],
       pauseCount: 0,
     });
@@ -481,7 +485,7 @@ test("setup wizard supports codex cli auth option in model selection", async () 
       let loginCalled = 0;
       const prompter = new FakePrompter({
         confirms: [true, true, false, false],
-        selects: ["emulator", "gpt-5.2-codex::codex-cli", "skip", "keep", "skip", "disabled"],
+        selects: ["emulator", "gpt-5.2-codex::codex-cli", "skip", "pairing", "skip", "disabled"],
         texts: [""],
         pauseCount: 0,
       });
@@ -541,7 +545,7 @@ test("setup wizard uses existing codex credential when codex login command fails
       let loginCalled = 0;
       const prompter = new FakePrompter({
         confirms: [true, true, false, false],
-        selects: ["emulator", "gpt-5.2-codex::codex-cli", "skip", "keep", "skip", "disabled"],
+        selects: ["emulator", "gpt-5.2-codex::codex-cli", "skip", "pairing", "skip", "disabled"],
         texts: [""],
         pauseCount: 0,
       });
