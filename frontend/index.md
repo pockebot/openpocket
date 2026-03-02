@@ -61,8 +61,8 @@ function onVideoEnd(e) {
       <p><strong>All sensitive data stays local</strong>, including accounts, credentials, runtime state, and Agent Phone artifacts. The authorization relay server also runs <strong>on your own machine</strong>, so private traffic remains inside your environment.</p>
     </article>
     <article class="op-why-item">
-      <h3>Open &amp; Flexible Framework</h3>
-      <p>OpenPocket follows extension-friendly standards and supports fast integration through <strong>one <code>SKILL.md</code></strong>. Developers can move from <strong>Mobile App to Agent App</strong> without changing existing app code.</p>
+      <h3>Open Framework</h3>
+      <p>OpenPocket follows extension-friendly standards and supports fast integration through <strong>one <code>SKILL.md</code></strong>. Developers can migrate from <strong>Mobile App to Agent App</strong> without changing existing app code.</p>
     </article>
   </div>
 </section>
