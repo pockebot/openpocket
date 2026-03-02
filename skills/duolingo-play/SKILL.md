@@ -75,6 +75,12 @@ Actively help the user complete lessons. Do not ask the user what the answer is 
 6. Tap **Continue** to proceed to the next question.
 7. Repeat until the lesson is complete.
 
+## Unit Completion
+
+When a full unit (lesson set) is completed:
+- Take a screenshot of the completion/celebration screen.
+- Send the user a summary: unit name, number of lessons completed, hearts remaining, and any notable mistakes or corrections encountered during the session.
+
 ## Failure Handling
 
 - If an answer is marked incorrect, note the correction shown on screen and continue.
