@@ -15,6 +15,33 @@ function onVideoEnd(e) {
     video.play();
   }, 600);
 }
+
+const modelSupport = [
+  { id: "gpt-5.2-codex", provider: "OpenAI", model: "GPT-5.2 Codex", logo: "/models/openai.svg" },
+  { id: "gpt-5.3-codex", provider: "OpenAI", model: "GPT-5.3 Codex", logo: "/models/openai.svg" },
+  { id: "claude-sonnet-4.6", provider: "OpenRouter", model: "Claude Sonnet 4.6", logo: "/models/anthropic.svg" },
+  { id: "claude-opus-4.6", provider: "OpenRouter", model: "Claude Opus 4.6", logo: "/models/anthropic.svg" },
+  { id: "blockrun/gpt-4o", provider: "Blockrun", model: "GPT-4o", logo: "/models/openai.svg" },
+  { id: "blockrun/claude-sonnet-4", provider: "Blockrun", model: "Claude Sonnet 4", logo: "/models/anthropic.svg" },
+  { id: "blockrun/gemini-2.0-flash", provider: "Blockrun", model: "Gemini 2.0 Flash", logo: "/models/gemini.svg" },
+  { id: "blockrun/deepseek-chat", provider: "Blockrun", model: "DeepSeek Chat", logo: "/models/deepseek.svg" },
+  { id: "autoglm-phone", provider: "Z.ai", model: "AutoGLM Phone", logo: "/models/zai.svg" },
+  { id: "kimi-k2-turbo-preview", provider: "Moonshot AI", model: "Kimi K2 Turbo Preview", logo: "/models/moonshot.svg" },
+  { id: "kimi-k2.5", provider: "Moonshot AI", model: "Kimi K2.5", logo: "/models/moonshot.svg" },
+  { id: "kimi-k2-thinking", provider: "Moonshot AI", model: "Kimi K2 Thinking", logo: "/models/moonshot.svg" },
+  { id: "kimi-coding/k2p5", provider: "Kimi Code", model: "K2.5 (Coding)", logo: "/models/kimi.svg" },
+  { id: "kimi-k2-thinking-turbo", provider: "Moonshot AI", model: "Kimi K2 Thinking Turbo", logo: "/models/moonshot.svg" },
+  { id: "deepseek-v3", provider: "DeepSeek", model: "DeepSeek V3", logo: "/models/deepseek.svg" },
+  { id: "deepseek-r1", provider: "DeepSeek", model: "DeepSeek R1", logo: "/models/deepseek.svg" },
+  { id: "qwen-max", provider: "Qwen (DashScope)", model: "Qwen Max", logo: "/models/qwen.svg" },
+  { id: "qwen-plus", provider: "Qwen (DashScope)", model: "Qwen Plus", logo: "/models/qwen.svg" },
+  { id: "qwen-coder-plus", provider: "Qwen (DashScope)", model: "Qwen Coder Plus", logo: "/models/qwen.svg" },
+  { id: "minimax-m2.5", provider: "MiniMax", model: "MiniMax M2.5", logo: "/models/minimax.svg" },
+  { id: "minimax-m2.1", provider: "MiniMax", model: "MiniMax M2.1", logo: "/models/minimax.svg" },
+  { id: "volcengine/doubao-seed-1-8", provider: "Volcano Engine", model: "Doubao Seed 1.8", logo: "/models/doubao.svg" },
+  { id: "volcengine/deepseek-v3-2", provider: "Volcano Engine", model: "DeepSeek V3.2", logo: "/models/deepseek.svg" },
+  { id: "byteplus/seed-1-8", provider: "BytePlus", model: "Seed 1.8", logo: "/models/bytedance.svg" },
+];
 </script>
 
 <div class="op-landing">
@@ -140,15 +167,20 @@ function onVideoEnd(e) {
     <article class="op-support-item">
       <h3>Model Support</h3>
       <div class="op-model-grid">
-        <img class="op-model-logo" :src="withBase('/models/gpt-5.2-codex.svg')" alt="gpt-5.2-codex" title="gpt-5.2-codex" />
-        <img class="op-model-logo" :src="withBase('/models/gpt-5.3-codex.svg')" alt="gpt-5.3-codex" title="gpt-5.3-codex" />
-        <img class="op-model-logo" :src="withBase('/models/claude-sonnet-4.6.svg')" alt="claude-sonnet-4.6" title="claude-sonnet-4.6" />
-        <img class="op-model-logo" :src="withBase('/models/claude-opus-4.6.svg')" alt="claude-opus-4.6" title="claude-opus-4.6" />
-        <img class="op-model-logo" :src="withBase('/models/blockrun-gpt-4o.svg')" alt="blockrun/gpt-4o" title="blockrun/gpt-4o" />
-        <img class="op-model-logo" :src="withBase('/models/blockrun-claude-sonnet-4.svg')" alt="blockrun/claude-sonnet-4" title="blockrun/claude-sonnet-4" />
-        <img class="op-model-logo" :src="withBase('/models/blockrun-gemini-2.0-flash.svg')" alt="blockrun/gemini-2.0-flash" title="blockrun/gemini-2.0-flash" />
-        <img class="op-model-logo" :src="withBase('/models/blockrun-deepseek-chat.svg')" alt="blockrun/deepseek-chat" title="blockrun/deepseek-chat" />
-        <img class="op-model-logo" :src="withBase('/models/autoglm-phone.svg')" alt="autoglm-phone" title="autoglm-phone" />
+        <article class="op-model-card" v-for="item in modelSupport" :key="item.id">
+          <div class="op-model-logo-box">
+            <img
+              class="op-model-logo"
+              :src="withBase(item.logo)"
+              :alt="`${item.provider} logo for ${item.model}`"
+              :title="`${item.provider} / ${item.model}`"
+            />
+          </div>
+          <div class="op-model-meta">
+            <p class="op-model-provider">{{ item.provider }}</p>
+            <p class="op-model-name">{{ item.model }}</p>
+          </div>
+        </article>
       </div>
     </article>
   </div>

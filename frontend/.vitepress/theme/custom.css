@@ -693,20 +693,63 @@ h1, h2, h3, h4, h5, h6,
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   width: 100%;
-  align-items: center;
-  justify-items: start;
 }
 
-.op-model-logo {
-  width: 100%;
-  max-width: 220px;
-  height: 72px;
-  display: block;
-  object-fit: contain;
-  padding: 10px 14px;
+.op-model-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 92px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(15, 23, 42, 0.14);
+}
+
+.op-model-logo-box {
+  width: 52px;
+  height: 52px;
   border-radius: 12px;
   background: #ffffff;
   border: 1px solid rgba(15, 23, 42, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.op-model-logo {
+  width: 32px;
+  height: 32px;
+  display: block;
+  object-fit: contain;
+}
+
+.op-model-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  justify-content: center;
+}
+
+.op-model-meta p {
+  margin: 0 !important;
+}
+
+.op-model-provider {
+  font-size: 14px;
+  line-height: 18px;
+  font-weight: 700;
+  color: #ff8a00;
+}
+
+.op-model-name {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: #1f2937;
 }
 
 /* ============================================
@@ -995,7 +1038,10 @@ h1, h2, h3, h4, h5, h6,
 .dark .op-support-item h3        { color: #ffb347 !important; }
 .dark .op-support-pill           { background: rgba(241, 245, 249, 0.08); border-color: rgba(241, 245, 249, 0.16); color: #f1f5f9; }
 .dark .op-support-pill-soon      { background: rgba(255, 179, 71, 0.12); border-color: rgba(255, 179, 71, 0.45); color: #ffd9a3; }
-.dark .op-model-logo             { background: #ffffff; border-color: rgba(255, 255, 255, 0.22); }
+.dark .op-model-card             { background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.18); }
+.dark .op-model-logo-box         { background: rgba(255, 255, 255, 0.98); border-color: rgba(255, 255, 255, 0.28); }
+.dark .op-model-provider         { color: #ffb347; }
+.dark .op-model-name             { color: #cbd5e1; }
 
 .dark .op-footer-animation video { background: rgba(255, 255, 255, 0.05) !important; }
 
@@ -1089,7 +1135,7 @@ h1, h2, h3, h4, h5, h6,
   .op-why-item h3 { font-size: 26px; line-height: 32px; }
   .op-why-item p  { font-size: 15px; line-height: 24px; }
   .op-support-item h3 { font-size: 26px; line-height: 32px; }
-  .op-model-logo { max-width: 200px; }
+  .op-model-card { min-height: 88px; }
 }
 
 /* Tablet landscape */
@@ -1107,7 +1153,7 @@ h1, h2, h3, h4, h5, h6,
   .op-support-item        { grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 20px; }
   .op-support-item h3     { font-size: 24px; line-height: 30px; }
   .op-model-grid          { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .op-model-logo          { max-width: 220px; }
+  .op-model-card          { min-height: 88px; }
   .op-workflow-step-title { font-size: 44px !important; line-height: 52px !important; }
   .op-workflow-step-num   { font-size: 26px !important; }
   .op-workflow-grid       { gap: 32px; }
@@ -1132,7 +1178,11 @@ h1, h2, h3, h4, h5, h6,
   .op-support-item        { grid-template-columns: 1fr; gap: 10px; padding: 18px 0; }
   .op-support-item h3     { font-size: 22px; }
   .op-model-grid          { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .op-model-logo          { max-width: 180px; }
+  .op-model-card          { min-height: 84px; padding: 10px 12px; }
+  .op-model-logo-box      { width: 48px; height: 48px; }
+  .op-model-logo          { width: 30px; height: 30px; }
+  .op-model-provider      { font-size: 13px; line-height: 18px; }
+  .op-model-name          { font-size: 14px; line-height: 20px; }
   .op-workflow-grid       { flex-direction: column; gap: 28px; }
   .op-workflow-step-title { font-size: 36px !important; line-height: 44px !important; }
   .op-workflow-step-num   { font-size: 22px !important; }
@@ -1160,7 +1210,11 @@ h1, h2, h3, h4, h5, h6,
   .op-support-item h3     { font-size: 20px; }
   .op-support-pill        { height: 32px; padding: 0 12px; font-size: 12px; line-height: 16px; }
   .op-model-grid          { grid-template-columns: 1fr; }
-  .op-model-logo          { max-width: 240px; }
+  .op-model-card          { min-height: 80px; }
+  .op-model-logo-box      { width: 46px; height: 46px; border-radius: 10px; }
+  .op-model-logo          { width: 28px; height: 28px; }
+  .op-model-provider      { font-size: 12px; line-height: 16px; }
+  .op-model-name          { font-size: 13px; line-height: 18px; }
   .op-workflow-step-title { font-size: 28px !important; line-height: 36px !important; }
   .op-workflow-step-num   { font-size: 20px !important; }
   .op-workflow-step p     { font-size: 13px; line-height: 18px; }
