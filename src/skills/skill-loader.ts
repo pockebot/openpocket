@@ -349,24 +349,49 @@ export class SkillLoader {
     ];
   }
 
-  loadDetailedAll(): LoadedSkill[] {
-    const selected = new Map<string, LoadedSkill>();
+  private loadDetailedFromSourceDir(
+    sourceDir: { source: SkillInfo["source"]; dir: string },
+    options: { ignoreRequirements?: boolean } = {},
+  ): LoadedSkill[] {
+    const out: LoadedSkill[] = [];
     const skillsSpecMode = normalizeSkillsSpecMode(this.config.agent.skillsSpecMode);
-
-    for (const sourceDir of this.sourceDirs()) {
-      const files = listSkillMarkdownFilesRecursive(sourceDir.dir, skillsSpecMode);
-      for (const filePath of files) {
-        if (skillsSpecMode === "strict") {
-          const validation = validateSkillPath(filePath, { strict: true });
-          if (!validation.ok) {
-            continue;
-          }
+    const files = listSkillMarkdownFilesRecursive(sourceDir.dir, skillsSpecMode);
+    for (const filePath of files) {
+      if (skillsSpecMode === "strict") {
+        const validation = validateSkillPath(filePath, { strict: true });
+        if (!validation.ok) {
+          continue;
         }
-        const skill = parseLoadedSkill(filePath, sourceDir.source);
+      }
+      const skill = parseLoadedSkill(filePath, sourceDir.source);
+      if (!options.ignoreRequirements) {
         const requirements = parseSkillRequirements(skill.metadata);
         if (!satisfiesRequirements(this.config, requirements)) {
           continue;
         }
+      }
+      out.push(skill);
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  loadDetailedBySource(
+    source: SkillInfo["source"],
+    options: { ignoreRequirements?: boolean } = {},
+  ): LoadedSkill[] {
+    const sourceDir = this.sourceDirs().find((item) => item.source === source);
+    if (!sourceDir) {
+      return [];
+    }
+    return this.loadDetailedFromSourceDir(sourceDir, options);
+  }
+
+  loadDetailedAll(): LoadedSkill[] {
+    const selected = new Map<string, LoadedSkill>();
+
+    for (const sourceDir of this.sourceDirs()) {
+      const sourceSkills = this.loadDetailedFromSourceDir(sourceDir);
+      for (const skill of sourceSkills) {
         if (!selected.has(skill.id)) {
           selected.set(skill.id, skill);
         }

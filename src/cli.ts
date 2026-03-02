@@ -21,7 +21,7 @@ import { HumanAuthBridge } from "./human-auth/bridge.js";
 import { LocalHumanAuthStack } from "./human-auth/local-stack.js";
 import { HumanAuthRelayServer } from "./human-auth/relay-server.js";
 import { LocalHumanAuthTakeoverRuntime } from "./human-auth/takeover-runtime.js";
-import { SkillLoader } from "./skills/skill-loader.js";
+import { SkillLoader, type LoadedSkill } from "./skills/skill-loader.js";
 import { validateSkillPath } from "./skills/spec-validator.js";
 import { ScriptExecutor } from "./tools/script-executor.js";
 import { runSetupWizard } from "./onboarding/setup-wizard.js";
@@ -105,7 +105,7 @@ Usage:
   openpocket [--config <path>] emulator tap --x <int> --y <int> [--device <id>]
   openpocket [--config <path>] emulator type --text <text> [--device <id>]
   openpocket [--config <path>] agent [--model <name>] <task>
-  openpocket [--config <path>] skills list|validate [--strict]
+  openpocket [--config <path>] skills list|load [--all]|validate [--strict]
   openpocket [--config <path>] script run [--file <path> | --text <script>] [--timeout <sec>]
   openpocket [--config <path>] channels login --channel <name>
   openpocket [--config <path>] channels whoami [--channel <name>]
@@ -134,6 +134,8 @@ Examples:
   openpocket emulator tap --x 120 --y 300
   openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
   openpocket skills list
+  openpocket skills load
+  openpocket skills load --all
   openpocket skills validate --strict
   openpocket script run --text "echo hello"
   openpocket channels login --channel whatsapp
@@ -1340,7 +1342,7 @@ async function runInstallCliCommand(): Promise<number> {
 
 async function runSkillsCommand(configPath: string | undefined, args: string[]): Promise<number> {
   const sub = args[0];
-  if (sub !== "list" && sub !== "validate") {
+  if (sub !== "list" && sub !== "load" && sub !== "validate") {
     throw new Error(`Unknown skills subcommand: ${sub ?? "(missing)"}`);
   }
 
@@ -1353,11 +1355,10 @@ async function runSkillsCommand(configPath: string | undefined, args: string[]):
 
     const cfg = loadConfig(configPath);
     const strict = strictFlag || cfg.agent.skillsSpecMode === "strict";
-    const cliDir = path.dirname(fileURLToPath(import.meta.url));
     const roots = [
       path.join(cfg.workspaceDir, "skills"),
       path.join(openpocketHome(), "skills"),
-      path.resolve(path.join(cliDir, "..", "skills")),
+      bundledSkillsRootForCli(),
     ];
     const files = new Set<string>();
     const stack = [...roots];
@@ -1419,19 +1420,136 @@ async function runSkillsCommand(configPath: string | undefined, args: string[]):
 
   const cfg = loadConfig(configPath);
   const loader = new SkillLoader(cfg);
-  const skills = loader.loadAll();
+  if (sub === "load") {
+    const loadAll = args.includes("--all");
+    const unknownArgs = args.slice(1).filter((item) => item !== "--all");
+    if (unknownArgs.length > 0) {
+      throw new Error(`Unknown skills load option(s): ${unknownArgs.join(" ")}`);
+    }
+
+    const workspaceSkillsDir = path.join(cfg.workspaceDir, "skills");
+    fs.mkdirSync(workspaceSkillsDir, { recursive: true });
+    const bundledSkills = loader.loadDetailedBySource("bundled", { ignoreRequirements: true });
+    const workspaceSkills = loader.loadDetailedBySource("workspace", { ignoreRequirements: true });
+    const workspaceSkillIds = new Set(workspaceSkills.map((skill) => skill.id));
+    const bundledCandidates = new Map<string, LoadedSkill>();
+    for (const skill of bundledSkills) {
+      if (!workspaceSkillIds.has(skill.id) && !bundledCandidates.has(skill.id)) {
+        bundledCandidates.set(skill.id, skill);
+      }
+    }
+    const candidates = [...bundledCandidates.values()].sort((a, b) => a.name.localeCompare(b.name));
+    if (candidates.length === 0) {
+      printInfo("All bundled skills already exist in workspace.");
+      return 0;
+    }
+
+    let selectedIds: string[] = [];
+    if (loadAll) {
+      selectedIds = candidates.map((skill) => skill.id);
+    } else {
+      if (!input.isTTY || !output.isTTY) {
+        throw new Error("`skills load` requires an interactive terminal, or pass --all.");
+      }
+      const rl = createInterface({ input, output });
+      try {
+        selectedIds = await selectManyByArrowKeys(
+          rl,
+          "Select bundled skills to copy into workspace",
+          candidates.map((skill) => ({
+            value: skill.id,
+            label: `${skill.name} (${skill.id})`,
+            hint: path.relative(bundledSkillsRootForCli(), skill.path),
+          })),
+        );
+      } finally {
+        rl.close();
+      }
+    }
+
+    if (selectedIds.length === 0) {
+      printWarn("No skills selected. Nothing changed.");
+      return 0;
+    }
+
+    const bundledRoot = bundledSkillsRootForCli();
+    let copied = 0;
+    let skipped = 0;
+    for (const skillId of selectedIds) {
+      const skill = bundledCandidates.get(skillId);
+      if (!skill) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const destination = copyBundledSkillToWorkspace(skill, bundledRoot, workspaceSkillsDir);
+        copied += 1;
+        printSuccess(`Loaded ${skill.id} -> ${destination}`);
+      } catch (error) {
+        skipped += 1;
+        const detail = error instanceof Error ? error.message : String(error);
+        printWarn(`Skipped ${skill.id}: ${detail}`);
+      }
+    }
+    printInfo(`Skills load summary: selected=${selectedIds.length} copied=${copied} skipped=${skipped}`);
+    return copied > 0 ? 0 : 1;
+  }
+
+  const skills = loader.loadDetailedAll().filter((skill) => skill.source === "workspace");
   if (skills.length === 0) {
-    printWarn("No skills loaded.");
+    printWarn("No workspace skills loaded.");
     return 0;
   }
 
-  printRaw(cliTheme.section("Loaded Skills"));
+  printRaw(cliTheme.section("Loaded Workspace Skills"));
   for (const skill of skills) {
     printRaw(cliTheme.emphasize(`[${skill.source}] ${skill.name} (${skill.id})`, "accent"));
     printRaw(`  ${skill.description}`);
     printRaw(`  ${skill.path}`);
   }
   return 0;
+}
+
+function bundledSkillsRootForCli(): string {
+  const cliDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(path.join(cliDir, "..", "skills"));
+}
+
+function resolveSkillCopyEntry(skillPath: string): string {
+  if (path.basename(skillPath).toLowerCase() === "skill.md") {
+    return path.dirname(skillPath);
+  }
+  return skillPath;
+}
+
+function relativePathWithinRoot(root: string, targetPath: string): string {
+  const relative = path.relative(root, targetPath);
+  if (!relative || relative === "." || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Invalid skill path outside bundled root: ${targetPath}`);
+  }
+  return relative;
+}
+
+function copyBundledSkillToWorkspace(
+  skill: LoadedSkill,
+  bundledRoot: string,
+  workspaceSkillsDir: string,
+): string {
+  const sourceEntry = resolveSkillCopyEntry(skill.path);
+  const relative = relativePathWithinRoot(bundledRoot, sourceEntry);
+  const destinationEntry = path.join(workspaceSkillsDir, relative);
+  if (fs.existsSync(destinationEntry)) {
+    throw new Error(`destination already exists at ${destinationEntry}`);
+  }
+
+  fs.mkdirSync(path.dirname(destinationEntry), { recursive: true });
+  const stats = fs.statSync(sourceEntry);
+  if (stats.isDirectory()) {
+    fs.cpSync(sourceEntry, destinationEntry, { recursive: true });
+  } else {
+    fs.copyFileSync(sourceEntry, destinationEntry);
+  }
+  return destinationEntry;
 }
 
 async function runScriptCommand(configPath: string | undefined, args: string[]): Promise<number> {
@@ -1957,6 +2075,127 @@ async function selectByArrowKeys<T extends string>(
         cleanup();
         output.write("\n");
         resolve(options[index].value);
+      }
+    };
+
+    input.on("keypress", onKeypress);
+    render();
+  });
+}
+
+async function selectManyByArrowKeys<T extends string>(
+  rl: Interface,
+  message: string,
+  options: CliSelectOption<T>[],
+  initialValues: T[] = [],
+): Promise<T[]> {
+  if (options.length === 0) {
+    return [];
+  }
+  const selectedValues = new Set<T>(initialValues.filter((value) => options.some((opt) => opt.value === value)));
+  let index = 0;
+
+  if (!input.isTTY || !output.isTTY) {
+    return [...selectedValues];
+  }
+
+  rl.pause();
+  readline.emitKeypressEvents(input);
+
+  const previousRaw = Boolean((input as NodeJS.ReadStream).isRaw);
+  if (input.setRawMode) {
+    input.setRawMode(true);
+  }
+  input.resume();
+
+  let renderedLines = 0;
+  const columns = Math.max(70, output.columns ?? 120);
+  const render = () => {
+    if (renderedLines > 0) {
+      readline.moveCursor(output, 0, -renderedLines);
+      readline.clearScreenDown(output);
+    }
+    const lines: string[] = [];
+    lines.push("");
+    lines.push(cliTheme.paint(truncateForTerminal(`[MULTI-SELECT] ${message}`, columns - 1), "accent"));
+    for (let i = 0; i < options.length; i += 1) {
+      const option = options[i];
+      const focused = i === index;
+      const marked = selectedValues.has(option.value) ? "x" : " ";
+      const pointer = focused ? ">>" : "  ";
+      const hint = option.hint ? ` (${option.hint})` : "";
+      const rawLine = `  ${pointer} [${marked}] ${option.label}${hint}`;
+      const clipped = truncateForTerminal(rawLine, columns - 1);
+      lines.push(focused ? cliTheme.paint(clipped, "success") : clipped);
+    }
+    lines.push(cliTheme.paint(truncateForTerminal("[INPUT] Up/Down move, Space toggle, A toggle all, Enter confirm.", columns - 1), "warn"));
+    lines.push(cliTheme.paint(truncateForTerminal(`[INPUT] Selected: ${selectedValues.size}/${options.length}`, columns - 1), "warn"));
+    output.write(`${lines.join("\n")}\n`);
+    renderedLines = lines.length;
+  };
+
+  return new Promise<T[]>((resolve, reject) => {
+    const cleanup = () => {
+      input.removeListener("keypress", onKeypress);
+      if (input.setRawMode) {
+        try {
+          input.setRawMode(previousRaw);
+        } catch {
+          // Ignore raw mode restore errors.
+        }
+      }
+      rl.resume();
+    };
+
+    const toggleCurrent = () => {
+      const value = options[index]?.value;
+      if (value === undefined) {
+        return;
+      }
+      if (selectedValues.has(value)) {
+        selectedValues.delete(value);
+      } else {
+        selectedValues.add(value);
+      }
+    };
+
+    const onKeypress = (char: string, key: { name?: string; ctrl?: boolean }) => {
+      if (key.ctrl && key.name === "c") {
+        cleanup();
+        output.write("\n");
+        reject(new Error("Setup cancelled by user."));
+        return;
+      }
+      if (key.name === "up") {
+        index = (index - 1 + options.length) % options.length;
+        render();
+        return;
+      }
+      if (key.name === "down") {
+        index = (index + 1) % options.length;
+        render();
+        return;
+      }
+      if (key.name === "space") {
+        toggleCurrent();
+        render();
+        return;
+      }
+      if (key.name === "a" || char === "a" || char === "A") {
+        if (selectedValues.size === options.length) {
+          selectedValues.clear();
+        } else {
+          for (const option of options) {
+            selectedValues.add(option.value);
+          }
+        }
+        render();
+        return;
+      }
+      if (key.name === "return" || key.name === "enter") {
+        cleanup();
+        output.write("\n");
+        resolve(options.filter((option) => selectedValues.has(option.value)).map((option) => option.value));
       }
     };
 

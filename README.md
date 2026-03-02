@@ -576,6 +576,14 @@ Skill validation command:
 openpocket skills validate --strict
 ```
 
+Skill workspace commands:
+
+```bash
+openpocket skills list        # show loaded workspace skills only
+openpocket skills load        # interactive select bundled skills to copy into workspace
+openpocket skills load --all  # copy all bundled skills missing from workspace
+```
+
 Coding runtime migration note:
 
 - `agent.legacyCodingExecutor` is now **off by default**.
@@ -640,6 +648,8 @@ Command prefix by install mode:
 ./openpocket telegram setup
 ./openpocket telegram whoami
 ./openpocket skills list
+./openpocket skills load
+./openpocket skills load --all
 ./openpocket skills validate --strict
 ./openpocket gateway start
 ./openpocket dashboard start
