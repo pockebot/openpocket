@@ -103,6 +103,7 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
 
   let api: Api = "openai-completions";
   let provider = "openai";
+  let headers: Record<string, string> | undefined;
 
   if (isChatGptBackendUrl(baseUrlLower) && isCodexModelId(profile.model)) {
     api = "openai-codex-responses";
@@ -120,6 +121,23 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
   } else if (baseUrlLower.includes("googleapis.com") || baseUrlLower.includes("generativelanguage.googleapis.com")) {
     api = "google-generative-ai";
     provider = "google";
+  } else if (baseUrlLower.includes("api.kimi.com")) {
+    api = "anthropic-messages";
+    provider = "kimi-coding";
+    headers = { "user-agent": "openpocket/0.2.2 (coding-agent)" };
+  } else if (baseUrlLower.includes("moonshot.cn") || baseUrlLower.includes("moonshot.ai")) {
+    provider = "moonshot";
+  } else if (baseUrlLower.includes("api.deepseek.com")) {
+    provider = "openai";
+  } else if (baseUrlLower.includes("dashscope.aliyuncs.com")) {
+    provider = "openai";
+  } else if (baseUrlLower.includes("api.minimax.io")) {
+    api = "anthropic-messages";
+    provider = "minimax";
+  } else if (baseUrlLower.includes("volces.com") || baseUrlLower.includes("volcengine.com")) {
+    provider = "openai";
+  } else if (baseUrlLower.includes("bytepluses.com")) {
+    provider = "openai";
   }
 
   return {
@@ -133,6 +151,7 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: profile.maxTokens,
+    ...(headers ? { headers } : {}),
   };
 }
 

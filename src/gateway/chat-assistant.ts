@@ -446,6 +446,76 @@ export class ChatAssistant {
     return text;
   }
 
+  private isAnthropicEndpoint(client: OpenAI): boolean {
+    const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
+    return baseUrl.includes("api.kimi.com") || baseUrl.includes("anthropic.com") || baseUrl.includes("api.minimax.io");
+  }
+
+  private detectAnthropicProvider(client: OpenAI): string {
+    const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
+    if (baseUrl.includes("api.kimi.com")) {
+      return "kimi-coding";
+    }
+    if (baseUrl.includes("api.minimax.io")) {
+      return "minimax";
+    }
+    return "anthropic";
+  }
+
+  private async callAnthropicText(params: {
+    apiKey: string;
+    model: string;
+    baseUrl: string;
+    provider: string;
+    maxTokens: number;
+    prompt: string;
+  }): Promise<string> {
+    await this.ensurePiAiLoaded();
+    const { completeSimple } = await import("@mariozechner/pi-ai");
+
+    const headers: Record<string, string> = {};
+    if (params.provider === "kimi-coding") {
+      headers["user-agent"] = "openpocket/0.2.2 (coding-agent)";
+    }
+
+    const response = await completeSimple(
+      {
+        id: params.model,
+        name: params.model,
+        api: "anthropic-messages",
+        provider: params.provider,
+        baseUrl: params.baseUrl,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: Math.min(Math.max(32, params.maxTokens), 4096),
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      } as never,
+      {
+        systemPrompt: "",
+        messages: [
+          {
+            role: "user" as const,
+            content: [{ type: "text", text: params.prompt }],
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [],
+      } as never,
+      {
+        apiKey: params.apiKey,
+        maxTokens: Math.min(Math.max(32, params.maxTokens), 4096),
+      } as never,
+    );
+
+    const text = this.extractPiAiAssistantText(response);
+    if (!text) {
+      throw new Error("Anthropic transport returned empty text output.");
+    }
+    return text;
+  }
+
   /**
    * Shared helper: call the model with automatic endpoint-mode fallback.
    * Returns the raw text output or empty string on failure.
@@ -457,6 +527,19 @@ export class ChatAssistant {
     prompt: string,
     label: string,
   ): Promise<string> {
+    if (this.isAnthropicEndpoint(client)) {
+      try {
+        const apiKey = this.readClientApiKey(client);
+        const baseUrl = String((client as { baseURL?: string }).baseURL ?? "");
+        const provider = this.detectAnthropicProvider(client);
+        return await this.callAnthropicText({ apiKey, model, baseUrl, provider, maxTokens, prompt });
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.warn(`[OpenPocket][chat] ${label} failed: anthropic: ${stringifyError(error)}`);
+        return "";
+      }
+    }
+
     if (this.shouldUseCodexResponsesTransport(client, model)) {
       const apiKey = this.readClientApiKey(client);
       try {

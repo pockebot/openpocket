@@ -92,6 +92,8 @@ export async function runRuntimeAttempt(
 
   const profileKey = request.modelName ?? deps.config.defaultModel;
   const profile = getModelProfile(deps.config, profileKey);
+  // eslint-disable-next-line no-console
+  console.log(`[OpenPocket][agent] attempt start profile=${profileKey} model=${profile.model} baseUrl=${profile.baseUrl}`);
   const session = deps.workspace.createSession(
     request.task,
     profileKey,

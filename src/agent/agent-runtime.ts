@@ -372,6 +372,10 @@ export class AgentRuntime {
     this.agentFactory = options?.agentFactory ?? ((agentOptions: AgentOptions) => new Agent(agentOptions));
   }
 
+  updateConfig(updated: OpenPocketConfig): void {
+    (this as unknown as { config: OpenPocketConfig }).config = updated;
+  }
+
   isBusy(): boolean {
     return this.busy;
   }

@@ -974,7 +974,7 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
       printRuntimeLine(line);
     },
     start: async () => {
-      const cfg = loadConfig(configPath);
+      let cfg = loadConfig(configPath);
       const shortcut = installCliShortcut();
       const tgCfg = cfg.channels?.telegram;
       const envName = tgCfg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
@@ -1079,6 +1079,10 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
                   ? "managed by current gateway process"
                   : "gateway initializing",
             }),
+            onConfigChanged: (updated) => {
+              cfg = updated;
+              gateway?.applyExternalConfig(updated);
+            },
           });
 
         try {

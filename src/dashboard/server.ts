@@ -36,6 +36,7 @@ export interface DashboardServerOptions {
   port?: number;
   getGatewayStatus?: () => DashboardGatewayStatus;
   onLogLine?: (line: string) => void;
+  onConfigChanged?: (config: OpenPocketConfig) => void;
 }
 
 interface PreviewSnapshot {
@@ -171,6 +172,7 @@ export class DashboardServer {
   private readonly port: number;
   private readonly getGatewayStatusFn: (() => DashboardGatewayStatus) | null;
   private readonly onLogLine: ((line: string) => void) | null;
+  private readonly onConfigChangedFn: ((config: OpenPocketConfig) => void) | null;
 
   private emulator: EmulatorManager;
   private adb: AdbRuntime;
@@ -186,6 +188,7 @@ export class DashboardServer {
     this.port = options.port ?? options.config.dashboard.port;
     this.getGatewayStatusFn = options.getGatewayStatus ?? null;
     this.onLogLine = options.onLogLine ?? null;
+    this.onConfigChangedFn = options.onConfigChanged ?? null;
 
     this.emulator = new EmulatorManager(this.config);
     this.adb = new AdbRuntime(this.config, this.emulator);
@@ -991,6 +994,22 @@ export class DashboardServer {
       next.defaultModel = candidate;
     }
 
+    if (isObject(input.modelApiKeys)) {
+      next.models = { ...next.models };
+      for (const [profileName, apiKey] of Object.entries(input.modelApiKeys as Record<string, string>)) {
+        if (typeof apiKey !== "string") continue;
+        const profile = next.models[profileName];
+        if (!profile) continue;
+        next.models[profileName] = { ...profile, apiKey: apiKey.trim() };
+        const envName = profile.apiKeyEnv;
+        for (const [otherName, otherProfile] of Object.entries(next.models)) {
+          if (otherName !== profileName && otherProfile.apiKeyEnv === envName) {
+            next.models[otherName] = { ...otherProfile, apiKey: apiKey.trim() };
+          }
+        }
+      }
+    }
+
     if (isObject(input.emulator)) {
       if (typeof input.emulator.avdName === "string" && input.emulator.avdName.trim()) {
         next.emulator.avdName = input.emulator.avdName.trim();
@@ -1037,6 +1056,9 @@ export class DashboardServer {
     this.emulator = new EmulatorManager(this.config);
     this.adb = new AdbRuntime(this.config, this.emulator);
     this.log("config patched and reloaded");
+    if (this.onConfigChangedFn) {
+      try { this.onConfigChangedFn(this.config); } catch { /* best-effort */ }
+    }
     return this.config;
   }
 
@@ -1342,7 +1364,27 @@ export class DashboardServer {
     return result;
   }
 
-  private htmlShell(): string {
+  private static readonly TAB_ROUTES: Record<string, string> = {
+    runtime: "/",
+    onboarding: "/onboarding",
+    permissions: "/permissions",
+    prompts: "/prompts",
+    channels: "/channels",
+    models: "/models",
+    timeline: "/timeline",
+    logs: "/logs",
+  };
+
+  private static tabFromPath(pathname: string): string | null {
+    const clean = pathname.replace(/\/+$/, "") || "/";
+    for (const [tab, route] of Object.entries(DashboardServer.TAB_ROUTES)) {
+      if (clean === route) return tab;
+    }
+    return null;
+  }
+
+  private htmlShell(activeTab = "runtime"): string {
+    const tabRoutes = JSON.stringify(DashboardServer.TAB_ROUTES);
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -1441,8 +1483,11 @@ export class DashboardServer {
       background: #fff;
       color: #1f2b3d;
       padding: 9px 14px;
+      font-size: 13px;
       font-weight: 700;
       cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
       transition: transform 120ms ease, background 120ms ease;
     }
     .tab-btn:hover {
@@ -1466,6 +1511,10 @@ export class DashboardServer {
     }
     .tab-panel.active {
       display: block;
+    }
+    .tab-panel.tab-grid.active {
+      display: grid;
+      gap: 16px;
     }
     @keyframes rise {
       from { opacity: 0; transform: translateY(6px); }
@@ -2199,19 +2248,20 @@ export class DashboardServer {
       </div>
     </header>
 
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="runtime">Runtime</button>
-      <button class="tab-btn" data-tab="onboarding">Onboarding</button>
-      <button class="tab-btn" data-tab="permissions">Permissions</button>
-      <button class="tab-btn" data-tab="prompts">Agent Prompts</button>
-      <button class="tab-btn" data-tab="channels">Channels</button>
-      <button class="tab-btn" data-tab="timeline">Action Timeline</button>
-      <button class="tab-btn" data-tab="logs">Logs</button>
-    </div>
+    <nav class="tabs">
+      <a class="tab-btn${activeTab === "runtime" ? " active" : ""}" href="/" data-tab="runtime">Runtime</a>
+      <a class="tab-btn${activeTab === "onboarding" ? " active" : ""}" href="/onboarding" data-tab="onboarding">Onboarding</a>
+      <a class="tab-btn${activeTab === "permissions" ? " active" : ""}" href="/permissions" data-tab="permissions">Permissions</a>
+      <a class="tab-btn${activeTab === "prompts" ? " active" : ""}" href="/prompts" data-tab="prompts">Agent Prompts</a>
+      <a class="tab-btn${activeTab === "channels" ? " active" : ""}" href="/channels" data-tab="channels">Channels</a>
+      <a class="tab-btn${activeTab === "models" ? " active" : ""}" href="/models" data-tab="models">Models</a>
+      <a class="tab-btn${activeTab === "timeline" ? " active" : ""}" href="/timeline" data-tab="timeline">Action Timeline</a>
+      <a class="tab-btn${activeTab === "logs" ? " active" : ""}" href="/logs" data-tab="logs">Logs</a>
+    </nav>
 
     <div class="status-line" id="status-line"></div>
 
-    <section class="tab-panel active" data-panel="runtime">
+    <section class="tab-panel${activeTab === "runtime" ? " active" : ""}" data-panel="runtime">
       <div class="runtime-layout">
         <div class="runtime-left">
           <div class="card">
@@ -2279,7 +2329,7 @@ export class DashboardServer {
       </div>
     </section>
 
-    <section class="tab-panel" data-panel="timeline">
+    <section class="tab-panel${activeTab === "timeline" ? " active" : ""}" data-panel="timeline">
       <div class="card">
         <div class="row spread">
           <h3 style="margin:0;">Action Timeline</h3>
@@ -2307,21 +2357,26 @@ export class DashboardServer {
       </div>
     </section>
 
-    <section class="tab-panel" data-panel="onboarding">
+    <section class="tab-panel tab-grid${activeTab === "onboarding" ? " active" : ""}" data-panel="onboarding">
+      <div class="card" style="padding:18px 20px;">
+        <h3 style="margin:0 0 10px 0;font-size:15px;">Getting Started</h3>
+        <p class="hint" style="margin:0;">Complete these steps to get the gateway ready. Model and API key settings are in the <strong>Models</strong> tab.</p>
+      </div>
+
       <div class="grid cols-2">
-        <div class="card">
-          <h3>User Consent</h3>
-          <p class="hint">Emulator artifacts are stored locally. Cloud model providers may receive task text/screenshots.</p>
+        <div class="card" style="padding:18px 20px;">
+          <h3 style="margin:0 0 8px 0;font-size:14px;">User Consent</h3>
+          <p class="hint" style="margin:0 0 10px 0;">Emulator artifacts are stored locally. Cloud model providers may receive task text and screenshots.</p>
           <label class="row">
             <input type="checkbox" id="onboard-consent" />
             <span>I accept local automation and data handling terms.</span>
           </label>
         </div>
-        <div class="card">
-          <h3>Play Store Login</h3>
-          <p class="hint">Manually complete Gmail sign-in in emulator when needed.</p>
+        <div class="card" style="padding:18px 20px;">
+          <h3 style="margin:0 0 8px 0;font-size:14px;">Play Store Login</h3>
+          <p class="hint" style="margin:0 0 10px 0;">Manually complete Gmail sign-in in emulator when needed.</p>
           <label class="row">
-            <input type="checkbox" id="onboard-gmail-done" />
+            <input type="checkbox" id="onboard-consent-gmail" />
             <span>I finished Gmail sign-in and verified Play Store access.</span>
           </label>
           <div class="row" style="margin-top:10px;">
@@ -2331,56 +2386,36 @@ export class DashboardServer {
         </div>
       </div>
 
-      <div class="card">
-        <h3>Model Selection</h3>
-        <div class="row">
-          <div style="min-width:320px;flex:1;">
-            <label for="onboard-model-select">Default Model</label>
-            <select id="onboard-model-select"></select>
+      <div class="card" id="onboard-profile-status" style="padding:18px 20px;"></div>
+
+      <div class="card" id="onboard-profile-fields" style="padding:18px 20px;">
+        <h3 style="margin:0 0 8px 0;font-size:14px;">Profile Setup</h3>
+        <p class="hint" style="margin:0 0 12px 0;">These fields are required before the gateway will accept tasks.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+          <div>
+            <label for="onboard-assistant-name">Assistant name</label>
+            <input type="text" id="onboard-assistant-name" placeholder="e.g. Pocket, Jarvis, Friday" value="Pocket" />
+          </div>
+          <div>
+            <label for="onboard-assistant-persona">Assistant persona</label>
+            <input type="text" id="onboard-assistant-persona" placeholder="e.g. Helpful and concise assistant" value="Helpful and concise phone assistant" />
+          </div>
+          <div>
+            <label for="onboard-user-address">What should the assistant call you?</label>
+            <input type="text" id="onboard-user-address" placeholder="e.g. Boss, your first name" value="Boss" />
           </div>
         </div>
-        <div class="kv" id="onboard-model-meta"></div>
       </div>
 
-      <div class="card">
-        <h3>API Key Setup</h3>
-        <label class="row">
-          <input type="checkbox" id="onboard-use-env" checked />
-          <span>Use environment variable for API key</span>
-        </label>
-        <div style="margin-top:10px;" id="onboard-api-key-wrap">
-          <input type="password" id="onboard-api-key" placeholder="Paste API key when not using env variable" />
-        </div>
-      </div>
-
-      <div class="card" id="onboard-profile-status"></div>
-
-      <div class="card" id="onboard-profile-fields">
-        <h3>Profile Setup</h3>
-        <p class="hint">These fields are required before the gateway will accept tasks.</p>
-        <div style="margin-bottom:8px;">
-          <label for="onboard-assistant-name">Assistant name</label>
-          <input type="text" id="onboard-assistant-name" placeholder="e.g. Pocket, Jarvis, Friday" value="Pocket" />
-        </div>
-        <div style="margin-bottom:8px;">
-          <label for="onboard-assistant-persona">Assistant persona</label>
-          <input type="text" id="onboard-assistant-persona" placeholder="e.g. Helpful and concise assistant" value="Helpful and concise phone assistant" />
-        </div>
-        <div style="margin-bottom:8px;">
-          <label for="onboard-user-address">What should the assistant call you?</label>
-          <input type="text" id="onboard-user-address" placeholder="e.g. Boss, your first name" value="Boss" />
-        </div>
-      </div>
-
-      <div class="card">
+      <div class="card" style="padding:14px 20px;">
         <div class="row spread">
-          <h3 style="margin:0;">Save Onboarding</h3>
-          <button class="btn primary" id="onboard-save-btn" disabled>Save Onboarding to Config + State</button>
+          <h3 style="margin:0;font-size:14px;">Save Onboarding</h3>
+          <button class="btn primary" id="onboard-save-btn" disabled>Save</button>
         </div>
       </div>
     </section>
 
-    <section class="tab-panel" data-panel="permissions">
+    <section class="tab-panel${activeTab === "permissions" ? " active" : ""}" data-panel="permissions">
       <div class="grid cols-2">
         <div class="card">
           <h3>File Access Permissions</h3>
@@ -2424,7 +2459,7 @@ export class DashboardServer {
       </div>
     </section>
 
-    <section class="tab-panel" data-panel="prompts">
+    <section class="tab-panel${activeTab === "prompts" ? " active" : ""}" data-panel="prompts">
       <div class="card">
         <h3>Prompt Files</h3>
         <div class="split">
@@ -2457,7 +2492,7 @@ export class DashboardServer {
       </div>
     </section>
 
-    <section class="tab-panel" data-panel="channels">
+    <section class="tab-panel${activeTab === "channels" ? " active" : ""}" data-panel="channels">
       <div class="card">
         <div class="row spread">
           <h3 style="margin:0;">Channel Management</h3>
@@ -2468,7 +2503,31 @@ export class DashboardServer {
       <div id="channels-container"></div>
     </section>
 
-    <section class="tab-panel" data-panel="logs">
+    <section class="tab-panel tab-grid${activeTab === "models" ? " active" : ""}" data-panel="models">
+      <div class="card" style="padding:18px 20px;">
+        <div class="row spread" style="margin-bottom:6px;">
+          <h3 style="margin:0;font-size:15px;">Active Model</h3>
+          <button class="btn" id="models-refresh-btn" style="font-size:12px;padding:4px 10px;">Refresh</button>
+        </div>
+        <p class="hint" style="margin:0 0 12px 0;">Switch the active model. Changes take effect on the next task.</p>
+        <div style="display:flex;gap:10px;align-items:stretch;">
+          <select id="models-active-select" style="flex:1;min-width:240px;margin:0;"></select>
+          <button class="btn primary" id="models-switch-btn" style="white-space:nowrap;">Switch</button>
+        </div>
+      </div>
+      <div class="card" style="padding:18px 20px;">
+        <h3 style="margin:0 0 4px 0;font-size:15px;">API Key Configuration</h3>
+        <p class="hint" style="margin:0 0 10px 0;">Set API keys per provider. Saved to config.json and shared across all models of the same provider.</p>
+        <div id="models-apikey-container"></div>
+      </div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:4px;">
+        <h3 style="margin:0;font-size:15px;">All Model Profiles</h3>
+        <span class="hint" style="font-size:12px;">Currently active model is highlighted</span>
+      </div>
+      <div id="models-container" style="display:grid;gap:12px;"></div>
+    </section>
+
+    <section class="tab-panel${activeTab === "logs" ? " active" : ""}" data-panel="logs">
       <div class="card">
         <h3>Dashboard Logs</h3>
         <div class="row">
@@ -2552,14 +2611,24 @@ export class DashboardServer {
       return payload;
     }
 
-    function activateTab(tab) {
-      document.querySelectorAll(".tab-btn").forEach((button) => {
+    var TAB_ROUTES = ${tabRoutes};
+    function activateTab(tab, pushHistory) {
+      document.querySelectorAll(".tab-btn").forEach(function(button) {
         button.classList.toggle("active", button.dataset.tab === tab);
       });
-      document.querySelectorAll(".tab-panel").forEach((panel) => {
+      document.querySelectorAll(".tab-panel").forEach(function(panel) {
         panel.classList.toggle("active", panel.dataset.panel === tab);
       });
+      if (pushHistory !== false && TAB_ROUTES[tab]) {
+        history.pushState({ tab: tab }, "", TAB_ROUTES[tab]);
+      }
+      document.title = "OpenPocket — " + tab.charAt(0).toUpperCase() + tab.slice(1);
     }
+    window.addEventListener("popstate", function(e) {
+      var tab = (e.state && e.state.tab) ? e.state.tab : "runtime";
+      activateTab(tab, false);
+      onTabActivated(tab);
+    });
 
     function updateBadges(runtime) {
       const gatewayBadge = $("#gateway-badge");
@@ -2577,6 +2646,7 @@ export class DashboardServer {
 
     function renderRuntime(runtime) {
       updateBadges(runtime);
+
       $("#gateway-kv").innerHTML =
         "<div>Mode: <code>" + (runtime.mode || "unknown") + "</code></div>" +
         "<div>Gateway note: " + (runtime.gateway?.note || "n/a") + "</div>" +
@@ -2618,11 +2688,8 @@ export class DashboardServer {
 
     function snapshotOnboardingForm() {
       return JSON.stringify({
-        model: $("#onboard-model-select").value,
         consent: $("#onboard-consent").checked,
-        gmail: $("#onboard-gmail-done").checked,
-        useEnv: $("#onboard-use-env").checked,
-        apiKey: $("#onboard-api-key").value,
+        gmail: $("#onboard-consent-gmail").checked,
         name: $("#onboard-assistant-name").value,
         persona: $("#onboard-assistant-persona").value,
         address: $("#onboard-user-address").value,
@@ -2641,63 +2708,17 @@ export class DashboardServer {
         return;
       }
 
-      const select = $("#onboard-model-select");
-      const current = onboarding.modelProfile || config.defaultModel;
-      select.innerHTML = "";
-      const providerLabelFromBaseUrl = (baseUrl) => {
-        const text = String(baseUrl || "").toLowerCase();
-        if (text.includes("api.openai.com")) {
-          return "OpenAI";
-        }
-        if (text.includes("openrouter.ai")) {
-          return "OpenRouter";
-        }
-        if (text.includes("api.z.ai")) {
-          return "AutoGLM";
-        }
-        try {
-          return new URL(baseUrl).host || "custom";
-        } catch {
-          return "custom";
-        }
-      };
-      Object.keys(config.models || {}).sort().forEach((key) => {
-        const profile = config.models[key];
-        const option = document.createElement("option");
-        option.value = key;
-        option.textContent = key + " (" + providerLabelFromBaseUrl(profile.baseUrl) + ")";
-        if (key === current) {
-          option.selected = true;
-        }
-        select.appendChild(option);
-      });
-
       $("#onboard-consent").checked = Boolean(onboarding.consentAcceptedAt);
-      $("#onboard-gmail-done").checked = Boolean(onboarding.gmailLoginConfirmedAt);
-      $("#onboard-use-env").checked = (onboarding.apiKeySource || "env") !== "config";
-      $("#onboard-api-key-wrap").style.display = $("#onboard-use-env").checked ? "none" : "block";
-
-      const selected = select.value || config.defaultModel;
-      const profile = config.models[selected];
-      const provider = profile?.baseUrl ? profile.baseUrl : "unknown";
-      const envName = profile?.apiKeyEnv || "N/A";
-      const modelId = profile?.model || "unknown";
-      const status = state.credentialStatus[selected] || "";
-
-      $("#onboard-model-meta").innerHTML =
-        "<div>Model ID: <code>" + modelId + "</code></div>" +
-        "<div>Provider: <code>" + provider + "</code></div>" +
-        "<div>Provider API env: <code>" + envName + "</code></div>" +
-        "<div>" + status + "</div>";
+      $("#onboard-consent-gmail").checked = Boolean(onboarding.gmailLoginConfirmedAt);
 
       const pr = state.profileReadiness;
       const statusEl = $("#onboard-profile-status");
       if (pr && !pr.ready) {
         statusEl.style.display = "";
         statusEl.innerHTML =
-          "<h3 style='color:#e65100;margin-top:0;'>Profile Incomplete</h3>" +
-          "<p>The gateway will not run tasks until these are resolved. Fill in the fields below and save.</p>" +
-          "<ul>" + pr.missing.map(function(m) { return "<li>" + m + "</li>"; }).join("") + "</ul>";
+          "<h3 style='color:#e65100;margin-top:0;font-size:14px;'>Profile Incomplete</h3>" +
+          "<p style='margin:0 0 8px 0;'>The gateway will not run tasks until these are resolved:</p>" +
+          "<ul style='margin:0;padding-left:20px;'>" + pr.missing.map(function(m) { return "<li>" + m + "</li>"; }).join("") + "</ul>";
       } else {
         statusEl.style.display = "none";
         statusEl.innerHTML = "";
@@ -3548,11 +3569,11 @@ export class DashboardServer {
     }
 
     async function saveOnboarding() {
-      const selectedModelProfile = $("#onboard-model-select").value;
+      const selectedModelProfile = state.config?.defaultModel || "";
       const consentAccepted = $("#onboard-consent").checked;
-      const gmailLoginDone = $("#onboard-gmail-done").checked;
-      const useEnvKey = $("#onboard-use-env").checked;
-      const apiKey = $("#onboard-api-key").value;
+      const gmailLoginDone = $("#onboard-consent-gmail").checked;
+      const useEnvKey = true;
+      const apiKey = "";
       const assistantName = $("#onboard-assistant-name").value.trim();
       const assistantPersona = $("#onboard-assistant-persona").value.trim();
       const userAddress = $("#onboard-user-address").value.trim();
@@ -3570,7 +3591,7 @@ export class DashboardServer {
           userAddress,
         }),
       });
-      setStatus("Onboarding saved to config + state.", "ok");
+      setStatus("Onboarding saved.", "ok");
       await loadConfigAndOnboarding();
       await loadRuntime();
     }
@@ -3596,25 +3617,24 @@ export class DashboardServer {
       await refreshPreview({ silent: true }).catch(() => {});
     }
 
+    function onTabActivated(tab) {
+      if (tab === "logs") loadLogs().catch(function() {});
+      if (tab === "timeline") loadTraces({ silent: true }).catch(function() {});
+      if (tab === "permissions") loadScopedFiles().catch(function() {});
+      if (tab === "prompts") { renderPromptList(); readPromptContent().catch(function() {}); }
+      if (tab === "models") loadModels().catch(function() {});
+      if (tab === "channels") loadChannels().catch(function() {});
+      if (tab === "onboarding") loadConfigAndOnboarding().catch(function() {});
+    }
+
     function bindEvents() {
       bindTracePanelEvents();
-      document.querySelectorAll(".tab-btn").forEach((button) => {
-        button.addEventListener("click", () => {
-          const tab = button.dataset.tab;
+      document.querySelectorAll(".tab-btn").forEach(function(link) {
+        link.addEventListener("click", function(e) {
+          e.preventDefault();
+          var tab = link.dataset.tab;
           activateTab(tab);
-          if (tab === "logs") {
-            loadLogs().catch(() => {});
-          }
-          if (tab === "timeline") {
-            loadTraces({ silent: true }).catch(() => {});
-          }
-          if (tab === "permissions") {
-            loadScopedFiles().catch(() => {});
-          }
-          if (tab === "prompts") {
-            renderPromptList();
-            readPromptContent().catch(() => {});
-          }
+          onTabActivated(tab);
         });
       });
 
@@ -3657,37 +3677,9 @@ export class DashboardServer {
         saveCorePaths().catch((error) => setStatus(error.message, "error"));
       });
 
-      $("#onboard-use-env").addEventListener("change", (event) => {
-        $("#onboard-api-key-wrap").style.display = event.target.checked ? "none" : "block";
-      });
-
-      $("#onboard-model-select").addEventListener("change", () => {
-        const select = $("#onboard-model-select");
-        const selected = select.value || state.config?.defaultModel;
-        const profile = state.config?.models?.[selected];
-        const provider = profile?.baseUrl || "unknown";
-        const envName = profile?.apiKeyEnv || "N/A";
-        const modelId = profile?.model || "unknown";
-        const status = state.credentialStatus[selected] || "";
-        // Use textContent to avoid XSS from config values.
-        const meta = $("#onboard-model-meta");
-        meta.textContent = "";
-        const lines = [
-          "Model ID: " + modelId,
-          "Provider: " + provider,
-          "Provider API env: " + envName,
-          status,
-        ].filter(Boolean);
-        for (const line of lines) {
-          const div = document.createElement("div");
-          div.textContent = line;
-          meta.appendChild(div);
-        }
-      });
-
-      ["onboard-model-select", "onboard-consent", "onboard-gmail-done",
-       "onboard-use-env", "onboard-api-key", "onboard-assistant-name",
-       "onboard-assistant-persona", "onboard-user-address"].forEach(function(id) {
+      ["onboard-consent", "onboard-consent-gmail",
+       "onboard-assistant-name", "onboard-assistant-persona",
+       "onboard-user-address"].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.addEventListener(el.tagName === "SELECT" ? "change" : "input", updateSaveButtonState);
       });
@@ -3810,6 +3802,10 @@ export class DashboardServer {
 
       $("#channels-refresh-btn").addEventListener("click", () => {
         loadChannels().then(() => setStatus("Channels refreshed.", "ok")).catch((error) => setStatus(error.message, "error"));
+      });
+
+      $("#models-refresh-btn").addEventListener("click", () => {
+        loadModels().then(() => setStatus("Models refreshed.", "ok")).catch((error) => setStatus(error.message, "error"));
       });
     }
 
@@ -3976,44 +3972,264 @@ export class DashboardServer {
       });
     }
 
+    // -------------------------------------------------------------------
+    // Models tab
+    // -------------------------------------------------------------------
+
+    async function loadModels() {
+      const payload = await api("/api/config");
+      state.config = payload.config;
+      state.credentialStatus = payload.credentialStatus || {};
+      renderModels();
+      renderModelsActiveSelect();
+      renderModelsApiKeys();
+      bindModelsEvents();
+    }
+
+    function renderModelsActiveSelect() {
+      var config = state.config;
+      if (!config || !config.models) return;
+      var select = $("#models-active-select");
+      var current = config.defaultModel || "";
+      select.innerHTML = "";
+      Object.keys(config.models).sort().forEach(function(key) {
+        var p = config.models[key];
+        var opt = document.createElement("option");
+        opt.value = key;
+        opt.textContent = key + " (" + modelsProviderLabel(p.baseUrl) + ")";
+        if (key === current) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    function renderModelsApiKeys() {
+      var config = state.config;
+      var container = $("#models-apikey-container");
+      if (!config || !config.models) {
+        container.innerHTML = "";
+        return;
+      }
+      var seen = {};
+      var providers = [];
+      Object.keys(config.models).sort().forEach(function(key) {
+        var p = config.models[key];
+        var envName = p.apiKeyEnv || "";
+        if (!envName || seen[envName]) return;
+        seen[envName] = true;
+        var cred = state.credentialStatus[key] || "";
+        var hasKey = cred.indexOf("detected") !== -1;
+        providers.push({ envName: envName, profileKey: key, provider: modelsProviderLabel(p.baseUrl), hasKey: hasKey });
+      });
+
+      container.innerHTML = '<div style="display:grid;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;">'
+        + providers.map(function(item, idx) {
+          var statusHtml = item.hasKey
+            ? '<span style="display:inline-flex;align-items:center;gap:4px;color:#0f6f52;font-size:12px;white-space:nowrap;"><span style="width:7px;height:7px;border-radius:50%;background:#0f6f52;display:inline-block;"></span>Configured</span>'
+            : '<span style="display:inline-flex;align-items:center;gap:4px;color:#b45309;font-size:12px;white-space:nowrap;"><span style="width:7px;height:7px;border-radius:50%;border:1.5px solid #b45309;display:inline-block;"></span>Not set</span>';
+          var borderTop = idx > 0 ? 'border-top:1px solid var(--line);' : '';
+          return '<div style="display:grid;grid-template-columns:140px 150px 90px 1fr auto;align-items:center;gap:10px;padding:10px 14px;' + borderTop + 'background:var(--card);">'
+            + '<span style="font-size:13px;font-weight:600;white-space:nowrap;">' + escHtml(item.provider) + '</span>'
+            + '<code style="font-size:11px;color:#888;">' + escHtml(item.envName) + '</code>'
+            + statusHtml
+            + '<input type="password" placeholder="Paste key..." style="width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;background:var(--bg);margin:0;" data-apikey-profile="' + escHtml(item.profileKey) + '" />'
+            + '<button class="btn primary" style="padding:5px 14px;font-size:12px;white-space:nowrap;" data-apikey-save="' + escHtml(item.profileKey) + '">Save</button>'
+            + '</div>';
+        }).join("")
+        + '</div>';
+    }
+
+    function bindModelsEvents() {
+      $("#models-switch-btn").onclick = async function() {
+        var selected = $("#models-active-select").value;
+        if (!selected) return;
+        try {
+          var patch = { defaultModel: selected };
+          var pendingKeys = collectPendingApiKeys();
+          if (Object.keys(pendingKeys).length > 0) {
+            patch.modelApiKeys = pendingKeys;
+          }
+          await api("/api/config", {
+            method: "POST",
+            body: JSON.stringify(patch),
+          });
+          var msg = "Model switched to " + selected + ".";
+          if (Object.keys(pendingKeys).length > 0) {
+            msg += " API keys also saved.";
+          }
+          setStatus(msg, "ok");
+          await loadModels();
+          await loadRuntime();
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      };
+
+      $("#models-apikey-container").onclick = async function(e) {
+        var btn = e.target.closest("[data-apikey-save]");
+        if (!btn) return;
+        var profileKey = btn.dataset.apikeySave;
+        var input = document.querySelector('[data-apikey-profile="' + profileKey + '"]');
+        var value = input ? input.value.trim() : "";
+        if (!value) {
+          setStatus("Please enter an API key.", "error");
+          return;
+        }
+        try {
+          var payload = {};
+          payload[profileKey] = value;
+          await api("/api/config", {
+            method: "POST",
+            body: JSON.stringify({ modelApiKeys: payload }),
+          });
+          input.value = "";
+          setStatus("API key saved for " + profileKey + ".", "ok");
+          await loadModels();
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      };
+    }
+
+    function collectPendingApiKeys() {
+      var keys = {};
+      document.querySelectorAll("[data-apikey-profile]").forEach(function(input) {
+        var val = input.value.trim();
+        if (val) {
+          var profileKey = input.dataset.apikeyProfile;
+          keys[profileKey] = val;
+        }
+      });
+      return keys;
+    }
+
+    function modelsProviderLabel(baseUrl) {
+      const text = String(baseUrl || "").toLowerCase();
+      if (text.includes("api.openai.com")) return "OpenAI";
+      if (text.includes("openrouter.ai")) return "OpenRouter";
+      if (text.includes("blockrun.ai")) return "BlockRun";
+      if (text.includes("api.z.ai")) return "AutoGLM";
+      if (text.includes("api.kimi.com")) return "Kimi Code";
+      if (text.includes("moonshot.cn") || text.includes("moonshot.ai")) return "Moonshot AI";
+      if (text.includes("anthropic.com")) return "Anthropic";
+      if (text.includes("googleapis.com")) return "Google";
+      if (text.includes("api.deepseek.com")) return "DeepSeek";
+      if (text.includes("dashscope.aliyuncs.com")) return "Qwen (DashScope)";
+      if (text.includes("api.minimax.io")) return "MiniMax";
+      if (text.includes("volces.com") || text.includes("volcengine.com")) return "Volcano Engine";
+      if (text.includes("bytepluses.com")) return "BytePlus";
+      try { return new URL(baseUrl).host || "custom"; } catch { return "custom"; }
+    }
+
+    function renderModels() {
+      const container = $("#models-container");
+      const config = state.config;
+      if (!config || !config.models) {
+        container.innerHTML = '<div class="card"><p class="hint">No models configured.</p></div>';
+        return;
+      }
+
+      const models = config.models;
+      const defaultModel = config.defaultModel || "";
+      const keys = Object.keys(models).sort();
+
+      const byProvider = {};
+      keys.forEach(function(key) {
+        const profile = models[key];
+        const label = modelsProviderLabel(profile.baseUrl);
+        if (!byProvider[label]) byProvider[label] = [];
+        byProvider[label].push({ key: key, profile: profile });
+      });
+
+      const providerOrder = Object.keys(byProvider).sort();
+
+      container.innerHTML = providerOrder.map(function(provider) {
+        const group = byProvider[provider];
+        var rows = group.map(function(item, idx) {
+          var p = item.profile;
+          var isActive = item.key === defaultModel;
+          var cred = state.credentialStatus[item.key] || "";
+          var hasKey = cred.indexOf("detected") !== -1;
+          var credBadge = hasKey
+            ? '<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#0f6f52;"><span style="width:6px;height:6px;border-radius:50%;background:#0f6f52;display:inline-block;"></span>OK</span>'
+            : '<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#b45309;"><span style="width:6px;height:6px;border-radius:50%;border:1.5px solid #b45309;display:inline-block;"></span>Missing</span>';
+          var activeBadge = isActive
+            ? ' <span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:#dbeafe;color:#1e40af;vertical-align:middle;">Active</span>'
+            : '';
+          var rowBg = isActive ? 'background:rgba(15,111,82,0.04);' : '';
+          var borderTop = idx > 0 ? 'border-top:1px solid rgba(0,0,0,0.04);' : '';
+
+          var reasoningText = p.reasoningEffort ? p.reasoningEffort : "—";
+          var tempText = p.temperature !== null && p.temperature !== undefined ? String(p.temperature) : "—";
+
+          return '<tr style="' + borderTop + rowBg + '">'
+            + '<td style="padding:7px 10px;font-weight:500;">'
+            + '<code style="font-size:12px;">' + escHtml(item.key) + '</code>' + activeBadge
+            + '</td>'
+            + '<td style="padding:7px 10px;"><code style="font-size:11px;color:#666;">' + escHtml(p.model) + '</code></td>'
+            + '<td style="padding:7px 10px;font-size:11px;color:#888;">' + escHtml(p.apiKeyEnv || "—") + '</td>'
+            + '<td style="padding:7px 10px;">' + credBadge + '</td>'
+            + '<td style="padding:7px 10px;font-size:11px;text-align:right;">' + escHtml(String(p.maxTokens)) + '</td>'
+            + '<td style="padding:7px 10px;font-size:11px;text-align:center;">' + escHtml(reasoningText) + '</td>'
+            + '<td style="padding:7px 10px;font-size:11px;text-align:center;">' + escHtml(tempText) + '</td>'
+            + '</tr>';
+        }).join("");
+
+        return '<div style="background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;">'
+          + '<div style="padding:10px 14px;background:rgba(0,0,0,0.02);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;">'
+          + '<span style="font-weight:600;font-size:13px;">' + escHtml(provider) + '</span>'
+          + '<span style="font-size:11px;color:#999;">' + group.length + ' model' + (group.length > 1 ? 's' : '') + '</span>'
+          + '</div>'
+          + '<div style="overflow-x:auto;">'
+          + '<table style="width:100%;border-collapse:collapse;">'
+          + '<thead><tr style="text-align:left;border-bottom:1px solid var(--line);background:rgba(0,0,0,0.015);">'
+          + '<th style="padding:6px 10px;font-size:11px;color:#999;font-weight:500;">Profile</th>'
+          + '<th style="padding:6px 10px;font-size:11px;color:#999;font-weight:500;">Model ID</th>'
+          + '<th style="padding:6px 10px;font-size:11px;color:#999;font-weight:500;">Env Key</th>'
+          + '<th style="padding:6px 10px;font-size:11px;color:#999;font-weight:500;">Key</th>'
+          + '<th style="padding:6px 10px;font-size:11px;color:#999;font-weight:500;text-align:right;">Tokens</th>'
+          + '<th style="padding:6px 10px;font-size:11px;color:#999;font-weight:500;text-align:center;">Reasoning</th>'
+          + '<th style="padding:6px 10px;font-size:11px;color:#999;font-weight:500;text-align:center;">Temp</th>'
+          + '</tr></thead><tbody>' + rows + '</tbody></table>'
+          + '</div>'
+          + '</div>';
+      }).join("");
+    }
+
     function escHtml(str) {
       return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
 
+    function currentTab() {
+      var active = document.querySelector(".tab-btn.active");
+      return active ? active.dataset.tab : "runtime";
+    }
+
     async function init() {
       bindEvents();
-      if ($("#timeline-auto").checked) {
-        $("#timeline-auto").dispatchEvent(new Event("change"));
+
+      var tab = currentTab();
+      history.replaceState({ tab: tab }, "", TAB_ROUTES[tab] || "/");
+
+      var failures = [];
+      async function run(label, fn) {
+        try { await fn(); } catch (e) { failures.push(label + ": " + (e?.message || "failed")); }
       }
 
-      const startupTasks = [
-        { label: "runtime", run: () => loadRuntime() },
-        { label: "onboarding", run: () => loadConfigAndOnboarding() },
-        { label: "control", run: () => loadControlSettings() },
-        { label: "permissions", run: () => loadScopedFiles() },
-        { label: "logs", run: () => loadLogs() },
-        { label: "timeline", run: () => loadTraces() },
-        { label: "channels", run: () => loadChannels() },
-      ];
-      const failures = [];
+      await run("runtime", loadRuntime);
+      await run("config", loadConfigAndOnboarding);
+      await run("control", loadControlSettings);
 
-      for (const task of startupTasks) {
-        try {
-          await task.run();
-        } catch (error) {
-          failures.push(task.label + ": " + (error?.message || "failed"));
-        }
-      }
+      onTabActivated(tab);
 
       if (failures.length === 0) {
         setStatus("Dashboard ready.", "ok");
       } else {
-        const preview = failures.slice(0, 2).join("; ");
-        const suffix = failures.length > 2 ? "; ..." : "";
-        setStatus("Dashboard partial init (" + failures.length + "): " + preview + suffix, "error");
+        var preview = failures.slice(0, 2).join("; ");
+        var suffix = failures.length > 2 ? "; ..." : "";
+        setStatus("Partial init (" + failures.length + "): " + preview + suffix, "error");
       }
-      state.runtimeTimer = setInterval(() => {
-        loadRuntime().catch(() => {});
+      state.runtimeTimer = setInterval(function() {
+        loadRuntime().catch(function() {});
       }, 3000);
     }
 
@@ -4593,8 +4809,9 @@ export class DashboardServer {
     const url = new URL(req.url ?? "/", `http://${req.headers.host || "127.0.0.1"}`);
 
     try {
-      if (method === "GET" && url.pathname === "/") {
-        sendHtml(res, 200, this.htmlShell());
+      const pageTab = method === "GET" ? DashboardServer.tabFromPath(url.pathname) : null;
+      if (pageTab !== null) {
+        sendHtml(res, 200, this.htmlShell(pageTab));
         return;
       }
 

@@ -65,7 +65,7 @@ interface SetupState {
   playStoreDetected?: boolean | null;
   telegramConfiguredAt?: string;
   telegramTokenSource?: "env" | "config" | "skip";
-  telegramAllowedChatMode?: "keep" | "open" | "set";
+  telegramAllowedChatMode?: "pairing" | "allowlist" | "open" | "keep" | "set";
   channelsConfiguredAt?: string;
   enabledChannels?: string[];
   discordConfiguredAt?: string;
@@ -204,6 +204,27 @@ function providerFromBaseUrl(baseUrl: string): string {
   if (lower.includes("api.z.ai")) {
     return "AutoGLM";
   }
+  if (lower.includes("api.kimi.com")) {
+    return "Kimi Code";
+  }
+  if (lower.includes("moonshot.cn") || lower.includes("moonshot.ai")) {
+    return "Moonshot AI";
+  }
+  if (lower.includes("api.deepseek.com")) {
+    return "DeepSeek";
+  }
+  if (lower.includes("dashscope.aliyuncs.com")) {
+    return "Qwen (DashScope)";
+  }
+  if (lower.includes("api.minimax.io")) {
+    return "MiniMax";
+  }
+  if (lower.includes("volces.com") || lower.includes("volcengine.com")) {
+    return "Volcano Engine";
+  }
+  if (lower.includes("bytepluses.com")) {
+    return "BytePlus";
+  }
   try {
     const host = new URL(baseUrl).host;
     return host || "custom";
@@ -254,6 +275,51 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   }
   if (profileKey === "autoglm-phone") {
     return "AutoGLM Phone (Z.ai)";
+  }
+  if (profileKey === "kimi-k2-turbo-preview") {
+    return "Kimi K2 Turbo Preview (Moonshot AI)";
+  }
+  if (profileKey === "kimi-k2.5") {
+    return "Kimi K2.5 (Moonshot AI)";
+  }
+  if (profileKey === "kimi-k2-thinking") {
+    return "Kimi K2 Thinking (Moonshot AI)";
+  }
+  if (profileKey === "kimi-coding/k2p5") {
+    return "Kimi K2.5 for Coding (Kimi Code)";
+  }
+  if (profileKey === "kimi-k2-thinking-turbo") {
+    return "Kimi K2 Thinking Turbo (Moonshot AI)";
+  }
+  if (profileKey === "deepseek-v3") {
+    return "DeepSeek V3 (DeepSeek)";
+  }
+  if (profileKey === "deepseek-r1") {
+    return "DeepSeek R1 (DeepSeek)";
+  }
+  if (profileKey === "qwen-max") {
+    return "Qwen Max (DashScope)";
+  }
+  if (profileKey === "qwen-plus") {
+    return "Qwen Plus (DashScope)";
+  }
+  if (profileKey === "qwen-coder-plus") {
+    return "Qwen Coder Plus (DashScope)";
+  }
+  if (profileKey === "minimax-m2.5") {
+    return "MiniMax M2.5 (MiniMax)";
+  }
+  if (profileKey === "minimax-m2.1") {
+    return "MiniMax M2.1 (MiniMax)";
+  }
+  if (profileKey === "volcengine/doubao-seed-1-8") {
+    return "Doubao Seed 1.8 (Volcano Engine)";
+  }
+  if (profileKey === "volcengine/deepseek-v3-2") {
+    return "DeepSeek V3.2 (Volcano Engine)";
+  }
+  if (profileKey === "byteplus/seed-1-8") {
+    return "Seed 1.8 (BytePlus)";
   }
   return `${profile.model} (${providerFromBaseUrl(profile.baseUrl)})`;
 }
@@ -1153,11 +1219,18 @@ async function runModelSelectionStep(
   prompter: SetupPrompter,
   state: SetupState,
 ): Promise<ModelSelectionResult> {
-  const options = Object.entries(config.models).flatMap(([profileKey, profile]) => {
+  const sortedEntries = Object.entries(config.models).sort((a, b) => {
+    const provA = providerFromBaseUrl(a[1].baseUrl);
+    const provB = providerFromBaseUrl(b[1].baseUrl);
+    if (provA !== provB) return provA.localeCompare(provB);
+    return a[0].localeCompare(b[0]);
+  });
+
+  const options = sortedEntries.flatMap(([profileKey, profile]) => {
     const baseOption: SelectOption<string> = {
       value: modelSelectionValue(profileKey, "api-key"),
       label: modelOptionLabel(profileKey, profile),
-      hint: `${profile.model} | ${profile.apiKeyEnv}`,
+      hint: `${profile.model} | ${providerFromBaseUrl(profile.baseUrl)}`,
     };
     if (!isCodexCliCapableModel(profile)) {
       return [baseOption];
@@ -1534,37 +1607,35 @@ async function runTelegramStep(
     state.telegramTokenSource = "skip";
   }
 
-  const currentAllow = config.telegram.allowedChatIds;
-  const allowedMode = await prompter.select(
-    "Telegram chat allowlist policy",
-    [
-      {
-        value: "keep",
-        label: "Keep current allowlist",
-        hint:
-          currentAllow.length > 0
-            ? currentAllow.join(", ")
-            : "empty -> all chats allowed",
-      },
-      {
-        value: "open",
-        label: "Allow all chats (clear allowlist)",
-      },
-      {
-        value: "set",
-        label: "Set allowlist manually (chat IDs)",
-      },
-    ],
-    "keep",
-  );
-  state.telegramAllowedChatMode = allowedMode;
+  if (!config.channels) {
+    config.channels = {} as import("../channel/types.js").ChannelsConfig;
+  }
+  if (!config.channels.telegram) {
+    config.channels.telegram = {} as import("../channel/types.js").TelegramChannelConfig;
+  }
+  const tgChannel = config.channels.telegram;
+  if (config.telegram!.botToken) tgChannel.botToken = config.telegram!.botToken;
+  if (config.telegram!.botTokenEnv) tgChannel.botTokenEnv = config.telegram!.botTokenEnv;
+  if (config.telegram!.pollTimeoutSec) tgChannel.pollTimeoutSec = config.telegram!.pollTimeoutSec;
 
-  if (allowedMode === "open") {
-    config.telegram.allowedChatIds = [];
-  } else if (allowedMode === "set") {
+  const currentDmPolicy = (tgChannel.dmPolicy as string) || "pairing";
+  const dmPolicy = await prompter.select(
+    "Telegram DM access policy",
+    [
+      { value: "pairing", label: "Pairing (unknown senders get a code, owner approves)" },
+      { value: "allowlist", label: "Allowlist (only pre-configured chat IDs)" },
+      { value: "open", label: "Open (all chats allowed)" },
+    ],
+    currentDmPolicy,
+  );
+  tgChannel.dmPolicy = dmPolicy as import("../channel/types.js").DmPolicy;
+  state.telegramAllowedChatMode = dmPolicy as typeof state.telegramAllowedChatMode;
+
+  if (dmPolicy === "allowlist") {
+    const currentAllow = tgChannel.allowFrom ?? config.telegram.allowedChatIds.map(String);
     const input = await prompter.text(
       "Enter allowed chat IDs (comma or space separated)",
-      config.telegram.allowedChatIds.join(", "),
+      currentAllow.join(", "),
       (value) => {
         try {
           parseAllowedChatIdsInput(value);
@@ -1574,20 +1645,12 @@ async function runTelegramStep(
         }
       },
     );
-    config.telegram.allowedChatIds = parseAllowedChatIdsInput(input);
+    const parsed = parseAllowedChatIdsInput(input);
+    tgChannel.allowFrom = parsed.map(String);
+    config.telegram.allowedChatIds = parsed;
+  } else {
+    config.telegram.allowedChatIds = [];
   }
-
-  if (!config.channels) {
-    config.channels = {} as import("../channel/types.js").ChannelsConfig;
-  }
-  const tgChannel = (config.channels.telegram ?? {}) as Record<string, unknown>;
-  if (config.telegram!.botToken) tgChannel.botToken = config.telegram!.botToken;
-  if (config.telegram!.botTokenEnv) tgChannel.botTokenEnv = config.telegram!.botTokenEnv;
-  if (config.telegram!.pollTimeoutSec) tgChannel.pollTimeoutSec = config.telegram!.pollTimeoutSec;
-  if (config.telegram!.allowedChatIds.length > 0) {
-    tgChannel.allowFrom = config.telegram!.allowedChatIds.map(String);
-  }
-  config.channels.telegram = tgChannel as import("../channel/types.js").TelegramChannelConfig;
 
   state.telegramConfiguredAt = nowIso();
   saveConfig(config);
@@ -2032,6 +2095,47 @@ async function testProxyConnectivity(proxyUrl: string): Promise<boolean> {
   }
 }
 
+async function runIMessageStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  _state: SetupState,
+): Promise<void> {
+  if (!config.channels) config.channels = {};
+  if (!config.channels.imessage) config.channels.imessage = {};
+  const im = config.channels.imessage;
+
+  await prompter.note(
+    "iMessage Setup",
+    [
+      "OpenPocket uses the `imsg` CLI (steipete/imsg) for iMessage integration.",
+      "Requires macOS with Messages app and Full Disk Access for Terminal.",
+      "",
+      "Install: brew install steipete/tap/imsg",
+    ].join("\n"),
+  );
+
+  const dmPolicy = await prompter.select(
+    "iMessage DM access policy",
+    [
+      { value: "pairing", label: "Pairing (unknown senders get a code, owner approves)" },
+      { value: "allowlist", label: "Allowlist (only pre-configured sender IDs)" },
+      { value: "open", label: "Open (all messages allowed)" },
+    ],
+    (im.dmPolicy as string) || "pairing",
+  );
+  im.dmPolicy = dmPolicy as import("../channel/types.js").DmPolicy;
+
+  saveConfig(config);
+
+  await prompter.note(
+    "iMessage Setup",
+    [
+      "iMessage channel configured.",
+      "Gateway will start the `imsg watch` process automatically.",
+    ].join("\n"),
+  );
+}
+
 async function runChannelSetupStep(
   config: OpenPocketConfig,
   prompter: SetupPrompter,
@@ -2050,6 +2154,9 @@ async function runChannelSetupStep(
     { value: "telegram", label: "Telegram", hint: "Bot API polling" },
     { value: "discord", label: "Discord", hint: "Bot with DMs and guild support" },
     { value: "whatsapp", label: "WhatsApp", hint: "Via Baileys (WhatsApp Web)" },
+    ...(process.platform === "darwin"
+      ? [{ value: "imessage", label: "iMessage", hint: "macOS only, via imsg CLI" }]
+      : []),
   ];
 
   const selectedChannels: string[] = [];
@@ -2082,6 +2189,10 @@ async function runChannelSetupStep(
 
   if (selectedChannels.includes("whatsapp")) {
     await runWhatsAppStep(config, prompter, state);
+  }
+
+  if (selectedChannels.includes("imessage")) {
+    await runIMessageStep(config, prompter, state);
   }
 
   const summary = selectedChannels.map((ch) => `  - ${ch}`).join("\n");

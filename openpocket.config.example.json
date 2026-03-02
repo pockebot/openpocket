@@ -234,6 +234,141 @@
       "maxTokens": 3000,
       "reasoningEffort": null,
       "temperature": null
+    },
+    "kimi-k2-turbo-preview": {
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2-turbo-preview",
+      "apiKey": "",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "kimi-k2.5": {
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2.5",
+      "apiKey": "",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "kimi-k2-thinking": {
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2-thinking",
+      "apiKey": "",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": "medium",
+      "temperature": null
+    },
+    "kimi-coding/k2p5": {
+      "baseUrl": "https://api.kimi.com/coding",
+      "model": "k2p5",
+      "apiKey": "",
+      "apiKeyEnv": "KIMI_API_KEY",
+      "maxTokens": 32768,
+      "reasoningEffort": "medium",
+      "temperature": null
+    },
+    "kimi-k2-thinking-turbo": {
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2-thinking-turbo",
+      "apiKey": "",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": "medium",
+      "temperature": null
+    },
+    "deepseek-v3": {
+      "baseUrl": "https://api.deepseek.com",
+      "model": "deepseek-chat",
+      "apiKey": "",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "maxTokens": 8192,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "deepseek-r1": {
+      "baseUrl": "https://api.deepseek.com",
+      "model": "deepseek-reasoner",
+      "apiKey": "",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "maxTokens": 8192,
+      "reasoningEffort": "medium",
+      "temperature": null
+    },
+    "qwen-max": {
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen-max",
+      "apiKey": "",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "maxTokens": 8192,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "qwen-plus": {
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen-plus",
+      "apiKey": "",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "maxTokens": 8192,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "qwen-coder-plus": {
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen-coder-plus",
+      "apiKey": "",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "maxTokens": 8192,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "minimax-m2.5": {
+      "baseUrl": "https://api.minimax.io/anthropic",
+      "model": "MiniMax-M2.5",
+      "apiKey": "",
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "minimax-m2.1": {
+      "baseUrl": "https://api.minimax.io/anthropic",
+      "model": "MiniMax-M2.1",
+      "apiKey": "",
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "volcengine/doubao-seed-1-8": {
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "doubao-seed-1-8-251228",
+      "apiKey": "",
+      "apiKeyEnv": "ARK_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "volcengine/deepseek-v3-2": {
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "deepseek-v3-2-251201",
+      "apiKey": "",
+      "apiKeyEnv": "ARK_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "byteplus/seed-1-8": {
+      "baseUrl": "https://ark.ap-southeast.bytepluses.com/api/v3",
+      "model": "seed-1-8-251228",
+      "apiKey": "",
+      "apiKeyEnv": "ARK_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
     }
   }
 }
