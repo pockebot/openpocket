@@ -337,6 +337,22 @@ export interface EmulatorStatus {
   bootedDevices: string[];
 }
 
+export interface ScreenSnapshotCaptureMetrics {
+  totalMs: number;
+  ensureReadyMs: number;
+  screencapMs: number;
+  screenSizeMs: number;
+  currentAppMs: number;
+  scaleMs: number;
+  uiDumpMs: number;
+  overlayMs: number;
+  uiElementsSource: "fresh" | "cache" | "cache_fallback" | "fresh_empty";
+  uiElementsCount: number;
+  visualHash: string;
+  visualHashHammingDistance: number | null;
+  uiDumpTimedOut: boolean;
+}
+
 export interface ScreenSnapshot {
   deviceId: string;
   currentApp: string;
@@ -358,6 +374,8 @@ export interface ScreenSnapshot {
   installedPackages?: string[];
   /** Actionable UI nodes extracted from uiautomator dump for deterministic element targeting. */
   uiElements: UiElementSnapshot[];
+  /** Per-capture timing and cache diagnostics for screenshot pipeline profiling. */
+  captureMetrics?: ScreenSnapshotCaptureMetrics;
 }
 
 export interface UiElementSnapshot {
