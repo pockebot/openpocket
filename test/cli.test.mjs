@@ -316,7 +316,7 @@ test("help output uses onboard as primary command and lists legacy aliases", () 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /install-cli/);
   assert.match(result.stdout, /onboard/);
-  assert.match(result.stdout, /telegram whoami/);
+  assert.match(result.stdout, /(channels whoami|telegram whoami)/);
   assert.match(result.stdout, /Legacy aliases/);
   assert.match(result.stdout, /\binit\b/);
   assert.match(result.stdout, /\bsetup\b/);

@@ -111,3 +111,11 @@ Use CLI validation to check strict compatibility:
 ```bash
 openpocket skills validate --strict
 ```
+
+Manage workspace-installed skills:
+
+```bash
+openpocket skills list
+openpocket skills load
+openpocket skills load --all
+```

@@ -27,6 +27,25 @@ type AgentAction =
       durationMs?: number;
       reason?: string;
     }
+  | {
+      type: "drag";
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      durationMs?: number;
+      reason?: string;
+    }
+  | {
+      type: "long_press_drag";
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      holdMs?: number;
+      durationMs?: number;
+      reason?: string;
+    }
   | { type: "type"; text: string; reason?: string }
   | { type: "keyevent"; keycode: string; reason?: string }
   | { type: "launch_app"; packageName: string; reason?: string }
@@ -162,6 +181,8 @@ When fields are missing/invalid, runtime normalizes as follows:
 
 - `tap`: `x=0`, `y=0`
 - `swipe`: coords default `0`, `durationMs=300`
+- `drag`: coords default `0`, `durationMs=360`
+- `long_press_drag`: coords default `0`, `holdMs=450`, `durationMs=300`
 - `type`: `text=""`
 - `keyevent`: `keycode="KEYCODE_ENTER"`
 - `launch_app`: `packageName=""`
@@ -186,6 +207,8 @@ When fields are missing/invalid, runtime normalizes as follows:
 
 - `tap`: `adb shell input tap <x> <y>`
 - `swipe`: `adb shell input swipe <x1> <y1> <x2> <y2> <durationMs>`
+- `drag`: `adb shell input swipe <x1> <y1> <x2> <y2> <durationMs>`
+- `long_press_drag`: `adb shell input swipe <x1> <y1> <x2> <y2> <holdMs + durationMs>`
 - `type`: tries `adb shell input text`; for non-ASCII or failure, falls back to clipboard + paste
 - `keyevent`: `adb shell input keyevent <keycode>`
 - `launch_app`: `adb shell monkey -p <package> -c android.intent.category.LAUNCHER 1`

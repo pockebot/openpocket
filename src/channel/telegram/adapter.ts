@@ -104,6 +104,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
     this.bot = new TelegramBot(token, {
       polling: {
+        autoStart: false,
         interval: 1000,
         params: { timeout: tgConfig.pollTimeoutSec ?? 25 },
       },
@@ -125,6 +126,14 @@ export class TelegramAdapter implements ChannelAdapter {
     this.bot.on("polling_error", this.handlePollingError);
     await this.configureBotCommandMenu();
     await this.syncBotDisplayNameFromIdentity();
+    await this.bot.startPolling({
+      restart: true,
+      polling: {
+        autoStart: false,
+        interval: 1000,
+        params: { timeout: this.tgConfig.pollTimeoutSec ?? 25 },
+      },
+    });
     this.log("telegram adapter started (polling)");
   }
 

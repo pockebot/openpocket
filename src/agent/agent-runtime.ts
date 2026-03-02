@@ -2192,7 +2192,7 @@ export class AgentRuntime {
     // Debug screenshot overlay before scaling
     if (
       this.config.screenshots.saveStepScreenshots &&
-      (action.type === "tap" || action.type === "swipe")
+      (action.type === "tap" || action.type === "swipe" || action.type === "drag" || action.type === "long_press_drag")
     ) {
       try {
         const buf = Buffer.from(snapshot.screenshotBase64, "base64");
@@ -2209,7 +2209,7 @@ export class AgentRuntime {
     if (action.type === "tap") {
       const s = scaleCoordinates(action.x, action.y, snapshot.scaleX, snapshot.scaleY, snapshot.width, snapshot.height);
       action = { ...action, x: s.x, y: s.y };
-    } else if (action.type === "swipe") {
+    } else if (action.type === "swipe" || action.type === "drag" || action.type === "long_press_drag") {
       const p1 = scaleCoordinates(action.x1, action.y1, snapshot.scaleX, snapshot.scaleY, snapshot.width, snapshot.height);
       const p2 = scaleCoordinates(action.x2, action.y2, snapshot.scaleX, snapshot.scaleY, snapshot.width, snapshot.height);
       action = { ...action, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
@@ -2266,7 +2266,7 @@ export class AgentRuntime {
         executionResult = await this.adb.executeAction(action, this.config.agent.deviceId);
       }
       // State delta observation
-      const deltaTypes = new Set(["tap", "swipe", "type", "keyevent", "launch_app", "shell"]);
+      const deltaTypes = new Set(["tap", "swipe", "drag", "long_press_drag", "type", "keyevent", "launch_app", "shell"]);
       if (!options?.skipStateObservation && deltaTypes.has(action.type)) {
         try {
           const before = this.observeSnapshotState(snapshot);
@@ -2305,7 +2305,7 @@ export class AgentRuntime {
     if (stateDeltaLine) {
       executionResult += `\n${stateDeltaLine}`;
     }
-    const probeActionTypes = new Set(["tap", "tap_element", "swipe", "type", "keyevent", "launch_app", "shell"]);
+    const probeActionTypes = new Set(["tap", "tap_element", "swipe", "drag", "long_press_drag", "type", "keyevent", "launch_app", "shell"]);
     if (!options?.skipCapabilityProbe && probeActionTypes.has(action.type)) {
       try {
         const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
@@ -2354,7 +2354,15 @@ export class AgentRuntime {
     ctx: PhoneAgentRunContext,
   ): Promise<string> {
     const lines = [`batch_actions count=${action.actions.length}`];
-    const terminalActions = new Set<BatchableAgentAction["type"]>(["tap", "tap_element", "swipe", "type", "keyevent"]);
+    const terminalActions = new Set<BatchableAgentAction["type"]>([
+      "tap",
+      "tap_element",
+      "swipe",
+      "drag",
+      "long_press_drag",
+      "type",
+      "keyevent",
+    ]);
 
     for (let i = 0; i < action.actions.length; i += 1) {
       const item = action.actions[i]!;

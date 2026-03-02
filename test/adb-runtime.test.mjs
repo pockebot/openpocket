@@ -243,6 +243,69 @@ test("AdbRuntime uses escaped adb input for passwords with special characters", 
   );
 });
 
+test("AdbRuntime executes drag with swipe gesture", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({
+    type: "drag",
+    x1: 120,
+    y1: 640,
+    x2: 680,
+    y2: 980,
+    durationMs: 420,
+  });
+  assert.match(result, /Dragged from/);
+  assert.equal(
+    emulator.calls.some(
+      (args) =>
+        args[0] === "-s"
+        && args[2] === "shell"
+        && args[3] === "input"
+        && args[4] === "swipe"
+        && args[5] === "120"
+        && args[6] === "640"
+        && args[7] === "680"
+        && args[8] === "980"
+        && args[9] === "420",
+    ),
+    true,
+  );
+});
+
+test("AdbRuntime executes long_press_drag with combined hold and move duration", async () => {
+  const emulator = new FakeEmulator();
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({
+    type: "long_press_drag",
+    x1: 300,
+    y1: 900,
+    x2: 700,
+    y2: 900,
+    holdMs: 700,
+    durationMs: 260,
+  });
+  assert.match(result, /Long-press drag/);
+  assert.match(result, /hold=700ms/);
+  assert.match(result, /move=260ms/);
+  assert.equal(
+    emulator.calls.some(
+      (args) =>
+        args[0] === "-s"
+        && args[2] === "shell"
+        && args[3] === "input"
+        && args[4] === "swipe"
+        && args[5] === "300"
+        && args[6] === "900"
+        && args[7] === "700"
+        && args[8] === "900"
+        && args[9] === "960",
+    ),
+    true,
+  );
+});
+
 test("AdbRuntime wakes and dismisses keyguard before interactive action on physical phone", async () => {
   const emulator = new FakeEmulator({
     powerDumps: ["mInteractive=false"],

@@ -48,6 +48,8 @@ const PHONE_ONLY_TOOL_NAMES = new Set([
   "tap",
   "tap_element",
   "swipe",
+  "drag",
+  "long_press_drag",
   "type_text",
   "keyevent",
   "launch_app",
