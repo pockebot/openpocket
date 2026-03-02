@@ -2676,8 +2676,23 @@ export class DashboardServer {
         if (text.includes("api.kimi.com")) {
           return "Kimi Code";
         }
-        if (text.includes("moonshot.cn")) {
+        if (text.includes("moonshot.cn") || text.includes("moonshot.ai")) {
           return "Moonshot AI";
+        }
+        if (text.includes("api.deepseek.com")) {
+          return "DeepSeek";
+        }
+        if (text.includes("dashscope.aliyuncs.com")) {
+          return "Qwen (DashScope)";
+        }
+        if (text.includes("api.minimax.io")) {
+          return "MiniMax";
+        }
+        if (text.includes("volces.com") || text.includes("volcengine.com")) {
+          return "Volcano Engine";
+        }
+        if (text.includes("bytepluses.com")) {
+          return "BytePlus";
         }
         try {
           return new URL(baseUrl).host || "custom";
@@ -4025,9 +4040,14 @@ export class DashboardServer {
       if (text.includes("blockrun.ai")) return "BlockRun";
       if (text.includes("api.z.ai")) return "AutoGLM";
       if (text.includes("api.kimi.com")) return "Kimi Code";
-      if (text.includes("moonshot.cn")) return "Moonshot AI";
+      if (text.includes("moonshot.cn") || text.includes("moonshot.ai")) return "Moonshot AI";
       if (text.includes("anthropic.com")) return "Anthropic";
       if (text.includes("googleapis.com")) return "Google";
+      if (text.includes("api.deepseek.com")) return "DeepSeek";
+      if (text.includes("dashscope.aliyuncs.com")) return "Qwen (DashScope)";
+      if (text.includes("api.minimax.io")) return "MiniMax";
+      if (text.includes("volces.com") || text.includes("volcengine.com")) return "Volcano Engine";
+      if (text.includes("bytepluses.com")) return "BytePlus";
       try { return new URL(baseUrl).host || "custom"; } catch { return "custom"; }
     }
 
@@ -4040,6 +4060,11 @@ export class DashboardServer {
       if (label === "Kimi Code") return '<i class="fa-solid fa-code" style="color:#06b6d4;"></i>';
       if (label === "AutoGLM") return '<i class="fa-solid fa-wand-magic-sparkles" style="color:#8b5cf6;"></i>';
       if (label === "BlockRun") return '<i class="fa-solid fa-cube" style="color:#f59e0b;"></i>';
+      if (label === "DeepSeek") return '<i class="fa-solid fa-magnifying-glass" style="color:#4f46e5;"></i>';
+      if (label === "Qwen (DashScope)") return '<i class="fa-solid fa-cloud" style="color:#ff6a00;"></i>';
+      if (label === "MiniMax") return '<i class="fa-solid fa-bolt" style="color:#e11d48;"></i>';
+      if (label === "Volcano Engine") return '<i class="fa-solid fa-volcano" style="color:#ef4444;"></i>';
+      if (label === "BytePlus") return '<i class="fa-solid fa-globe" style="color:#0ea5e9;"></i>';
       return '<i class="fa-solid fa-server" style="color:#888;"></i>';
     }
 

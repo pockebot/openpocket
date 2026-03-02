@@ -210,6 +210,21 @@ function providerFromBaseUrl(baseUrl: string): string {
   if (lower.includes("moonshot.cn") || lower.includes("moonshot.ai")) {
     return "Moonshot AI";
   }
+  if (lower.includes("api.deepseek.com")) {
+    return "DeepSeek";
+  }
+  if (lower.includes("dashscope.aliyuncs.com")) {
+    return "Qwen (DashScope)";
+  }
+  if (lower.includes("api.minimax.io")) {
+    return "MiniMax";
+  }
+  if (lower.includes("volces.com") || lower.includes("volcengine.com")) {
+    return "Volcano Engine";
+  }
+  if (lower.includes("bytepluses.com")) {
+    return "BytePlus";
+  }
   try {
     const host = new URL(baseUrl).host;
     return host || "custom";
@@ -272,6 +287,39 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   }
   if (profileKey === "kimi-coding/k2p5") {
     return "Kimi K2.5 for Coding (Kimi Code)";
+  }
+  if (profileKey === "kimi-k2-thinking-turbo") {
+    return "Kimi K2 Thinking Turbo (Moonshot AI)";
+  }
+  if (profileKey === "deepseek-chat") {
+    return "DeepSeek Chat V3.2 (DeepSeek)";
+  }
+  if (profileKey === "deepseek-reasoner") {
+    return "DeepSeek Reasoner V3.2 (DeepSeek)";
+  }
+  if (profileKey === "qwen-max") {
+    return "Qwen Max (DashScope)";
+  }
+  if (profileKey === "qwen-plus") {
+    return "Qwen Plus (DashScope)";
+  }
+  if (profileKey === "qwen-coder-plus") {
+    return "Qwen Coder Plus (DashScope)";
+  }
+  if (profileKey === "minimax-m2.5") {
+    return "MiniMax M2.5 (MiniMax)";
+  }
+  if (profileKey === "minimax-m2.1") {
+    return "MiniMax M2.1 (MiniMax)";
+  }
+  if (profileKey === "volcengine/doubao-seed-1-8") {
+    return "Doubao Seed 1.8 (Volcano Engine)";
+  }
+  if (profileKey === "volcengine/deepseek-v3-2") {
+    return "DeepSeek V3.2 (Volcano Engine)";
+  }
+  if (profileKey === "byteplus/seed-1-8") {
+    return "Seed 1.8 (BytePlus)";
   }
   return `${profile.model} (${providerFromBaseUrl(profile.baseUrl)})`;
 }

@@ -125,8 +125,19 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
     api = "anthropic-messages";
     provider = "kimi-coding";
     headers = { "user-agent": "openpocket/0.2.2 (coding-agent)" };
-  } else if (baseUrlLower.includes("moonshot.cn")) {
+  } else if (baseUrlLower.includes("moonshot.cn") || baseUrlLower.includes("moonshot.ai")) {
     provider = "moonshot";
+  } else if (baseUrlLower.includes("api.deepseek.com")) {
+    provider = "openai";
+  } else if (baseUrlLower.includes("dashscope.aliyuncs.com")) {
+    provider = "openai";
+  } else if (baseUrlLower.includes("api.minimax.io")) {
+    api = "anthropic-messages";
+    provider = "minimax";
+  } else if (baseUrlLower.includes("volces.com") || baseUrlLower.includes("volcengine.com")) {
+    provider = "openai";
+  } else if (baseUrlLower.includes("bytepluses.com")) {
+    provider = "openai";
   }
 
   return {

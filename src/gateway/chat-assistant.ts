@@ -448,13 +448,16 @@ export class ChatAssistant {
 
   private isAnthropicEndpoint(client: OpenAI): boolean {
     const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
-    return baseUrl.includes("api.kimi.com") || baseUrl.includes("anthropic.com");
+    return baseUrl.includes("api.kimi.com") || baseUrl.includes("anthropic.com") || baseUrl.includes("api.minimax.io");
   }
 
   private detectAnthropicProvider(client: OpenAI): string {
     const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
     if (baseUrl.includes("api.kimi.com")) {
       return "kimi-coding";
+    }
+    if (baseUrl.includes("api.minimax.io")) {
+      return "minimax";
     }
     return "anthropic";
   }

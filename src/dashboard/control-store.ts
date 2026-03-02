@@ -88,8 +88,23 @@ export function providerLabel(baseUrl: string): string {
   if (lower.includes("api.kimi.com")) {
     return "Kimi Code";
   }
-  if (lower.includes("moonshot.cn")) {
+  if (lower.includes("moonshot.cn") || lower.includes("moonshot.ai")) {
     return "Moonshot AI";
+  }
+  if (lower.includes("api.deepseek.com")) {
+    return "DeepSeek";
+  }
+  if (lower.includes("dashscope.aliyuncs.com")) {
+    return "Qwen (DashScope)";
+  }
+  if (lower.includes("api.minimax.io")) {
+    return "MiniMax";
+  }
+  if (lower.includes("volces.com") || lower.includes("volcengine.com")) {
+    return "Volcano Engine";
+  }
+  if (lower.includes("bytepluses.com")) {
+    return "BytePlus";
   }
   const host = (() => {
     try {
