@@ -2589,7 +2589,13 @@ export class DashboardServer {
 
     function renderRuntime(runtime) {
       updateBadges(runtime);
+      var activeModel = runtime.config?.defaultModel || "unknown";
+      var activeProfile = state.config?.models?.[activeModel];
+      var activeProvider = activeProfile ? modelsProviderLabel(activeProfile.baseUrl) : "";
+      var modelDisplay = activeModel + (activeProvider ? " (" + activeProvider + ")" : "");
+
       $("#gateway-kv").innerHTML =
+        "<div>Active Model: <code style=\"font-weight:600;color:#0f6f52;\">" + escHtml(modelDisplay) + "</code></div>" +
         "<div>Mode: <code>" + (runtime.mode || "unknown") + "</code></div>" +
         "<div>Gateway note: " + (runtime.gateway?.note || "n/a") + "</div>" +
         "<div>Dashboard: <code>" + (runtime.dashboard?.address || location.origin) + "</code></div>";
