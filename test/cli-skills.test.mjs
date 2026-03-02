@@ -112,6 +112,10 @@ test("skills load --all copies bundled skills missing from workspace", () => {
   assert.equal(fs.existsSync(loadedSkillPath), true, "solitaire-play SKILL.md should be copied to workspace");
   assert.equal(fs.existsSync(loadedSkillAgentPath), true, "solitaire-play nested assets should be copied to workspace");
 
+  const list = runCli(["skills", "list"], { OPENPOCKET_HOME: home });
+  assert.equal(list.status, 0, list.stderr || list.stdout);
+  assert.match(list.stdout, /\[workspace\] solitaire-play \(solitaire-play\)/);
+
   const marker = fs.readFileSync(existingPath, "utf-8");
   assert.match(marker, /Workspace copy marker\./);
 });

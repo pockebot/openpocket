@@ -1495,7 +1495,7 @@ async function runSkillsCommand(configPath: string | undefined, args: string[]):
     return copied > 0 ? 0 : 1;
   }
 
-  const skills = loader.loadDetailedAll().filter((skill) => skill.source === "workspace");
+  const skills = loader.loadDetailedBySource("workspace", { ignoreRequirements: true });
   if (skills.length === 0) {
     printWarn("No workspace skills loaded.");
     return 0;
