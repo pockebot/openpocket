@@ -4,6 +4,8 @@ export interface ScaledImage {
   data: Buffer;
   scaleX: number;
   scaleY: number;
+  originalWidth: number;
+  originalHeight: number;
   width: number;
   height: number;
 }
@@ -55,6 +57,8 @@ export async function scaleScreenshot(
       data: pngBuffer,
       scaleX: 1,
       scaleY: 1,
+      originalWidth: origWidth,
+      originalHeight: origHeight,
       width: origWidth,
       height: origHeight,
     };
@@ -74,6 +78,8 @@ export async function scaleScreenshot(
     // scaleX/Y: multiply model coordinates by these to get original-resolution coordinates.
     scaleX: origWidth / newWidth,
     scaleY: origHeight / newHeight,
+    originalWidth: origWidth,
+    originalHeight: origHeight,
     width: newWidth,
     height: newHeight,
   };

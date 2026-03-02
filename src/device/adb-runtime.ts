@@ -805,10 +805,11 @@ export class AdbRuntime {
     await this.ensureInteractiveTargetReady(deviceId);
 
     const { data } = this.emulator.captureScreenshotBuffer(deviceId);
-    const { width, height } = this.resolveScreenSize(deviceId);
     const currentApp = this.resolveCurrentApp(deviceId);
 
     const scaled = await scaleScreenshot(data, modelName);
+    const width = scaled.originalWidth;
+    const height = scaled.originalHeight;
     const uiElements = this.captureUiElements(
       deviceId,
       width,

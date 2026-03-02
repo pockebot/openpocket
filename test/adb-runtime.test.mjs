@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { AdbRuntime, extractPackageName } = await import("../dist/device/adb-runtime.js");
+const sharp = (await import("sharp")).default;
+
+const ONE_BY_ONE_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAgMBgN4m2sYAAAAASUVORK5CYII=",
+  "base64",
+);
 
 function makeConfig() {
   return {
@@ -23,6 +29,7 @@ class FakeEmulator {
       : ["com.android.adbkeyboard/.AdbIME", "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME"];
     this.currentIme = options.defaultIme ?? "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME";
     this.clipboardText = "";
+    this.screenshotBuffer = options.screenshotBuffer ?? ONE_BY_ONE_PNG;
     this.powerDumps = Array.isArray(options.powerDumps) ? [...options.powerDumps] : [];
     this.policyDumps = Array.isArray(options.policyDumps) ? [...options.policyDumps] : [];
   }
@@ -37,6 +44,10 @@ class FakeEmulator {
 
   adbBinary() {
     return "adb";
+  }
+
+  captureScreenshotBuffer(deviceId = "emulator-5554") {
+    return { deviceId, data: this.screenshotBuffer };
   }
 
   runAdb(args) {
@@ -667,4 +678,25 @@ test("AdbRuntime shell preserves wrapped command and quoted arguments", async ()
     emulator.calls[1],
     ["-s", "emulator-5554", "shell", "settings", "put", "global", "device_name", "Pixel 9 Pro"],
   );
+});
+
+test("captureScreenSnapshot uses screenshot dimensions as source resolution in landscape", async () => {
+  const screenshotBuffer = await sharp({
+    create: {
+      width: 1920,
+      height: 1080,
+      channels: 3,
+      background: { r: 24, g: 32, b: 40 },
+    },
+  }).png().toBuffer();
+  const emulator = new FakeEmulator({ screenshotBuffer });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const snapshot = await runtime.captureScreenSnapshot();
+  assert.equal(snapshot.width, 1920);
+  assert.equal(snapshot.height, 1080);
+  assert.equal(snapshot.scaledWidth > snapshot.scaledHeight, true);
+  assert.equal(snapshot.scaledHeight, 768);
+  assert.equal(snapshot.scaleX > 1, true);
+  assert.equal(snapshot.scaleY > 1, true);
 });
