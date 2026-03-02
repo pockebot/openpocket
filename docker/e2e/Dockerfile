@@ -45,8 +45,9 @@ RUN sdkmanager --sdk_root=/opt/android-sdk \
   "platform-tools" \
   "emulator" \
   "platforms;android-34" \
-  "system-images;android-34;google_apis_playstore;x86_64"
-RUN echo "no" | avdmanager create avd --force -n OpenPocket_AVD -k "system-images;android-34;google_apis_playstore;x86_64"
+  "system-images;android-34;google_apis;x86_64"
+
+RUN echo "no" | avdmanager create avd --force -n OpenPocket_AVD -k "system-images;android-34;google_apis;x86_64"
 
 WORKDIR /workspace
 

@@ -275,7 +275,7 @@ export class EmulatorManager {
       .filter(Boolean);
   }
 
-  emulatorDevices(): string[] {
+  private emulatorDevices(): string[] {
     return this.onlineAdbDevices().filter((line) => line.startsWith("emulator-"));
   }
 
@@ -995,7 +995,7 @@ export class EmulatorManager {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
         maxBuffer: 8 * 1024 * 1024,
-        timeout: 20000,
+        timeout: 45000,
       });
       execFileSync(this.adbBinary(), ["-s", deviceId, "pull", remote, local], {
         encoding: "utf-8",

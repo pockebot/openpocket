@@ -133,13 +133,12 @@ function pickScenarioAction(task, step) {
   };
 }
 
-function parseTaskAndStep(promptText) {
+function parseTaskAndStep(promptText, state) {
   const task = promptText.match(/^Task:\s*(.+)$/m)?.[1]?.trim() ?? "";
-  const stepRaw = promptText.match(/^Step:\s*(\d+)$/m)?.[1] ?? "1";
-  const step = Number.parseInt(stepRaw, 10);
+  console.log(`[MockServer] Parsed -> Task: "${task}", Calls: ${state.calls}`);
   return {
     task,
-    step: Number.isFinite(step) && step > 0 ? step : 1,
+    step: state.calls,
   };
 }
 
@@ -163,26 +162,34 @@ async function startMockModelServer(port) {
 
       const body = await readJsonBody(req);
       const promptText = findPromptText(body);
-      const parsed = parseTaskAndStep(promptText);
+      state.calls += 1;
+      const parsed = parseTaskAndStep(promptText, state);
       if (parsed.task) {
         state.task = parsed.task;
       }
-      state.calls += 1;
 
       const action = pickScenarioAction(parsed.task || state.task, parsed.step);
       const argsJson = JSON.stringify(action.args);
 
       if (req.url === "/v1/chat/completions") {
-        sendJson(res, 200, {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        const data = {
           id: `chatcmpl-e2e-${state.calls}`,
-          object: "chat.completion",
+          object: "chat.completion.chunk",
+          created: Date.now(),
+          model: "e2e-mock-model",
           choices: [
             {
               index: 0,
               finish_reason: "tool_calls",
-              message: {
+              delta: {
                 role: "assistant",
-                content: "",
+                content: action.args.thought || "",
                 tool_calls: [
                   {
                     id: `call-e2e-${state.calls}`,
@@ -196,7 +203,11 @@ async function startMockModelServer(port) {
               },
             },
           ],
-        });
+        };
+
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+        res.write(`data: [DONE]\n\n`);
+        res.end();
         return;
       }
 
@@ -344,6 +355,7 @@ function sleep(ms) {
 }
 
 async function waitForBootComplete(env, timeoutMs) {
+  log("Waiting for emulator boot completion...");
   const deadline = Date.now() + timeoutMs;
   const startedAt = Date.now();
   while (Date.now() < deadline) {
@@ -367,9 +379,16 @@ async function waitForBootComplete(env, timeoutMs) {
         // Verify the ADB connection is stable before declaring boot complete.
         // The device can briefly go offline right after sys.boot_completed fires,
         // which would cause subsequent agent commands to fail with "device offline".
+        // Furthermore, check `adb devices` directly to ensure it does not say `offline`.
         let stableCount = 0;
-        for (let i = 0; i < 15 && stableCount < 2; i++) {
-          await sleep(2000);
+        for (let i = 0; i < 20 && stableCount < 3; i++) {
+          await sleep(3000);
+          const devicesCheck = runCommand("adb", ["devices"], { env, timeoutMs: 8000 });
+          const isOnline = devicesCheck.stdout.includes("device") && !devicesCheck.stdout.includes("offline");
+          if (!isOnline) {
+            stableCount = 0;
+            continue;
+          }
           const ping = runCommand("adb", ["shell", "echo", "ping"], { env, timeoutMs: 8000 });
           if (ping.status === 0 && ping.stdout.trim() === "ping") {
             stableCount++;
@@ -377,7 +396,7 @@ async function waitForBootComplete(env, timeoutMs) {
             stableCount = 0;
           }
         }
-        if (stableCount >= 2) {
+        if (stableCount >= 3) {
           return;
         }
       }

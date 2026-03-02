@@ -998,7 +998,7 @@ export class AdbRuntime {
           "android.intent.category.LAUNCHER",
           "1",
         ]);
-        return `Launched package ${action.packageName}`;
+        return `Launched app ${action.packageName}`;
       }
       case "shell": {
         const command = String(action.command ?? "").trim();

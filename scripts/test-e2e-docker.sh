@@ -15,6 +15,8 @@ DOCKER_RUN_ARGS=(--rm --shm-size="${SHM_SIZE}")
 if [ -e /dev/kvm ]; then
   echo "[e2e] Hardware virtualization (/dev/kvm) detected. Enabling KVM."
   DOCKER_RUN_ARGS+=(--device /dev/kvm)
+else
+  echo "[e2e] Hardware virtualization (/dev/kvm) missing. Emulator performance will be significantly degraded."
 fi
 
 docker run "${DOCKER_RUN_ARGS[@]}" \
