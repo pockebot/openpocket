@@ -87,6 +87,31 @@ function normalizeBatchActionItem(input: unknown): BatchableAgentAction | null {
     };
   }
 
+  if (type === "drag") {
+    return {
+      type,
+      x1: toNumber(input.x1, 0),
+      y1: toNumber(input.y1, 0),
+      x2: toNumber(input.x2, 0),
+      y2: toNumber(input.y2, 0),
+      durationMs: toNumber(input.durationMs, 360),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "long_press_drag") {
+    return {
+      type,
+      x1: toNumber(input.x1, 0),
+      y1: toNumber(input.y1, 0),
+      x2: toNumber(input.x2, 0),
+      y2: toNumber(input.y2, 0),
+      holdMs: toNumber(input.holdMs, 450),
+      durationMs: toNumber(input.durationMs, 300),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "type") {
     return {
       type,
@@ -160,6 +185,31 @@ export function normalizeAction(input: unknown): AgentAction {
       y1: toNumber(input.y1, 0),
       x2: toNumber(input.x2, 0),
       y2: toNumber(input.y2, 0),
+      durationMs: toNumber(input.durationMs, 300),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "drag") {
+    return {
+      type,
+      x1: toNumber(input.x1, 0),
+      y1: toNumber(input.y1, 0),
+      x2: toNumber(input.x2, 0),
+      y2: toNumber(input.y2, 0),
+      durationMs: toNumber(input.durationMs, 360),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "long_press_drag") {
+    return {
+      type,
+      x1: toNumber(input.x1, 0),
+      y1: toNumber(input.y1, 0),
+      x2: toNumber(input.x2, 0),
+      y2: toNumber(input.y2, 0),
+      holdMs: toNumber(input.holdMs, 450),
       durationMs: toNumber(input.durationMs, 300),
       reason: input.reason ? String(input.reason) : undefined,
     };

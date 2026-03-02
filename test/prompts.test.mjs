@@ -36,6 +36,24 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /skill-a/);
 });
 
+test("buildSystemPrompt data-source check doesn't require auth before app launch for login/payment tasks", () => {
+  const prompt = buildSystemPrompt("- skill-a", "", { mode: "full" });
+  const dataSourceLine = prompt
+    .split("\n")
+    .find((line) => line.startsWith("0) DATA SOURCE CHECK")) || "";
+
+  assert.ok(dataSourceLine, "Expected a DATA SOURCE CHECK line in full system prompt");
+  assert.match(
+    dataSourceLine,
+    /Human Phone \(photos, contacts, files, audio, location, etc\.\)/,
+  );
+  assert.match(
+    dataSourceLine,
+    /launch the target app.*first explicit sensitive prompt/i,
+  );
+  assert.match(prompt, /call request_human_auth with capability=oauth/i);
+});
+
 test("buildSystemPrompt includes workspace context when provided", () => {
   const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A");
   assert.match(prompt, /Workspace Prompt Context/);
@@ -69,6 +87,7 @@ test("buildSystemPrompt supports minimal mode", () => {
   assert.match(prompt, /Workspace Prompt Context/);
   assert.match(prompt, /Tooling/);
   assert.match(prompt, /tap.*swipe/s);
+  assert.match(prompt, /drag.*long_press_drag/s);
   assert.doesNotMatch(prompt, /Planning Loop/);
 });
 

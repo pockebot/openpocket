@@ -187,7 +187,7 @@ export class GatewayCore {
     this.heartbeat.start();
     this.cron.start();
     await this.router.startAll();
-    this.log("gateway core started");
+    this.log(`gateway core started model=${this.config.defaultModel}`);
   }
 
   async stop(reason = "manual"): Promise<void> {
@@ -206,6 +206,13 @@ export class GatewayCore {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  applyExternalConfig(updated: OpenPocketConfig): void {
+    (this as unknown as { config: OpenPocketConfig }).config = updated;
+    this.chat = new ChatAssistant(updated);
+    this.agent.updateConfig(updated);
+    this.log(`config hot-reloaded via dashboard (model=${updated.defaultModel})`);
   }
 
   // -----------------------------------------------------------------------
@@ -534,7 +541,7 @@ export class GatewayCore {
     const chatId = this.peerIdNum(envelope);
     const decision = await this.chat.decide(chatId, text);
     this.log(
-      `decision channel=${envelope.channelType} sender=${envelope.senderId} mode=${decision.mode} confidence=${decision.confidence.toFixed(2)}`,
+      `decision channel=${envelope.channelType} sender=${envelope.senderId} model=${this.config.defaultModel} mode=${decision.mode} confidence=${decision.confidence.toFixed(2)}`,
     );
 
     if (decision.mode === "task") {
@@ -619,7 +626,7 @@ export class GatewayCore {
     };
     let progressWork: Promise<void> = Promise.resolve();
 
-    this.log(`task accepted channel=${envelope.channelType} sender=${envelope.senderId} task=${JSON.stringify(task)}`);
+    this.log(`task accepted channel=${envelope.channelType} sender=${envelope.senderId} model=${this.config.defaultModel} task=${JSON.stringify(task)}`);
 
     const adapter = this.router.getAdapter(envelope.channelType);
 
@@ -709,7 +716,7 @@ export class GatewayCore {
       );
       await progressWork;
 
-      this.log(`task done channel=${envelope.channelType} ok=${result.ok} session=${result.sessionPath}`);
+      this.log(`task done channel=${envelope.channelType} model=${this.config.defaultModel} ok=${result.ok} session=${result.sessionPath}`);
 
       const finalMessage = await this.chat.narrateTaskOutcome({
         task, locale, ok: result.ok, rawResult: result.message,
@@ -724,7 +731,7 @@ export class GatewayCore {
     } catch (error) {
       await progressWork.catch(() => {});
       const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
-      this.log(`task crash channel=${envelope.channelType} error=${(error as Error).message}`);
+      this.log(`task crash channel=${envelope.channelType} model=${this.config.defaultModel} error=${(error as Error).message}`);
       await this.router.replyText(envelope, this.sanitizeForChat(message, 600));
       return { accepted: true, ok: false, message };
     } finally {

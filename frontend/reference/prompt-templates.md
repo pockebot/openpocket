@@ -11,7 +11,7 @@ This page documents runtime prompt templates used by both task loop and chat gat
 Includes complete policy stack:
 
 - Tooling catalog (all task tools):
-  - Android actions: `tap`, `swipe`, `type_text`, `keyevent`, `launch_app`, `shell`, `wait`, `finish`
+  - Android actions: `tap`, `swipe`, `drag`, `long_press_drag`, `type_text`, `keyevent`, `launch_app`, `shell`, `wait`, `finish`
   - script fallback: `run_script`
   - coding tools: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`
   - memory tools: `memory_search`, `memory_get`

@@ -1208,6 +1208,8 @@ export class TelegramGateway {
       || action === "finish"
       || action === "tap"
       || action === "swipe"
+      || action === "drag"
+      || action === "long_press_drag"
       || action === "type_text";
     const errorLike = /(error|failed|timeout|interrupted|rejected|not completed)/i.test(
       `${progress.message} ${progress.thought}`,
@@ -1253,6 +1255,8 @@ export class TelegramGateway {
       tap: `我正在执行界面操作并确认下一步入口${appSuffix}。`,
       tap_element: `我正在点击关键控件并推进流程${appSuffix}。`,
       swipe: `我正在浏览当前页面并定位目标区域${appSuffix}。`,
+      drag: `我正在拖拽目标元素并验证落点${appSuffix}。`,
+      long_press_drag: `我正在长按并拖拽目标元素${appSuffix}。`,
       type_text: `我正在填写必要信息并继续流程${appSuffix}。`,
       keyevent: `我正在执行系统导航操作${appSuffix}。`,
       read: `我正在读取必要上下文并规划下一步${appSuffix}。`,
@@ -1267,6 +1271,8 @@ export class TelegramGateway {
       tap: `Performing a UI action and locating the next entry point${appSuffix}.`,
       tap_element: `Tapping a key control to move the flow forward${appSuffix}.`,
       swipe: `Scanning the current screen to locate the target area${appSuffix}.`,
+      drag: `Dragging the target element to the intended destination${appSuffix}.`,
+      long_press_drag: `Long-pressing and dragging the target element${appSuffix}.`,
       type_text: `Filling required text and continuing the flow${appSuffix}.`,
       keyevent: `Sending a system navigation input${appSuffix}.`,
       read: `Reading required context before the next step${appSuffix}.`,

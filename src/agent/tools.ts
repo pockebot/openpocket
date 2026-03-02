@@ -43,6 +43,27 @@ export const swipeSchema = Type.Object({
   reason: ReasonParam,
 });
 
+export const dragSchema = Type.Object({
+  thought: ThoughtParam,
+  x1: Type.Number({ description: "Drag start X coordinate." }),
+  y1: Type.Number({ description: "Drag start Y coordinate." }),
+  x2: Type.Number({ description: "Drag end X coordinate." }),
+  y2: Type.Number({ description: "Drag end Y coordinate." }),
+  durationMs: Type.Optional(Type.Number({ description: "Drag move duration in milliseconds (default 360)." })),
+  reason: ReasonParam,
+});
+
+export const longPressDragSchema = Type.Object({
+  thought: ThoughtParam,
+  x1: Type.Number({ description: "Long-press drag start X coordinate." }),
+  y1: Type.Number({ description: "Long-press drag start Y coordinate." }),
+  x2: Type.Number({ description: "Long-press drag end X coordinate." }),
+  y2: Type.Number({ description: "Long-press drag end Y coordinate." }),
+  holdMs: Type.Optional(Type.Number({ description: "Press-and-hold time before move in milliseconds (default 450)." })),
+  durationMs: Type.Optional(Type.Number({ description: "Move duration after hold in milliseconds (default 300)." })),
+  reason: ReasonParam,
+});
+
 export const typeTextSchema = Type.Object({
   thought: ThoughtParam,
   text: Type.String({ description: "The text to type." }),
@@ -89,6 +110,25 @@ const batchActionItemSchema = Type.Union([
     x2: Type.Number({ description: "End X coordinate." }),
     y2: Type.Number({ description: "End Y coordinate." }),
     durationMs: Type.Optional(Type.Number({ description: "Swipe duration in milliseconds (default 300)." })),
+    reason: ReasonParam,
+  }),
+  Type.Object({
+    type: Type.Literal("drag"),
+    x1: Type.Number({ description: "Drag start X coordinate." }),
+    y1: Type.Number({ description: "Drag start Y coordinate." }),
+    x2: Type.Number({ description: "Drag end X coordinate." }),
+    y2: Type.Number({ description: "Drag end Y coordinate." }),
+    durationMs: Type.Optional(Type.Number({ description: "Drag move duration in milliseconds (default 360)." })),
+    reason: ReasonParam,
+  }),
+  Type.Object({
+    type: Type.Literal("long_press_drag"),
+    x1: Type.Number({ description: "Long-press drag start X coordinate." }),
+    y1: Type.Number({ description: "Long-press drag start Y coordinate." }),
+    x2: Type.Number({ description: "Long-press drag end X coordinate." }),
+    y2: Type.Number({ description: "Long-press drag end Y coordinate." }),
+    holdMs: Type.Optional(Type.Number({ description: "Press-and-hold time before move in milliseconds (default 450)." })),
+    durationMs: Type.Optional(Type.Number({ description: "Move duration after hold in milliseconds (default 300)." })),
     reason: ReasonParam,
   }),
   Type.Object({
@@ -249,6 +289,8 @@ export const finishSchema = Type.Object({
 export type TapParams = Static<typeof tapSchema>;
 export type TapElementParams = Static<typeof tapElementSchema>;
 export type SwipeParams = Static<typeof swipeSchema>;
+export type DragParams = Static<typeof dragSchema>;
+export type LongPressDragParams = Static<typeof longPressDragSchema>;
 export type TypeTextParams = Static<typeof typeTextSchema>;
 export type KeyeventParams = Static<typeof keyeventSchema>;
 export type LaunchAppParams = Static<typeof launchAppSchema>;
@@ -283,6 +325,8 @@ export const TOOL_METAS: ToolMeta[] = [
   { name: "tap", description: "Tap at the given (x, y) coordinate on the screen.", parameters: tapSchema },
   { name: "tap_element", description: "Tap a UI element by id from the current UI candidate list.", parameters: tapElementSchema },
   { name: "swipe", description: "Swipe from (x1,y1) to (x2,y2) on the screen.", parameters: swipeSchema },
+  { name: "drag", description: "Drag from (x1,y1) to (x2,y2) on the screen.", parameters: dragSchema },
+  { name: "long_press_drag", description: "Long-press at (x1,y1) then drag to (x2,y2) on the screen.", parameters: longPressDragSchema },
   { name: "type_text", description: "Type text into the currently focused input field.", parameters: typeTextSchema },
   { name: "keyevent", description: "Send an Android keyevent (e.g. KEYCODE_BACK, KEYCODE_HOME, KEYCODE_ENTER).", parameters: keyeventSchema },
   { name: "launch_app", description: "Launch an Android application by package name.", parameters: launchAppSchema },

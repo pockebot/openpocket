@@ -570,6 +570,8 @@ export class AdbRuntime {
       case "tap":
       case "tap_element":
       case "swipe":
+      case "drag":
+      case "long_press_drag":
       case "type":
       case "keyevent":
       case "launch_app":
@@ -947,6 +949,40 @@ export class AdbRuntime {
           String(durationMs),
         ]);
         return `Swiped from (${action.x1}, ${action.y1}) to (${action.x2}, ${action.y2})`;
+      }
+      case "drag": {
+        const durationMs = Math.max(100, Math.round(action.durationMs ?? 360));
+        this.emulator.runAdb([
+          "-s",
+          deviceId,
+          "shell",
+          "input",
+          "swipe",
+          String(Math.round(action.x1)),
+          String(Math.round(action.y1)),
+          String(Math.round(action.x2)),
+          String(Math.round(action.y2)),
+          String(durationMs),
+        ]);
+        return `Dragged from (${action.x1}, ${action.y1}) to (${action.x2}, ${action.y2})`;
+      }
+      case "long_press_drag": {
+        const holdMs = Math.max(120, Math.round(action.holdMs ?? 450));
+        const moveDurationMs = Math.max(100, Math.round(action.durationMs ?? 300));
+        const totalDurationMs = holdMs + moveDurationMs;
+        this.emulator.runAdb([
+          "-s",
+          deviceId,
+          "shell",
+          "input",
+          "swipe",
+          String(Math.round(action.x1)),
+          String(Math.round(action.y1)),
+          String(Math.round(action.x2)),
+          String(Math.round(action.y2)),
+          String(totalDurationMs),
+        ]);
+        return `Long-press drag from (${action.x1}, ${action.y1}) to (${action.x2}, ${action.y2}) hold=${holdMs}ms move=${moveDurationMs}ms`;
       }
       case "type": {
         const encoded = encodeInputText(action.text);

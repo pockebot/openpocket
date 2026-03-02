@@ -390,6 +390,25 @@ export type BatchableAgentAction =
       durationMs?: number;
       reason?: string;
     }
+  | {
+      type: "drag";
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      durationMs?: number;
+      reason?: string;
+    }
+  | {
+      type: "long_press_drag";
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      holdMs?: number;
+      durationMs?: number;
+      reason?: string;
+    }
   | { type: "type"; text: string; reason?: string }
   | { type: "keyevent"; keycode: string; reason?: string }
   | { type: "wait"; durationMs?: number; reason?: string };
