@@ -13,7 +13,7 @@ function initScrollAnimations() {
 
   nextTick(() => {
     const targets = document.querySelectorAll(
-      ".op-hero-left, .op-hero-right, .op-why, .op-why-item, .op-usecases, .op-workflow, .op-workflow-step, .op-footer-animation"
+      ".op-hero-left, .op-hero-right, .op-why, .op-why-item, .op-usecases, .op-workflow, .op-workflow-step, .op-support, .op-support-item, .op-footer-animation"
     );
 
     if (!targets.length) return;

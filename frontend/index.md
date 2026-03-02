@@ -118,6 +118,42 @@ function onVideoEnd(e) {
   </div>
 </section>
 
+<!-- Support -->
+<section class="op-support">
+  <p class="op-section-label">Support</p>
+  <div class="op-support-list">
+    <article class="op-support-item">
+      <h3>Phone Environment</h3>
+      <div class="op-support-content">
+        <span class="op-support-pill">Android</span>
+        <span class="op-support-pill op-support-pill-soon">iOS (Coming Soon)</span>
+      </div>
+    </article>
+    <article class="op-support-item">
+      <h3>Agent Runtime</h3>
+      <div class="op-support-content">
+        <span class="op-support-pill">macOS</span>
+        <span class="op-support-pill">Windows</span>
+        <span class="op-support-pill">Linux</span>
+      </div>
+    </article>
+    <article class="op-support-item">
+      <h3>Model Support</h3>
+      <div class="op-model-grid">
+        <img class="op-model-logo" :src="withBase('/models/gpt-5.2-codex.svg')" alt="gpt-5.2-codex" title="gpt-5.2-codex" />
+        <img class="op-model-logo" :src="withBase('/models/gpt-5.3-codex.svg')" alt="gpt-5.3-codex" title="gpt-5.3-codex" />
+        <img class="op-model-logo" :src="withBase('/models/claude-sonnet-4.6.svg')" alt="claude-sonnet-4.6" title="claude-sonnet-4.6" />
+        <img class="op-model-logo" :src="withBase('/models/claude-opus-4.6.svg')" alt="claude-opus-4.6" title="claude-opus-4.6" />
+        <img class="op-model-logo" :src="withBase('/models/blockrun-gpt-4o.svg')" alt="blockrun/gpt-4o" title="blockrun/gpt-4o" />
+        <img class="op-model-logo" :src="withBase('/models/blockrun-claude-sonnet-4.svg')" alt="blockrun/claude-sonnet-4" title="blockrun/claude-sonnet-4" />
+        <img class="op-model-logo" :src="withBase('/models/blockrun-gemini-2.0-flash.svg')" alt="blockrun/gemini-2.0-flash" title="blockrun/gemini-2.0-flash" />
+        <img class="op-model-logo" :src="withBase('/models/blockrun-deepseek-chat.svg')" alt="blockrun/deepseek-chat" title="blockrun/deepseek-chat" />
+        <img class="op-model-logo" :src="withBase('/models/autoglm-phone.svg')" alt="autoglm-phone" title="autoglm-phone" />
+      </div>
+    </article>
+  </div>
+</section>
+
 <!-- Footer Animation -->
 <section class="op-footer-animation">
   <video autoplay muted playsinline preload="auto" :src="withBase('/hamster-architecture.mp4')" @ended="onVideoEnd"></video>

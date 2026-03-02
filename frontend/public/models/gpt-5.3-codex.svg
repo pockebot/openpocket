@@ -1,0 +1,7 @@
+<svg width="220" height="72" viewBox="0 0 220 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0.5" y="0.5" width="219" height="71" rx="12" fill="white" stroke="#E5E7EB"/>
+  <rect x="12" y="16" width="40" height="40" rx="10" fill="#10A37F"/>
+  <text x="32" y="41" fill="white" font-size="14" font-family="Arial, sans-serif" text-anchor="middle" font-weight="700">OA</text>
+  <text x="64" y="33" fill="#0F172A" font-size="14" font-family="Arial, sans-serif" font-weight="700">GPT-5.3</text>
+  <text x="64" y="50" fill="#334155" font-size="13" font-family="Arial, sans-serif" font-weight="600">Codex</text>
+</svg>
