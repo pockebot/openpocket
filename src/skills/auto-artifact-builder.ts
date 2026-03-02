@@ -86,6 +86,12 @@ function actionSummary(action: AgentAction): string {
   if (action.type === "swipe") {
     return `swipe(${Math.round(action.x1)}, ${Math.round(action.y1)} -> ${Math.round(action.x2)}, ${Math.round(action.y2)})`;
   }
+  if (action.type === "drag") {
+    return `drag(${Math.round(action.x1)}, ${Math.round(action.y1)} -> ${Math.round(action.x2)}, ${Math.round(action.y2)})`;
+  }
+  if (action.type === "long_press_drag") {
+    return `long_press_drag(${Math.round(action.x1)}, ${Math.round(action.y1)} -> ${Math.round(action.x2)}, ${Math.round(action.y2)})`;
+  }
   if (action.type === "type") {
     return `type(${JSON.stringify(compactText(action.text, 72))})`;
   }
@@ -388,6 +394,18 @@ export class AutoArtifactBuilder {
         useful = true;
         lines.push(
           `adb -s "${'${DEVICE}'}" shell input swipe ${Math.round(action.x1)} ${Math.round(action.y1)} ${Math.round(action.x2)} ${Math.round(action.y2)} ${Math.max(100, Math.round(action.durationMs ?? 300))}`,
+        );
+      } else if (action.type === "drag") {
+        useful = true;
+        lines.push(
+          `adb -s "${'${DEVICE}'}" shell input swipe ${Math.round(action.x1)} ${Math.round(action.y1)} ${Math.round(action.x2)} ${Math.round(action.y2)} ${Math.max(100, Math.round(action.durationMs ?? 360))}`,
+        );
+      } else if (action.type === "long_press_drag") {
+        useful = true;
+        const holdMs = Math.max(120, Math.round(action.holdMs ?? 450));
+        const moveDurationMs = Math.max(100, Math.round(action.durationMs ?? 300));
+        lines.push(
+          `adb -s "${'${DEVICE}'}" shell input swipe ${Math.round(action.x1)} ${Math.round(action.y1)} ${Math.round(action.x2)} ${Math.round(action.y2)} ${holdMs + moveDurationMs}`,
         );
       } else if (action.type === "type") {
         useful = true;

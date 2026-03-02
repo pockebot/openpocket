@@ -111,7 +111,7 @@ export async function drawDebugMarker(
             stroke="red" stroke-width="2"/>
     </svg>`;
   } else if (
-    action.type === "swipe" &&
+    (action.type === "swipe" || action.type === "drag" || action.type === "long_press_drag") &&
     action.x1 != null && action.y1 != null &&
     action.x2 != null && action.y2 != null
   ) {

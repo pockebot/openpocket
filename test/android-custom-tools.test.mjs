@@ -50,6 +50,14 @@ test("createAndroidCustomTools routes calls through AdbRuntime and triggers stat
     thought: "type test",
     text: "hello",
   });
+  const dragResult = await toolByName(tools, "drag").execute("t2.5", {
+    thought: "drag test",
+    x1: 200,
+    y1: 300,
+    x2: 500,
+    y2: 800,
+    durationMs: 450,
+  });
   const shellResult = await toolByName(tools, "shell").execute("t3", {
     thought: "shell test",
     command: "echo hello && echo world",
@@ -59,19 +67,22 @@ test("createAndroidCustomTools routes calls through AdbRuntime and triggers stat
   assert.equal(tapResult.details.ok, true);
   assert.match(tapResult.content[0].text, /ok:tap/);
   assert.equal(typeResult.details.actionType, "type");
+  assert.equal(dragResult.details.actionType, "drag");
   assert.equal(shellResult.details.actionType, "shell");
 
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   assert.equal(calls[0].action.type, "tap");
   assert.equal(calls[1].action.type, "type");
-  assert.equal(calls[2].action.type, "shell");
-  assert.equal(calls[2].action.useShellWrap, true);
-  assert.equal(calls[2].preferredDeviceId, "emulator-5554");
+  assert.equal(calls[2].action.type, "drag");
+  assert.equal(calls[3].action.type, "shell");
+  assert.equal(calls[3].action.useShellWrap, true);
+  assert.equal(calls[3].preferredDeviceId, "emulator-5554");
 
-  assert.equal(stateChanges.length, 3);
+  assert.equal(stateChanges.length, 4);
   assert.equal(stateChanges[0].action.type, "tap");
-  assert.equal(stateChanges[2].action.type, "shell");
-  assert.equal(stateChanges[2].output, "ok:shell");
+  assert.equal(stateChanges[2].action.type, "drag");
+  assert.equal(stateChanges[3].action.type, "shell");
+  assert.equal(stateChanges[3].output, "ok:shell");
 });
 
 test("createAndroidCustomTools normalizes error result surface", async () => {

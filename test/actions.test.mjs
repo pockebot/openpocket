@@ -9,7 +9,7 @@ test("normalizeAction handles invalid payload", () => {
   assert.match(out.reason, /invalid action payload/);
 });
 
-test("normalizeAction converts numeric fields for tap/swipe", () => {
+test("normalizeAction converts numeric fields for tap/swipe/drag/long_press_drag", () => {
   const tap = normalizeAction({ type: "tap", x: "12", y: "34" });
   assert.deepEqual(tap, { type: "tap", x: 12, y: 34, reason: undefined });
 
@@ -23,6 +23,30 @@ test("normalizeAction converts numeric fields for tap/swipe", () => {
   });
   assert.equal(swipe.type, "swipe");
   assert.equal(swipe.durationMs, 500);
+
+  const drag = normalizeAction({
+    type: "drag",
+    x1: "11",
+    y1: "22",
+    x2: "33",
+    y2: "44",
+    durationMs: "480",
+  });
+  assert.equal(drag.type, "drag");
+  assert.equal(drag.durationMs, 480);
+
+  const longPressDrag = normalizeAction({
+    type: "long_press_drag",
+    x1: "10",
+    y1: "20",
+    x2: "30",
+    y2: "40",
+    holdMs: "700",
+    durationMs: "260",
+  });
+  assert.equal(longPressDrag.type, "long_press_drag");
+  assert.equal(longPressDrag.holdMs, 700);
+  assert.equal(longPressDrag.durationMs, 260);
 });
 
 test("normalizeAction sets defaults for run_script and finish", () => {
@@ -121,13 +145,15 @@ test("normalizeAction supports batch_actions", () => {
     type: "batch_actions",
     actions: [
       { type: "tap", x: "12", y: "24" },
+      { type: "drag", x1: "12", y1: "24", x2: "30", y2: "40", durationMs: "420" },
       { type: "type_text", text: "hello" },
       { type: "wait", durationMs: "250" },
     ],
   });
   assert.equal(batch.type, "batch_actions");
-  assert.equal(batch.actions.length, 3);
+  assert.equal(batch.actions.length, 4);
   assert.deepEqual(batch.actions[0], { type: "tap", x: 12, y: 24, reason: undefined });
-  assert.deepEqual(batch.actions[1], { type: "type", text: "hello", reason: undefined });
-  assert.deepEqual(batch.actions[2], { type: "wait", durationMs: 250, reason: undefined });
+  assert.deepEqual(batch.actions[1], { type: "drag", x1: 12, y1: 24, x2: 30, y2: 40, durationMs: 420, reason: undefined });
+  assert.deepEqual(batch.actions[2], { type: "type", text: "hello", reason: undefined });
+  assert.deepEqual(batch.actions[3], { type: "wait", durationMs: 250, reason: undefined });
 });

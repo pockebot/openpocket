@@ -5,7 +5,9 @@ import type { Static } from "@sinclair/typebox";
 import type { AdbRuntime } from "../device/adb-runtime.js";
 import type { AgentAction } from "../types.js";
 import {
+  dragSchema,
   keyeventSchema,
+  longPressDragSchema,
   launchAppSchema,
   shellSchema,
   swipeSchema,
@@ -16,6 +18,8 @@ import {
 export const ANDROID_CUSTOM_TOOL_NAMES = [
   "tap",
   "swipe",
+  "drag",
+  "long_press_drag",
   "type_text",
   "keyevent",
   "launch_app",
@@ -23,13 +27,15 @@ export const ANDROID_CUSTOM_TOOL_NAMES = [
 ] as const;
 
 type AndroidCustomToolName = (typeof ANDROID_CUSTOM_TOOL_NAMES)[number];
-type AndroidActionType = Extract<AgentAction["type"], "tap" | "swipe" | "type" | "keyevent" | "launch_app" | "shell">;
+type AndroidActionType = Extract<AgentAction["type"], "tap" | "swipe" | "drag" | "long_press_drag" | "type" | "keyevent" | "launch_app" | "shell">;
 
 type AndroidAction = Extract<AgentAction, { type: AndroidActionType }>;
 
 const STATE_CHANGING_ANDROID_ACTIONS = new Set<AndroidActionType>([
   "tap",
   "swipe",
+  "drag",
+  "long_press_drag",
   "type",
   "keyevent",
   "launch_app",
@@ -141,6 +147,41 @@ export function createAndroidCustomTools(
           y1: params.y1,
           x2: params.x2,
           y2: params.y2,
+          durationMs: params.durationMs,
+          reason: params.reason,
+        });
+      },
+    },
+    {
+      name: "drag",
+      label: "drag",
+      description: "Drag from (x1, y1) to (x2, y2) on the Android screen.",
+      parameters: dragSchema,
+      execute: async (_toolCallId: string, params: Static<typeof dragSchema>) => {
+        return executeAndroidAction(options, {
+          type: "drag",
+          x1: params.x1,
+          y1: params.y1,
+          x2: params.x2,
+          y2: params.y2,
+          durationMs: params.durationMs,
+          reason: params.reason,
+        });
+      },
+    },
+    {
+      name: "long_press_drag",
+      label: "long_press_drag",
+      description: "Long-press at start point, then drag to target point.",
+      parameters: longPressDragSchema,
+      execute: async (_toolCallId: string, params: Static<typeof longPressDragSchema>) => {
+        return executeAndroidAction(options, {
+          type: "long_press_drag",
+          x1: params.x1,
+          y1: params.y1,
+          x2: params.x2,
+          y2: params.y2,
+          holdMs: params.holdMs,
           durationMs: params.durationMs,
           reason: params.reason,
         });
