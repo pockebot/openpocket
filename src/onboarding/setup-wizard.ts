@@ -279,6 +279,12 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   if (profileKey === "google/gemini-2.0-flash") {
     return "Gemini 2.0 Flash (Google AI Studio)";
   }
+  if (profileKey === "google/gemini-3-pro-preview") {
+    return "Gemini 3 Pro Preview (Google AI Studio)";
+  }
+  if (profileKey === "google/gemini-3.1-pro-preview") {
+    return "Gemini 3.1 Pro Preview (Google AI Studio)";
+  }
   if (profileKey === "autoglm-phone") {
     return "AutoGLM Phone (Z.ai)";
   }

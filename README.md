@@ -599,7 +599,7 @@ OpenPocket supports multiple AI model providers through OpenAI-compatible and na
 **OpenRouter** - Multi-provider routing for Claude models (claude-sonnet-4.6, claude-opus-4.6)
 
 **Google AI Studio** - Direct Gemini access with AI Studio API keys
-- Model ID: `google/gemini-2.0-flash`
+- Model IDs: `google/gemini-2.0-flash`, `google/gemini-3-pro-preview`, `google/gemini-3.1-pro-preview`
 - Environment variable: `GEMINI_API_KEY`
 
 **BlockRun** - Pay-per-request micropayments with no subscriptions
