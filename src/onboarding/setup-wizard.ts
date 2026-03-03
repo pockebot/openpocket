@@ -216,7 +216,7 @@ function providerFromBaseUrl(baseUrl: string): string {
   if (lower.includes("dashscope.aliyuncs.com")) {
     return "Qwen (DashScope)";
   }
-  if (lower.includes("api.minimax.io")) {
+  if (lower.includes("api.minimax.io") || lower.includes("api.minimaxi.com")) {
     return "MiniMax";
   }
   if (lower.includes("volces.com") || lower.includes("volcengine.com")) {

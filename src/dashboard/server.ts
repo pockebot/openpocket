@@ -4114,7 +4114,7 @@ export class DashboardServer {
       if (text.includes("googleapis.com")) return "Google";
       if (text.includes("api.deepseek.com")) return "DeepSeek";
       if (text.includes("dashscope.aliyuncs.com")) return "Qwen (DashScope)";
-      if (text.includes("api.minimax.io")) return "MiniMax";
+      if (text.includes("api.minimax.io") || text.includes("api.minimaxi.com")) return "MiniMax";
       if (text.includes("volces.com") || text.includes("volcengine.com")) return "Volcano Engine";
       if (text.includes("bytepluses.com")) return "BytePlus";
       try { return new URL(baseUrl).host || "custom"; } catch { return "custom"; }
