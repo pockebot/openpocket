@@ -57,7 +57,7 @@ test("SkillLoader prefers bundled skills over workspace/local when skill IDs col
   assert.match(skill?.path || "", /skills[\\/]human-auth-location[\\/]SKILL\.md$/i);
 });
 
-test("SkillLoader exposes skill index and leaves active skill prompt empty", () => {
+test("SkillLoader auto-loads matching skill content for active task context", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-active-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -85,12 +85,13 @@ test("SkillLoader exposes skill index and leaves active skill prompt empty", () 
   );
 
   assert.match(context.summaryText, /PayByPhone Nearest Flow/);
-  assert.equal(context.activeEntries.length, 0);
-  assert.equal(context.activePromptText, "");
-  assert.equal(context.activePromptChars, 0);
+  assert.equal(context.activeEntries.length > 0, true);
+  assert.match(context.activePromptText, /PayByPhone Nearest Flow/);
+  assert.match(context.activePromptText, /<active_skill /);
+  assert.equal(context.activePromptChars > 0, true);
 });
 
-test("SkillLoader keeps tricky skill names in summary index without auto-loading body", () => {
+test("SkillLoader honors explicit metadata trigger phrases for active loading", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-escape-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -127,8 +128,9 @@ test("SkillLoader keeps tricky skill names in summary index without auto-loading
   );
 
   assert.match(context.summaryText, /Skill <A&B>/);
-  assert.equal(context.activeEntries.length, 0);
-  assert.equal(context.activePromptText, "");
+  assert.equal(context.activeEntries.length, 1);
+  assert.match(context.activePromptText, /trigger:/);
+  assert.match(context.activePromptText, /Test content body/);
 });
 
 test("SkillLoader supports SKILL.md directory layout and metadata gating", () => {
@@ -206,5 +208,6 @@ test("SkillLoader lists all discovered skills in summary regardless task text", 
 
   assert.match(context.summaryText, /X Twitter Login Recovery/);
   assert.match(context.summaryText, /Generic Login/);
-  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activeEntries.length > 0, true);
+  assert.match(context.activePromptText, /X Twitter Login Recovery/);
 });

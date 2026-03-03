@@ -1,6 +1,7 @@
 ---
 name: clash-of-clans-play
 description: Play Clash of Clans on mobile with autonomous tactical decisions. Use when the user asks to attack, farm resources, push trophies/rank, run Builder Base attacks, collect rewards, or manage daily village upgrades in Clash of Clans.
+metadata: {"openclaw":{"triggers":{"any":["clash of clans","clash of clan","coc","supercell clash","com.supercell.clashofclans"]}}}
 ---
 
 # Clash of Clans Play
@@ -91,11 +92,15 @@ Do **not** rely on one `long_press_drag` to deploy the full stack. In this runti
 ## Daily Management Workflow
 
 1. Collect resources and free rewards (chest/events/season UI if visible).
-2. Keep builders and laboratory busy (no idle builder/lab time unless user requests save strategy).
-3. Prioritize upgrades by user goal:
+2. Treat red notification dots/badges as actionable backlog:
+- Prioritize tapping red-dot entry points first (events, tasks, inbox, achievements, shop freebies, reward tracks).
+- Clear low-risk claim actions before starting long actions so progression is not blocked by pending prompts.
+- If multiple red-dot targets exist, prefer: `time-limited rewards` -> `builder/lab idle fixes` -> `routine claims`.
+3. Keep builders and laboratory busy (no idle builder/lab time unless user requests save strategy).
+4. Prioritize upgrades by user goal:
 - `push`: offense first (army camps, key troops/spells/heroes, key offensive buildings).
 - `farm`: economy plus efficient offense upgrades.
-4. Train/queue army only if the current game version still requires it for the chosen mode.
+5. Train/queue army only if the current game version still requires it for the chosen mode.
 
 ## Hard Guardrails
 

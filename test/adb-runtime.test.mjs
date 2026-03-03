@@ -26,6 +26,23 @@ function makeUiDumpXml(label = "Open") {
 </hierarchy>`;
 }
 
+function makeFullscreenStageUiDumpXml() {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node
+    index="0"
+    text=""
+    resource-id="com.supercell.clashofclans:id/stage"
+    class="android.view.SurfaceView"
+    package="com.supercell.clashofclans"
+    content-desc=""
+    clickable="false"
+    enabled="true"
+    focusable="false"
+    bounds="[0,0][1920,1080]" />
+</hierarchy>`;
+}
+
 function makeConfig() {
   return {
     agent: {
@@ -778,6 +795,28 @@ test("captureScreenSnapshot uses screenshot dimensions as source resolution in l
   assert.equal(snapshot.scaledHeight, 768);
   assert.equal(snapshot.scaleX > 1, true);
   assert.equal(snapshot.scaleY > 1, true);
+});
+
+test("captureScreenSnapshot drops low-value fullscreen game stage nodes and skips SoM overlay", async () => {
+  const screenshotBuffer = await sharp({
+    create: {
+      width: 1920,
+      height: 1080,
+      channels: 3,
+      background: { r: 20, g: 24, b: 30 },
+    },
+  }).png().toBuffer();
+  const emulator = new FakeEmulator({
+    screenshotBuffer,
+    uiDumpXml: makeFullscreenStageUiDumpXml(),
+    currentApp: "com.supercell.clashofclans",
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const snapshot = await runtime.captureScreenSnapshot();
+  assert.equal(snapshot.uiElements.length, 0);
+  assert.equal(snapshot.somScreenshotBase64, null);
+  assert.equal(snapshot.captureMetrics?.overlayMs, 0);
 });
 
 test("captureScreenSnapshot caches stable UI dumps and forces periodic refresh", async () => {

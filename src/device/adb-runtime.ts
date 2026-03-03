@@ -135,6 +135,36 @@ function uiNodeScore(node: {
   return score;
 }
 
+function isLikelyLowValueFullscreenSurface(
+  node: UiElementSnapshot,
+  scaledWidth: number,
+  scaledHeight: number,
+): boolean {
+  const classLower = String(node.className || "").toLowerCase();
+  const isSurfaceClass =
+    classLower.includes("surfaceview")
+    || classLower.includes("textureview")
+    || classLower.includes("glsurfaceview")
+    || classLower === "android.view.view";
+  if (!isSurfaceClass) {
+    return false;
+  }
+  if (node.clickable || node.text.trim() || node.contentDesc.trim()) {
+    return false;
+  }
+  const bounds = node.scaledBounds;
+  const width = Math.max(1, bounds.right - bounds.left);
+  const height = Math.max(1, bounds.bottom - bounds.top);
+  const areaRatio = (width * height) / Math.max(1, scaledWidth * scaledHeight);
+  const nearFullscreen =
+    bounds.left <= 2
+    && bounds.top <= 2
+    && bounds.right >= scaledWidth - 3
+    && bounds.bottom >= scaledHeight - 3;
+  const stageHint = String(node.resourceId || "").toLowerCase().includes(":id/stage");
+  return areaRatio >= 0.9 && (nearFullscreen || stageHint);
+}
+
 function encodeInputText(text: string): string {
   // Escape device-shell metacharacters before passing the value to
   // `adb shell input text ...`, then normalize spaces/newlines for input parser.
@@ -380,6 +410,7 @@ const UI_DUMP_TIMEOUT_MS = 12_000;
 const UI_DUMP_CACHE_MAX_AGE_MS = 15_000;
 const UI_DUMP_CACHE_MAX_REUSE = 1;
 const UI_DUMP_MAX_HASH_DISTANCE = 4;
+const UI_NODE_MIN_SCORE = 4;
 const VISUAL_HASH_BITS = 64;
 const VISUAL_HASH_GRID_WIDTH = 9;
 const VISUAL_HASH_COMPARE_WIDTH = 8;
@@ -1094,15 +1125,21 @@ export class AdbRuntime {
     metrics.uiElementsSource = uiElementsSource;
     metrics.uiElementsCount = uiElements.length;
 
-    const overlayStartMs = Date.now();
-    const somBuffer = await drawSetOfMarkOverlay(
-      scaled.data,
-      uiElements.map((item) => ({
-        id: item.id,
-        bounds: item.scaledBounds,
-      })),
-    );
-    metrics.overlayMs = Date.now() - overlayStartMs;
+    let somScreenshotBase64: string | null = null;
+    if (uiElements.length > 0) {
+      const overlayStartMs = Date.now();
+      const somBuffer = await drawSetOfMarkOverlay(
+        scaled.data,
+        uiElements.map((item) => ({
+          id: item.id,
+          bounds: item.scaledBounds,
+        })),
+      );
+      metrics.overlayMs = Date.now() - overlayStartMs;
+      somScreenshotBase64 = somBuffer.toString("base64");
+    } else {
+      metrics.overlayMs = 0;
+    }
     metrics.totalMs = Date.now() - captureStartedAtMs;
 
     return {
@@ -1111,7 +1148,7 @@ export class AdbRuntime {
       width,
       height,
       screenshotBase64: scaled.data.toString("base64"),
-      somScreenshotBase64: somBuffer.toString("base64"),
+      somScreenshotBase64,
       capturedAt: nowIso(),
       scaleX: scaled.scaleX,
       scaleY: scaled.scaleY,
@@ -1166,7 +1203,7 @@ export class AdbRuntime {
     const xml = raw.slice(xmlStart);
     const parsed = parseUiXmlNodes(xml)
       .map((node) => ({ node, score: uiNodeScore(node) }))
-      .filter(({ score }) => score > 0)
+      .filter(({ score }) => score >= UI_NODE_MIN_SCORE)
       .sort((a, b) => b.score - a.score)
       .slice(0, 28);
 
@@ -1201,7 +1238,13 @@ export class AdbRuntime {
         scaledCenter: { x: scaledCenterX, y: scaledCenterY },
       };
     });
-    return { uiElements: mapped, failed: false, timedOut };
+    const filtered = mapped
+      .filter((item) => !isLikelyLowValueFullscreenSurface(item, scaledWidth, scaledHeight))
+      .map((item, index) => ({
+        ...item,
+        id: String(index + 1),
+      }));
+    return { uiElements: filtered, failed: false, timedOut };
   }
 
   async executeAction(action: AgentAction, preferred?: string | null): Promise<string> {

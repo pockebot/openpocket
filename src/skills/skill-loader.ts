@@ -16,6 +16,32 @@ const SOURCE_PRIORITY: Record<SkillInfo["source"], number> = {
 };
 
 const DEFAULT_SUMMARY_ITEMS = 20;
+const DEFAULT_MAX_ACTIVE_SKILLS = 2;
+const DEFAULT_MAX_ACTIVE_SKILL_CHARS = 4_000;
+const DEFAULT_MAX_ACTIVE_TOTAL_CHARS = 7_500;
+const ACTIVE_SKILL_MIN_SCORE = 6;
+
+const SKILL_MATCH_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "app",
+  "for",
+  "flow",
+  "from",
+  "help",
+  "in",
+  "into",
+  "of",
+  "on",
+  "or",
+  "play",
+  "skill",
+  "the",
+  "to",
+  "use",
+  "with",
+]);
 
 export interface LoadedSkill extends SkillInfo {
   content: string;
@@ -330,6 +356,153 @@ function formatSummaryLine(skill: SkillInfo): string {
   return `- name="${skill.name}" source="${skill.source}" location="${skill.path}" description="${skill.description.replace(/"/g, "'")}"`;
 }
 
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function normalizeForMatch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeToken(token: string): string {
+  const normalized = token.toLowerCase().trim();
+  if (normalized.length > 4 && normalized.endsWith("s")) {
+    return normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+function extractKeywords(value: string): string[] {
+  const normalized = normalizeForMatch(value);
+  if (!normalized) {
+    return [];
+  }
+  const out = new Set<string>();
+  for (const raw of normalized.split(" ")) {
+    const token = normalizeToken(raw);
+    if (token.length < 3) {
+      continue;
+    }
+    if (SKILL_MATCH_STOPWORDS.has(token)) {
+      continue;
+    }
+    out.add(token);
+  }
+  return [...out];
+}
+
+function parseTriggerPhrases(metadata: Record<string, unknown> | null): string[] {
+  const openclawRaw = metadata?.openclaw;
+  const openclaw = openclawRaw && typeof openclawRaw === "object" && !Array.isArray(openclawRaw)
+    ? openclawRaw as Record<string, unknown>
+    : null;
+  const triggersRaw = openclaw?.triggers;
+  const triggers = triggersRaw && typeof triggersRaw === "object" && !Array.isArray(triggersRaw)
+    ? triggersRaw as Record<string, unknown>
+    : null;
+  const phrases = [
+    ...toStringArray(triggers?.any),
+    ...toStringArray(triggers?.all),
+  ]
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return [...new Set(phrases)];
+}
+
+type SkillTaskScore = {
+  skill: LoadedSkill;
+  score: number;
+  reason: string;
+};
+
+function scoreSkillForTask(skill: LoadedSkill, task: string): SkillTaskScore {
+  const normalizedTask = normalizeForMatch(task);
+  if (!normalizedTask) {
+    return { skill, score: 0, reason: "no task text" };
+  }
+  const taskTokens = new Set(
+    extractKeywords(normalizedTask).map((token) => normalizeToken(token)),
+  );
+
+  let score = 0;
+  const reasonBits: string[] = [];
+  const isHumanAuthSkill = skill.id.startsWith("human-auth-");
+
+  for (const phrase of parseTriggerPhrases(skill.metadata)) {
+    const normalizedPhrase = normalizeForMatch(phrase);
+    if (!normalizedPhrase) {
+      continue;
+    }
+    if (normalizedTask.includes(normalizedPhrase)) {
+      const phraseWordCount = normalizedPhrase.split(" ").filter(Boolean).length;
+      score += phraseWordCount >= 2 ? 10 : 4;
+      reasonBits.push(`trigger:"${phrase}"`);
+    }
+  }
+
+  const signatureKeywords = [
+    ...extractKeywords(skill.id),
+    ...extractKeywords(skill.name),
+    ...extractKeywords(skill.description),
+  ];
+  const uniqueSignature = [...new Set(signatureKeywords.map((token) => normalizeToken(token)))];
+  const matchedSignature = uniqueSignature.filter((token) => taskTokens.has(token));
+  if (matchedSignature.length > 0) {
+    score += matchedSignature.length * 2;
+    reasonBits.push(`keyword:${matchedSignature.slice(0, 4).join(",")}`);
+  }
+
+  const nameKeywords = extractKeywords(`${skill.id} ${skill.name}`).map((token) => normalizeToken(token));
+  const uniqueNameKeywords = [...new Set(nameKeywords)];
+  if (uniqueNameKeywords.length > 0) {
+    const matchedName = uniqueNameKeywords.filter((token) => taskTokens.has(token));
+    if (matchedName.length === uniqueNameKeywords.length) {
+      score += 4;
+      reasonBits.push("all-name-keywords");
+    }
+  }
+
+  if (isHumanAuthSkill) {
+    const humanAuthIntent = /request human auth|human auth|human phone|oauth|login|password|passkey|otp|2fa|sms|payment|card|biometric|camera|photo|microphone|nfc|contacts|calendar|files|permission|gps/.test(normalizedTask);
+    if (!humanAuthIntent) {
+      score -= 6;
+      reasonBits.push("human-auth-penalty");
+    }
+  }
+
+  return {
+    skill,
+    score,
+    reason: reasonBits.join("; ") || "weak match",
+  };
+}
+
+function formatActiveSkillBlock(
+  skill: LoadedSkill,
+  reason: string,
+  score: number,
+  content: string,
+): string {
+  const safeName = escapeAttr(skill.name);
+  const safeSource = escapeAttr(skill.source);
+  const safePath = escapeAttr(skill.path);
+  const safeReason = escapeAttr(reason);
+  const safeScore = Number.isFinite(score) ? score.toFixed(2) : "0.00";
+  return [
+    `<active_skill name="${safeName}" source="${safeSource}" location="${safePath}" score="${safeScore}" reason="${safeReason}">`,
+    content.trim(),
+    "</active_skill>",
+  ].join("\n");
+}
+
 export class SkillLoader {
   private readonly config: OpenPocketConfig;
 
@@ -445,10 +618,6 @@ export class SkillLoader {
       maxActiveTotalChars?: number;
     },
   ): SkillPromptContext {
-    void task;
-    void options?.maxActiveSkills;
-    void options?.maxActiveSkillChars;
-    void options?.maxActiveTotalChars;
     const allSkills = this.loadDetailedAll();
     const requestedSummaryItems = options?.maxSummaryItems;
     const maxSummaryItems = Number.isFinite(requestedSummaryItems)
@@ -475,8 +644,69 @@ export class SkillLoader {
     const summaryText = summaryEntries.length > 0
       ? summaryEntries.map((entry) => entry.line).join("\n")
       : "(no skills loaded)";
+    const requestedActiveSkills = options?.maxActiveSkills;
+    const maxActiveSkills = Number.isFinite(requestedActiveSkills)
+      ? Math.max(0, Math.round(Number(requestedActiveSkills)))
+      : DEFAULT_MAX_ACTIVE_SKILLS;
+    const requestedPerSkillChars = options?.maxActiveSkillChars;
+    const maxActiveSkillChars = Number.isFinite(requestedPerSkillChars)
+      ? Math.max(200, Math.round(Number(requestedPerSkillChars)))
+      : DEFAULT_MAX_ACTIVE_SKILL_CHARS;
+    const requestedTotalChars = options?.maxActiveTotalChars;
+    const maxActiveTotalChars = Number.isFinite(requestedTotalChars)
+      ? Math.max(400, Math.round(Number(requestedTotalChars)))
+      : DEFAULT_MAX_ACTIVE_TOTAL_CHARS;
+
+    const scored = allSkills
+      .map((skill) => scoreSkillForTask(skill, task))
+      .filter((entry) => entry.score >= ACTIVE_SKILL_MIN_SCORE)
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        const sourceDelta = SOURCE_PRIORITY[a.skill.source] - SOURCE_PRIORITY[b.skill.source];
+        if (sourceDelta !== 0) {
+          return sourceDelta;
+        }
+        return a.skill.name.localeCompare(b.skill.name);
+      })
+      .slice(0, maxActiveSkills);
+
     const activeEntries: ActiveSkillPromptEntry[] = [];
-    const activePromptText = "";
+    const activeBlocks: string[] = [];
+    let usedChars = 0;
+
+    for (const scoredSkill of scored) {
+      const remainingChars = maxActiveTotalChars - usedChars;
+      if (remainingChars <= 0) {
+        break;
+      }
+      const allowedChars = Math.max(200, Math.min(maxActiveSkillChars, remainingChars));
+      const fullContent = scoredSkill.skill.content.trim();
+      const truncated = fullContent.length > allowedChars;
+      const content = truncated
+        ? `${fullContent.slice(0, Math.max(0, allowedChars - 26)).trimEnd()}\n...[truncated by skill-loader]`
+        : fullContent;
+      const block = formatActiveSkillBlock(scoredSkill.skill, scoredSkill.reason, scoredSkill.score, content);
+
+      activeEntries.push({
+        skill: {
+          id: scoredSkill.skill.id,
+          name: scoredSkill.skill.name,
+          description: scoredSkill.skill.description,
+          source: scoredSkill.skill.source,
+          path: scoredSkill.skill.path,
+        },
+        reason: scoredSkill.reason,
+        score: scoredSkill.score,
+        contentChars: content.length,
+        truncated,
+      });
+      activeBlocks.push(block);
+      usedChars += block.length;
+    }
+
+    const activePromptText = activeBlocks.join("\n\n");
 
     return {
       summaryText,
