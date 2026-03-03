@@ -4344,6 +4344,8 @@ export class DashboardServer {
       padding: 14px;
       display: grid;
       gap: 10px;
+      min-width: 0;
+      overflow: hidden;
     }
     .step.error { border-left-color: var(--err); }
     .step-head {
