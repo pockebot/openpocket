@@ -42,6 +42,7 @@ export class LocalHumanAuthStack {
         apiKeyEnv: this.config.humanAuth.apiKeyEnv,
         stateFile: this.config.humanAuth.localRelayStateFile,
         takeoverRuntime: new LocalHumanAuthTakeoverRuntime(this.config),
+        logger: this.log,
       });
       await this.relay.start();
 
@@ -49,7 +50,7 @@ export class LocalHumanAuthStack {
       if (!relayBaseUrl) {
         throw new Error("Failed to obtain local human-auth relay address.");
       }
-      this.log(`[OpenPocket][human-auth] local relay started at ${relayBaseUrl}`);
+      this.log(`[OpenPocket][human-auth][info] local relay started at ${relayBaseUrl}`);
 
       let publicBaseUrl = this.config.humanAuth.publicBaseUrl.trim().replace(/\/+$/, "");
       const tunnelProvider = this.config.humanAuth.tunnel.provider;
@@ -58,7 +59,7 @@ export class LocalHumanAuthStack {
       if (ngrokEnabled) {
         this.ngrok = new NgrokTunnel(this.config.humanAuth.tunnel.ngrok, relayBaseUrl, this.log);
         publicBaseUrl = await this.ngrok.start();
-        this.log(`[OpenPocket][human-auth] ngrok tunnel url=${publicBaseUrl}`);
+        this.log(`[OpenPocket][human-auth][info] ngrok tunnel url=${publicBaseUrl}`);
       }
 
       if (!publicBaseUrl) {

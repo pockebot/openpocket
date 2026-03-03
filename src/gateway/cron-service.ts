@@ -97,7 +97,7 @@ export class CronService {
       this.tick();
     }, this.config.cron.tickSec * 1000);
     this.deps.log(
-      `[OpenPocket][cron] ${new Date().toISOString()} started tickSec=${this.config.cron.tickSec} jobsFile=${this.config.cron.jobsFile}`,
+      `[OpenPocket][cron][info] ${new Date().toISOString()} started tickSec=${this.config.cron.tickSec} jobsFile=${this.config.cron.jobsFile}`,
     );
   }
 
@@ -107,7 +107,7 @@ export class CronService {
     }
     this.deps.clearIntervalFn(this.timer);
     this.timer = null;
-    this.deps.log(`[OpenPocket][cron] ${new Date().toISOString()} stopped`);
+    this.deps.log(`[OpenPocket][cron][info] ${new Date().toISOString()} stopped`);
   }
 
   runNow(jobId: string): Promise<boolean> {
@@ -158,8 +158,11 @@ export class CronService {
     state.jobs[job.id] = jobState;
     this.saveState(state);
 
+    const taskPart = this.config.gatewayLogging.includePayloads
+      ? ` task=${JSON.stringify(this.previewPayload(job.task, 120))}`
+      : "";
     this.deps.log(
-      `[OpenPocket][cron] ${new Date().toISOString()} run job=${job.id} everySec=${job.everySec} task=${JSON.stringify(job.task)}`,
+      `[OpenPocket][cron][debug] ${new Date().toISOString()} run job=${job.id} everySec=${job.everySec}${taskPart}`,
     );
 
     try {
@@ -176,8 +179,12 @@ export class CronService {
       updated.lastMessage = result.message.slice(0, 500);
       nextState.jobs[job.id] = updated;
       this.saveState(nextState);
+      const messagePart = this.config.gatewayLogging.includePayloads
+        ? ` message=${JSON.stringify(this.previewPayload(result.message, 120))}`
+        : "";
+      const level = result.accepted && result.ok ? "debug" : "warn";
       this.deps.log(
-        `[OpenPocket][cron] ${new Date().toISOString()} result job=${job.id} accepted=${result.accepted} ok=${result.ok} message=${JSON.stringify(result.message)}`,
+        `[OpenPocket][cron][${level}] ${new Date().toISOString()} result job=${job.id} accepted=${result.accepted} ok=${result.ok}${messagePart}`,
       );
     } catch (error) {
       const nextState = this.loadState();
@@ -188,7 +195,7 @@ export class CronService {
       nextState.jobs[job.id] = updated;
       this.saveState(nextState);
       this.deps.log(
-        `[OpenPocket][cron] ${new Date().toISOString()} failed job=${job.id} error=${(error as Error).message}`,
+        `[OpenPocket][cron][error] ${new Date().toISOString()} failed job=${job.id} error=${(error as Error).message}`,
       );
     } finally {
       this.inFlightJobs.delete(job.id);
@@ -212,10 +219,18 @@ export class CronService {
       return jobs;
     } catch (error) {
       this.deps.log(
-        `[OpenPocket][cron] ${new Date().toISOString()} invalid jobs file error=${(error as Error).message}`,
+        `[OpenPocket][cron][error] ${new Date().toISOString()} invalid jobs file error=${(error as Error).message}`,
       );
       return [];
     }
+  }
+
+  private previewPayload(value: string, maxChars: number): string {
+    const compact = String(value || "").replace(/\s+/g, " ").trim();
+    if (compact.length <= maxChars) {
+      return compact;
+    }
+    return `${compact.slice(0, Math.max(0, maxChars - 3))}...`;
   }
 
   private loadState(): CronStateFile {

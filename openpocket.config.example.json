@@ -129,6 +129,21 @@
     "port": 51888,
     "autoOpenBrowser": false
   },
+  "gatewayLogging": {
+    "level": "info",
+    "includePayloads": false,
+    "maxPayloadChars": 160,
+    "modules": {
+      "core": true,
+      "access": true,
+      "task": true,
+      "channel": true,
+      "cron": true,
+      "heartbeat": false,
+      "humanAuth": true,
+      "chat": false
+    }
+  },
   "humanAuth": {
     "enabled": false,
     "useLocalRelay": true,

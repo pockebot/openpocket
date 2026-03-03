@@ -15,6 +15,7 @@ import { EmulatorManager } from "./device/emulator-manager.js";
 import { TelegramGateway } from "./gateway/telegram-gateway.js";
 import { createGateway } from "./gateway/gateway-factory.js";
 import type { GatewayCore } from "./gateway/gateway-core.js";
+import { createGatewayLogEmitter } from "./gateway/logging.js";
 import { runGatewayLoop } from "./gateway/run-loop.js";
 import { DashboardServer, type DashboardGatewayStatus } from "./dashboard/server.js";
 import { HumanAuthBridge } from "./human-auth/bridge.js";
@@ -78,17 +79,7 @@ function printStep(step: number, total: number, title: string, status: CliStepSt
   printRaw(cliTheme.step(step, total, title, status, detail));
 }
 
-function shouldSuppressRuntimeLine(line: string): boolean {
-  const normalized = line.toLowerCase();
-  const isHeartbeat = normalized.includes("[heartbeat]");
-  const isWarning = normalized.includes("[warn]");
-  return isHeartbeat && !isWarning;
-}
-
 function printRuntimeLine(line: string): void {
-  if (shouldSuppressRuntimeLine(line)) {
-    return;
-  }
   printRaw(cliTheme.classifyRuntimeLine(line));
 }
 
@@ -1102,12 +1093,21 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
     printStep(step, total, title, status, detail);
   };
 
+  let loopLogLine = (line: string) => {
+    printRuntimeLine(line);
+  };
+
   await runGatewayLoop({
     log: (line) => {
-      printRuntimeLine(line);
+      loopLogLine(line);
     },
     start: async () => {
       let cfg = loadConfig(configPath);
+      loopLogLine = createGatewayLogEmitter(cfg, [
+        (line) => {
+          printRuntimeLine(line);
+        },
+      ]);
       const shortcut = installCliShortcut();
       const tgCfg = cfg.channels?.telegram;
       const envName = tgCfg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
@@ -3078,7 +3078,9 @@ async function runPermissionLabScenario(params: {
 
   const permissionLab = new PermissionLabManager(runtimeConfig);
   const agent = new AgentRuntime(runtimeConfig);
-  const humanAuth = new HumanAuthBridge(runtimeConfig);
+  const humanAuth = new HumanAuthBridge(runtimeConfig, (line) => {
+    printRuntimeLine(line);
+  });
   const localStack = new LocalHumanAuthStack(runtimeConfig, (line) => {
     printRuntimeLine(line);
   });

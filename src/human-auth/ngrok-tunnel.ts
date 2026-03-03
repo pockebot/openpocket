@@ -210,7 +210,7 @@ export class NgrokTunnel {
         ) {
           this.processExitHint = trimmed;
         }
-        this.log(`[OpenPocket][human-auth][ngrok] ${prefix}${trimmed}`);
+        this.log(`[OpenPocket][human-auth][debug][ngrok] ${prefix}${trimmed}`);
       }
     };
     child.stdout.on("data", (chunk) => onChunk("", chunk));
@@ -218,11 +218,11 @@ export class NgrokTunnel {
     child.on("exit", (code, signal) => {
       this.closed = true;
       this.log(
-        `[OpenPocket][human-auth][ngrok] process exited code=${code ?? "(null)"} signal=${signal ?? "(null)"}`,
+        `[OpenPocket][human-auth][warn][ngrok] process exited code=${code ?? "(null)"} signal=${signal ?? "(null)"}`,
       );
     });
     child.on("error", (error) => {
-      this.log(`[OpenPocket][human-auth][ngrok] process error=${error.message}`);
+      this.log(`[OpenPocket][human-auth][error][ngrok] process error=${error.message}`);
     });
 
     const deadline = Date.now() + this.config.startupTimeoutSec * 1000;

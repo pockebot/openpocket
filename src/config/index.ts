@@ -147,6 +147,21 @@ function defaultConfigObject() {
       port: 51888,
       autoOpenBrowser: false,
     },
+    gatewayLogging: {
+      level: "info" as const,
+      includePayloads: false,
+      maxPayloadChars: 160,
+      modules: {
+        core: true,
+        access: true,
+        task: true,
+        channel: true,
+        cron: true,
+        heartbeat: false,
+        humanAuth: true,
+        chat: false,
+      },
+    },
     humanAuth: {
       enabled: false,
       useLocalRelay: true,
@@ -503,6 +518,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     heartbeat_config: "heartbeat",
     cron_config: "cron",
     dashboard_config: "dashboard",
+    gateway_logging: "gatewayLogging",
     human_auth: "humanAuth",
   };
 
@@ -696,6 +712,32 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
   }
   if (Object.keys(dashboard).length > 0) {
     raw.dashboard = dashboard;
+  }
+
+  const gatewayLogging = isObject(raw.gatewayLogging) ? { ...raw.gatewayLogging } : {};
+  const gatewayLoggingMap: Record<string, string> = {
+    include_payloads: "includePayloads",
+    max_payload_chars: "maxPayloadChars",
+  };
+  for (const [oldKey, newKey] of Object.entries(gatewayLoggingMap)) {
+    if (oldKey in gatewayLogging && !(newKey in gatewayLogging)) {
+      gatewayLogging[newKey] = gatewayLogging[oldKey];
+    }
+  }
+  if (isObject(gatewayLogging.modules)) {
+    const modules = { ...gatewayLogging.modules };
+    const moduleMap: Record<string, string> = {
+      human_auth: "humanAuth",
+    };
+    for (const [oldKey, newKey] of Object.entries(moduleMap)) {
+      if (oldKey in modules && !(newKey in modules)) {
+        modules[newKey] = modules[oldKey];
+      }
+    }
+    gatewayLogging.modules = modules;
+  }
+  if (Object.keys(gatewayLogging).length > 0) {
+    raw.gatewayLogging = gatewayLogging;
   }
 
   const sessionStorage = isObject(raw.sessionStorage) ? { ...raw.sessionStorage } : {};
@@ -897,6 +939,8 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
   const heartbeat = (merged.heartbeat ?? {}) as Record<string, unknown>;
   const cron = (merged.cron ?? {}) as Record<string, unknown>;
   const dashboard = (merged.dashboard ?? {}) as Record<string, unknown>;
+  const gatewayLogging = (merged.gatewayLogging ?? {}) as Record<string, unknown>;
+  const gatewayLoggingModules = isObject(gatewayLogging.modules) ? gatewayLogging.modules : {};
   const humanAuth = (merged.humanAuth ?? {}) as Record<string, unknown>;
   const sessionStorage = (merged.sessionStorage ?? {}) as Record<string, unknown>;
   const humanAuthTunnel = isObject(humanAuth.tunnel) ? humanAuth.tunnel : {};
@@ -1038,6 +1082,27 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       })(),
       autoOpenBrowser: Boolean(dashboard.autoOpenBrowser ?? false),
     },
+    gatewayLogging: {
+      level: (() => {
+        const rawLevel = String(gatewayLogging.level ?? "info").trim().toLowerCase();
+        if (rawLevel === "error" || rawLevel === "warn" || rawLevel === "debug") {
+          return rawLevel;
+        }
+        return "info";
+      })(),
+      includePayloads: Boolean(gatewayLogging.includePayloads ?? false),
+      maxPayloadChars: Math.max(40, Math.min(1000, Number(gatewayLogging.maxPayloadChars ?? 160) || 160)),
+      modules: {
+        core: Boolean(gatewayLoggingModules.core ?? true),
+        access: Boolean(gatewayLoggingModules.access ?? true),
+        task: Boolean(gatewayLoggingModules.task ?? true),
+        channel: Boolean(gatewayLoggingModules.channel ?? true),
+        cron: Boolean(gatewayLoggingModules.cron ?? true),
+        heartbeat: Boolean(gatewayLoggingModules.heartbeat ?? false),
+        humanAuth: Boolean(gatewayLoggingModules.humanAuth ?? true),
+        chat: Boolean(gatewayLoggingModules.chat ?? false),
+      },
+    },
     humanAuth: {
       enabled: Boolean(humanAuth.enabled ?? false),
       useLocalRelay: Boolean(humanAuth.useLocalRelay ?? true),
@@ -1178,6 +1243,7 @@ export function saveConfig(config: OpenPocketConfig): void {
     heartbeat: config.heartbeat,
     cron: config.cron,
     dashboard: config.dashboard,
+    gatewayLogging: config.gatewayLogging,
     humanAuth: config.humanAuth,
     models: config.models,
     channels: config.channels,

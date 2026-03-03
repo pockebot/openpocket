@@ -124,6 +124,26 @@ export interface DashboardConfig {
   autoOpenBrowser: boolean;
 }
 
+export type GatewayLogLevel = "error" | "warn" | "info" | "debug";
+
+export interface GatewayLogModulesConfig {
+  core: boolean;
+  access: boolean;
+  task: boolean;
+  channel: boolean;
+  cron: boolean;
+  heartbeat: boolean;
+  humanAuth: boolean;
+  chat: boolean;
+}
+
+export interface GatewayLoggingConfig {
+  level: GatewayLogLevel;
+  includePayloads: boolean;
+  maxPayloadChars: number;
+  modules: GatewayLogModulesConfig;
+}
+
 export interface SessionStorageConfig {
   mode: "unified";
   storePath: string;
@@ -323,6 +343,7 @@ export interface OpenPocketConfig {
   heartbeat: HeartbeatConfig;
   cron: CronConfig;
   dashboard: DashboardConfig;
+  gatewayLogging: GatewayLoggingConfig;
   humanAuth: HumanAuthConfig;
   models: Record<string, ModelProfile>;
   channels: import("./channel/types.js").ChannelsConfig;

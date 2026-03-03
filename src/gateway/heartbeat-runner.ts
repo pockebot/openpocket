@@ -73,13 +73,15 @@ export class HeartbeatRunner {
         ? Math.max(0, Math.floor(snapshot.taskRuntimeMs / 1000))
         : null;
 
+    const taskPart = this.config.gatewayLogging.includePayloads
+      ? ` task=${snapshot.currentTask ? JSON.stringify(this.previewPayload(snapshot.currentTask, 120)) : "(none)"}`
+      : "";
     const baseLine = [
-      `[OpenPocket][heartbeat] ${nowIso()}`,
+      `[OpenPocket][heartbeat][debug] ${nowIso()}`,
       `busy=${snapshot.busy}`,
-      `task=${snapshot.currentTask ? JSON.stringify(snapshot.currentTask) : "(none)"}`,
       `runtimeSec=${runtimeSec ?? 0}`,
       `devices=${snapshot.devices}`,
-      `booted=${snapshot.bootedDevices}`,
+      `booted=${snapshot.bootedDevices}${taskPart}`,
     ].join(" ");
 
     this.deps.log(baseLine);
@@ -106,5 +108,13 @@ export class HeartbeatRunner {
       };
       fs.appendFileSync(this.logFilePath, `${JSON.stringify(payload)}\n`, "utf-8");
     }
+  }
+
+  private previewPayload(value: string, maxChars: number): string {
+    const compact = String(value || "").replace(/\s+/g, " ").trim();
+    if (compact.length <= maxChars) {
+      return compact;
+    }
+    return `${compact.slice(0, Math.max(0, maxChars - 3))}...`;
   }
 }

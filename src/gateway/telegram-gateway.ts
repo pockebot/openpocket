@@ -184,7 +184,7 @@ export class TelegramGateway {
       },
     });
 
-    this.humanAuth = new HumanAuthBridge(config);
+    this.humanAuth = new HumanAuthBridge(config, (line) => this.writeLogLine(line));
     this.localHumanAuthStack = new LocalHumanAuthStack(config, (line) => this.writeLogLine(line));
 
     this.heartbeat = new HeartbeatRunner(config, {

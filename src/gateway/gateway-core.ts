@@ -133,7 +133,7 @@ export class GatewayCore {
     this.emulator = new EmulatorManager(config);
     this.agent = new AgentRuntime(config);
     this.chat = new ChatAssistant(config);
-    this.humanAuth = new HumanAuthBridge(config);
+    this.humanAuth = new HumanAuthBridge(config, (line) => this.writeLogLine(line));
     this.localHumanAuthStack = new LocalHumanAuthStack(config, (line) => this.writeLogLine(line));
 
     this.writeLogLine =
@@ -177,17 +177,17 @@ export class GatewayCore {
         this.config.humanAuth.relayBaseUrl = started.relayBaseUrl;
         this.config.humanAuth.publicBaseUrl = started.publicBaseUrl;
         this.localHumanAuthActive = true;
-        this.log(`human-auth local stack ready relay=${started.relayBaseUrl} public=${started.publicBaseUrl}`);
+        this.log(`human-auth local stack ready relay=${started.relayBaseUrl} public=${started.publicBaseUrl}`, "info", "humanAuth");
       } catch (error) {
         this.localHumanAuthActive = false;
-        this.log(`human-auth local stack failed: ${(error as Error).message}`);
+        this.log(`human-auth local stack failed error=${(error as Error).message}`, "error", "humanAuth");
       }
     }
 
     this.heartbeat.start();
     this.cron.start();
     await this.router.startAll();
-    this.log(`gateway core started model=${this.config.defaultModel}`);
+    this.log(`gateway core started model=${this.config.defaultModel}`, "info", "core");
   }
 
   async stop(reason = "manual"): Promise<void> {
@@ -201,7 +201,7 @@ export class GatewayCore {
       this.localHumanAuthActive = false;
     }
     await this.router.stopAll(reason);
-    this.log(`gateway core stopped reason=${reason}`);
+    this.log(`gateway core stopped reason=${reason}`, "info", "core");
   }
 
   isRunning(): boolean {
@@ -212,7 +212,7 @@ export class GatewayCore {
     (this as unknown as { config: OpenPocketConfig }).config = updated;
     this.chat = new ChatAssistant(updated);
     this.agent.updateConfig(updated);
-    this.log(`config hot-reloaded via dashboard (model=${updated.defaultModel})`);
+    this.log(`config hot-reloaded via dashboard model=${updated.defaultModel}`, "info", "core");
   }
 
   // -----------------------------------------------------------------------
@@ -292,7 +292,7 @@ export class GatewayCore {
     this.registerCommand("screen", async (env) => {
       this.chat.appendExternalTurn(this.peerIdNum(env), "user", "/screen");
       const screenshotPath = await this.agent.captureManualScreenshot();
-      this.log(`manual screenshot channel=${env.channelType} sender=${env.senderId} path=${screenshotPath}`);
+      this.log(`manual screenshot channel=${env.channelType} sender=${env.senderId} path=${screenshotPath}`, "info", "task");
       try {
         await this.router.replyImage(env, screenshotPath, "Current device screenshot.");
         this.chat.appendExternalTurn(this.peerIdNum(env), "assistant", "[shared current emulator screenshot]");
@@ -411,7 +411,10 @@ export class GatewayCore {
   // -----------------------------------------------------------------------
 
   async handleInbound(envelope: InboundEnvelope): Promise<void> {
-    this.log(`incoming channel=${envelope.channelType} sender=${envelope.senderId} text=${JSON.stringify(envelope.text)}`);
+    const inboundText = this.config.gatewayLogging.includePayloads
+      ? ` text=${JSON.stringify(this.previewPayload(envelope.text, 120))}`
+      : "";
+    this.log(`incoming channel=${envelope.channelType} sender=${envelope.senderId}${inboundText}`, "debug", "access");
 
     if (!await this.checkAccess(envelope)) return;
 
@@ -462,7 +465,7 @@ export class GatewayCore {
 
     if (noStaticAllowFrom && noApprovedSenders) {
       this.pairingStore.addToAllowlist(envelope.channelType, envelope.senderId);
-      this.log(`owner claim channel=${envelope.channelType} sender=${envelope.senderId} — first sender auto-approved as owner`);
+      this.log(`owner claim channel=${envelope.channelType} sender=${envelope.senderId} first_sender_auto_approved=true`, "info", "access");
       const locale = this.inferLocale(envelope);
       const msg = locale === "zh"
         ? "你是此频道的第一个用户，已自动注册为 owner。"
@@ -486,7 +489,7 @@ export class GatewayCore {
           : `Please send this pairing code to the owner for approval: ${result.pairingCode}\n(Valid for 1 hour)`;
         await this.router.replyText(envelope, msg);
       }
-      this.log(`access denied channel=${envelope.channelType} sender=${envelope.senderId} policy=${dmPolicy} reason=${result.reason}`);
+      this.log(`access denied channel=${envelope.channelType} sender=${envelope.senderId} policy=${dmPolicy} reason=${result.reason}`, "warn", "access");
       return false;
     }
 
@@ -509,7 +512,7 @@ export class GatewayCore {
     const groupPolicy = this.resolveGroupPolicy(envelope.channelType);
 
     if (groupPolicy === "disabled") {
-      this.log(`group access denied channel=${envelope.channelType} group=${envelope.peerId} sender=${envelope.senderId} reason=group_policy_disabled`);
+      this.log(`group access denied channel=${envelope.channelType} group=${envelope.peerId} sender=${envelope.senderId} reason=group_policy_disabled`, "warn", "access");
       return false;
     }
 
@@ -530,7 +533,7 @@ export class GatewayCore {
       return true;
     }
 
-    this.log(`group access denied channel=${envelope.channelType} group=${envelope.peerId} sender=${envelope.senderId} reason=not_in_group_allowlist`);
+    this.log(`group access denied channel=${envelope.channelType} group=${envelope.peerId} sender=${envelope.senderId} reason=not_in_group_allowlist`, "warn", "access");
     return false;
   }
 
@@ -542,6 +545,8 @@ export class GatewayCore {
     const decision = await this.chat.decide(chatId, text);
     this.log(
       `decision channel=${envelope.channelType} sender=${envelope.senderId} model=${this.config.defaultModel} mode=${decision.mode} confidence=${decision.confidence.toFixed(2)}`,
+      "debug",
+      "task",
     );
 
     if (decision.mode === "task") {
@@ -601,7 +606,7 @@ export class GatewayCore {
         const result = await this.runTaskAndReport(next.envelope, next.task, next.sessionKey);
         if (next.onDone) {
           try { await next.onDone(result); } catch (error) {
-            this.log(`task completion callback error channel=${next.envelope.channelType} error=${(error as Error).message}`);
+            this.log(`task completion callback error channel=${next.envelope.channelType} error=${(error as Error).message}`, "warn", "task");
           }
         }
       }
@@ -626,7 +631,10 @@ export class GatewayCore {
     };
     let progressWork: Promise<void> = Promise.resolve();
 
-    this.log(`task accepted channel=${envelope.channelType} sender=${envelope.senderId} model=${this.config.defaultModel} task=${JSON.stringify(task)}`);
+    const taskDetail = this.config.gatewayLogging.includePayloads
+      ? ` task=${JSON.stringify(this.previewPayload(task, 160))}`
+      : "";
+    this.log(`task accepted channel=${envelope.channelType} sender=${envelope.senderId} model=${this.config.defaultModel}${taskDetail}`, "info", "task");
 
     const adapter = this.router.getAdapter(envelope.channelType);
 
@@ -675,7 +683,7 @@ export class GatewayCore {
           narrationState.recentProgress = [];
           await this.router.replyText(envelope, message);
         }).catch((error) => {
-          this.log(`progress narration error channel=${envelope.channelType} error=${(error as Error).message}`);
+          this.log(`progress narration error channel=${envelope.channelType} error=${(error as Error).message}`, "warn", "task");
         });
       };
 
@@ -716,7 +724,7 @@ export class GatewayCore {
       );
       await progressWork;
 
-      this.log(`task done channel=${envelope.channelType} model=${this.config.defaultModel} ok=${result.ok} session=${result.sessionPath}`);
+      this.log(`task done channel=${envelope.channelType} model=${this.config.defaultModel} ok=${result.ok} session=${result.sessionPath}`, "info", "task");
 
       const finalMessage = await this.chat.narrateTaskOutcome({
         task, locale, ok: result.ok, rawResult: result.message,
@@ -731,7 +739,7 @@ export class GatewayCore {
     } catch (error) {
       await progressWork.catch(() => {});
       const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
-      this.log(`task crash channel=${envelope.channelType} model=${this.config.defaultModel} error=${(error as Error).message}`);
+      this.log(`task crash channel=${envelope.channelType} model=${this.config.defaultModel} error=${(error as Error).message}`, "error", "task");
       await this.router.replyText(envelope, this.sanitizeForChat(message, 600));
       return { accepted: true, ok: false, message };
     } finally {
@@ -921,8 +929,20 @@ export class GatewayCore {
   // Utility helpers
   // -----------------------------------------------------------------------
 
-  private log(message: string): void {
-    this.writeLogLine(`[OpenPocket][gateway-core] ${new Date().toISOString()} ${message}`);
+  private previewPayload(value: string, maxChars: number): string {
+    const compact = String(value || "").replace(/\s+/g, " ").trim();
+    if (compact.length <= maxChars) {
+      return compact;
+    }
+    return `${compact.slice(0, Math.max(0, maxChars - 3))}...`;
+  }
+
+  private log(
+    message: string,
+    level: "debug" | "info" | "warn" | "error" = "info",
+    module: "core" | "access" | "task" | "channel" | "cron" | "heartbeat" | "humanAuth" | "chat" = "core",
+  ): void {
+    this.writeLogLine(`[OpenPocket][gateway-core][${module}][${level}] ${new Date().toISOString()} ${message}`);
   }
 
   private inferLocale(envelope: InboundEnvelope): OnboardingLocale {

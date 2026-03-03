@@ -17,14 +17,14 @@ import type {
 export class DefaultChannelRouter implements ChannelRouter {
   private readonly adapters = new Map<ChannelType, ChannelAdapter>();
   private inboundHandler: InboundHandler | null = null;
-  private readonly log: (line: string) => void;
+  private readonly writeLine: (line: string) => void;
 
   constructor(options?: { log?: (line: string) => void }) {
-    this.log =
+    this.writeLine =
       options?.log ??
       ((line: string) => {
         // eslint-disable-next-line no-console
-        console.log(`[OpenPocket][channel-router] ${new Date().toISOString()} ${line}`);
+        console.log(line);
       });
   }
 
@@ -33,15 +33,15 @@ export class DefaultChannelRouter implements ChannelRouter {
 
     adapter.onInbound((envelope) => {
       if (!this.inboundHandler) {
-        this.log(`no inbound handler registered, dropping message channel=${envelope.channelType} sender=${envelope.senderId}`);
+        this.log("warn", `no inbound handler registered, dropping message channel=${envelope.channelType} sender=${envelope.senderId}`);
         return;
       }
       void Promise.resolve(this.inboundHandler(envelope)).catch((error) => {
-        this.log(`inbound handler error channel=${envelope.channelType} sender=${envelope.senderId} error=${(error as Error).message}`);
+        this.log("error", `inbound handler error channel=${envelope.channelType} sender=${envelope.senderId} error=${(error as Error).message}`);
       });
     });
 
-    this.log(`adapter registered channel=${adapter.channelType}`);
+    this.log("info", `adapter registered channel=${adapter.channelType}`);
   }
 
   getAdapter(channelType: ChannelType): ChannelAdapter | null {
@@ -57,9 +57,9 @@ export class DefaultChannelRouter implements ChannelRouter {
     for (const [channelType, adapter] of entries) {
       try {
         await adapter.start();
-        this.log(`adapter started channel=${channelType}`);
+        this.log("info", `adapter started channel=${channelType}`);
       } catch (error) {
-        this.log(`adapter start failed channel=${channelType} error=${(error as Error).message}`);
+        this.log("error", `adapter start failed channel=${channelType} error=${(error as Error).message}`);
       }
     }
   }
@@ -69,9 +69,9 @@ export class DefaultChannelRouter implements ChannelRouter {
     for (const [channelType, adapter] of entries) {
       try {
         await adapter.stop(reason);
-        this.log(`adapter stopped channel=${channelType} reason=${reason ?? "shutdown"}`);
+        this.log("info", `adapter stopped channel=${channelType} reason=${reason ?? "shutdown"}`);
       } catch (error) {
-        this.log(`adapter stop failed channel=${channelType} error=${(error as Error).message}`);
+        this.log("error", `adapter stop failed channel=${channelType} error=${(error as Error).message}`);
       }
     }
   }
@@ -79,7 +79,7 @@ export class DefaultChannelRouter implements ChannelRouter {
   async replyText(envelope: InboundEnvelope, text: string, opts?: SendOptions): Promise<void> {
     const adapter = this.adapters.get(envelope.channelType);
     if (!adapter) {
-      this.log(`no adapter for reply channel=${envelope.channelType}`);
+      this.log("warn", `no adapter for reply channel=${envelope.channelType}`);
       return;
     }
     await adapter.sendText(envelope.peerId, text, opts);
@@ -88,7 +88,7 @@ export class DefaultChannelRouter implements ChannelRouter {
   async replyImage(envelope: InboundEnvelope, imagePath: string, caption?: string): Promise<void> {
     const adapter = this.adapters.get(envelope.channelType);
     if (!adapter) {
-      this.log(`no adapter for reply channel=${envelope.channelType}`);
+      this.log("warn", `no adapter for reply channel=${envelope.channelType}`);
       return;
     }
     await adapter.sendImage(envelope.peerId, imagePath, caption);
@@ -96,5 +96,9 @@ export class DefaultChannelRouter implements ChannelRouter {
 
   onInbound(handler: InboundHandler): void {
     this.inboundHandler = handler;
+  }
+
+  private log(level: "debug" | "info" | "warn" | "error", message: string): void {
+    this.writeLine(`[OpenPocket][channel-router][${level}] ${new Date().toISOString()} ${message}`);
   }
 }
