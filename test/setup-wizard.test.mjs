@@ -232,7 +232,7 @@ test("setup wizard supports custom provider+model profile in model selection", a
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
     assert.equal(savedCfg.defaultModel, "claude-opus-4.6-anthropic");
-    assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].baseUrl, "https://api.anthropic.com/v1");
+    assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].baseUrl, "https://api.anthropic.com");
     assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].model, "claude-opus-4-6");
     assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].apiKeyEnv, "ANTHROPIC_API_KEY");
   });

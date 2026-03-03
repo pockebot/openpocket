@@ -32,7 +32,7 @@ const MODEL_PROVIDER_PRESETS: ReadonlyArray<ModelProviderPreset> = [
   {
     key: "anthropic",
     label: "Anthropic",
-    baseUrl: "https://api.anthropic.com/v1",
+    baseUrl: "https://api.anthropic.com",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     defaultModelId: "claude-opus-4-6",
     suggestedModelIds: ["claude-opus-4-6", "claude-sonnet-4-5"],

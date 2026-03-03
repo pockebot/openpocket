@@ -833,6 +833,27 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
     }
   };
 
+  const normalizeAnthropicBaseUrl = (input: string): string => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return trimmed;
+    }
+    try {
+      const url = new URL(trimmed);
+      if (!url.hostname.toLowerCase().includes("anthropic.com")) {
+        return trimmed;
+      }
+      const pathname = url.pathname.replace(/\/+$/, "");
+      if (pathname === "/v1") {
+        url.pathname = "/";
+        return url.toString().replace(/\/$/, "");
+      }
+      return trimmed;
+    } catch {
+      return trimmed;
+    }
+  };
+
   for (const [key, value] of Object.entries(rawModels)) {
     const model = isObject(value) ? value : {};
     const reasoningRaw =
@@ -846,7 +867,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
         : null;
     const tempRaw = model.temperature;
     const parsedBaseUrl = String(model.baseUrl ?? model.base_url ?? "https://api.openai.com/v1");
-    const baseUrl = normalizeGoogleBaseUrl(parsedBaseUrl);
+    const baseUrl = normalizeAnthropicBaseUrl(normalizeGoogleBaseUrl(parsedBaseUrl));
     models[key] = {
       baseUrl,
       model: String(model.model ?? key),

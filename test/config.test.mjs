@@ -320,6 +320,45 @@ test("loadConfig normalizes Google generative baseUrl to /v1beta", async () => {
   });
 });
 
+test("loadConfig normalizes Anthropic baseUrl /v1 to root endpoint", async () => {
+  await withTempHome("openpocket-config-anthropic-baseurl-", async (home) => {
+    const cfgPath = path.join(home, "config.json");
+    fs.writeFileSync(
+      cfgPath,
+      `${JSON.stringify(
+        {
+          projectName: "OpenPocket",
+          workspaceDir: path.join(home, "workspace"),
+          stateDir: path.join(home, "state"),
+          defaultModel: "anthropic/claude-opus-4-6",
+          emulator: {},
+          telegram: {},
+          models: {
+            "anthropic/claude-opus-4-6": {
+              baseUrl: "https://api.anthropic.com/v1",
+              model: "claude-opus-4-6",
+              apiKey: "",
+              apiKeyEnv: "ANTHROPIC_API_KEY",
+              maxTokens: 1024,
+              reasoningEffort: null,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const cfg = loadConfig(cfgPath);
+    assert.equal(cfg.models["anthropic/claude-opus-4-6"].baseUrl, "https://api.anthropic.com");
+
+    saveConfig(cfg);
+    const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    assert.equal(saved.models["anthropic/claude-opus-4-6"].baseUrl, "https://api.anthropic.com");
+  });
+});
+
 test("getModelProfile and resolveApiKey follow precedence rules", async () => {
   await withTempHome("openpocket-config-key-", async (home) => {
     await withTempCodexHome("openpocket-codex-empty-", async () => {

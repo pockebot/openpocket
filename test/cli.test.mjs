@@ -464,7 +464,7 @@ test("model set supports provider+model upsert and switches default profile", ()
   const cfgPath = path.join(home, "config.json");
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
   assert.equal(cfg.defaultModel, "anthropic/claude-opus-4-6");
-  assert.equal(cfg.models["anthropic/claude-opus-4-6"].baseUrl, "https://api.anthropic.com/v1");
+  assert.equal(cfg.models["anthropic/claude-opus-4-6"].baseUrl, "https://api.anthropic.com");
   assert.equal(cfg.models["anthropic/claude-opus-4-6"].model, "claude-opus-4-6");
   assert.equal(cfg.models["anthropic/claude-opus-4-6"].apiKeyEnv, "ANTHROPIC_API_KEY");
 });

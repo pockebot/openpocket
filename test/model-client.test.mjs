@@ -69,7 +69,7 @@ test("buildPiAiModel selects google-generative-ai for Google AI Studio baseUrl",
 test("buildPiAiModel selects anthropic-messages for Anthropic baseUrl", () => {
   const profile = {
     ...makeProfile(),
-    baseUrl: "https://api.anthropic.com/v1",
+    baseUrl: "https://api.anthropic.com",
     model: "claude-sonnet-4.6",
   };
   const model = buildPiAiModel(profile);
