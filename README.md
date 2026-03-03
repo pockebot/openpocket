@@ -10,8 +10,6 @@
 </p>
 
 <p align="center">
-  <a href="./frontend/public/hamster-cover.mp4">Hero Animation</a> ·
-  <a href="./frontend/public/hamster-architecture.mp4">Architecture Animation</a> ·
   <a href="https://www.openpocket.ai/hubs#doc-hubs">Documentation Hubs</a>
 </p>
 
