@@ -497,7 +497,7 @@ export class ChatAssistant {
 
   private isGoogleEndpoint(client: OpenAI): boolean {
     const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
-    return baseUrl.includes("generativelanguage.googleapis.com") || baseUrl.includes("googleapis.com");
+    return baseUrl.includes("generativelanguage.googleapis.com");
   }
 
   private detectAnthropicProvider(client: OpenAI): string {

@@ -471,7 +471,7 @@ function scoreSkillForTask(skill: LoadedSkill, task: string): SkillTaskScore {
   }
 
   if (isHumanAuthSkill) {
-    const humanAuthIntent = /request human auth|human auth|human phone|oauth|login|password|passkey|otp|2fa|sms|payment|card|biometric|camera|photo|microphone|nfc|contacts|calendar|files|permission|gps/.test(normalizedTask);
+    const humanAuthIntent = /request.human.auth|human.auth|human.phone|oauth|login|password|passkey|otp|2fa|sms.code|verification.code|payment.card|biometric|nfc/.test(normalizedTask);
     if (!humanAuthIntent) {
       score -= 6;
       reasonBits.push("human-auth-penalty");

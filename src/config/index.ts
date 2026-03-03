@@ -723,6 +723,9 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     if (oldKey in gatewayLogging && !(newKey in gatewayLogging)) {
       gatewayLogging[newKey] = gatewayLogging[oldKey];
     }
+    if (oldKey in gatewayLogging && oldKey !== newKey) {
+      delete gatewayLogging[oldKey];
+    }
   }
   if (isObject(gatewayLogging.modules)) {
     const modules = { ...gatewayLogging.modules };
@@ -732,6 +735,9 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     for (const [oldKey, newKey] of Object.entries(moduleMap)) {
       if (oldKey in modules && !(newKey in modules)) {
         modules[newKey] = modules[oldKey];
+      }
+      if (oldKey in modules && oldKey !== newKey) {
+        delete modules[oldKey];
       }
     }
     gatewayLogging.modules = modules;

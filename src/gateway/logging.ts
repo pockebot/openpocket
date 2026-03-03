@@ -28,6 +28,23 @@ const PAYLOAD_KEYS = new Set([
   "screenshotpath",
 ]);
 
+const ALWAYS_REDACT_KEYS = new Set([
+  "apikey",
+  "api_key",
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "credential",
+  "authorization",
+  "cookie",
+  "accesstoken",
+  "access_token",
+  "refreshtoken",
+  "refresh_token",
+  "authtoken",
+]);
+
 function normalizeModuleToken(token: string): keyof GatewayLogModulesConfig {
   const normalized = token.trim().toLowerCase().replace(/[^a-z]/g, "");
   if (normalized === "access") return "access";
@@ -108,6 +125,9 @@ function sanitizePayloadTokens(line: string, includePayloads: boolean, maxPayloa
     (chunk, rawKey, rawValue) => {
       const key = String(rawKey || "").trim();
       const lowerKey = key.toLowerCase();
+      if (ALWAYS_REDACT_KEYS.has(lowerKey)) {
+        return `${key}=[redacted]`;
+      }
       if (!PAYLOAD_KEYS.has(lowerKey)) {
         return chunk;
       }
