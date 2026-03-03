@@ -451,6 +451,11 @@ export class ChatAssistant {
     return baseUrl.includes("api.kimi.com") || baseUrl.includes("anthropic.com") || baseUrl.includes("api.minimax.io");
   }
 
+  private isGoogleEndpoint(client: OpenAI): boolean {
+    const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
+    return baseUrl.includes("generativelanguage.googleapis.com") || baseUrl.includes("googleapis.com");
+  }
+
   private detectAnthropicProvider(client: OpenAI): string {
     const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
     if (baseUrl.includes("api.kimi.com")) {
@@ -516,6 +521,74 @@ export class ChatAssistant {
     return text;
   }
 
+  private normalizeGoogleGenerativeBaseUrl(baseUrl: string): string {
+    const trimmed = String(baseUrl ?? "").trim();
+    if (!trimmed) {
+      return "https://generativelanguage.googleapis.com/v1beta";
+    }
+    try {
+      const url = new URL(trimmed);
+      if (!url.hostname.toLowerCase().includes("generativelanguage.googleapis.com")) {
+        return trimmed;
+      }
+      const pathname = url.pathname.replace(/\/+$/, "");
+      if (!pathname) {
+        url.pathname = "/v1beta";
+        return url.toString().replace(/\/$/, "");
+      }
+      return trimmed;
+    } catch {
+      return trimmed;
+    }
+  }
+
+  private async callGoogleText(params: {
+    apiKey: string;
+    model: string;
+    baseUrl: string;
+    maxTokens: number;
+    prompt: string;
+  }): Promise<string> {
+    await this.ensurePiAiLoaded();
+    const { completeSimple } = await import("@mariozechner/pi-ai");
+
+    const response = await completeSimple(
+      {
+        id: params.model,
+        name: params.model,
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: this.normalizeGoogleGenerativeBaseUrl(params.baseUrl),
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: Math.min(Math.max(32, params.maxTokens), 4096),
+      } as never,
+      {
+        systemPrompt: "",
+        messages: [
+          {
+            role: "user" as const,
+            content: [{ type: "text", text: params.prompt }],
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [],
+      } as never,
+      {
+        apiKey: params.apiKey,
+        maxTokens: Math.min(Math.max(32, params.maxTokens), 4096),
+      } as never,
+    );
+
+    const text = this.extractPiAiAssistantText(response);
+    if (!text) {
+      throw new Error("Google transport returned empty text output.");
+    }
+    return text;
+  }
+
   /**
    * Shared helper: call the model with automatic endpoint-mode fallback.
    * Returns the raw text output or empty string on failure.
@@ -536,6 +609,18 @@ export class ChatAssistant {
       } catch (error) {
         // eslint-disable-next-line no-console
         console.warn(`[OpenPocket][chat] ${label} failed: anthropic: ${stringifyError(error)}`);
+        return "";
+      }
+    }
+
+    if (this.isGoogleEndpoint(client)) {
+      try {
+        const apiKey = this.readClientApiKey(client);
+        const baseUrl = String((client as { baseURL?: string }).baseURL ?? "");
+        return await this.callGoogleText({ apiKey, model, baseUrl, maxTokens, prompt });
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.warn(`[OpenPocket][chat] ${label} failed: google-generative-ai: ${stringifyError(error)}`);
         return "";
       }
     }

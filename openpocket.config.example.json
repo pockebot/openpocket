@@ -218,7 +218,7 @@
       "temperature": null
     },
     "google/gemini-2.0-flash": {
-      "baseUrl": "https://generativelanguage.googleapis.com",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
       "model": "gemini-2.0-flash",
       "apiKey": "",
       "apiKeyEnv": "GEMINI_API_KEY",
@@ -227,7 +227,7 @@
       "temperature": null
     },
     "google/gemini-3-pro-preview": {
-      "baseUrl": "https://generativelanguage.googleapis.com",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
       "model": "gemini-3-pro-preview",
       "apiKey": "",
       "apiKeyEnv": "GEMINI_API_KEY",
@@ -236,7 +236,7 @@
       "temperature": null
     },
     "google/gemini-3.1-pro-preview": {
-      "baseUrl": "https://generativelanguage.googleapis.com",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
       "model": "gemini-3.1-pro-preview",
       "apiKey": "",
       "apiKeyEnv": "GEMINI_API_KEY",

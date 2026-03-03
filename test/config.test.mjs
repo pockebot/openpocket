@@ -61,13 +61,13 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.equal(cfg.memoryTools.maxResults, 6);
     assert.equal(cfg.memoryTools.minScore, 0.2);
     assert.equal(cfg.memoryTools.maxSnippetChars, 1200);
-    assert.equal(cfg.models["google/gemini-2.0-flash"].baseUrl, "https://generativelanguage.googleapis.com");
+    assert.equal(cfg.models["google/gemini-2.0-flash"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
     assert.equal(cfg.models["google/gemini-2.0-flash"].model, "gemini-2.0-flash");
     assert.equal(cfg.models["google/gemini-2.0-flash"].apiKeyEnv, "GEMINI_API_KEY");
-    assert.equal(cfg.models["google/gemini-3-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com");
+    assert.equal(cfg.models["google/gemini-3-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
     assert.equal(cfg.models["google/gemini-3-pro-preview"].model, "gemini-3-pro-preview");
     assert.equal(cfg.models["google/gemini-3-pro-preview"].apiKeyEnv, "GEMINI_API_KEY");
-    assert.equal(cfg.models["google/gemini-3.1-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com");
+    assert.equal(cfg.models["google/gemini-3.1-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
     assert.equal(cfg.models["google/gemini-3.1-pro-preview"].model, "gemini-3.1-pro-preview");
     assert.equal(cfg.models["google/gemini-3.1-pro-preview"].apiKeyEnv, "GEMINI_API_KEY");
     assert.equal(cfg.humanAuth.enabled, false);
@@ -275,6 +275,48 @@ test("loadConfig normalizes agent.lang to en", async () => {
     saveConfig(cfg);
     const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
     assert.equal(saved.agent.lang, "en");
+  });
+});
+
+test("loadConfig normalizes Google generative baseUrl to /v1beta", async () => {
+  await withTempHome("openpocket-config-google-baseurl-", async (home) => {
+    const cfgPath = path.join(home, "config.json");
+    fs.writeFileSync(
+      cfgPath,
+      `${JSON.stringify(
+        {
+          projectName: "OpenPocket",
+          workspaceDir: path.join(home, "workspace"),
+          stateDir: path.join(home, "state"),
+          defaultModel: "google/gemini-3.1-pro-preview",
+          emulator: {},
+          telegram: {},
+          models: {
+            "google/gemini-3.1-pro-preview": {
+              baseUrl: "https://generativelanguage.googleapis.com",
+              model: "gemini-3.1-pro-preview",
+              apiKey: "",
+              apiKeyEnv: "GEMINI_API_KEY",
+              maxTokens: 1024,
+              reasoningEffort: null,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const cfg = loadConfig(cfgPath);
+    assert.equal(cfg.models["google/gemini-3.1-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
+
+    saveConfig(cfg);
+    const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    assert.equal(
+      saved.models["google/gemini-3.1-pro-preview"].baseUrl,
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
   });
 });
 

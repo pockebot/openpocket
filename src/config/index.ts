@@ -236,7 +236,7 @@ function defaultConfigObject() {
         temperature: null,
       },
       "google/gemini-2.0-flash": {
-        baseUrl: "https://generativelanguage.googleapis.com",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
         model: "gemini-2.0-flash",
         apiKey: "",
         apiKeyEnv: "GEMINI_API_KEY",
@@ -245,7 +245,7 @@ function defaultConfigObject() {
         temperature: null,
       },
       "google/gemini-3-pro-preview": {
-        baseUrl: "https://generativelanguage.googleapis.com",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
         model: "gemini-3-pro-preview",
         apiKey: "",
         apiKeyEnv: "GEMINI_API_KEY",
@@ -254,7 +254,7 @@ function defaultConfigObject() {
         temperature: null,
       },
       "google/gemini-3.1-pro-preview": {
-        baseUrl: "https://generativelanguage.googleapis.com",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
         model: "gemini-3.1-pro-preview",
         apiKey: "",
         apiKeyEnv: "GEMINI_API_KEY",
@@ -802,6 +802,28 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
   ) as Record<string, unknown>;
   const rawModels = (merged.models ?? {}) as Record<string, unknown>;
   const models: Record<string, ModelProfile> = {};
+
+  const normalizeGoogleBaseUrl = (input: string): string => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return trimmed;
+    }
+    try {
+      const url = new URL(trimmed);
+      if (!url.hostname.toLowerCase().includes("generativelanguage.googleapis.com")) {
+        return trimmed;
+      }
+      const pathname = url.pathname.replace(/\/+$/, "");
+      if (!pathname || pathname === "") {
+        url.pathname = "/v1beta";
+        return url.toString().replace(/\/$/, "");
+      }
+      return trimmed;
+    } catch {
+      return trimmed;
+    }
+  };
+
   for (const [key, value] of Object.entries(rawModels)) {
     const model = isObject(value) ? value : {};
     const reasoningRaw =
@@ -814,8 +836,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
         ? reasoningRaw
         : null;
     const tempRaw = model.temperature;
+    const parsedBaseUrl = String(model.baseUrl ?? model.base_url ?? "https://api.openai.com/v1");
+    const baseUrl = normalizeGoogleBaseUrl(parsedBaseUrl);
     models[key] = {
-      baseUrl: String(model.baseUrl ?? model.base_url ?? "https://api.openai.com/v1"),
+      baseUrl,
       model: String(model.model ?? key),
       apiKey: String(model.apiKey ?? model.api_key ?? ""),
       apiKeyEnv: String(model.apiKeyEnv ?? model.api_key_env ?? "OPENAI_API_KEY"),
