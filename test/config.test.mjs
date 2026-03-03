@@ -61,6 +61,9 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.equal(cfg.memoryTools.maxResults, 6);
     assert.equal(cfg.memoryTools.minScore, 0.2);
     assert.equal(cfg.memoryTools.maxSnippetChars, 1200);
+    assert.equal(cfg.models["google/gemini-2.0-flash"].baseUrl, "https://generativelanguage.googleapis.com");
+    assert.equal(cfg.models["google/gemini-2.0-flash"].model, "gemini-2.0-flash");
+    assert.equal(cfg.models["google/gemini-2.0-flash"].apiKeyEnv, "GEMINI_API_KEY");
     assert.equal(cfg.humanAuth.enabled, false);
     assert.equal(cfg.humanAuth.useLocalRelay, true);
     assert.equal(cfg.humanAuth.localRelayPort, 8787);

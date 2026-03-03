@@ -235,6 +235,15 @@ function defaultConfigObject() {
         reasoningEffort: null,
         temperature: null,
       },
+      "google/gemini-2.0-flash": {
+        baseUrl: "https://generativelanguage.googleapis.com",
+        model: "gemini-2.0-flash",
+        apiKey: "",
+        apiKeyEnv: "GEMINI_API_KEY",
+        maxTokens: 4096,
+        reasoningEffort: null,
+        temperature: null,
+      },
       "blockrun/deepseek-chat": {
         baseUrl: "https://api.blockrun.ai/v1",
         model: "deepseek/deepseek-chat",

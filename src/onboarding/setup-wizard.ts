@@ -201,6 +201,9 @@ function providerFromBaseUrl(baseUrl: string): string {
   if (lower.includes("openrouter.ai")) {
     return "OpenRouter";
   }
+  if (lower.includes("generativelanguage.googleapis.com") || lower.includes("googleapis.com")) {
+    return "Google AI Studio";
+  }
   if (lower.includes("api.z.ai")) {
     return "AutoGLM";
   }
@@ -272,6 +275,9 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   }
   if (profileKey === "claude-opus-4.6") {
     return "Claude Opus 4.6 (OpenRouter)";
+  }
+  if (profileKey === "google/gemini-2.0-flash") {
+    return "Gemini 2.0 Flash (Google AI Studio)";
   }
   if (profileKey === "autoglm-phone") {
     return "AutoGLM Phone (Z.ai)";

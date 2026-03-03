@@ -55,6 +55,17 @@ test("buildPiAiModel selects openrouter provider for OpenRouter baseUrl", () => 
   assert.equal(model.provider, "openrouter");
 });
 
+test("buildPiAiModel selects google-generative-ai for Google AI Studio baseUrl", () => {
+  const profile = {
+    ...makeProfile(),
+    baseUrl: "https://generativelanguage.googleapis.com",
+    model: "gemini-2.0-flash",
+  };
+  const model = buildPiAiModel(profile);
+  assert.equal(model.api, "google-generative-ai");
+  assert.equal(model.provider, "google");
+});
+
 test("buildPiAiModel selects anthropic-messages for Anthropic baseUrl", () => {
   const profile = {
     ...makeProfile(),

@@ -592,11 +592,15 @@ Coding runtime migration note:
 
 ### Supported Model Providers
 
-OpenPocket supports multiple AI model providers through OpenAI-compatible APIs:
+OpenPocket supports multiple AI model providers through OpenAI-compatible and native provider APIs:
 
 **OpenAI** - Direct access to GPT models (gpt-5.2-codex, gpt-5.3-codex)
 
 **OpenRouter** - Multi-provider routing for Claude models (claude-sonnet-4.6, claude-opus-4.6)
+
+**Google AI Studio** - Direct Gemini access with AI Studio API keys
+- Model ID: `google/gemini-2.0-flash`
+- Environment variable: `GEMINI_API_KEY`
 
 **BlockRun** - Pay-per-request micropayments with no subscriptions
 - Ideal for always-on agents with cost-effective pricing
@@ -611,6 +615,7 @@ Common environment variables:
 ```bash
 export OPENAI_API_KEY="<your_openai_key>"
 export OPENROUTER_API_KEY="<your_openrouter_key>"
+export GEMINI_API_KEY="<your_google_ai_studio_key>"
 export BLOCKRUN_API_KEY="<your_blockrun_key>"
 export AUTOGLM_API_KEY="<your_autoglm_key>"
 export TELEGRAM_BOT_TOKEN="<your_telegram_bot_token>"
