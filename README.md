@@ -172,9 +172,30 @@ See [LICENSE](./LICENSE) for details.
 
 ## Thanks
 
-Special thanks to:
-- The open-source Android automation and agent ecosystem
-- Contributors across runtime, gateway, and docs
+Special thanks to the open-source projects that make OpenPocket possible:
+
+- pi-mono ecosystem by Mario Zechner:
+  - `@mariozechner/pi-agent-core`
+  - `@mariozechner/pi-ai`
+  - `@mariozechner/pi-coding-agent`
+- Messaging and channel SDKs:
+  - `node-telegram-bot-api`
+  - `discord.js`
+  - `baileys`
+- Core runtime and schema/tooling:
+  - `openai`
+  - `@modelcontextprotocol/sdk`
+  - `zod`
+  - `@sinclair/typebox`
+  - `sharp`
+  - `qrcode` / `qrcode-terminal`
+- Docs and developer tooling:
+  - `vitepress`
+  - `mermaid`
+  - `typescript`
+  - `tsx`
+
+- Contributors across runtime, gateway, docs, and operations
 - Community users who continuously report issues and share real-world scenarios
 
 And thanks for building with OpenPocket.
