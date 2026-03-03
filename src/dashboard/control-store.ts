@@ -82,8 +82,8 @@ export function providerLabel(baseUrl: string): string {
   if (lower.includes("openrouter.ai")) {
     return "OpenRouter";
   }
-  if (lower.includes("api.z.ai")) {
-    return "AutoGLM";
+  if (lower.includes("api.z.ai") || lower.includes("bigmodel.cn")) {
+    return "Z.AI (GLM)";
   }
   if (lower.includes("api.kimi.com")) {
     return "Kimi Code";
@@ -97,14 +97,11 @@ export function providerLabel(baseUrl: string): string {
   if (lower.includes("dashscope.aliyuncs.com")) {
     return "Qwen (DashScope)";
   }
-  if (lower.includes("api.minimax.io")) {
+  if (lower.includes("api.minimax.io") || lower.includes("api.minimaxi.com")) {
     return "MiniMax";
   }
   if (lower.includes("volces.com") || lower.includes("volcengine.com")) {
     return "Volcano Engine";
-  }
-  if (lower.includes("bytepluses.com")) {
-    return "BytePlus";
   }
   const host = (() => {
     try {
