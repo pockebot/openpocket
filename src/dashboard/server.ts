@@ -3054,8 +3054,13 @@ export class DashboardServer {
             " · delay " + formatDuration(step.loopDelayMs)
           );
         }
+        const overheadBeforeExec = Number(step.screenshotMs || 0) + Number(step.modelInferenceMs || 0);
+        const parsedStart = Date.parse(String(step.startedAt || ""));
+        const trueStart = Number.isFinite(parsedStart) && overheadBeforeExec > 0
+          ? formatTime(new Date(parsedStart - overheadBeforeExec).toISOString())
+          : formatTime(step.startedAt);
         metaParts.push(
-          formatTime(step.startedAt) +
+          trueStart +
           (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : "")
         );
         meta.textContent = metaParts.join("  |  ");
@@ -4633,9 +4638,14 @@ export class DashboardServer {
           + Number(step.screenshotMs || 0)
           + Number(step.modelInferenceMs || 0);
         const inlineHasBreakdown = timing.length > 0;
+        const inlineOverhead = Number(step.screenshotMs || 0) + Number(step.modelInferenceMs || 0);
+        const inlineParsedStart = Date.parse(String(step.startedAt || ""));
+        const inlineTrueStart = Number.isFinite(inlineParsedStart) && inlineOverhead > 0
+          ? formatTime(new Date(inlineParsedStart - inlineOverhead).toISOString())
+          : formatTime(step.startedAt);
         metaLine.textContent =
           "App: " + String(step.currentApp || "unknown") +
-          " | " + formatTime(step.startedAt) + " → " + formatTime(step.endedAt) +
+          " | " + inlineTrueStart + " → " + formatTime(step.endedAt) +
           " | total " + formatDuration(inlineHasBreakdown ? inlineTotalMs : step.durationMs) +
           (inlineHasBreakdown ? " (exec " + formatDuration(step.durationMs) + " · " + timing.join(" · ") + ")" : "");
         card.appendChild(metaLine);
