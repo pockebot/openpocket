@@ -191,7 +191,7 @@ test("setup wizard applies provider key to selected provider only", async () => 
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, true, false, false],
-      selects: ["emulator", "autoglm-phone", "config", "skip", "pairing", "skip", "disabled"],
+      selects: ["emulator", "zai/glm-5", "config", "skip", "pairing", "skip", "disabled"],
       texts: ["", "zai-test-key"],
       pauseCount: 0,
     });
@@ -200,7 +200,8 @@ test("setup wizard applies provider key to selected provider only", async () => 
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.models["autoglm-phone"].apiKey, "zai-test-key");
+    assert.equal(savedCfg.models["zai/glm-5"].apiKey, "zai-test-key");
+    assert.equal(savedCfg.models["zai/glm-4.7"].apiKey, "zai-test-key");
     assert.equal(savedCfg.models["gpt-5.2-codex"].apiKey, "");
     assert.equal(savedCfg.models["claude-sonnet-4.6"].apiKey, "");
   });
