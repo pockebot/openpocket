@@ -226,12 +226,30 @@
       "reasoningEffort": null,
       "temperature": null
     },
-    "autoglm-phone": {
+    "zai/glm-5": {
       "baseUrl": "https://api.z.ai/api/paas/v4",
-      "model": "autoglm-phone-multilingual",
+      "model": "glm-5",
       "apiKey": "",
-      "apiKeyEnv": "AUTOGLM_API_KEY",
-      "maxTokens": 3000,
+      "apiKeyEnv": "ZAI_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "zai/glm-4.7": {
+      "baseUrl": "https://api.z.ai/api/paas/v4",
+      "model": "glm-4.7",
+      "apiKey": "",
+      "apiKeyEnv": "ZAI_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "zai/glm-4.7-flash": {
+      "baseUrl": "https://api.z.ai/api/paas/v4",
+      "model": "glm-4.7-flash",
+      "apiKey": "",
+      "apiKeyEnv": "ZAI_API_KEY",
+      "maxTokens": 4096,
       "reasoningEffort": null,
       "temperature": null
     },
@@ -355,15 +373,6 @@
     "volcengine/deepseek-v3-2": {
       "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
       "model": "deepseek-v3-2-251201",
-      "apiKey": "",
-      "apiKeyEnv": "ARK_API_KEY",
-      "maxTokens": 4096,
-      "reasoningEffort": null,
-      "temperature": null
-    },
-    "byteplus/seed-1-8": {
-      "baseUrl": "https://ark.ap-southeast.bytepluses.com/api/v3",
-      "model": "seed-1-8-251228",
       "apiKey": "",
       "apiKeyEnv": "ARK_API_KEY",
       "maxTokens": 4096,

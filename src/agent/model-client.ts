@@ -135,8 +135,6 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
     provider = "openai";
   } else if (baseUrlLower.includes("volces.com") || baseUrlLower.includes("volcengine.com")) {
     provider = "openai";
-  } else if (baseUrlLower.includes("bytepluses.com")) {
-    provider = "openai";
   }
 
   return {

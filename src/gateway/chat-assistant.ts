@@ -586,9 +586,12 @@ export class ChatAssistant {
             max_tokens: maxTokens,
             messages: [{ role: "user", content: prompt }],
           } as never);
-          output = typeof response.choices?.[0]?.message?.content === "string"
-            ? response.choices?.[0]?.message?.content.trim()
-            : "";
+          const msg = response.choices?.[0]?.message as
+            | { content?: string; reasoning_content?: string }
+            | undefined;
+          const text = typeof msg?.content === "string" ? msg.content.trim() : "";
+          output = text
+            || (typeof msg?.reasoning_content === "string" ? msg.reasoning_content.trim() : "");
         } else {
           const response = await client.completions.create({
             model,
@@ -1537,7 +1540,7 @@ export class ChatAssistant {
     maxTokens: number,
     prompt: string,
   ): Promise<BootstrapModelDecision | null> {
-    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 500), prompt, "bootstrap onboarding");
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 1024), prompt, "bootstrap onboarding");
     if (!output) {
       return null;
     }
@@ -1591,7 +1594,7 @@ export class ChatAssistant {
     maxTokens: number,
     prompt: string,
   ): Promise<TaskProgressNarrationDecision | null> {
-    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 260), prompt, "progress narration");
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 800), prompt, "progress narration");
     if (!output) {
       return null;
     }
@@ -1621,7 +1624,7 @@ export class ChatAssistant {
     maxTokens: number,
     prompt: string,
   ): Promise<string | null> {
-    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 300), prompt, "task outcome narration");
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 1024), prompt, "task outcome narration");
     if (!output) {
       return null;
     }
@@ -1645,7 +1648,7 @@ export class ChatAssistant {
     maxTokens: number,
     prompt: string,
   ): Promise<string | null> {
-    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 260), prompt, "escalation narration");
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 800), prompt, "escalation narration");
     if (!output) {
       return null;
     }
@@ -2199,17 +2202,19 @@ export class ChatAssistant {
       `User message: ${inputText}`,
     ].join("\n");
 
-    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 300), prompt, "classify");
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 1024), prompt, "classify");
     if (!output) {
       throw new Error("classify failed: all endpoint modes returned empty output");
     }
 
     const jsonText = extractJsonObjectText(output);
+    // eslint-disable-next-line no-console
+    console.log(`[OpenPocket][chat] classify raw output (${output.length} chars): ${output.slice(0, 500)}`);
 
     try {
       const parsed = JSON.parse(jsonText) as Partial<ChatDecision>;
       const mode = parsed.mode === "task" ? "task" : "chat";
-      return {
+      const result: ChatDecision = {
         mode,
         task: typeof parsed.task === "string" ? parsed.task.trim() : "",
         reply: typeof parsed.reply === "string" ? parsed.reply.trim() : "",
@@ -2221,7 +2226,12 @@ export class ChatAssistant {
         requiresExternalObservation: parsed.requiresExternalObservation === true,
         canAnswerDirectly: parsed.canAnswerDirectly !== false,
       };
+      // eslint-disable-next-line no-console
+      console.log(`[OpenPocket][chat] classify parsed: mode=${result.mode} confidence=${result.confidence} reason=${result.reason}`);
+      return result;
     } catch {
+      // eslint-disable-next-line no-console
+      console.warn(`[OpenPocket][chat] classify JSON parse failed, jsonText: ${jsonText.slice(0, 300)}`);
       return {
         mode: "chat",
         task: "",
@@ -2268,7 +2278,7 @@ export class ChatAssistant {
       `User message: ${inputText}`,
     ].join("\n");
 
-    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 240), prompt, "grounding audit");
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 800), prompt, "grounding audit");
     if (!output) {
       throw new Error("grounding audit failed: all endpoint modes returned empty output");
     }
