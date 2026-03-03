@@ -75,6 +75,39 @@ Runtime and target references:
 - Device targets: [https://www.openpocket.ai/get-started/device-targets](https://www.openpocket.ai/get-started/device-targets)
 - CLI and gateway reference: [https://www.openpocket.ai/reference/cli-and-gateway](https://www.openpocket.ai/reference/cli-and-gateway)
 
+### Manage model profiles
+
+```bash
+openpocket model show
+openpocket model list
+openpocket model set --name gpt-5.3-codex
+openpocket model set --provider google --model gemini-3.1-pro-preview
+```
+
+### Control gateway log noise
+
+Set `gatewayLogging` in config to tune level, payload redaction, and module-level output:
+
+```json
+{
+  "gatewayLogging": {
+    "level": "info",
+    "includePayloads": false,
+    "maxPayloadChars": 160,
+    "modules": {
+      "core": true,
+      "access": true,
+      "task": true,
+      "channel": true,
+      "cron": true,
+      "heartbeat": false,
+      "humanAuth": true,
+      "chat": false
+    }
+  }
+}
+```
+
 ## Detailed Architecture
 
 ```mermaid

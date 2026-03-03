@@ -6,6 +6,7 @@
 openpocket [--config <path>] install-cli
 openpocket [--config <path>] onboard
 openpocket [--config <path>] config-show
+openpocket [--config <path>] model show|list|set [--name <profile>|<profile>] [--provider <provider> --model <model-id>]
 openpocket [--config <path>] target show
 openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--cloud-provider <name>] [--pin <4-digit>] [--wakeup-interval <sec>] [--clear-device] [--clear-adb-endpoint] [--clear-pin] [--clear-wakeup-interval]
 openpocket [--config <path>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
@@ -15,6 +16,9 @@ openpocket [--config <path>] emulator type --text <text> [--device <id>]
 openpocket [--config <path>] agent [--model <name>] <task>
 openpocket [--config <path>] skills list
 openpocket [--config <path>] script run [--file <path> | --text <script>] [--timeout <sec>]
+openpocket [--config <path>] channels login --channel <name>
+openpocket [--config <path>] channels whoami [--channel <name>]
+openpocket [--config <path>] channels list
 openpocket [--config <path>] telegram setup|whoami
 openpocket [--config <path>] gateway [start|telegram]
 openpocket [--config <path>] dashboard start [--host <host>] [--port <port>]
@@ -101,10 +105,10 @@ Behavior:
 Startup sequence:
 
 1. load config
-2. validate Telegram token source (`config.telegram.botToken` or env)
+2. validate configured channel credentials
 3. ensure selected target device is online
 4. ensure dashboard is running
-5. initialize Telegram gateway runtime
+5. initialize gateway runtime
 6. start polling + heartbeat + cron
 
 Step 3 behavior:
@@ -118,6 +122,23 @@ When human auth is enabled, gateway can auto-start:
 - ngrok tunnel (`humanAuth.tunnel.provider=ngrok` and `humanAuth.tunnel.ngrok.enabled=true`)
 
 Gateway startup also attempts Telegram bot display-name sync from `workspace/IDENTITY.md` (`- Name:`).
+
+## Model Profile Management
+
+Examples:
+
+```bash
+openpocket model show
+openpocket model list
+openpocket model set --name gpt-5.3-codex
+openpocket model set --provider google --model gemini-3.1-pro-preview
+```
+
+Notes:
+
+- `model set --name <profile>` switches to an existing profile key.
+- `model set --provider <provider> --model <model-id>` creates/updates a profile from provider presets and switches default model to it.
+- provider/model selection is also available during `openpocket onboard`.
 
 ## Telegram Commands
 
@@ -247,6 +268,17 @@ Before sending model/task content back to chat:
 - compact and length-limit output
 
 This keeps user-facing messages concise and avoids local path leakage.
+
+## Gateway Logging Controls
+
+`gatewayLogging` config controls runtime log volume and sensitivity:
+
+- `level`: `error|warn|info|debug`
+- `modules`: independently enable/disable `core/access/task/channel/cron/heartbeat/humanAuth/chat`
+- `includePayloads`: when `false`, payload-like fields are hidden
+- `maxPayloadChars`: payload preview truncation bound (`40..1000`)
+
+This replaces hardcoded heartbeat suppression with explicit config policy.
 
 ## Related Specs
 

@@ -38,7 +38,7 @@
 
 - ensure `humanAuth.enabled=true`
 - ensure gateway started with `humanAuth.useLocalRelay=true`
-- check gateway logs for local relay startup failure
+- check gateway logs for local relay startup failure (`[gateway-core][humanAuth]` / `[human-auth]`)
 - use `/auth pending` to verify request creation even when web link fallback is unavailable
 - if running PermissionLab E2E, use `openpocket test permission-app run --chat <id>` so gateway sends auth link automatically
 
@@ -76,3 +76,9 @@
 - inspect `result.json` and `stderr.log` in run directory
 - confirm command is in `scriptExecutor.allowedCommands`
 - check deny patterns (for example `sudo`, `shutdown`, `rm -rf /`)
+
+## Gateway logs are too noisy (or too quiet)
+
+- set `gatewayLogging.level` to `warn` (quiet) or `debug` (verbose)
+- tune module switches under `gatewayLogging.modules` (for example disable `heartbeat` and `chat` in production)
+- if payload fields appear hidden but you need them temporarily, set `gatewayLogging.includePayloads=true` and keep `maxPayloadChars` small

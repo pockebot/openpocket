@@ -44,7 +44,7 @@ For human-auth relay:
 Loader maps old keys automatically, including:
 
 - top-level: `project_name`, `workspace_dir`, `state_dir`, `default_model`, `script_executor`, `coding_tools`, `memory_tools`
-- top-level aliases: `heartbeat_config`, `cron_config`, `dashboard_config`, `human_auth`
+- top-level aliases: `heartbeat_config`, `cron_config`, `dashboard_config`, `gateway_logging`, `human_auth`
 - nested: `avd_name`, `android_sdk_root`, `bot_token`, `max_steps`, `system_prompt_mode`, `context_budget_chars`, `save_step_screenshots`, `allowed_commands`, `base_url`, `api_key`, `reasoning_effort`, etc.
 
 After `onboard`, saved config uses camelCase keys.
@@ -70,11 +70,16 @@ Normalization enforces:
 - `heartbeat.stuckTaskWarnSec >= 30`
 - `cron.tickSec >= 2`
 - `dashboard.port` in `1..65535`
+- `gatewayLogging.level` in `error|warn|info|debug` (invalid -> `info`)
+- `gatewayLogging.maxPayloadChars` clamped to `40..1000`
 - `humanAuth.localRelayPort` in `1..65535`
 - `humanAuth.requestTimeoutSec >= 30`
 - `humanAuth.pollIntervalMs >= 500`
 - `humanAuth.tunnel.provider` in `none|ngrok`
 - `humanAuth.tunnel.ngrok.startupTimeoutSec >= 3`
+- model `baseUrl` normalization:
+  - Google AI Studio endpoints auto-normalize bare host to `/v1beta`
+  - Anthropic `/v1` base URL auto-normalizes to root endpoint
 
 If `defaultModel` does not exist in `models`, startup throws.
 

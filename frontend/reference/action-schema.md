@@ -246,16 +246,50 @@ When fields are missing/invalid, runtime normalizes as follows:
 ## Current Screen Snapshot Schema
 
 ```ts
+interface ScreenSnapshotCaptureMetrics {
+  totalMs: number;
+  ensureReadyMs: number;
+  screencapMs: number;
+  screenSizeMs: number;
+  currentAppMs: number;
+  scaleMs: number;
+  uiDumpMs: number;
+  overlayMs: number;
+  uiElementsSource: "fresh" | "cache" | "cache_fallback" | "fresh_empty";
+  uiElementsCount: number;
+  visualHash: string;
+  visualHashHammingDistance: number | null;
+  uiDumpTimedOut: boolean;
+}
+
+interface UiElementSnapshot {
+  id: string;
+  text: string;
+  contentDesc: string;
+  resourceId: string;
+  className: string;
+  clickable: boolean;
+  enabled: boolean;
+  bounds: { left: number; top: number; right: number; bottom: number };
+  center: { x: number; y: number };
+  scaledBounds: { left: number; top: number; right: number; bottom: number };
+  scaledCenter: { x: number; y: number };
+}
+
 interface ScreenSnapshot {
   deviceId: string;
   currentApp: string;
   width: number;
   height: number;
   screenshotBase64: string;
+  somScreenshotBase64: string | null;
   capturedAt: string;
   scaleX: number;
   scaleY: number;
   scaledWidth: number;
   scaledHeight: number;
+  installedPackages?: string[];
+  uiElements: UiElementSnapshot[];
+  captureMetrics?: ScreenSnapshotCaptureMetrics;
 }
 ```
