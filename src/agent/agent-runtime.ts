@@ -1123,10 +1123,11 @@ export class AgentRuntime {
     try {
       const dir = this.modelInputDirForSession(params.sessionId);
       const stepTag = String(params.step).padStart(3, "0");
-      const systemPromptPath = path.join(dir, "system-prompt.txt");
-      if (!fs.existsSync(systemPromptPath)) {
-        fs.writeFileSync(systemPromptPath, `${params.systemPrompt}\n`, "utf-8");
-      }
+      // Always persist a step-scoped system prompt snapshot for reliable post-run debugging.
+      // Keep session-level file for backward compatibility and quick "latest prompt" lookup.
+      const systemPromptPath = path.join(dir, `step-${stepTag}-system-prompt.txt`);
+      fs.writeFileSync(systemPromptPath, `${params.systemPrompt}\n`, "utf-8");
+      fs.writeFileSync(path.join(dir, "system-prompt.txt"), `${params.systemPrompt}\n`, "utf-8");
       const userPromptPath = path.join(dir, `step-${stepTag}-user-prompt.txt`);
       fs.writeFileSync(userPromptPath, `${params.userPrompt}\n`, "utf-8");
 
