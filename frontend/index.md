@@ -6,6 +6,7 @@ titleTemplate: false
 ---
 
 <script setup>
+import { computed, ref } from "vue";
 import { withBase } from "vitepress";
 
 function onVideoEnd(e) {
@@ -24,8 +25,13 @@ const modelSupport = [
   { id: "blockrun/gpt-4o", provider: "Blockrun", model: "GPT-4o", logo: "/models/openai.svg" },
   { id: "blockrun/claude-sonnet-4", provider: "Blockrun", model: "Claude Sonnet 4", logo: "/models/anthropic.svg" },
   { id: "blockrun/gemini-2.0-flash", provider: "Blockrun", model: "Gemini 2.0 Flash", logo: "/models/gemini.svg" },
+  { id: "google/gemini-2.0-flash", provider: "Google AI Studio", model: "Gemini 2.0 Flash", logo: "/models/gemini.svg" },
+  { id: "google/gemini-3-pro-preview", provider: "Google AI Studio", model: "Gemini 3 Pro Preview", logo: "/models/gemini.svg" },
+  { id: "google/gemini-3.1-pro-preview", provider: "Google AI Studio", model: "Gemini 3.1 Pro Preview", logo: "/models/gemini.svg" },
   { id: "blockrun/deepseek-chat", provider: "Blockrun", model: "DeepSeek Chat", logo: "/models/deepseek.svg" },
-  { id: "autoglm-phone", provider: "Z.ai", model: "AutoGLM Phone", logo: "/models/zai.svg" },
+  { id: "zai/glm-5", provider: "Z.AI (GLM)", model: "GLM-5", logo: "/models/zai.svg" },
+  { id: "zai/glm-4.7", provider: "Z.AI (GLM)", model: "GLM-4.7", logo: "/models/zai.svg" },
+  { id: "zai/glm-4.7-flash", provider: "Z.AI (GLM)", model: "GLM-4.7 Flash", logo: "/models/zai.svg" },
   { id: "kimi-k2-turbo-preview", provider: "Moonshot AI", model: "Kimi K2 Turbo Preview", logo: "/models/moonshot.svg" },
   { id: "kimi-k2.5", provider: "Moonshot AI", model: "Kimi K2.5", logo: "/models/moonshot.svg" },
   { id: "kimi-k2-thinking", provider: "Moonshot AI", model: "Kimi K2 Thinking", logo: "/models/moonshot.svg" },
@@ -40,8 +46,14 @@ const modelSupport = [
   { id: "minimax-m2.1", provider: "MiniMax", model: "MiniMax M2.1", logo: "/models/minimax.svg" },
   { id: "volcengine/doubao-seed-1-8", provider: "Volcano Engine", model: "Doubao Seed 1.8", logo: "/models/doubao.svg" },
   { id: "volcengine/deepseek-v3-2", provider: "Volcano Engine", model: "DeepSeek V3.2", logo: "/models/deepseek.svg" },
-  { id: "byteplus/seed-1-8", provider: "BytePlus", model: "Seed 1.8", logo: "/models/bytedance.svg" },
 ];
+
+const modelSupportCollapsedCount = 9;
+const showAllModels = ref(false);
+const visibleModelSupport = computed(() =>
+  showAllModels.value ? modelSupport : modelSupport.slice(0, modelSupportCollapsedCount),
+);
+const hasMoreModels = computed(() => modelSupport.length > modelSupportCollapsedCount);
 </script>
 
 <div class="op-landing">
@@ -166,21 +178,36 @@ const modelSupport = [
     </article>
     <article class="op-support-item">
       <h3>Model Support</h3>
-      <div class="op-model-grid">
-        <article class="op-model-card" v-for="item in modelSupport" :key="item.id">
-          <div class="op-model-logo-box">
-            <img
-              class="op-model-logo"
-              :src="withBase(item.logo)"
-              :alt="`${item.provider} logo for ${item.model}`"
-              :title="`${item.provider} / ${item.model}`"
-            />
-          </div>
-          <div class="op-model-meta">
-            <p class="op-model-provider">{{ item.provider }}</p>
-            <p class="op-model-name">{{ item.model }}</p>
-          </div>
-        </article>
+      <div class="op-model-panel">
+        <div class="op-model-grid">
+          <article class="op-model-card" v-for="item in visibleModelSupport" :key="item.id">
+            <div class="op-model-logo-box">
+              <img
+                class="op-model-logo"
+                :src="withBase(item.logo)"
+                :alt="`${item.provider} logo for ${item.model}`"
+                :title="`${item.provider} / ${item.model}`"
+              />
+            </div>
+            <div class="op-model-meta">
+              <p class="op-model-provider">{{ item.provider }}</p>
+              <p class="op-model-name">{{ item.model }}</p>
+            </div>
+          </article>
+        </div>
+        <button
+          v-if="hasMoreModels"
+          class="op-model-toggle"
+          :class="{ 'is-expanded': showAllModels }"
+          type="button"
+          :aria-expanded="showAllModels ? 'true' : 'false'"
+          @click="showAllModels = !showAllModels"
+        >
+          <span>{{ showAllModels ? "Show Less" : `Show All (${modelSupport.length})` }}</span>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m3.333 6 4.667 4.667L12.667 6" />
+          </svg>
+        </button>
       </div>
     </article>
   </div>
