@@ -3054,8 +3054,13 @@ export class DashboardServer {
             " · delay " + formatDuration(step.loopDelayMs)
           );
         }
+        const overheadBeforeExec = Number(step.screenshotMs || 0) + Number(step.modelInferenceMs || 0);
+        const parsedStart = Date.parse(String(step.startedAt || ""));
+        const trueStart = Number.isFinite(parsedStart) && overheadBeforeExec > 0
+          ? formatTime(new Date(parsedStart - overheadBeforeExec).toISOString())
+          : formatTime(step.startedAt);
         metaParts.push(
-          formatTime(step.startedAt) +
+          trueStart +
           (step.endedAt ? " \\u2192 " + formatTime(step.endedAt) : "")
         );
         meta.textContent = metaParts.join("  |  ");
@@ -4107,16 +4112,15 @@ export class DashboardServer {
       if (text.includes("api.openai.com")) return "OpenAI";
       if (text.includes("openrouter.ai")) return "OpenRouter";
       if (text.includes("blockrun.ai")) return "BlockRun";
-      if (text.includes("api.z.ai")) return "AutoGLM";
+      if (text.includes("api.z.ai") || text.includes("bigmodel.cn")) return "Z.AI (GLM)";
       if (text.includes("api.kimi.com")) return "Kimi Code";
       if (text.includes("moonshot.cn") || text.includes("moonshot.ai")) return "Moonshot AI";
       if (text.includes("anthropic.com")) return "Anthropic";
       if (text.includes("googleapis.com")) return "Google";
       if (text.includes("api.deepseek.com")) return "DeepSeek";
       if (text.includes("dashscope.aliyuncs.com")) return "Qwen (DashScope)";
-      if (text.includes("api.minimax.io")) return "MiniMax";
+      if (text.includes("api.minimax.io") || text.includes("api.minimaxi.com")) return "MiniMax";
       if (text.includes("volces.com") || text.includes("volcengine.com")) return "Volcano Engine";
-      if (text.includes("bytepluses.com")) return "BytePlus";
       try { return new URL(baseUrl).host || "custom"; } catch { return "custom"; }
     }
 
@@ -4339,6 +4343,8 @@ export class DashboardServer {
       padding: 14px;
       display: grid;
       gap: 10px;
+      min-width: 0;
+      overflow: hidden;
     }
     .step.error { border-left-color: var(--err); }
     .step-head {
@@ -4633,9 +4639,14 @@ export class DashboardServer {
           + Number(step.screenshotMs || 0)
           + Number(step.modelInferenceMs || 0);
         const inlineHasBreakdown = timing.length > 0;
+        const inlineOverhead = Number(step.screenshotMs || 0) + Number(step.modelInferenceMs || 0);
+        const inlineParsedStart = Date.parse(String(step.startedAt || ""));
+        const inlineTrueStart = Number.isFinite(inlineParsedStart) && inlineOverhead > 0
+          ? formatTime(new Date(inlineParsedStart - inlineOverhead).toISOString())
+          : formatTime(step.startedAt);
         metaLine.textContent =
           "App: " + String(step.currentApp || "unknown") +
-          " | " + formatTime(step.startedAt) + " → " + formatTime(step.endedAt) +
+          " | " + inlineTrueStart + " → " + formatTime(step.endedAt) +
           " | total " + formatDuration(inlineHasBreakdown ? inlineTotalMs : step.durationMs) +
           (inlineHasBreakdown ? " (exec " + formatDuration(step.durationMs) + " · " + timing.join(" · ") + ")" : "");
         card.appendChild(metaLine);

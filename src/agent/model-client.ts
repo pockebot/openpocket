@@ -131,12 +131,9 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
     provider = "openai";
   } else if (baseUrlLower.includes("dashscope.aliyuncs.com")) {
     provider = "openai";
-  } else if (baseUrlLower.includes("api.minimax.io")) {
-    api = "anthropic-messages";
-    provider = "minimax";
-  } else if (baseUrlLower.includes("volces.com") || baseUrlLower.includes("volcengine.com")) {
+  } else if (baseUrlLower.includes("minimax.io") || baseUrlLower.includes("minimaxi.com")) {
     provider = "openai";
-  } else if (baseUrlLower.includes("bytepluses.com")) {
+  } else if (baseUrlLower.includes("volces.com") || baseUrlLower.includes("volcengine.com")) {
     provider = "openai";
   }
 

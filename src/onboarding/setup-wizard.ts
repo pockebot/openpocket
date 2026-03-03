@@ -204,8 +204,8 @@ function providerFromBaseUrl(baseUrl: string): string {
   if (lower.includes("generativelanguage.googleapis.com") || lower.includes("googleapis.com")) {
     return "Google AI Studio";
   }
-  if (lower.includes("api.z.ai")) {
-    return "AutoGLM";
+  if (lower.includes("api.z.ai") || lower.includes("bigmodel.cn")) {
+    return "Z.AI (GLM)";
   }
   if (lower.includes("api.kimi.com")) {
     return "Kimi Code";
@@ -219,14 +219,11 @@ function providerFromBaseUrl(baseUrl: string): string {
   if (lower.includes("dashscope.aliyuncs.com")) {
     return "Qwen (DashScope)";
   }
-  if (lower.includes("api.minimax.io")) {
+  if (lower.includes("api.minimax.io") || lower.includes("api.minimaxi.com")) {
     return "MiniMax";
   }
   if (lower.includes("volces.com") || lower.includes("volcengine.com")) {
     return "Volcano Engine";
-  }
-  if (lower.includes("bytepluses.com")) {
-    return "BytePlus";
   }
   try {
     const host = new URL(baseUrl).host;
@@ -288,6 +285,9 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   if (profileKey === "autoglm-phone") {
     return "AutoGLM Phone (Z.ai)";
   }
+  if (profileKey.startsWith("zai/")) {
+    return `Z.AI ${profileKey.replace("zai/", "").toUpperCase()}`;
+  }
   if (profileKey === "kimi-k2-turbo-preview") {
     return "Kimi K2 Turbo Preview (Moonshot AI)";
   }
@@ -329,9 +329,6 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   }
   if (profileKey === "volcengine/deepseek-v3-2") {
     return "DeepSeek V3.2 (Volcano Engine)";
-  }
-  if (profileKey === "byteplus/seed-1-8") {
-    return "Seed 1.8 (BytePlus)";
   }
   return `${profile.model} (${providerFromBaseUrl(profile.baseUrl)})`;
 }
