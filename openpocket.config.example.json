@@ -326,7 +326,7 @@
       "temperature": null
     },
     "minimax-m2.5": {
-      "baseUrl": "https://api.minimax.io/anthropic",
+      "baseUrl": "https://api.minimaxi.com/v1",
       "model": "MiniMax-M2.5",
       "apiKey": "",
       "apiKeyEnv": "MINIMAX_API_KEY",
@@ -335,7 +335,7 @@
       "temperature": null
     },
     "minimax-m2.1": {
-      "baseUrl": "https://api.minimax.io/anthropic",
+      "baseUrl": "https://api.minimaxi.com/v1",
       "model": "MiniMax-M2.1",
       "apiKey": "",
       "apiKeyEnv": "MINIMAX_API_KEY",

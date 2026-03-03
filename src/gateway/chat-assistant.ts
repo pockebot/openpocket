@@ -448,16 +448,13 @@ export class ChatAssistant {
 
   private isAnthropicEndpoint(client: OpenAI): boolean {
     const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
-    return baseUrl.includes("api.kimi.com") || baseUrl.includes("anthropic.com") || baseUrl.includes("api.minimax.io");
+    return baseUrl.includes("api.kimi.com") || baseUrl.includes("anthropic.com");
   }
 
   private detectAnthropicProvider(client: OpenAI): string {
     const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
     if (baseUrl.includes("api.kimi.com")) {
       return "kimi-coding";
-    }
-    if (baseUrl.includes("api.minimax.io")) {
-      return "minimax";
     }
     return "anthropic";
   }
@@ -511,7 +508,8 @@ export class ChatAssistant {
 
     const text = this.extractPiAiAssistantText(response);
     if (!text) {
-      throw new Error("Anthropic transport returned empty text output.");
+      const errMsg = (response as { errorMessage?: string }).errorMessage ?? "";
+      throw new Error(errMsg ? `Anthropic transport error: ${errMsg}` : "Anthropic transport returned empty text output.");
     }
     return text;
   }
