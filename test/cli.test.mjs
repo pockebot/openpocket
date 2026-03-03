@@ -445,6 +445,45 @@ test("model set updates default model persistently", () => {
   assert.equal(cfg.defaultModel, "google/gemini-3.1-pro-preview");
 });
 
+test("model set supports provider+model upsert and switches default profile", () => {
+  const home = makeHome("openpocket-ts-model-set-provider-model-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    ["model", "set", "--provider", "anthropic", "--model", "claude-opus-4-6"],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.match(run.stdout, /Default model updated/i);
+  assert.match(run.stdout, /anthropic\/claude-opus-4-6/i);
+  assert.match(run.stdout, /Anthropic/i);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.defaultModel, "anthropic/claude-opus-4-6");
+  assert.equal(cfg.models["anthropic/claude-opus-4-6"].baseUrl, "https://api.anthropic.com/v1");
+  assert.equal(cfg.models["anthropic/claude-opus-4-6"].model, "claude-opus-4-6");
+  assert.equal(cfg.models["anthropic/claude-opus-4-6"].apiKeyEnv, "ANTHROPIC_API_KEY");
+});
+
+test("model set --provider rejects unknown provider key", () => {
+  const home = makeHome("openpocket-ts-model-set-provider-unknown-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const run = runCli(
+    ["model", "set", "--provider", "unknown-provider", "--model", "claude-opus-4-6"],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /Unknown provider/i);
+});
+
 test("model set rejects unknown profile", () => {
   const home = makeHome("openpocket-ts-model-set-unknown-");
   const init = runCli(["init"], { OPENPOCKET_HOME: home });

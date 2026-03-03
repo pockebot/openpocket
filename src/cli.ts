@@ -30,6 +30,12 @@ import { ensureAndroidPrerequisites } from "./environment/android-prerequisites.
 import { PermissionLabManager } from "./test/permission-lab.js";
 import { createCliTheme, createOpenPocketBanner, type CliStepStatus, type CliTone } from "./utils/cli-theme.js";
 import { openpocketHome } from "./utils/paths.js";
+import {
+  buildModelProfileFromPreset,
+  deriveModelProfileKey,
+  listModelProviderPresetKeys,
+  resolveModelProviderPreset,
+} from "./config/model-provider-presets.js";
 import type { OpenPocketConfig } from "./types.js";
 import {
   deviceTargetLabel,
@@ -92,7 +98,7 @@ Usage:
   openpocket [--config <path>] install-cli
   openpocket [--config <path>] onboard [--force] [--target <type>]
   openpocket [--config <path>] config-show
-  openpocket [--config <path>] model show|list|set [--name <profile>|<profile>]
+  openpocket [--config <path>] model show|list|set [--name <profile>|<profile>] [--provider <provider> --model <model-id>]
   openpocket [--config <path>] target show
   openpocket [--config <path>] target set|set-target|config --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
   openpocket [--config <path>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
@@ -127,6 +133,8 @@ Examples:
   openpocket model list
   openpocket model set --name google/gemini-3.1-pro-preview
   openpocket model set gpt-5.2-codex
+  openpocket model set --provider anthropic --model claude-opus-4-6
+  openpocket model set --provider anthropic --model claude-opus-4-6 --name claude-opus-4.6-anthropic
   openpocket target set --type physical-phone --pin 1234
   openpocket target set-target --type physical-phone
   openpocket target set --type emulator --pin 1234
@@ -428,6 +436,7 @@ function modelProviderLabel(baseUrl: string): string {
   const lower = baseUrl.toLowerCase();
   if (lower.includes("api.openai.com")) return "OpenAI";
   if (lower.includes("openrouter.ai")) return "OpenRouter";
+  if (lower.includes("anthropic.com")) return "Anthropic";
   if (lower.includes("generativelanguage.googleapis.com") || lower.includes("googleapis.com")) {
     return "Google AI Studio";
   }
@@ -437,7 +446,7 @@ function modelProviderLabel(baseUrl: string): string {
   if (lower.includes("moonshot.cn") || lower.includes("moonshot.ai")) return "Moonshot AI";
   if (lower.includes("api.deepseek.com")) return "DeepSeek";
   if (lower.includes("dashscope.aliyuncs.com")) return "Qwen (DashScope)";
-  if (lower.includes("api.minimax.io")) return "MiniMax";
+  if (lower.includes("api.minimax.io") || lower.includes("api.minimaxi.com")) return "MiniMax";
   if (lower.includes("volces.com") || lower.includes("volcengine.com")) return "Volcano Engine";
   if (lower.includes("bytepluses.com")) return "BytePlus";
   try {
@@ -955,12 +964,45 @@ async function runModelCommand(configPath: string | undefined, args: string[]): 
       printRaw(`${marker} ${profileKey} | ${modelProviderLabel(profile.baseUrl)} | ${profile.model}`);
     }
     printRaw("\nUse `openpocket model set --name <profile>` to switch default model.");
+    printRaw("Or `openpocket model set --provider <provider> --model <model-id> [--name <profile>]` to upsert+switch.");
     return 0;
   }
 
   const { value: nameOption, rest: afterName } = takeOption(args.slice(1), "--name");
+  const { value: providerOption, rest: afterProvider } = takeOption(afterName, "--provider");
+  const { value: modelOption, rest: afterModel } = takeOption(afterProvider, "--model");
+
+  const providerRaw = providerOption?.trim() || "";
+  const modelIdRaw = modelOption?.trim() || "";
+  if (providerRaw || modelIdRaw) {
+    if (!providerRaw || !modelIdRaw) {
+      throw new Error(
+        "Usage: openpocket model set --provider <provider> --model <model-id> [--name <profile>]",
+      );
+    }
+    if (afterModel.length > 0) {
+      throw new Error(`Unexpected model set arguments: ${afterModel.join(" ")}`);
+    }
+    const preset = resolveModelProviderPreset(providerRaw);
+    if (!preset) {
+      throw new Error(
+        `Unknown provider: ${providerRaw}. Use one of: ${listModelProviderPresetKeys().join(", ")}`,
+      );
+    }
+    const profileKey = (nameOption?.trim() || "")
+      || deriveModelProfileKey(preset.key, modelIdRaw, cfg.models);
+    const existingProfile = cfg.models[profileKey];
+    cfg.models[profileKey] = buildModelProfileFromPreset(preset, modelIdRaw, existingProfile);
+    cfg.defaultModel = profileKey;
+    saveConfig(cfg);
+    printSuccess(`Default model updated: ${profileKey}`);
+    printInfo(`Upserted profile via provider/model: ${preset.label} | ${modelIdRaw}`);
+    printModelSummary(cfg);
+    return 0;
+  }
+
   let requested = nameOption?.trim() || "";
-  let rest = afterName;
+  let rest = afterModel;
   if (!requested && rest.length > 0) {
     requested = rest[0]?.trim() || "";
     rest = rest.slice(1);
@@ -969,7 +1011,9 @@ async function runModelCommand(configPath: string | undefined, args: string[]): 
     throw new Error(`Unexpected model set arguments: ${rest.join(" ")}`);
   }
   if (!requested) {
-    throw new Error("Usage: openpocket model set --name <profile> (or: openpocket model set <profile>)");
+    throw new Error(
+      "Usage: openpocket model set --name <profile> (or: openpocket model set <profile>), or openpocket model set --provider <provider> --model <model-id> [--name <profile>]",
+    );
   }
   if (!cfg.models[requested]) {
     throw new Error(`Unknown model profile: ${requested}`);

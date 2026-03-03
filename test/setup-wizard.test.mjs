@@ -207,6 +207,37 @@ test("setup wizard applies provider key to selected provider only", async () => 
   });
 });
 
+test("setup wizard supports custom provider+model profile in model selection", async () => {
+  await withTempHome("openpocket-setup-custom-provider-model-", async () => {
+    const cfg = loadConfig();
+    const prompter = new FakePrompter({
+      confirms: [true, true, false, false],
+      selects: [
+        "emulator",
+        "__custom_provider_model__",
+        "anthropic",
+        "claude-opus-4-6",
+        "skip",
+        "skip",
+        "pairing",
+        "skip",
+        "disabled",
+      ],
+      texts: ["", "claude-opus-4.6-anthropic"],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
+    assert.equal(savedCfg.defaultModel, "claude-opus-4.6-anthropic");
+    assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].baseUrl, "https://api.anthropic.com/v1");
+    assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].model, "claude-opus-4-6");
+    assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].apiKeyEnv, "ANTHROPIC_API_KEY");
+  });
+});
+
 test("setup wizard can configure physical phone target and skip emulator onboarding", async () => {
   await withTempHome("openpocket-setup-physical-target-", async () => {
     const cfg = loadConfig();

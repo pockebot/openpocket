@@ -10,6 +10,12 @@ import { createRequire } from "node:module";
 import type { DeviceTargetType, EmulatorStatus, ModelProfile, OpenPocketConfig } from "../types.js";
 import { saveConfig } from "../config/index.js";
 import { readCodexCliCredential } from "../config/codex-cli.js";
+import {
+  buildModelProfileFromPreset,
+  deriveModelProfileKey,
+  listModelProviderPresets,
+  resolveModelProviderPresetByBaseUrl,
+} from "../config/model-provider-presets.js";
 import { ensureDir, nowIso } from "../utils/paths.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
 import {
@@ -82,6 +88,9 @@ type ModelSelectionResult = {
   profileKey: string;
   authMode: ModelAuthMode;
 };
+
+const CUSTOM_PROVIDER_MODEL_SELECTION = "__custom_provider_model__";
+const CUSTOM_MODEL_ID_SELECTION = "__custom_model_id__";
 
 type ApiKeyChoice = "env" | "config" | "skip" | "config-existing";
 type TokenChoice = "env" | "config" | "skip" | "config-existing";
@@ -200,6 +209,9 @@ function providerFromBaseUrl(baseUrl: string): string {
   }
   if (lower.includes("openrouter.ai")) {
     return "OpenRouter";
+  }
+  if (lower.includes("anthropic.com")) {
+    return "Anthropic";
   }
   if (lower.includes("generativelanguage.googleapis.com") || lower.includes("googleapis.com")) {
     return "Google AI Studio";
@@ -358,6 +370,88 @@ function parseModelSelectionValue(value: string): ModelSelectionResult {
     profileKey: value,
     authMode: "api-key",
   };
+}
+
+async function runCustomProviderModelSelectionStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+): Promise<ModelSelectionResult> {
+  const presets = [...listModelProviderPresets()].sort((a, b) => a.label.localeCompare(b.label));
+  const currentPreset = resolveModelProviderPresetByBaseUrl(
+    config.models[config.defaultModel]?.baseUrl ?? "",
+  );
+
+  const providerKey = await prompter.select(
+    "Choose model provider",
+    presets.map((preset) => ({
+      value: preset.key,
+      label: preset.label,
+      hint: `${preset.baseUrl} | env ${preset.apiKeyEnv}`,
+    })),
+    currentPreset?.key ?? "openai",
+  );
+
+  const selectedPreset = presets.find((preset) => preset.key === providerKey);
+  if (!selectedPreset) {
+    throw new Error(`Unknown provider during setup: ${providerKey}`);
+  }
+
+  const modelChoice = await prompter.select(
+    "Choose model id",
+    [
+      ...selectedPreset.suggestedModelIds.map((modelId) => ({
+        value: modelId,
+        label: modelId,
+      })),
+      {
+        value: CUSTOM_MODEL_ID_SELECTION,
+        label: "Enter custom model id",
+      },
+    ],
+    selectedPreset.defaultModelId,
+  );
+
+  const selectedModelId = modelChoice === CUSTOM_MODEL_ID_SELECTION
+    ? (await prompter.text(
+        "Model id",
+        selectedPreset.defaultModelId,
+        (value) => (value.trim() ? null : "Model id cannot be empty."),
+      )).trim()
+    : modelChoice;
+
+  const autoProfileKey = deriveModelProfileKey(selectedPreset.key, selectedModelId, config.models);
+  const profileKeyInput = await prompter.text(
+    "Profile key to save in config.json (press Enter to keep auto key)",
+    autoProfileKey,
+    (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      if (/\s/.test(trimmed)) {
+        return "Profile key cannot contain spaces.";
+      }
+      return null;
+    },
+  );
+  const profileKey = profileKeyInput.trim() || autoProfileKey;
+  const existingProfile = config.models[profileKey];
+  config.models[profileKey] = buildModelProfileFromPreset(
+    selectedPreset,
+    selectedModelId,
+    existingProfile,
+  );
+
+  await prompter.note(
+    "Custom Model Profile",
+    [
+      `Provider: ${selectedPreset.label}`,
+      `Model id: ${selectedModelId}`,
+      `Profile key: ${profileKey}`,
+      `Base URL: ${selectedPreset.baseUrl}`,
+      `API key env: ${selectedPreset.apiKeyEnv}`,
+    ].join("\n"),
+  );
+
+  return { profileKey, authMode: "api-key" };
 }
 
 function resolveCodexHomeForDisplay(): string {
@@ -1235,7 +1329,7 @@ async function runModelSelectionStep(
     return a[0].localeCompare(b[0]);
   });
 
-  const options = sortedEntries.flatMap(([profileKey, profile]) => {
+  const options: SelectOption<string>[] = sortedEntries.flatMap(([profileKey, profile]) => {
     const baseOption: SelectOption<string> = {
       value: modelSelectionValue(profileKey, "api-key"),
       label: modelOptionLabel(profileKey, profile),
@@ -1253,12 +1347,19 @@ async function runModelSelectionStep(
       },
     ];
   });
+  options.push({
+    value: CUSTOM_PROVIDER_MODEL_SELECTION,
+    label: "Custom provider + model",
+    hint: "Create or update a profile using provider/model presets",
+  });
   const selectedRaw = await prompter.select(
     "Choose your default model profile",
     options,
     modelSelectionValue(config.defaultModel, "api-key"),
   );
-  const selection = parseModelSelectionValue(selectedRaw);
+  const selection = selectedRaw === CUSTOM_PROVIDER_MODEL_SELECTION
+    ? await runCustomProviderModelSelectionStep(config, prompter)
+    : parseModelSelectionValue(selectedRaw);
 
   config.defaultModel = selection.profileKey;
   saveConfig(config);
