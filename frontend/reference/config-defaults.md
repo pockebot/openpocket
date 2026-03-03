@@ -9,10 +9,17 @@ This page is the source-of-truth for current default config values and normaliza
   "projectName": "OpenPocket",
   "workspaceDir": "<absolute OPENPOCKET_HOME>/workspace",
   "stateDir": "<absolute OPENPOCKET_HOME>/state",
+  "sessionStorage": {
+    "mode": "unified",
+    "storePath": "<absolute OPENPOCKET_HOME>/workspace/sessions/sessions.json",
+    "markdownLog": true
+  },
   "defaultModel": "gpt-5.2-codex",
   "target": {
     "type": "emulator",
     "adbEndpoint": "",
+    "pin": "1234",
+    "wakeupIntervalSec": 3,
     "cloudProvider": ""
   },
   "emulator": {
@@ -34,6 +41,8 @@ This page is the source-of-truth for current default config values and normaliza
     "loopDelayMs": 1200,
     "progressReportInterval": 1,
     "returnHomeOnTaskEnd": true,
+    "autoArtifactsEnabled": true,
+    "skillsSpecMode": "mixed",
     "systemPromptMode": "full",
     "contextBudgetChars": 150000,
     "lang": "en",
@@ -127,6 +136,21 @@ This page is the source-of-truth for current default config values and normaliza
     "port": 51888,
     "autoOpenBrowser": false
   },
+  "gatewayLogging": {
+    "level": "info",
+    "includePayloads": false,
+    "maxPayloadChars": 160,
+    "modules": {
+      "core": true,
+      "access": true,
+      "task": true,
+      "channel": true,
+      "cron": true,
+      "heartbeat": false,
+      "humanAuth": true,
+      "chat": false
+    }
+  },
   "humanAuth": {
     "enabled": false,
     "useLocalRelay": true,
@@ -215,6 +239,33 @@ This page is the source-of-truth for current default config values and normaliza
       "reasoningEffort": null,
       "temperature": null
     },
+    "google/gemini-2.0-flash": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "gemini-2.0-flash",
+      "apiKey": "",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "google/gemini-3-pro-preview": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "gemini-3-pro-preview",
+      "apiKey": "",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "google/gemini-3.1-pro-preview": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "gemini-3.1-pro-preview",
+      "apiKey": "",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
     "blockrun/deepseek-chat": {
       "baseUrl": "https://api.blockrun.ai/v1",
       "model": "deepseek/deepseek-chat",
@@ -224,12 +275,12 @@ This page is the source-of-truth for current default config values and normaliza
       "reasoningEffort": null,
       "temperature": null
     },
-    "autoglm-phone": {
+    "zai/glm-5": {
       "baseUrl": "https://api.z.ai/api/paas/v4",
-      "model": "autoglm-phone-multilingual",
+      "model": "glm-5",
       "apiKey": "",
-      "apiKeyEnv": "AUTOGLM_API_KEY",
-      "maxTokens": 3000,
+      "apiKeyEnv": "ZAI_API_KEY",
+      "maxTokens": 4096,
       "reasoningEffort": null,
       "temperature": null
     }
@@ -265,12 +316,17 @@ Notes:
 - `heartbeat.stuckTaskWarnSec` is clamped to at least `30`.
 - `cron.tickSec` is clamped to at least `2`.
 - `dashboard.port` is clamped to `1..65535`.
+- `gatewayLogging.level` accepts only `error|warn|info|debug`.
+- `gatewayLogging.maxPayloadChars` is clamped to `40..1000`.
 - `humanAuth.localRelayPort` is clamped to `1..65535`.
 - `humanAuth.requestTimeoutSec` is clamped to at least `30`.
 - `humanAuth.pollIntervalMs` is clamped to at least `500`.
 - `humanAuth.tunnel.provider` accepts only `none|ngrok`.
 - `humanAuth.tunnel.ngrok.startupTimeoutSec` is clamped to at least `3`.
 - `allowedChatIds` is coerced to numeric array with non-finite values removed.
+- model `baseUrl` is normalized for known providers:
+  - Google Generative Language bare host -> `/v1beta`
+  - Anthropic `/v1` endpoint -> root endpoint
 - model `reasoningEffort` accepts only `low|medium|high|xhigh`, else `null`.
 - model `temperature` is `null` if absent/invalid.
 
@@ -316,7 +372,10 @@ Examples:
 - `memory_tools` -> `memoryTools`
 - `heartbeat_config` -> `heartbeat`
 - `cron_config` -> `cron`
+- `gateway_logging` -> `gatewayLogging`
 - `human_auth` -> `humanAuth`
+- `include_payloads` -> `includePayloads`
+- `max_payload_chars` -> `maxPayloadChars`
 - `allowed_commands` -> `allowedCommands`
 - `base_url` -> `baseUrl`
 - `reasoning_effort` -> `reasoningEffort`

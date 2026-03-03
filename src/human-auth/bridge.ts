@@ -121,10 +121,17 @@ export interface HumanAuthPendingSummary {
 
 export class HumanAuthBridge {
   private readonly config: OpenPocketConfig;
+  private readonly log: (line: string) => void;
   private readonly pending = new Map<string, PendingEntry>();
 
-  constructor(config: OpenPocketConfig) {
+  constructor(config: OpenPocketConfig, logger?: (line: string) => void) {
     this.config = config;
+    this.log =
+      logger ??
+      ((line: string) => {
+        // eslint-disable-next-line no-console
+        console.log(line);
+      });
   }
 
   listPending(): HumanAuthPendingSummary[] {
@@ -252,8 +259,7 @@ export class HumanAuthBridge {
         }
         void this.pollRemoteDecision(entry);
       } catch (error) {
-        // eslint-disable-next-line no-console
-        console.log(`[OpenPocket][human-auth] relay create request failed: ${(error as Error).message}`);
+        this.log(`[OpenPocket][human-auth][warn] relay create request failed error=${(error as Error).message}`);
       }
     }
 

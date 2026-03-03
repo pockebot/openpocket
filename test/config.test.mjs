@@ -61,6 +61,15 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.equal(cfg.memoryTools.maxResults, 6);
     assert.equal(cfg.memoryTools.minScore, 0.2);
     assert.equal(cfg.memoryTools.maxSnippetChars, 1200);
+    assert.equal(cfg.models["google/gemini-2.0-flash"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
+    assert.equal(cfg.models["google/gemini-2.0-flash"].model, "gemini-2.0-flash");
+    assert.equal(cfg.models["google/gemini-2.0-flash"].apiKeyEnv, "GEMINI_API_KEY");
+    assert.equal(cfg.models["google/gemini-3-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
+    assert.equal(cfg.models["google/gemini-3-pro-preview"].model, "gemini-3-pro-preview");
+    assert.equal(cfg.models["google/gemini-3-pro-preview"].apiKeyEnv, "GEMINI_API_KEY");
+    assert.equal(cfg.models["google/gemini-3.1-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
+    assert.equal(cfg.models["google/gemini-3.1-pro-preview"].model, "gemini-3.1-pro-preview");
+    assert.equal(cfg.models["google/gemini-3.1-pro-preview"].apiKeyEnv, "GEMINI_API_KEY");
     assert.equal(cfg.humanAuth.enabled, false);
     assert.equal(cfg.humanAuth.useLocalRelay, true);
     assert.equal(cfg.humanAuth.localRelayPort, 8787);
@@ -70,6 +79,12 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.equal(cfg.dashboard.host, "127.0.0.1");
     assert.equal(cfg.dashboard.port, 51888);
     assert.equal(cfg.dashboard.autoOpenBrowser, false);
+    assert.equal(cfg.gatewayLogging.level, "info");
+    assert.equal(cfg.gatewayLogging.includePayloads, false);
+    assert.equal(cfg.gatewayLogging.maxPayloadChars, 160);
+    assert.equal(cfg.gatewayLogging.modules.core, true);
+    assert.equal(cfg.gatewayLogging.modules.heartbeat, false);
+    assert.equal(cfg.gatewayLogging.modules.chat, false);
     assert.equal(cfg.heartbeat.enabled, true);
     assert.equal(cfg.cron.enabled, true);
     assert.equal(cfg.emulator.dataPartitionSizeGb, 24);
@@ -152,6 +167,21 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
             port: 51999,
             auto_open_browser: true,
           },
+          gateway_logging: {
+            level: "debug",
+            include_payloads: true,
+            max_payload_chars: 260,
+            modules: {
+              core: true,
+              access: false,
+              task: true,
+              channel: true,
+              cron: false,
+              heartbeat: true,
+              human_auth: false,
+              chat: true,
+            },
+          },
           memory_tools: {
             enabled: true,
             max_results: 12,
@@ -192,6 +222,13 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     assert.equal(cfg.dashboard.host, "0.0.0.0");
     assert.equal(cfg.dashboard.port, 51999);
     assert.equal(cfg.dashboard.autoOpenBrowser, true);
+    assert.equal(cfg.gatewayLogging.level, "debug");
+    assert.equal(cfg.gatewayLogging.includePayloads, true);
+    assert.equal(cfg.gatewayLogging.maxPayloadChars, 260);
+    assert.equal(cfg.gatewayLogging.modules.access, false);
+    assert.equal(cfg.gatewayLogging.modules.heartbeat, true);
+    assert.equal(cfg.gatewayLogging.modules.humanAuth, false);
+    assert.equal(cfg.gatewayLogging.modules.chat, true);
     assert.equal(cfg.memoryTools.enabled, true);
     assert.equal(cfg.memoryTools.maxResults, 12);
     assert.equal(cfg.memoryTools.minScore, 0.35);
@@ -215,6 +252,12 @@ test("loadConfig migrates legacy snake_case return_home_on_task_end", async () =
     assert.equal(saved.agent.systemPromptMode, "minimal");
     assert.equal(saved.agent.contextBudgetChars, 30000);
     assert.equal(saved.agent.return_home_on_task_end, undefined);
+    assert.equal(saved.gatewayLogging.level, "debug");
+    assert.equal(saved.gatewayLogging.includePayloads, true);
+    assert.equal(saved.gatewayLogging.maxPayloadChars, 260);
+    assert.equal(saved.gatewayLogging.modules.access, false);
+    assert.equal(saved.gatewayLogging.modules.humanAuth, false);
+    assert.equal(saved.gateway_logging, undefined);
     assert.equal(saved.emulator.dataPartitionSizeGb, 48);
     assert.deepEqual(saved.emulator.extraArgs, ["-accel", "off"]);
     assert.equal(saved.emulator.extra_args, undefined);
@@ -266,6 +309,87 @@ test("loadConfig normalizes agent.lang to en", async () => {
     saveConfig(cfg);
     const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
     assert.equal(saved.agent.lang, "en");
+  });
+});
+
+test("loadConfig normalizes Google generative baseUrl to /v1beta", async () => {
+  await withTempHome("openpocket-config-google-baseurl-", async (home) => {
+    const cfgPath = path.join(home, "config.json");
+    fs.writeFileSync(
+      cfgPath,
+      `${JSON.stringify(
+        {
+          projectName: "OpenPocket",
+          workspaceDir: path.join(home, "workspace"),
+          stateDir: path.join(home, "state"),
+          defaultModel: "google/gemini-3.1-pro-preview",
+          emulator: {},
+          telegram: {},
+          models: {
+            "google/gemini-3.1-pro-preview": {
+              baseUrl: "https://generativelanguage.googleapis.com",
+              model: "gemini-3.1-pro-preview",
+              apiKey: "",
+              apiKeyEnv: "GEMINI_API_KEY",
+              maxTokens: 1024,
+              reasoningEffort: null,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const cfg = loadConfig(cfgPath);
+    assert.equal(cfg.models["google/gemini-3.1-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
+
+    saveConfig(cfg);
+    const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    assert.equal(
+      saved.models["google/gemini-3.1-pro-preview"].baseUrl,
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+  });
+});
+
+test("loadConfig normalizes Anthropic baseUrl /v1 to root endpoint", async () => {
+  await withTempHome("openpocket-config-anthropic-baseurl-", async (home) => {
+    const cfgPath = path.join(home, "config.json");
+    fs.writeFileSync(
+      cfgPath,
+      `${JSON.stringify(
+        {
+          projectName: "OpenPocket",
+          workspaceDir: path.join(home, "workspace"),
+          stateDir: path.join(home, "state"),
+          defaultModel: "anthropic/claude-opus-4-6",
+          emulator: {},
+          telegram: {},
+          models: {
+            "anthropic/claude-opus-4-6": {
+              baseUrl: "https://api.anthropic.com/v1",
+              model: "claude-opus-4-6",
+              apiKey: "",
+              apiKeyEnv: "ANTHROPIC_API_KEY",
+              maxTokens: 1024,
+              reasoningEffort: null,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const cfg = loadConfig(cfgPath);
+    assert.equal(cfg.models["anthropic/claude-opus-4-6"].baseUrl, "https://api.anthropic.com");
+
+    saveConfig(cfg);
+    const saved = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    assert.equal(saved.models["anthropic/claude-opus-4-6"].baseUrl, "https://api.anthropic.com");
   });
 });
 

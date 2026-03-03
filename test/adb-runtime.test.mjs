@@ -9,6 +9,40 @@ const ONE_BY_ONE_PNG = Buffer.from(
   "base64",
 );
 
+function makeUiDumpXml(label = "Open") {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node
+    index="0"
+    text="${label}"
+    resource-id="com.example:id/action"
+    class="android.widget.Button"
+    package="com.example"
+    content-desc=""
+    clickable="true"
+    enabled="true"
+    focusable="true"
+    bounds="[120,320][420,420]" />
+</hierarchy>`;
+}
+
+function makeFullscreenStageUiDumpXml() {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node
+    index="0"
+    text=""
+    resource-id="com.supercell.clashofclans:id/stage"
+    class="android.view.SurfaceView"
+    package="com.supercell.clashofclans"
+    content-desc=""
+    clickable="false"
+    enabled="true"
+    focusable="false"
+    bounds="[0,0][1920,1080]" />
+</hierarchy>`;
+}
+
 function makeConfig() {
   return {
     agent: {
@@ -32,6 +66,10 @@ class FakeEmulator {
     this.screenshotBuffer = options.screenshotBuffer ?? ONE_BY_ONE_PNG;
     this.powerDumps = Array.isArray(options.powerDumps) ? [...options.powerDumps] : [];
     this.policyDumps = Array.isArray(options.policyDumps) ? [...options.policyDumps] : [];
+    this.currentApp = options.currentApp ?? "com.example";
+    this.uiDumpXml = options.uiDumpXml ?? makeUiDumpXml("Open");
+    this.failUiDumpTimes = Math.max(0, Number(options.failUiDumpTimes ?? 0));
+    this.failUiDumpWithTimeout = Boolean(options.failUiDumpWithTimeout);
   }
 
   status() {
@@ -71,6 +109,64 @@ class FakeEmulator {
       return this.policyDumps.length > 0
         ? this.policyDumps.shift()
         : "isStatusBarKeyguard=false\nmShowingLockscreen=false";
+    }
+
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "dumpsys" &&
+      args[4] === "activity" &&
+      args[5] === "activities"
+    ) {
+      return `topResumedActivity=ActivityRecord{u0 ${this.currentApp}/.MainActivity t1}`;
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "dumpsys" &&
+      args[4] === "window" &&
+      args[5] === "windows"
+    ) {
+      return `mCurrentFocus=Window{u0 ${this.currentApp}/.MainActivity}`;
+    }
+
+    if (
+      this.failUiDumpTimes > 0 &&
+      args[0] === "-s" &&
+      (
+        (args[2] === "exec-out" && args[3] === "uiautomator" && args[4] === "dump")
+        || (args[2] === "shell" && args[3] === "uiautomator" && args[4] === "dump")
+      )
+    ) {
+      this.failUiDumpTimes -= 1;
+      if (this.failUiDumpWithTimeout) {
+        throw new Error("ETIMEDOUT: adb command timed out");
+      }
+      throw new Error("uiautomator dump failed");
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "exec-out" &&
+      args[3] === "uiautomator" &&
+      args[4] === "dump"
+    ) {
+      return this.uiDumpXml;
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "uiautomator" &&
+      args[4] === "dump"
+    ) {
+      return "UI hierarchy dumped";
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "cat" &&
+      args[4] === "/sdcard/openpocket-ui.xml"
+    ) {
+      return this.uiDumpXml;
     }
 
     if (
@@ -699,4 +795,145 @@ test("captureScreenSnapshot uses screenshot dimensions as source resolution in l
   assert.equal(snapshot.scaledHeight, 768);
   assert.equal(snapshot.scaleX > 1, true);
   assert.equal(snapshot.scaleY > 1, true);
+});
+
+test("captureScreenSnapshot drops low-value fullscreen game stage nodes and skips SoM overlay", async () => {
+  const screenshotBuffer = await sharp({
+    create: {
+      width: 1920,
+      height: 1080,
+      channels: 3,
+      background: { r: 20, g: 24, b: 30 },
+    },
+  }).png().toBuffer();
+  const emulator = new FakeEmulator({
+    screenshotBuffer,
+    uiDumpXml: makeFullscreenStageUiDumpXml(),
+    currentApp: "com.supercell.clashofclans",
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const snapshot = await runtime.captureScreenSnapshot();
+  assert.equal(snapshot.uiElements.length, 0);
+  assert.equal(snapshot.somScreenshotBase64, null);
+  assert.equal(snapshot.captureMetrics?.overlayMs, 0);
+});
+
+test("captureScreenSnapshot caches stable UI dumps and forces periodic refresh", async () => {
+  const screenshotBuffer = await sharp({
+    create: {
+      width: 1080,
+      height: 1920,
+      channels: 3,
+      background: { r: 18, g: 24, b: 32 },
+    },
+  }).png().toBuffer();
+  const emulator = new FakeEmulator({
+    screenshotBuffer,
+    uiDumpXml: makeUiDumpXml("Cacheable"),
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const first = await runtime.captureScreenSnapshot();
+  const second = await runtime.captureScreenSnapshot();
+  const third = await runtime.captureScreenSnapshot();
+
+  assert.equal(first.captureMetrics?.uiElementsSource, "fresh");
+  assert.equal(second.captureMetrics?.uiElementsSource, "cache");
+  assert.equal(third.captureMetrics?.uiElementsSource, "fresh");
+  assert.equal(first.uiElements.length > 0, true);
+  assert.equal(second.uiElements.length, first.uiElements.length);
+  assert.equal(third.uiElements.length, first.uiElements.length);
+  assert.equal(typeof first.captureMetrics?.uiDumpMs, "number");
+  assert.equal(typeof first.captureMetrics?.totalMs, "number");
+
+  const uiDumpCommandCalls = emulator.calls.filter(
+    (args) => args[0] === "-s" && args[2] === "exec-out" && args[3] === "uiautomator" && args[4] === "dump",
+  ).length;
+  assert.equal(uiDumpCommandCalls, 2);
+});
+
+test("captureScreenSnapshot bypasses cache when visual hash changes", async () => {
+  const firstBuffer = await sharp({
+    create: {
+      width: 1080,
+      height: 1920,
+      channels: 3,
+      background: { r: 20, g: 24, b: 28 },
+    },
+  })
+    .composite([
+      {
+        input: Buffer.from("<svg width='1080' height='1920'><rect x='120' y='520' width='360' height='260' fill='#ffffff'/></svg>"),
+      },
+    ])
+    .png()
+    .toBuffer();
+  const secondBuffer = await sharp({
+    create: {
+      width: 1080,
+      height: 1920,
+      channels: 3,
+      background: { r: 20, g: 24, b: 28 },
+    },
+  })
+    .composite([
+      {
+        input: Buffer.from("<svg width='1080' height='1920'><rect x='600' y='1080' width='360' height='260' fill='#ffffff'/></svg>"),
+      },
+    ])
+    .png()
+    .toBuffer();
+  const emulator = new FakeEmulator({
+    screenshotBuffer: firstBuffer,
+    uiDumpXml: makeUiDumpXml("First"),
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const first = await runtime.captureScreenSnapshot();
+  emulator.screenshotBuffer = secondBuffer;
+  emulator.uiDumpXml = makeUiDumpXml("Second");
+  const second = await runtime.captureScreenSnapshot();
+
+  assert.equal(first.captureMetrics?.uiElementsSource, "fresh");
+  assert.equal(second.captureMetrics?.uiElementsSource, "fresh");
+  assert.equal(second.captureMetrics?.visualHashHammingDistance !== null, true);
+
+  const uiDumpCommandCalls = emulator.calls.filter(
+    (args) => args[0] === "-s" && args[2] === "exec-out" && args[3] === "uiautomator" && args[4] === "dump",
+  ).length;
+  assert.equal(uiDumpCommandCalls, 2);
+});
+
+test("captureScreenSnapshot falls back to cached UI dump on timeout", async () => {
+  const screenshotBuffer = await sharp({
+    create: {
+      width: 1080,
+      height: 1920,
+      channels: 3,
+      background: { r: 30, g: 36, b: 42 },
+    },
+  }).png().toBuffer();
+  const emulator = new FakeEmulator({
+    screenshotBuffer,
+    uiDumpXml: makeUiDumpXml("Stable"),
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const first = await runtime.captureScreenSnapshot();
+  const second = await runtime.captureScreenSnapshot();
+  emulator.failUiDumpWithTimeout = true;
+  emulator.failUiDumpTimes = 2;
+  const third = await runtime.captureScreenSnapshot();
+
+  assert.equal(first.captureMetrics?.uiElementsSource, "fresh");
+  assert.equal(second.captureMetrics?.uiElementsSource, "cache");
+  assert.equal(third.captureMetrics?.uiElementsSource, "cache_fallback");
+  assert.equal(third.captureMetrics?.uiDumpTimedOut, true);
+  assert.equal(third.uiElements.length > 0, true);
+
+  const uiDumpCalls = emulator.calls.filter(
+    (args) => args[0] === "-s" && args[3] === "uiautomator" && args[4] === "dump",
+  ).length;
+  assert.equal(uiDumpCalls, 3);
 });

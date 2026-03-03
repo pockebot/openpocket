@@ -9,6 +9,7 @@ import { DiscordAdapter } from "../channel/discord/adapter.js";
 import { WhatsAppAdapter } from "../channel/whatsapp/adapter.js";
 import { IMessageAdapter } from "../channel/imessage/adapter.js";
 import { GatewayCore } from "./gateway-core.js";
+import { createGatewayLogEmitter } from "./logging.js";
 
 export interface GatewayFactoryResult {
   core: GatewayCore;
@@ -32,11 +33,10 @@ export function createGateway(
   config: OpenPocketConfig,
   options?: GatewayFactoryOptions,
 ): GatewayFactoryResult {
-  const combinedLogger = (line: string) => {
-    options?.logger?.(line);
-    options?.onLogLine?.(line);
-  };
-  const log = options?.logger ? combinedLogger : undefined;
+  const log = createGatewayLogEmitter(config, [
+    options?.logger,
+    options?.onLogLine,
+  ]);
 
   const router = new DefaultChannelRouter({ log });
   const sessionKeyResolver = new DefaultSessionKeyResolver();

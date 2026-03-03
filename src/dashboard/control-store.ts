@@ -82,6 +82,9 @@ export function providerLabel(baseUrl: string): string {
   if (lower.includes("openrouter.ai")) {
     return "OpenRouter";
   }
+  if (lower.includes("generativelanguage.googleapis.com") || lower.includes("googleapis.com")) {
+    return "Google AI Studio";
+  }
   if (lower.includes("api.z.ai") || lower.includes("bigmodel.cn")) {
     return "Z.AI (GLM)";
   }

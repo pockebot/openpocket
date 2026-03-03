@@ -2055,15 +2055,15 @@ test("AgentRuntime parses textual finish(...) fallback when model omits tool_cal
     agentFactory: createTextFallbackProbeFactory("finish(message=\"fallback finish ok\")"),
   });
 
-  runtime.config.models["autoglm-phone"].apiKey = "dummy";
-  runtime.config.models["autoglm-phone"].apiKeyEnv = "MISSING_AUTOGLM_KEY";
+  runtime.config.models["zai/glm-5"].apiKey = "dummy";
+  runtime.config.models["zai/glm-5"].apiKeyEnv = "MISSING_ZAI_KEY";
   runtime.adb = {
     queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async () => "ok",
   };
 
-  const result = await runtime.runTask("text tool fallback test", "autoglm-phone");
+  const result = await runtime.runTask("text tool fallback test", "zai/glm-5");
   assert.equal(result.ok, true);
   assert.equal(result.message, "fallback finish ok");
 });
@@ -2082,15 +2082,18 @@ test("AgentRuntime infers finish action from narrative text when tool_call is mi
     ),
   });
 
-  runtime.config.models["autoglm-phone"].apiKey = "dummy";
-  runtime.config.models["autoglm-phone"].apiKeyEnv = "MISSING_AUTOGLM_KEY";
+  runtime.config.models["zai/glm-5"].apiKey = "dummy";
+  runtime.config.models["zai/glm-5"].apiKeyEnv = "MISSING_ZAI_KEY";
   runtime.adb = {
     queryLaunchablePackages: () => [],
     captureScreenSnapshot: () => makeSnapshot(),
     executeAction: async () => "ok",
   };
 
-  const result = await runtime.runTask("If the Android home screen is visible, call finish immediately with message 'autoglm fallback ok'. Otherwise perform at most one action then finish.", "autoglm-phone");
+  const result = await runtime.runTask(
+    "If the Android home screen is visible, call finish immediately with message 'autoglm fallback ok'. Otherwise perform at most one action then finish.",
+    "zai/glm-5",
+  );
   assert.equal(result.ok, true);
   assert.equal(result.message, "autoglm fallback ok");
 });

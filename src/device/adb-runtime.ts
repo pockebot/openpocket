@@ -1,8 +1,15 @@
-import type { AgentAction, OpenPocketConfig, ScreenSnapshot, UiElementSnapshot } from "../types.js";
+import type {
+  AgentAction,
+  OpenPocketConfig,
+  ScreenSnapshot,
+  ScreenSnapshotCaptureMetrics,
+  UiElementSnapshot,
+} from "../types.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import sharp from "sharp";
 import { nowIso } from "../utils/paths.js";
 import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
 import { sleep } from "../utils/time.js";
@@ -126,6 +133,36 @@ function uiNodeScore(node: {
   if (classLower.includes("imagebutton")) score += 4;
   if (classLower.includes("edittext")) score += 3;
   return score;
+}
+
+function isLikelyLowValueFullscreenSurface(
+  node: UiElementSnapshot,
+  scaledWidth: number,
+  scaledHeight: number,
+): boolean {
+  const classLower = String(node.className || "").toLowerCase();
+  const isSurfaceClass =
+    classLower.includes("surfaceview")
+    || classLower.includes("textureview")
+    || classLower.includes("glsurfaceview")
+    || classLower === "android.view.view";
+  if (!isSurfaceClass) {
+    return false;
+  }
+  if (node.clickable || node.text.trim() || node.contentDesc.trim()) {
+    return false;
+  }
+  const bounds = node.scaledBounds;
+  const width = Math.max(1, bounds.right - bounds.left);
+  const height = Math.max(1, bounds.bottom - bounds.top);
+  const areaRatio = (width * height) / Math.max(1, scaledWidth * scaledHeight);
+  const nearFullscreen =
+    bounds.left <= 2
+    && bounds.top <= 2
+    && bounds.right >= scaledWidth - 3
+    && bounds.bottom >= scaledHeight - 3;
+  const stageHint = String(node.resourceId || "").toLowerCase().includes(":id/stage");
+  return areaRatio >= 0.9 && (nearFullscreen || stageHint);
 }
 
 function encodeInputText(text: string): string {
@@ -273,10 +310,115 @@ function errorMessage(error: unknown): string {
   return String(error || "unknown error");
 }
 
+function looksLikeAdbTimeout(error: unknown): boolean {
+  const text = String(
+    error instanceof Error
+      ? [error.message, (error as { stack?: string }).stack ?? ""].join("\n")
+      : error ?? "",
+  ).toLowerCase();
+  if (!text) {
+    return false;
+  }
+  return text.includes("timed out")
+    || text.includes("timeout")
+    || text.includes("etimedout")
+    || text.includes("signal: sigterm");
+}
+
+const NIBBLE_POPCOUNT = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4] as const;
+
+function hammingDistanceHex(left: string, right: string): number | null {
+  if (!left || !right || left.length !== right.length) {
+    return null;
+  }
+  let distance = 0;
+  for (let i = 0; i < left.length; i += 1) {
+    const a = Number.parseInt(left[i], 16);
+    const b = Number.parseInt(right[i], 16);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      return null;
+    }
+    distance += NIBBLE_POPCOUNT[a ^ b];
+  }
+  return distance;
+}
+
+async function computeVisualHash(
+  pngBuffer: Buffer,
+  width: number,
+  height: number,
+): Promise<string> {
+  const safeWidth = Math.max(1, Math.round(width));
+  const safeHeight = Math.max(1, Math.round(height));
+
+  let top = Math.max(0, Math.round(safeHeight * VISUAL_HASH_TOP_TRIM_RATIO));
+  let bottom = Math.max(0, Math.round(safeHeight * VISUAL_HASH_BOTTOM_TRIM_RATIO));
+  let croppedHeight = safeHeight - top - bottom;
+  if (croppedHeight < VISUAL_HASH_MIN_CROP_HEIGHT) {
+    top = 0;
+    bottom = 0;
+    croppedHeight = safeHeight;
+  }
+
+  try {
+    const raw = await sharp(pngBuffer)
+      .extract({
+        left: 0,
+        top,
+        width: safeWidth,
+        height: Math.max(1, croppedHeight),
+      })
+      .grayscale()
+      .resize(VISUAL_HASH_GRID_WIDTH, VISUAL_HASH_GRID_HEIGHT, {
+        fit: "fill",
+        kernel: "nearest",
+      })
+      .raw()
+      .toBuffer();
+
+    const expectedSize = VISUAL_HASH_GRID_WIDTH * VISUAL_HASH_GRID_HEIGHT;
+    if (raw.length < expectedSize) {
+      return createHash("sha1").update(pngBuffer).digest("hex").slice(0, 16);
+    }
+
+    let bits = 0n;
+    let bitIndex = 0n;
+    for (let y = 0; y < VISUAL_HASH_GRID_HEIGHT; y += 1) {
+      const rowStart = y * VISUAL_HASH_GRID_WIDTH;
+      for (let x = 0; x < VISUAL_HASH_COMPARE_WIDTH; x += 1) {
+        const l = raw[rowStart + x];
+        const r = raw[rowStart + x + 1];
+        const diff = Math.abs(l - r);
+        const bit = l > r && diff > VISUAL_HASH_PIXEL_NOISE_THRESHOLD;
+        if (bit) {
+          bits |= (1n << bitIndex);
+        }
+        bitIndex += 1n;
+      }
+    }
+    return bits.toString(16).padStart(VISUAL_HASH_BITS / 4, "0");
+  } catch {
+    return createHash("sha1").update(pngBuffer).digest("hex").slice(0, 16);
+  }
+}
+
 const DEFAULT_LOCKSCREEN_PIN = "1234";
 const SCREEN_AWAKE_HEARTBEAT_MS = 3_000;
 const PIN_UNLOCK_MAX_ATTEMPTS = 2;
 const PIN_UNLOCK_SETTLE_MS = 1_500;
+const UI_DUMP_TIMEOUT_MS = 12_000;
+const UI_DUMP_CACHE_MAX_AGE_MS = 15_000;
+const UI_DUMP_CACHE_MAX_REUSE = 1;
+const UI_DUMP_MAX_HASH_DISTANCE = 4;
+const UI_NODE_MIN_SCORE = 4;
+const VISUAL_HASH_BITS = 64;
+const VISUAL_HASH_GRID_WIDTH = 9;
+const VISUAL_HASH_COMPARE_WIDTH = 8;
+const VISUAL_HASH_GRID_HEIGHT = 8;
+const VISUAL_HASH_TOP_TRIM_RATIO = 0.07;
+const VISUAL_HASH_BOTTOM_TRIM_RATIO = 0.11;
+const VISUAL_HASH_MIN_CROP_HEIGHT = 200;
+const VISUAL_HASH_PIXEL_NOISE_THRESHOLD = 3;
 
 type ScreenAwakeWorkerParams = {
   adbPath: string;
@@ -294,10 +436,27 @@ type AdbRuntimeOptions = {
   createScreenAwakeWorker?: (params: ScreenAwakeWorkerParams) => ScreenAwakeWorkerHandle;
 };
 
+type UiDumpCaptureResult = {
+  uiElements: UiElementSnapshot[];
+  failed: boolean;
+  timedOut: boolean;
+};
+
+type UiDumpCacheEntry = {
+  currentApp: string;
+  scaledWidth: number;
+  scaledHeight: number;
+  visualHash: string;
+  uiElements: UiElementSnapshot[];
+  updatedAtMs: number;
+  reuseCount: number;
+};
+
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
   private readonly screenSizeCache = new Map<string, { width: number; height: number; updatedAtMs: number }>();
+  private readonly uiDumpCache = new Map<string, UiDumpCacheEntry>();
   private readonly createScreenAwakeWorker: (params: ScreenAwakeWorkerParams) => ScreenAwakeWorkerHandle;
   private screenAwakeWorker: ScreenAwakeWorkerHandle | null = null;
   private screenAwakeWorkerKey = "";
@@ -800,30 +959,188 @@ export class AdbRuntime {
     };
   }
 
+  private cloneUiElements(uiElements: UiElementSnapshot[]): UiElementSnapshot[] {
+    return uiElements.map((item) => ({
+      ...item,
+      bounds: { ...item.bounds },
+      center: { ...item.center },
+      scaledBounds: { ...item.scaledBounds },
+      scaledCenter: { ...item.scaledCenter },
+    }));
+  }
+
+  private shouldReuseUiDumpCache(
+    entry: UiDumpCacheEntry | undefined,
+    params: {
+      currentApp: string;
+      scaledWidth: number;
+      scaledHeight: number;
+      visualHash: string;
+      nowMs: number;
+    },
+  ): { reuse: boolean; visualHashDistance: number | null } {
+    if (!entry) {
+      return { reuse: false, visualHashDistance: null };
+    }
+
+    const visualHashDistance = hammingDistanceHex(params.visualHash, entry.visualHash);
+    if (entry.currentApp !== params.currentApp) {
+      return { reuse: false, visualHashDistance };
+    }
+    if (entry.scaledWidth !== params.scaledWidth || entry.scaledHeight !== params.scaledHeight) {
+      return { reuse: false, visualHashDistance };
+    }
+    if (params.nowMs - entry.updatedAtMs > UI_DUMP_CACHE_MAX_AGE_MS) {
+      return { reuse: false, visualHashDistance };
+    }
+    if (entry.reuseCount >= UI_DUMP_CACHE_MAX_REUSE) {
+      return { reuse: false, visualHashDistance };
+    }
+    if (visualHashDistance === null || visualHashDistance > UI_DUMP_MAX_HASH_DISTANCE) {
+      return { reuse: false, visualHashDistance };
+    }
+    return { reuse: true, visualHashDistance };
+  }
+
   async captureScreenSnapshot(preferred?: string | null, modelName?: string): Promise<ScreenSnapshot> {
+    const captureStartedAtMs = Date.now();
+    const metrics: ScreenSnapshotCaptureMetrics = {
+      totalMs: 0,
+      ensureReadyMs: 0,
+      screencapMs: 0,
+      screenSizeMs: 0,
+      currentAppMs: 0,
+      scaleMs: 0,
+      uiDumpMs: 0,
+      overlayMs: 0,
+      uiElementsSource: "fresh_empty",
+      uiElementsCount: 0,
+      visualHash: "",
+      visualHashHammingDistance: null,
+      uiDumpTimedOut: false,
+    };
+
     const deviceId = this.resolveDeviceId(preferred);
+    const ensureReadyStartMs = Date.now();
     await this.ensureInteractiveTargetReady(deviceId);
+    metrics.ensureReadyMs = Date.now() - ensureReadyStartMs;
 
+    const screencapStartMs = Date.now();
     const { data } = this.emulator.captureScreenshotBuffer(deviceId);
-    const currentApp = this.resolveCurrentApp(deviceId);
+    metrics.screencapMs = Date.now() - screencapStartMs;
 
+    const currentAppStartMs = Date.now();
+    const currentApp = this.resolveCurrentApp(deviceId);
+    metrics.currentAppMs = Date.now() - currentAppStartMs;
+
+    const scaleStartMs = Date.now();
     const scaled = await scaleScreenshot(data, modelName);
-    const width = scaled.originalWidth;
-    const height = scaled.originalHeight;
-    const uiElements = this.captureUiElements(
-      deviceId,
-      width,
-      height,
-      scaled.width,
-      scaled.height,
-    );
-    const somBuffer = await drawSetOfMarkOverlay(
-      scaled.data,
-      uiElements.map((item) => ({
-        id: item.id,
-        bounds: item.scaledBounds,
-      })),
-    );
+    metrics.scaleMs = Date.now() - scaleStartMs;
+
+    let width = scaled.originalWidth;
+    let height = scaled.originalHeight;
+    const screenSizeStartMs = Date.now();
+    if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+      const fallbackSize = this.resolveScreenSize(deviceId);
+      width = fallbackSize.width;
+      height = fallbackSize.height;
+    }
+    metrics.screenSizeMs = Date.now() - screenSizeStartMs;
+
+    const visualHash = await computeVisualHash(scaled.data, scaled.width, scaled.height);
+    metrics.visualHash = visualHash;
+
+    const nowMs = Date.now();
+    const cached = this.uiDumpCache.get(deviceId);
+    const cacheDecision = this.shouldReuseUiDumpCache(cached, {
+      currentApp,
+      scaledWidth: scaled.width,
+      scaledHeight: scaled.height,
+      visualHash,
+      nowMs,
+    });
+    metrics.visualHashHammingDistance = cacheDecision.visualHashDistance;
+
+    let uiElements: UiElementSnapshot[] = [];
+    let uiElementsSource: ScreenSnapshotCaptureMetrics["uiElementsSource"] = "fresh_empty";
+    let uiDumpTimedOut = false;
+
+    const uiDumpStartMs = Date.now();
+    if (cacheDecision.reuse && cached) {
+      uiElements = this.cloneUiElements(cached.uiElements);
+      cached.reuseCount += 1;
+      cached.updatedAtMs = nowMs;
+      uiElementsSource = "cache";
+    } else {
+      const freshCapture = this.captureUiElements(
+        deviceId,
+        width,
+        height,
+        scaled.width,
+        scaled.height,
+      );
+      uiDumpTimedOut = freshCapture.timedOut;
+
+      const canFallbackToCache = cached
+        ? (
+            cached.currentApp === currentApp
+            && cached.scaledWidth === scaled.width
+            && cached.scaledHeight === scaled.height
+            && (nowMs - cached.updatedAtMs <= UI_DUMP_CACHE_MAX_AGE_MS)
+            && (
+              freshCapture.failed
+              || (
+                freshCapture.uiElements.length === 0
+                && cacheDecision.visualHashDistance !== null
+                && cacheDecision.visualHashDistance <= UI_DUMP_MAX_HASH_DISTANCE
+              )
+            )
+          )
+        : false;
+
+      if (freshCapture.uiElements.length > 0) {
+        uiElements = freshCapture.uiElements;
+        uiElementsSource = "fresh";
+        this.uiDumpCache.set(deviceId, {
+          currentApp,
+          scaledWidth: scaled.width,
+          scaledHeight: scaled.height,
+          visualHash,
+          uiElements: this.cloneUiElements(freshCapture.uiElements),
+          updatedAtMs: nowMs,
+          reuseCount: 0,
+        });
+      } else if (canFallbackToCache && cached) {
+        uiElements = this.cloneUiElements(cached.uiElements);
+        cached.reuseCount = Math.min(cached.reuseCount + 1, UI_DUMP_CACHE_MAX_REUSE);
+        cached.updatedAtMs = nowMs;
+        uiElementsSource = "cache_fallback";
+      } else {
+        uiElementsSource = "fresh_empty";
+        this.uiDumpCache.delete(deviceId);
+      }
+    }
+    metrics.uiDumpMs = Date.now() - uiDumpStartMs;
+    metrics.uiDumpTimedOut = uiDumpTimedOut;
+    metrics.uiElementsSource = uiElementsSource;
+    metrics.uiElementsCount = uiElements.length;
+
+    let somScreenshotBase64: string | null = null;
+    if (uiElements.length > 0) {
+      const overlayStartMs = Date.now();
+      const somBuffer = await drawSetOfMarkOverlay(
+        scaled.data,
+        uiElements.map((item) => ({
+          id: item.id,
+          bounds: item.scaledBounds,
+        })),
+      );
+      metrics.overlayMs = Date.now() - overlayStartMs;
+      somScreenshotBase64 = somBuffer.toString("base64");
+    } else {
+      metrics.overlayMs = 0;
+    }
+    metrics.totalMs = Date.now() - captureStartedAtMs;
 
     return {
       deviceId,
@@ -831,13 +1148,14 @@ export class AdbRuntime {
       width,
       height,
       screenshotBase64: scaled.data.toString("base64"),
-      somScreenshotBase64: somBuffer.toString("base64"),
+      somScreenshotBase64,
       capturedAt: nowIso(),
       scaleX: scaled.scaleX,
       scaleY: scaled.scaleY,
       scaledWidth: scaled.width,
       scaledHeight: scaled.height,
       uiElements,
+      captureMetrics: metrics,
     };
   }
 
@@ -847,17 +1165,19 @@ export class AdbRuntime {
     height: number,
     scaledWidth: number,
     scaledHeight: number,
-  ): UiElementSnapshot[] {
+  ): UiDumpCaptureResult {
     let raw = "";
+    let timedOut = false;
     try {
       // Use exec-out so XML is streamed directly; shell /dev/tty is often empty
       // in non-interactive ADB sessions.
       raw = this.emulator.runAdb(
         ["-s", deviceId, "exec-out", "uiautomator", "dump", "/dev/tty"],
-        12_000,
+        UI_DUMP_TIMEOUT_MS,
       );
-    } catch {
+    } catch (error) {
       raw = "";
+      timedOut = looksLikeAdbTimeout(error);
     }
     let xmlStart = raw.indexOf("<hierarchy");
     if (xmlStart < 0) {
@@ -865,31 +1185,32 @@ export class AdbRuntime {
         // Fallback: dump to device file then read via cat.
         this.emulator.runAdb(
           ["-s", deviceId, "shell", "uiautomator", "dump", "/sdcard/openpocket-ui.xml"],
-          12_000,
+          UI_DUMP_TIMEOUT_MS,
         );
         raw = this.emulator.runAdb(
           ["-s", deviceId, "shell", "cat", "/sdcard/openpocket-ui.xml"],
-          12_000,
+          UI_DUMP_TIMEOUT_MS,
         );
-      } catch {
-        return [];
+      } catch (error) {
+        timedOut = timedOut || looksLikeAdbTimeout(error);
+        return { uiElements: [], failed: true, timedOut };
       }
       xmlStart = raw.indexOf("<hierarchy");
     }
     if (xmlStart < 0) {
-      return [];
+      return { uiElements: [], failed: true, timedOut };
     }
     const xml = raw.slice(xmlStart);
     const parsed = parseUiXmlNodes(xml)
       .map((node) => ({ node, score: uiNodeScore(node) }))
-      .filter(({ score }) => score > 0)
+      .filter(({ score }) => score >= UI_NODE_MIN_SCORE)
       .sort((a, b) => b.score - a.score)
       .slice(0, 28);
 
     const scaleDownX = scaledWidth / Math.max(1, width);
     const scaleDownY = scaledHeight / Math.max(1, height);
 
-    return parsed.map(({ node }, index) => {
+    const mapped = parsed.map(({ node }, index) => {
       const centerX = Math.round((node.bounds.left + node.bounds.right) / 2);
       const centerY = Math.round((node.bounds.top + node.bounds.bottom) / 2);
       const scaledLeft = Math.max(0, Math.min(scaledWidth - 1, Math.round(node.bounds.left * scaleDownX)));
@@ -917,6 +1238,13 @@ export class AdbRuntime {
         scaledCenter: { x: scaledCenterX, y: scaledCenterY },
       };
     });
+    const filtered = mapped
+      .filter((item) => !isLikelyLowValueFullscreenSurface(item, scaledWidth, scaledHeight))
+      .map((item, index) => ({
+        ...item,
+        id: String(index + 1),
+      }));
+    return { uiElements: filtered, failed: false, timedOut };
   }
 
   async executeAction(action: AgentAction, preferred?: string | null): Promise<string> {

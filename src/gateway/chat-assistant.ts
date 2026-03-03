@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AgentProgressUpdate, OpenPocketConfig } from "../types.js";
+import type { AgentProgressUpdate, GatewayLogLevel, OpenPocketConfig } from "../types.js";
 import { CODEX_CLI_BASE_URL } from "../config/codex-cli.js";
 import { getModelProfile, resolveModelAuth } from "../config/index.js";
 import {
@@ -133,6 +133,12 @@ const PROFILE_ONBOARDING_TEMPLATE_FILE = "PROFILE_ONBOARDING.json";
 const BARE_SESSION_RESET_TEMPLATE_FILE = "BARE_SESSION_RESET_PROMPT.md";
 const TASK_PROGRESS_REPORTER_TEMPLATE_FILE = "TASK_PROGRESS_REPORTER.md";
 const TASK_OUTCOME_REPORTER_TEMPLATE_FILE = "TASK_OUTCOME_REPORTER.md";
+const CHAT_LOG_LEVEL_RANK: Record<GatewayLogLevel, number> = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  debug: 3,
+};
 
 const DEFAULT_SESSION_RESET_PROMPT: Record<OnboardingLocale, string> = {
   zh: [
@@ -347,6 +353,44 @@ export class ChatAssistant {
     this.config = config;
   }
 
+  private shouldLogChat(level: GatewayLogLevel): boolean {
+    if (!this.config.gatewayLogging.modules.chat) {
+      return false;
+    }
+    const configured = this.config.gatewayLogging.level;
+    return CHAT_LOG_LEVEL_RANK[level] <= CHAT_LOG_LEVEL_RANK[configured];
+  }
+
+  private clipForLog(text: string, maxChars: number): string {
+    const compact = String(text || "").replace(/\s+/g, " ").trim();
+    if (compact.length <= maxChars) {
+      return compact;
+    }
+    return `${compact.slice(0, Math.max(0, maxChars - 3))}...`;
+  }
+
+  private payloadForChatLog(text: string, maxChars: number): string {
+    if (!this.config.gatewayLogging.includePayloads) {
+      return "[hidden]";
+    }
+    const limit = Math.max(40, Math.min(1000, this.config.gatewayLogging.maxPayloadChars || maxChars));
+    return this.clipForLog(text, Math.min(maxChars, limit));
+  }
+
+  private logChat(level: GatewayLogLevel, message: string): void {
+    if (!this.shouldLogChat(level)) {
+      return;
+    }
+    const line = `[OpenPocket][chat][${level}] ${new Date().toISOString()} ${message}`;
+    if (level === "warn" || level === "error") {
+      // eslint-disable-next-line no-console
+      console.warn(line);
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.log(line);
+  }
+
   private shouldUseCodexResponsesTransport(client: OpenAI, model: string): boolean {
     const modelLower = model.toLowerCase();
     if (!modelLower.includes("codex")) {
@@ -451,6 +495,11 @@ export class ChatAssistant {
     return baseUrl.includes("api.kimi.com") || baseUrl.includes("anthropic.com");
   }
 
+  private isGoogleEndpoint(client: OpenAI): boolean {
+    const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
+    return baseUrl.includes("generativelanguage.googleapis.com");
+  }
+
   private detectAnthropicProvider(client: OpenAI): string {
     const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
     if (baseUrl.includes("api.kimi.com")) {
@@ -514,6 +563,74 @@ export class ChatAssistant {
     return text;
   }
 
+  private normalizeGoogleGenerativeBaseUrl(baseUrl: string): string {
+    const trimmed = String(baseUrl ?? "").trim();
+    if (!trimmed) {
+      return "https://generativelanguage.googleapis.com/v1beta";
+    }
+    try {
+      const url = new URL(trimmed);
+      if (!url.hostname.toLowerCase().includes("generativelanguage.googleapis.com")) {
+        return trimmed;
+      }
+      const pathname = url.pathname.replace(/\/+$/, "");
+      if (!pathname) {
+        url.pathname = "/v1beta";
+        return url.toString().replace(/\/$/, "");
+      }
+      return trimmed;
+    } catch {
+      return trimmed;
+    }
+  }
+
+  private async callGoogleText(params: {
+    apiKey: string;
+    model: string;
+    baseUrl: string;
+    maxTokens: number;
+    prompt: string;
+  }): Promise<string> {
+    await this.ensurePiAiLoaded();
+    const { completeSimple } = await import("@mariozechner/pi-ai");
+
+    const response = await completeSimple(
+      {
+        id: params.model,
+        name: params.model,
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: this.normalizeGoogleGenerativeBaseUrl(params.baseUrl),
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: Math.min(Math.max(32, params.maxTokens), 4096),
+      } as never,
+      {
+        systemPrompt: "",
+        messages: [
+          {
+            role: "user" as const,
+            content: [{ type: "text", text: params.prompt }],
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [],
+      } as never,
+      {
+        apiKey: params.apiKey,
+        maxTokens: Math.min(Math.max(32, params.maxTokens), 4096),
+      } as never,
+    );
+
+    const text = this.extractPiAiAssistantText(response);
+    if (!text) {
+      throw new Error("Google transport returned empty text output.");
+    }
+    return text;
+  }
+
   /**
    * Shared helper: call the model with automatic endpoint-mode fallback.
    * Returns the raw text output or empty string on failure.
@@ -532,8 +649,18 @@ export class ChatAssistant {
         const provider = this.detectAnthropicProvider(client);
         return await this.callAnthropicText({ apiKey, model, baseUrl, provider, maxTokens, prompt });
       } catch (error) {
-        // eslint-disable-next-line no-console
-        console.warn(`[OpenPocket][chat] ${label} failed: anthropic: ${stringifyError(error)}`);
+        this.logChat("warn", `${label} failed provider=anthropic error=${stringifyError(error)}`);
+        return "";
+      }
+    }
+
+    if (this.isGoogleEndpoint(client)) {
+      try {
+        const apiKey = this.readClientApiKey(client);
+        const baseUrl = String((client as { baseURL?: string }).baseURL ?? "");
+        return await this.callGoogleText({ apiKey, model, baseUrl, maxTokens, prompt });
+      } catch (error) {
+        this.logChat("warn", `${label} failed provider=google-generative-ai error=${stringifyError(error)}`);
         return "";
       }
     }
@@ -551,13 +678,11 @@ export class ChatAssistant {
         });
         if (this.modeHint !== "responses") {
           this.modeHint = "responses";
-          // eslint-disable-next-line no-console
-          console.log("[OpenPocket][chat] switched endpoint mode -> responses");
+          this.logChat("info", "switched endpoint mode=responses");
         }
         return output;
       } catch (error) {
-        // eslint-disable-next-line no-console
-        console.warn(`[OpenPocket][chat] ${label} failed: codex-responses: ${stringifyError(error)}`);
+        this.logChat("warn", `${label} failed provider=codex-responses error=${stringifyError(error)}`);
         return "";
       }
     }
@@ -606,8 +731,7 @@ export class ChatAssistant {
         }
         if (this.modeHint !== mode) {
           this.modeHint = mode;
-          // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][chat] switched endpoint mode -> ${mode}`);
+          this.logChat("info", `switched endpoint mode=${mode}`);
         }
         break;
       } catch (error) {
@@ -616,8 +740,7 @@ export class ChatAssistant {
     }
 
     if (!output) {
-      // eslint-disable-next-line no-console
-      console.warn(`[OpenPocket][chat] ${label} failed: ${errors.join(" | ")}`);
+      this.logChat("warn", `${label} failed all_endpoints=${errors.join(" | ")}`);
     }
     return output;
   }
@@ -2208,8 +2331,10 @@ export class ChatAssistant {
     }
 
     const jsonText = extractJsonObjectText(output);
-    // eslint-disable-next-line no-console
-    console.log(`[OpenPocket][chat] classify raw output (${output.length} chars): ${output.slice(0, 500)}`);
+    this.logChat(
+      "debug",
+      `classify raw_output_chars=${output.length} preview=${JSON.stringify(this.payloadForChatLog(output, 500))}`,
+    );
 
     try {
       const parsed = JSON.parse(jsonText) as Partial<ChatDecision>;
@@ -2226,12 +2351,13 @@ export class ChatAssistant {
         requiresExternalObservation: parsed.requiresExternalObservation === true,
         canAnswerDirectly: parsed.canAnswerDirectly !== false,
       };
-      // eslint-disable-next-line no-console
-      console.log(`[OpenPocket][chat] classify parsed: mode=${result.mode} confidence=${result.confidence} reason=${result.reason}`);
+      this.logChat("debug", `classify parsed mode=${result.mode} confidence=${result.confidence} reason=${result.reason}`);
       return result;
     } catch {
-      // eslint-disable-next-line no-console
-      console.warn(`[OpenPocket][chat] classify JSON parse failed, jsonText: ${jsonText.slice(0, 300)}`);
+      this.logChat(
+        "warn",
+        `classify parse failed json=${JSON.stringify(this.payloadForChatLog(jsonText, 300))}`,
+      );
       return {
         mode: "chat",
         task: "",
@@ -3049,8 +3175,7 @@ export class ChatAssistant {
         }
         if (this.modeHint !== mode) {
           this.modeHint = mode;
-          // eslint-disable-next-line no-console
-          console.log(`[OpenPocket][chat] switched endpoint mode -> ${mode}`);
+          this.logChat("info", `switched endpoint mode=${mode}`);
         }
         break;
       } catch (error) {

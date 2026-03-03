@@ -147,6 +147,21 @@ function defaultConfigObject() {
       port: 51888,
       autoOpenBrowser: false,
     },
+    gatewayLogging: {
+      level: "info" as const,
+      includePayloads: false,
+      maxPayloadChars: 160,
+      modules: {
+        core: true,
+        access: true,
+        task: true,
+        channel: true,
+        cron: true,
+        heartbeat: false,
+        humanAuth: true,
+        chat: false,
+      },
+    },
     humanAuth: {
       enabled: false,
       useLocalRelay: true,
@@ -231,6 +246,33 @@ function defaultConfigObject() {
         model: "google/gemini-2.0-flash-exp",
         apiKey: "",
         apiKeyEnv: "BLOCKRUN_API_KEY",
+        maxTokens: 4096,
+        reasoningEffort: null,
+        temperature: null,
+      },
+      "google/gemini-2.0-flash": {
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        model: "gemini-2.0-flash",
+        apiKey: "",
+        apiKeyEnv: "GEMINI_API_KEY",
+        maxTokens: 4096,
+        reasoningEffort: null,
+        temperature: null,
+      },
+      "google/gemini-3-pro-preview": {
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        model: "gemini-3-pro-preview",
+        apiKey: "",
+        apiKeyEnv: "GEMINI_API_KEY",
+        maxTokens: 4096,
+        reasoningEffort: null,
+        temperature: null,
+      },
+      "google/gemini-3.1-pro-preview": {
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        model: "gemini-3.1-pro-preview",
+        apiKey: "",
+        apiKeyEnv: "GEMINI_API_KEY",
         maxTokens: 4096,
         reasoningEffort: null,
         temperature: null,
@@ -476,6 +518,7 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     heartbeat_config: "heartbeat",
     cron_config: "cron",
     dashboard_config: "dashboard",
+    gateway_logging: "gatewayLogging",
     human_auth: "humanAuth",
   };
 
@@ -671,6 +714,38 @@ function normalizeLegacyKeys(input: Record<string, unknown>): Record<string, unk
     raw.dashboard = dashboard;
   }
 
+  const gatewayLogging = isObject(raw.gatewayLogging) ? { ...raw.gatewayLogging } : {};
+  const gatewayLoggingMap: Record<string, string> = {
+    include_payloads: "includePayloads",
+    max_payload_chars: "maxPayloadChars",
+  };
+  for (const [oldKey, newKey] of Object.entries(gatewayLoggingMap)) {
+    if (oldKey in gatewayLogging && !(newKey in gatewayLogging)) {
+      gatewayLogging[newKey] = gatewayLogging[oldKey];
+    }
+    if (oldKey in gatewayLogging && oldKey !== newKey) {
+      delete gatewayLogging[oldKey];
+    }
+  }
+  if (isObject(gatewayLogging.modules)) {
+    const modules = { ...gatewayLogging.modules };
+    const moduleMap: Record<string, string> = {
+      human_auth: "humanAuth",
+    };
+    for (const [oldKey, newKey] of Object.entries(moduleMap)) {
+      if (oldKey in modules && !(newKey in modules)) {
+        modules[newKey] = modules[oldKey];
+      }
+      if (oldKey in modules && oldKey !== newKey) {
+        delete modules[oldKey];
+      }
+    }
+    gatewayLogging.modules = modules;
+  }
+  if (Object.keys(gatewayLogging).length > 0) {
+    raw.gatewayLogging = gatewayLogging;
+  }
+
   const sessionStorage = isObject(raw.sessionStorage) ? { ...raw.sessionStorage } : {};
   const sessionStorageMap: Record<string, string> = {
     storage_backend: "mode",
@@ -784,6 +859,49 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
   ) as Record<string, unknown>;
   const rawModels = (merged.models ?? {}) as Record<string, unknown>;
   const models: Record<string, ModelProfile> = {};
+
+  const normalizeGoogleBaseUrl = (input: string): string => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return trimmed;
+    }
+    try {
+      const url = new URL(trimmed);
+      if (!url.hostname.toLowerCase().includes("generativelanguage.googleapis.com")) {
+        return trimmed;
+      }
+      const pathname = url.pathname.replace(/\/+$/, "");
+      if (!pathname || pathname === "") {
+        url.pathname = "/v1beta";
+        return url.toString().replace(/\/$/, "");
+      }
+      return trimmed;
+    } catch {
+      return trimmed;
+    }
+  };
+
+  const normalizeAnthropicBaseUrl = (input: string): string => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return trimmed;
+    }
+    try {
+      const url = new URL(trimmed);
+      if (!url.hostname.toLowerCase().includes("anthropic.com")) {
+        return trimmed;
+      }
+      const pathname = url.pathname.replace(/\/+$/, "");
+      if (pathname === "/v1") {
+        url.pathname = "/";
+        return url.toString().replace(/\/$/, "");
+      }
+      return trimmed;
+    } catch {
+      return trimmed;
+    }
+  };
+
   for (const [key, value] of Object.entries(rawModels)) {
     const model = isObject(value) ? value : {};
     const reasoningRaw =
@@ -796,8 +914,10 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
         ? reasoningRaw
         : null;
     const tempRaw = model.temperature;
+    const parsedBaseUrl = String(model.baseUrl ?? model.base_url ?? "https://api.openai.com/v1");
+    const baseUrl = normalizeAnthropicBaseUrl(normalizeGoogleBaseUrl(parsedBaseUrl));
     models[key] = {
-      baseUrl: String(model.baseUrl ?? model.base_url ?? "https://api.openai.com/v1"),
+      baseUrl,
       model: String(model.model ?? key),
       apiKey: String(model.apiKey ?? model.api_key ?? ""),
       apiKeyEnv: String(model.apiKeyEnv ?? model.api_key_env ?? "OPENAI_API_KEY"),
@@ -825,6 +945,8 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
   const heartbeat = (merged.heartbeat ?? {}) as Record<string, unknown>;
   const cron = (merged.cron ?? {}) as Record<string, unknown>;
   const dashboard = (merged.dashboard ?? {}) as Record<string, unknown>;
+  const gatewayLogging = (merged.gatewayLogging ?? {}) as Record<string, unknown>;
+  const gatewayLoggingModules = isObject(gatewayLogging.modules) ? gatewayLogging.modules : {};
   const humanAuth = (merged.humanAuth ?? {}) as Record<string, unknown>;
   const sessionStorage = (merged.sessionStorage ?? {}) as Record<string, unknown>;
   const humanAuthTunnel = isObject(humanAuth.tunnel) ? humanAuth.tunnel : {};
@@ -966,6 +1088,27 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
       })(),
       autoOpenBrowser: Boolean(dashboard.autoOpenBrowser ?? false),
     },
+    gatewayLogging: {
+      level: (() => {
+        const rawLevel = String(gatewayLogging.level ?? "info").trim().toLowerCase();
+        if (rawLevel === "error" || rawLevel === "warn" || rawLevel === "debug") {
+          return rawLevel;
+        }
+        return "info";
+      })(),
+      includePayloads: Boolean(gatewayLogging.includePayloads ?? false),
+      maxPayloadChars: Math.max(40, Math.min(1000, Number(gatewayLogging.maxPayloadChars ?? 160) || 160)),
+      modules: {
+        core: Boolean(gatewayLoggingModules.core ?? true),
+        access: Boolean(gatewayLoggingModules.access ?? true),
+        task: Boolean(gatewayLoggingModules.task ?? true),
+        channel: Boolean(gatewayLoggingModules.channel ?? true),
+        cron: Boolean(gatewayLoggingModules.cron ?? true),
+        heartbeat: Boolean(gatewayLoggingModules.heartbeat ?? false),
+        humanAuth: Boolean(gatewayLoggingModules.humanAuth ?? true),
+        chat: Boolean(gatewayLoggingModules.chat ?? false),
+      },
+    },
     humanAuth: {
       enabled: Boolean(humanAuth.enabled ?? false),
       useLocalRelay: Boolean(humanAuth.useLocalRelay ?? true),
@@ -1106,6 +1249,7 @@ export function saveConfig(config: OpenPocketConfig): void {
     heartbeat: config.heartbeat,
     cron: config.cron,
     dashboard: config.dashboard,
+    gatewayLogging: config.gatewayLogging,
     humanAuth: config.humanAuth,
     models: config.models,
     channels: config.channels,

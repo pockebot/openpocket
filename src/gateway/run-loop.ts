@@ -27,7 +27,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<void
     shuttingDown = true;
     restarting = action === "restart";
     log(
-      `[OpenPocket][gateway-loop] ${new Date().toISOString()} signal=${signal} action=${restarting ? "restart" : "stop"}`,
+      `[OpenPocket][gateway-loop][warn] ${new Date().toISOString()} signal=${signal} action=${restarting ? "restart" : "stop"}`,
     );
     void Promise.resolve(current?.stop(`signal:${signal}`))
       .catch(() => {
@@ -60,7 +60,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<void
       if (!restarting) {
         break;
       }
-      log(`[OpenPocket][gateway-loop] ${new Date().toISOString()} restarting gateway`);
+      log(`[OpenPocket][gateway-loop][info] ${new Date().toISOString()} restarting gateway`);
     }
   } finally {
     process.removeListener("SIGTERM", onSigterm);

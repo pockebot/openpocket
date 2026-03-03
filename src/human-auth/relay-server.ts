@@ -439,10 +439,12 @@ export interface HumanAuthRelayServerOptions {
   stateFile: string;
   takeoverRuntime?: HumanAuthTakeoverRuntime;
   takeoverFps?: number;
+  logger?: (line: string) => void;
 }
 
 export class HumanAuthRelayServer {
   private readonly options: HumanAuthRelayServerOptions;
+  private readonly log: (line: string) => void;
   private readonly records = new Map<string, RelayRecord>();
   private server: http.Server | null = null;
   /** Per-request rate limiting: track last takeover action timestamp. */
@@ -456,6 +458,12 @@ export class HumanAuthRelayServer {
 
   constructor(options: HumanAuthRelayServerOptions) {
     this.options = options;
+    this.log =
+      options.logger ??
+      ((line: string) => {
+        // eslint-disable-next-line no-console
+        console.log(line);
+      });
     this.loadState();
   }
 
@@ -3032,19 +3040,16 @@ export class HumanAuthRelayServer {
     const resolveMatch = pathname.match(/^\/v1\/human-auth\/requests\/([^/]+)\/resolve$/);
     if (method === "POST" && resolveMatch) {
       const requestId = decodeURIComponent(resolveMatch[1]);
-      // eslint-disable-next-line no-console
-      console.log(`[OpenPocket][human-auth] resolve incoming requestId=${requestId}`);
+      this.log(`[OpenPocket][human-auth][debug] resolve incoming requestId=${requestId}`);
       const record = this.records.get(requestId);
       if (!record) {
-        // eslint-disable-next-line no-console
-        console.log(`[OpenPocket][human-auth] resolve rejected requestId=${requestId} reason=request_not_found`);
+        this.log(`[OpenPocket][human-auth][warn] resolve rejected requestId=${requestId} reason=request_not_found`);
         sendJson(res, 404, { error: "Request not found." });
         return;
       }
       this.updateTimeoutStatus(record);
       if (record.status !== "pending") {
-        // eslint-disable-next-line no-console
-        console.log(`[OpenPocket][human-auth] resolve rejected requestId=${requestId} reason=already_${record.status}`);
+        this.log(`[OpenPocket][human-auth][warn] resolve rejected requestId=${requestId} reason=already_${record.status}`);
         sendJson(res, 409, { error: `Request already ${record.status}.` });
         return;
       }
@@ -3063,8 +3068,7 @@ export class HumanAuthRelayServer {
 
       const token = String(body.token ?? "");
       if (!token || hashToken(token) !== record.openTokenHash) {
-        // eslint-disable-next-line no-console
-        console.log(`[OpenPocket][human-auth] resolve rejected requestId=${requestId} reason=invalid_token`);
+        this.log(`[OpenPocket][human-auth][warn] resolve rejected requestId=${requestId} reason=invalid_token`);
         sendJson(res, 403, { error: "Invalid token." });
         return;
       }
@@ -3087,8 +3091,7 @@ export class HumanAuthRelayServer {
       }
 
       if (approved && portalTemplate.requireArtifactOnApprove && !artifact) {
-        // eslint-disable-next-line no-console
-        console.log(`[OpenPocket][human-auth] resolve rejected requestId=${requestId} reason=missing_artifact capability=${record.capability}`);
+        this.log(`[OpenPocket][human-auth][warn] resolve rejected requestId=${requestId} reason=missing_artifact capability=${record.capability}`);
         sendJson(res, 400, {
           error: "This authorization requires delegated data artifact before approval.",
         });
@@ -3103,9 +3106,8 @@ export class HumanAuthRelayServer {
 
       this.persistState();
       this.notifySseClients(record.requestId, record);
-      // eslint-disable-next-line no-console
-      console.log(
-        `[OpenPocket][human-auth] resolve accepted requestId=${record.requestId} status=${record.status} capability=${record.capability} artifact=${record.artifact ? "yes" : "no"}`,
+      this.log(
+        `[OpenPocket][human-auth][info] resolve accepted requestId=${record.requestId} status=${record.status} capability=${record.capability} artifact=${record.artifact ? "yes" : "no"}`,
       );
       sendJson(res, 200, {
         requestId: record.requestId,
@@ -3141,9 +3143,8 @@ export class HumanAuthRelayServer {
       }
       const eventName = sanitizeString(body.event, "unknown", 80);
       const detail = isObject(body.detail) ? JSON.stringify(body.detail).slice(0, 400) : "";
-      // eslint-disable-next-line no-console
-      console.log(
-        `[OpenPocket][human-auth] client_event requestId=${requestId} event=${eventName}${detail ? ` detail=${detail}` : ""}`,
+      this.log(
+        `[OpenPocket][human-auth][debug] client_event requestId=${requestId} event=${eventName}${detail ? ` detail=${detail}` : ""}`,
       );
       sendJson(res, 200, { ok: true });
       return;

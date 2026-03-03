@@ -97,6 +97,12 @@ This test uses local mock endpoint and does not require external model API keys.
 - relay requests in `state/human-auth-relay/requests.json`
 - uploaded auth artifacts in `state/human-auth-artifacts/`
 
+Log tuning:
+
+- use `gatewayLogging.level` to set baseline verbosity (`error|warn|info|debug`)
+- disable noisy domains with `gatewayLogging.modules.*` (for example `heartbeat=false`, `chat=false`)
+- keep `gatewayLogging.includePayloads=false` in production to avoid task/input payload leakage
+
 ## Safe Stop
 
 - use `/stop` in Telegram to request cancellation
@@ -107,7 +113,7 @@ This test uses local mock endpoint and does not require external model API keys.
 
 When remote auth flow fails, collect:
 
-- gateway lines containing `[OpenPocket][human-auth]`
+- gateway lines containing `[OpenPocket][gateway-core][humanAuth]` and `[OpenPocket][human-auth]`
 - latest session under `workspace/sessions/`
 - relay state file `state/human-auth-relay/requests.json`
 - artifact listing under `state/human-auth-artifacts/`

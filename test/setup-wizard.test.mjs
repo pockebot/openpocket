@@ -191,7 +191,7 @@ test("setup wizard applies provider key to selected provider only", async () => 
     const cfg = loadConfig();
     const prompter = new FakePrompter({
       confirms: [true, true, true, false, false],
-      selects: ["emulator", "autoglm-phone", "config", "skip", "pairing", "skip", "disabled"],
+      selects: ["emulator", "zai/glm-5", "config", "skip", "pairing", "skip", "disabled"],
       texts: ["", "zai-test-key"],
       pauseCount: 0,
     });
@@ -200,9 +200,41 @@ test("setup wizard applies provider key to selected provider only", async () => 
     await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
 
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
-    assert.equal(savedCfg.models["autoglm-phone"].apiKey, "zai-test-key");
+    assert.equal(savedCfg.models["zai/glm-5"].apiKey, "zai-test-key");
+    assert.equal(savedCfg.models["zai/glm-4.7"].apiKey, "zai-test-key");
     assert.equal(savedCfg.models["gpt-5.2-codex"].apiKey, "");
     assert.equal(savedCfg.models["claude-sonnet-4.6"].apiKey, "");
+  });
+});
+
+test("setup wizard supports custom provider+model profile in model selection", async () => {
+  await withTempHome("openpocket-setup-custom-provider-model-", async () => {
+    const cfg = loadConfig();
+    const prompter = new FakePrompter({
+      confirms: [true, true, false, false],
+      selects: [
+        "emulator",
+        "__custom_provider_model__",
+        "anthropic",
+        "claude-opus-4-6",
+        "skip",
+        "skip",
+        "pairing",
+        "skip",
+        "disabled",
+      ],
+      texts: ["", "claude-opus-4.6-anthropic"],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+    const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
+    assert.equal(savedCfg.defaultModel, "claude-opus-4.6-anthropic");
+    assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].baseUrl, "https://api.anthropic.com");
+    assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].model, "claude-opus-4-6");
+    assert.equal(savedCfg.models["claude-opus-4.6-anthropic"].apiKeyEnv, "ANTHROPIC_API_KEY");
   });
 });
 

@@ -129,6 +129,21 @@
     "port": 51888,
     "autoOpenBrowser": false
   },
+  "gatewayLogging": {
+    "level": "info",
+    "includePayloads": false,
+    "maxPayloadChars": 160,
+    "modules": {
+      "core": true,
+      "access": true,
+      "task": true,
+      "channel": true,
+      "cron": true,
+      "heartbeat": false,
+      "humanAuth": true,
+      "chat": false
+    }
+  },
   "humanAuth": {
     "enabled": false,
     "useLocalRelay": true,
@@ -213,6 +228,33 @@
       "model": "google/gemini-2.0-flash-exp",
       "apiKey": "",
       "apiKeyEnv": "BLOCKRUN_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "google/gemini-2.0-flash": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "gemini-2.0-flash",
+      "apiKey": "",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "google/gemini-3-pro-preview": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "gemini-3-pro-preview",
+      "apiKey": "",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
+    "google/gemini-3.1-pro-preview": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "gemini-3.1-pro-preview",
+      "apiKey": "",
+      "apiKeyEnv": "GEMINI_API_KEY",
       "maxTokens": 4096,
       "reasoningEffort": null,
       "temperature": null

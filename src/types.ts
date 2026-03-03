@@ -124,6 +124,26 @@ export interface DashboardConfig {
   autoOpenBrowser: boolean;
 }
 
+export type GatewayLogLevel = "error" | "warn" | "info" | "debug";
+
+export interface GatewayLogModulesConfig {
+  core: boolean;
+  access: boolean;
+  task: boolean;
+  channel: boolean;
+  cron: boolean;
+  heartbeat: boolean;
+  humanAuth: boolean;
+  chat: boolean;
+}
+
+export interface GatewayLoggingConfig {
+  level: GatewayLogLevel;
+  includePayloads: boolean;
+  maxPayloadChars: number;
+  modules: GatewayLogModulesConfig;
+}
+
 export interface SessionStorageConfig {
   mode: "unified";
   storePath: string;
@@ -323,6 +343,7 @@ export interface OpenPocketConfig {
   heartbeat: HeartbeatConfig;
   cron: CronConfig;
   dashboard: DashboardConfig;
+  gatewayLogging: GatewayLoggingConfig;
   humanAuth: HumanAuthConfig;
   models: Record<string, ModelProfile>;
   channels: import("./channel/types.js").ChannelsConfig;
@@ -335,6 +356,22 @@ export interface EmulatorStatus {
   avdName: string;
   devices: string[];
   bootedDevices: string[];
+}
+
+export interface ScreenSnapshotCaptureMetrics {
+  totalMs: number;
+  ensureReadyMs: number;
+  screencapMs: number;
+  screenSizeMs: number;
+  currentAppMs: number;
+  scaleMs: number;
+  uiDumpMs: number;
+  overlayMs: number;
+  uiElementsSource: "fresh" | "cache" | "cache_fallback" | "fresh_empty";
+  uiElementsCount: number;
+  visualHash: string;
+  visualHashHammingDistance: number | null;
+  uiDumpTimedOut: boolean;
 }
 
 export interface ScreenSnapshot {
@@ -358,6 +395,8 @@ export interface ScreenSnapshot {
   installedPackages?: string[];
   /** Actionable UI nodes extracted from uiautomator dump for deterministic element targeting. */
   uiElements: UiElementSnapshot[];
+  /** Per-capture timing and cache diagnostics for screenshot pipeline profiling. */
+  captureMetrics?: ScreenSnapshotCaptureMetrics;
 }
 
 export interface UiElementSnapshot {
