@@ -92,6 +92,7 @@ Usage:
   openpocket [--config <path>] install-cli
   openpocket [--config <path>] onboard [--force] [--target <type>]
   openpocket [--config <path>] config-show
+  openpocket [--config <path>] model show|list|set [--name <profile>|<profile>]
   openpocket [--config <path>] target show
   openpocket [--config <path>] target set|set-target|config --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
   openpocket [--config <path>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
@@ -123,6 +124,9 @@ Examples:
   openpocket onboard
   openpocket onboard --target physical-phone
   openpocket onboard --force
+  openpocket model list
+  openpocket model set --name google/gemini-3.1-pro-preview
+  openpocket model set gpt-5.2-codex
   openpocket target set --type physical-phone --pin 1234
   openpocket target set-target --type physical-phone
   openpocket target set --type emulator --pin 1234
@@ -418,6 +422,43 @@ function ensureGatewayStoppedForTargetSwitch(): void {
       `Gateway is running (pid: ${pids.join(", ")}). Stop it before switching deployment target.`,
     );
   }
+}
+
+function modelProviderLabel(baseUrl: string): string {
+  const lower = baseUrl.toLowerCase();
+  if (lower.includes("api.openai.com")) return "OpenAI";
+  if (lower.includes("openrouter.ai")) return "OpenRouter";
+  if (lower.includes("generativelanguage.googleapis.com") || lower.includes("googleapis.com")) {
+    return "Google AI Studio";
+  }
+  if (lower.includes("blockrun.ai")) return "BlockRun";
+  if (lower.includes("api.z.ai")) return "AutoGLM";
+  if (lower.includes("api.kimi.com")) return "Kimi Code";
+  if (lower.includes("moonshot.cn") || lower.includes("moonshot.ai")) return "Moonshot AI";
+  if (lower.includes("api.deepseek.com")) return "DeepSeek";
+  if (lower.includes("dashscope.aliyuncs.com")) return "Qwen (DashScope)";
+  if (lower.includes("api.minimax.io")) return "MiniMax";
+  if (lower.includes("volces.com") || lower.includes("volcengine.com")) return "Volcano Engine";
+  if (lower.includes("bytepluses.com")) return "BytePlus";
+  try {
+    return new URL(baseUrl).host || "custom";
+  } catch {
+    return "custom";
+  }
+}
+
+function printModelSummary(cfg: OpenPocketConfig): void {
+  const selected = cfg.models[cfg.defaultModel];
+  printRaw(cliTheme.section("Model Profile"));
+  printKeyValue("Default", cfg.defaultModel, "accent");
+  if (!selected) {
+    printWarn("Default model profile is missing from models map.");
+    return;
+  }
+  printKeyValue("Provider", modelProviderLabel(selected.baseUrl));
+  printKeyValue("Model id", selected.model);
+  printKeyValue("Base URL", selected.baseUrl);
+  printKeyValue("API key env", selected.apiKeyEnv || "(none)");
 }
 
 type ConnectedTargetDevice = {
@@ -890,6 +931,54 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
 
   printSuccess("Deployment target updated.");
   printTargetSummary(cfg);
+  return 0;
+}
+
+async function runModelCommand(configPath: string | undefined, args: string[]): Promise<number> {
+  const rawSub = (args[0] ?? "show").trim();
+  const sub = rawSub.toLowerCase();
+  if (sub !== "show" && sub !== "list" && sub !== "set") {
+    throw new Error(`Unknown model subcommand: ${rawSub}. Use: model show|list|set`);
+  }
+
+  const cfg = loadConfig(configPath);
+  if (sub === "show") {
+    printModelSummary(cfg);
+    return 0;
+  }
+
+  if (sub === "list") {
+    printRaw(cliTheme.section("Model Profiles"));
+    const entries = Object.entries(cfg.models).sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [profileKey, profile] of entries) {
+      const marker = profileKey === cfg.defaultModel ? "*" : " ";
+      printRaw(`${marker} ${profileKey} | ${modelProviderLabel(profile.baseUrl)} | ${profile.model}`);
+    }
+    printRaw("\nUse `openpocket model set --name <profile>` to switch default model.");
+    return 0;
+  }
+
+  const { value: nameOption, rest: afterName } = takeOption(args.slice(1), "--name");
+  let requested = nameOption?.trim() || "";
+  let rest = afterName;
+  if (!requested && rest.length > 0) {
+    requested = rest[0]?.trim() || "";
+    rest = rest.slice(1);
+  }
+  if (rest.length > 0) {
+    throw new Error(`Unexpected model set arguments: ${rest.join(" ")}`);
+  }
+  if (!requested) {
+    throw new Error("Usage: openpocket model set --name <profile> (or: openpocket model set <profile>)");
+  }
+  if (!cfg.models[requested]) {
+    throw new Error(`Unknown model profile: ${requested}`);
+  }
+
+  cfg.defaultModel = requested;
+  saveConfig(cfg);
+  printSuccess(`Default model updated: ${requested}`);
+  printModelSummary(cfg);
   return 0;
 }
 
@@ -3215,6 +3304,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const cfg = loadConfig(configPath ?? undefined);
     printRaw(fs.readFileSync(cfg.configPath, "utf-8").trim());
     return 0;
+  }
+
+  if (command === "model") {
+    return runModelCommand(configPath ?? undefined, rest.slice(1));
   }
 
   if (command === "target") {

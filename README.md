@@ -646,6 +646,9 @@ Command prefix by install mode:
 ./openpocket target set --type physical-phone
 ./openpocket target set --type physical-phone --adb-endpoint 192.168.1.25:5555
 ./openpocket config-show
+./openpocket model show
+./openpocket model list
+./openpocket model set --name google/gemini-3.1-pro-preview
 ./openpocket emulator start
 ./openpocket emulator status
 ./openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
