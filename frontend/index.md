@@ -71,7 +71,6 @@ const hasMoreModels = computed(() => modelSupport.length > modelSupportCollapsed
       </p>
     </div>
     <div class="op-hero-npm">
-      <p class="op-hero-npm-label">Install with NPM</p>
       <code class="op-hero-npm-code">npm install -g openpocket</code>
     </div>
     <div class="op-hero-actions">
@@ -87,53 +86,60 @@ const hasMoreModels = computed(() => modelSupport.length > modelSupportCollapsed
   </div>
 </section>
 
-<!-- Use Cases (Bento Grid) -->
+<!-- Use Cases (Scrolling Video Grid) -->
 <section class="op-bento">
   <p class="op-section-label">Use Cases</p>
-  <div class="op-bento-grid">
-    <!-- Item 1 (was 4.mp4) -->
-    <div class="op-bento-item">
-      <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/4.mp4"></video>
-      <div class="op-bento-overlay">
-        <span class="op-bento-tag">Social</span>
-        <h3 class="op-bento-title">Social</h3>
+  <div class="op-bento-scroll-wrap">
+    <div class="op-bento-track">
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/4.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Social</h3></div>
       </div>
-      <div class="op-bento-log">> Checking emails...
-> Draft reply: Meeting confirmed
-> Calendar updated</div>
-    </div>
-    <!-- Item 2 -->
-    <div class="op-bento-item">
-      <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/2.mp4"></video>
-      <div class="op-bento-overlay">
-        <span class="op-bento-tag">Gaming</span>
-        <h3 class="op-bento-title">Gaming</h3>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/2.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Gaming</h3></div>
       </div>
-      <div class="op-bento-log">> Scanning feed...
-> Liked post #4829
-> Commenting: "Great shot!"</div>
-    </div>
-    <!-- Item 3 -->
-    <div class="op-bento-item">
-      <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/3.mp4"></video>
-      <div class="op-bento-overlay">
-        <span class="op-bento-tag">Utility</span>
-        <h3 class="op-bento-title">Utility Payment</h3>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/3.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Utility Payment</h3></div>
       </div>
-      <div class="op-bento-log">> Filtering content...
-> Skipping ads (3s)
-> Saving to Watch Later</div>
-    </div>
-    <!-- Item 4 (was 1.mp4) -->
-    <div class="op-bento-item">
-      <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/1.mp4"></video>
-      <div class="op-bento-overlay">
-        <span class="op-bento-tag">Education</span>
-        <h3 class="op-bento-title">Studying</h3>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/1.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Studying</h3></div>
       </div>
-      <div class="op-bento-log">> Identifying product...
-> Price comparison: -15% found
-> Adding to cart...</div>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/5.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Social</h3></div>
+      </div>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/6.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Utility</h3></div>
+      </div>
+      <!-- Duplicate set for seamless infinite scroll -->
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/4.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Social</h3></div>
+      </div>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/2.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Gaming</h3></div>
+      </div>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/3.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Utility Payment</h3></div>
+      </div>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/1.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Studying</h3></div>
+      </div>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/5.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Social</h3></div>
+      </div>
+      <div class="op-bento-item">
+        <video class="op-bento-video" autoplay muted loop playsinline src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/6.mp4"></video>
+        <div class="op-bento-overlay"><h3 class="op-bento-title">Utility</h3></div>
+      </div>
     </div>
   </div>
 </section>
