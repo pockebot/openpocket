@@ -2532,6 +2532,41 @@ export class AgentRuntime {
           logStepSection("thought", thought || "(empty)");
           logStepSection("decision", JSON.stringify(action));
 
+          const stopErrorMessage = "Task stopped by user.";
+          const isStopError = (error: unknown): boolean => {
+            const message = (error as Error)?.message ?? String(error ?? "");
+            return message.toLowerCase().includes(stopErrorMessage.toLowerCase());
+          };
+          const awaitWithStopGuard = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+            if (ctx.stopRequested()) {
+              throw new Error(stopErrorMessage);
+            }
+            const opPromise = Promise.resolve().then(() => operation());
+            let stopTimer: NodeJS.Timeout | null = null;
+            try {
+              return await Promise.race([
+                opPromise,
+                new Promise<T>((_, reject) => {
+                  stopTimer = setInterval(() => {
+                    if (!ctx.stopRequested()) {
+                      return;
+                    }
+                    if (stopTimer) {
+                      clearInterval(stopTimer);
+                      stopTimer = null;
+                    }
+                    reject(new Error(stopErrorMessage));
+                  }, 120);
+                  stopTimer.unref?.();
+                }),
+              ]);
+            } finally {
+              if (stopTimer) {
+                clearInterval(stopTimer);
+              }
+            }
+          };
+
           // ---- finish ----
           if (action.type === "finish") {
             const preFinishLines: string[] = [];
@@ -2679,15 +2714,30 @@ export class AgentRuntime {
                 timeoutCapSec,
                 Math.max(30, Math.round(Number.isFinite(requestedTimeoutSec) ? requestedTimeoutSec : timeoutCapSec)),
               );
-              decision = await ctx.onHumanAuth({
+              decision = await awaitWithStopGuard(() => ctx.onHumanAuth!({
                 sessionId: ctx.session.id, sessionPath: ctx.session.path, task: ctx.task, step,
                 capability: action.capability, instruction: action.instruction,
                 reason: action.reason ?? thought,
                 timeoutSec,
                 currentApp, screenshotPath: ctx.lastScreenshotPath,
                 uiTemplate: resolvedUiTemplate,
-              });
+              }));
             } catch (error) {
+              if (isStopError(error)) {
+                const msg = stopErrorMessage;
+                ctx.failMessage = msg;
+                logStepSection("result", msg);
+                runtime.workspace.appendStep(
+                  ctx.session,
+                  step,
+                  thought,
+                  JSON.stringify(action, null, 2),
+                  msg,
+                  buildStepTrace(currentApp, "error"),
+                );
+                ctx.traces.push({ step, action, result: msg, thought, currentApp });
+                return { content: [{ type: "text" as const, text: msg }], details: {} };
+              }
               decision = { requestId: "local-error", approved: false, status: "rejected", message: `Human auth error: ${(error as Error).message}`, decidedAt: nowIso(), artifactPath: null };
             }
 
@@ -2734,14 +2784,16 @@ export class AgentRuntime {
             }
             let decision: UserDecisionResponse;
             try {
-              decision = await ctx.onUserDecision({
+              decision = await awaitWithStopGuard(() => ctx.onUserDecision!({
                 sessionId: ctx.session.id, sessionPath: ctx.session.path, task: ctx.task, step,
                 question: action.question, options: action.options,
                 timeoutSec: Math.max(20, action.timeoutSec ?? 300),
                 currentApp: snapshot?.currentApp ?? "unknown", screenshotPath: ctx.lastScreenshotPath,
-              });
+              }));
             } catch (error) {
-              const msg = `User decision failed: ${(error as Error).message}`;
+              const msg = isStopError(error)
+                ? stopErrorMessage
+                : `User decision failed: ${(error as Error).message}`;
               ctx.failMessage = msg;
               runtime.workspace.appendStep(
                 ctx.session,
@@ -2795,7 +2847,7 @@ export class AgentRuntime {
             }
             let response: UserInputResponse;
             try {
-              response = await ctx.onUserInput({
+              response = await awaitWithStopGuard(() => ctx.onUserInput!({
                 sessionId: ctx.session.id,
                 sessionPath: ctx.session.path,
                 task: ctx.task,
@@ -2805,9 +2857,11 @@ export class AgentRuntime {
                 timeoutSec: Math.max(20, action.timeoutSec ?? 300),
                 currentApp: snapshot?.currentApp ?? "unknown",
                 screenshotPath: ctx.lastScreenshotPath,
-              });
+              }));
             } catch (error) {
-              const msg = `User input failed: ${(error as Error).message}`;
+              const msg = isStopError(error)
+                ? stopErrorMessage
+                : `User input failed: ${(error as Error).message}`;
               ctx.failMessage = msg;
               runtime.workspace.appendStep(
                 ctx.session,
