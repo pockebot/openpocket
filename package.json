@@ -57,6 +57,7 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/node-telegram-bot-api": "^0.64.7",
+    "@vercel/blob": "^2.3.0",
     "mermaid": "^11.12.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

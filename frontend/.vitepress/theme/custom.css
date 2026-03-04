@@ -203,8 +203,8 @@ h1, h2, h3, h4, h5, h6,
   z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 160px;
-  padding: 120px 80px;
+  gap: 80px;
+  padding: 40px 80px 120px;
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
@@ -365,6 +365,7 @@ h1, h2, h3, h4, h5, h6,
 .op-hero-right {
   width: 560px;
   max-width: 640px;
+  max-height: 340px;
   flex-shrink: 0;
   border-radius: 8px;
   overflow: hidden;
@@ -475,7 +476,112 @@ h1, h2, h3, h4, h5, h6,
 }
 
 /* ============================================
-   USE CASES
+   BENTO GRID (REPLACES USE CASES)
+   ============================================ */
+.op-bento {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+  width: 100%;
+}
+
+.op-bento-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0;
+  width: 100%;
+}
+
+.op-bento-item {
+  position: relative;
+  width: 100%;
+  border-radius: 0;
+  overflow: hidden;
+  background: #000;
+  box-shadow: none;
+  transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.3s ease;
+  aspect-ratio: 16 / 9; /* Default: Landscape (computer screen recordings) */
+}
+
+/* Modifiers for different shapes in the future */
+.op-bento-item.wide {
+  grid-column: span 2;
+  aspect-ratio: 16 / 9; /* Desktop Landscape */
+}
+
+.op-bento-item.square {
+  aspect-ratio: 1 / 1;
+}
+
+.op-bento-item:hover {
+  transform: scale(1.02);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+}
+
+.op-bento-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* Key: This forces varied videos to fill the box neatly */
+  object-position: center top; /* Focus on the top-center of the screen (usually where action is) */
+  display: block;
+}
+
+.op-bento-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 32px 24px 24px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.op-bento-title {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+/* The Ghost Terminal Log Overlay */
+.op-bento-log {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  right: 24px;
+  font-family: "Menlo", monospace;
+  font-size: 11px;
+  line-height: 16px;
+  color: rgba(0, 255, 128, 0.9);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  padding: 12px;
+  border-radius: 8px;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: none;
+  white-space: pre-wrap;
+  display: none;
+}
+
+.op-bento-item:hover .op-bento-log {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.op-bento-tag {
+  display: none;
+}
+
+/* ============================================
+   USE CASES (SCROLLING)
    ============================================ */
 .op-usecases {
   display: flex;
@@ -558,9 +664,35 @@ h1, h2, h3, h4, h5, h6,
   background: linear-gradient(to left, #fff, transparent);
 }
 
+/* Dark Mode for Use Cases */
+.dark .op-usecase-card           { background: rgba(251, 242, 233, 0.15) !important; border-color: rgba(245, 198, 163, 0.5) !important; }
+.dark .op-usecase-card:hover     { background: rgba(251, 242, 233, 0.25) !important; border-color: rgba(230, 167, 117, 0.6) !important; }
+.dark .op-usecase-card span      { color: #f0f2f7 !important; }
+.dark .op-usecases-fade-l        { background: linear-gradient(to right, var(--vp-c-bg), transparent) !important; }
+.dark .op-usecases-fade-r        { background: linear-gradient(to left, var(--vp-c-bg), transparent) !important; }
+
 @keyframes op-scroll-infinite {
   0%   { transform: translateX(0); }
   100% { transform: translateX(calc(-100% / 3)); }
+}
+
+/* Responsive */
+@media (max-width: 860px) {
+  .op-bento-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+  .op-bento-title { font-size: 18px; line-height: 24px; }
+  .op-bento-log { display: none; } /* Hide log on mobile to save space */
+}
+
+@media (max-width: 640px) {
+  .op-bento-grid {
+    grid-template-columns: 1fr; /* Stack on mobile */
+  }
+  .op-bento-item {
+    aspect-ratio: 4 / 3;
+  }
 }
 
 /* ============================================
@@ -1065,12 +1197,6 @@ h1, h2, h3, h4, h5, h6,
 .dark .op-why-item               { border-color: rgba(255, 255, 255, 0.16); }
 .dark .op-why-item strong        { color: #f1f5f9 !important; }
 
-/* Use Cases */
-.dark .op-usecase-card           { background: rgba(251, 242, 233, 0.15) !important; border-color: rgba(245, 198, 163, 0.5) !important; }
-.dark .op-usecase-card:hover     { background: rgba(251, 242, 233, 0.25) !important; border-color: rgba(230, 167, 117, 0.6) !important; }
-.dark .op-usecase-card span      { color: #f0f2f7 !important; }
-.dark .op-usecases-fade-l        { background: linear-gradient(to right, var(--vp-c-bg), transparent) !important; }
-.dark .op-usecases-fade-r        { background: linear-gradient(to left, var(--vp-c-bg), transparent) !important; }
 
 /* Simple Workflow */
 .dark .op-workflow-step          { border-color: #ffb347 !important; }
@@ -1137,6 +1263,7 @@ h1, h2, h3, h4, h5, h6,
 .op-hero-right,
 .op-why,
 .op-why-item,
+.op-bento,
 .op-usecases,
 .op-workflow,
 .op-workflow-step,
@@ -1153,6 +1280,8 @@ h1, h2, h3, h4, h5, h6,
 .op-why-item.visible:nth-child(1) { animation: op-fade-up 0.5s ease 0.1s both; }
 .op-why-item.visible:nth-child(2) { animation: op-fade-up 0.5s ease 0.22s both; }
 .op-why-item.visible:nth-child(3) { animation: op-fade-up 0.5s ease 0.34s both; }
+
+.op-bento.visible      { animation: op-fade-up 0.6s ease both; }
 
 .op-usecases.visible   { animation: op-fade-up 0.6s ease both; }
 
@@ -1174,7 +1303,7 @@ h1, h2, h3, h4, h5, h6,
 
 /* Large screens */
 @media (max-width: 1440px) {
-  .op-landing    { padding: 80px 60px; gap: 100px; }
+  .op-landing    { padding: 32px 60px 80px; gap: 64px; }
   .op-hero       { gap: 48px; }
   .op-hero-left  { width: auto; flex: 1; min-width: 0; }
   .op-hero-right { max-width: 480px; }
@@ -1188,7 +1317,7 @@ h1, h2, h3, h4, h5, h6,
 
 /* Tablet landscape */
 @media (max-width: 1100px) {
-  .op-landing             { padding: 64px 40px; gap: 80px; }
+  .op-landing             { padding: 28px 40px 64px; gap: 56px; }
   .op-hero                { flex-direction: column-reverse; gap: 40px; }
   .op-hero-left           { width: 100%; }
   .op-hero-right          { width: 100%; max-width: 100%; min-height: 280px; aspect-ratio: 16/10; }
@@ -1217,7 +1346,7 @@ h1, h2, h3, h4, h5, h6,
   .VPNavBar .content        { height: var(--vp-nav-height) !important; justify-content: flex-end !important; margin-left: auto !important; }
   .VPNavBar .content-body   { width: auto !important; margin-left: auto !important; gap: 0 !important; justify-content: flex-end !important; }
   .VPNavBar .content-body > *:not(.VPNavBarHamburger) { display: none !important; }
-  .op-landing             { padding: 48px 28px; gap: 64px; }
+  .op-landing             { padding: 24px 28px 48px; gap: 48px; }
   .op-hero-title          { font-size: 36px !important; line-height: 44px !important; }
   .op-hero-desc           { font-size: 16px; }
   .op-why-item            { grid-template-columns: 1fr; gap: 10px; padding: 18px 0; }
@@ -1245,7 +1374,7 @@ h1, h2, h3, h4, h5, h6,
 
 /* Mobile */
 @media (max-width: 580px) {
-  .op-landing             { padding: 40px 16px; gap: 48px; }
+  .op-landing             { padding: 20px 16px 40px; gap: 36px; }
   .op-hero-title          { font-size: 28px !important; line-height: 36px !important; }
   .op-hero-desc           { font-size: 15px; line-height: 22px; }
   .op-section-label       { font-size: 15px; }
