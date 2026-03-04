@@ -1553,6 +1553,15 @@ export class TelegramGateway {
     this.typingSessions.clear();
   }
 
+  private clearTypingSessionForChat(chatId: number): void {
+    const session = this.typingSessions.get(chatId);
+    if (!session) {
+      return;
+    }
+    clearInterval(session.timer);
+    this.typingSessions.delete(chatId);
+  }
+
   private async sendTypingAction(chatId: number): Promise<void> {
     try {
       await this.bot.sendChatAction(chatId, "typing");
@@ -1712,6 +1721,8 @@ export class TelegramGateway {
     const cancelledDecision = this.cancelPendingUserDecisionWait(chatId, reason) ? 1 : 0;
     const cancelledInput = this.cancelPendingUserInputWait(chatId, reason) ? 1 : 0;
     const cancelledHumanAuth = this.humanAuth.cancelPendingForChat(chatId, reason);
+    // Stop typing indicator immediately once user requests stop.
+    this.clearTypingSessionForChat(chatId);
     return {
       accepted,
       cancelledWaits: cancelledDecision + cancelledInput + cancelledHumanAuth,
