@@ -499,7 +499,7 @@ h1, h2, h3, h4, h5, h6,
   overflow: hidden;
   background: #000;
   box-shadow: none;
-  transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.3s ease;
+  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.4s ease, filter 0.4s ease;
   aspect-ratio: 16 / 9; /* Default: Landscape (computer screen recordings) */
 }
 
@@ -514,8 +514,8 @@ h1, h2, h3, h4, h5, h6,
 }
 
 .op-bento-item:hover {
-  transform: scale(1.02);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+  transform: scale(1.08);
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
   z-index: 10;
 }
 
