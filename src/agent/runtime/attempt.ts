@@ -129,19 +129,32 @@ function ollamaStreamFn(
       messages,
       stream: false,
       think: false,
-      options: { num_predict: 256, temperature: 0.3 },
+      options: {
+        num_predict: 200,
+        num_ctx: 2048,
+        temperature: 0.6,
+        top_k: 20,
+        top_p: 0.95,
+      },
     };
 
     (async () => {
       try {
+        const fetchStart = Date.now();
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][ollama-native] calling ${ollamaBase}/api/chat model=${modelName} msgs=${messages.length} num_predict=${body.options.num_predict}`);
+
         const resp = await fetch(`${ollamaBase}/api/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+        const fetchMs = Date.now() - fetchStart;
 
         if (!resp.ok) {
           const errText = await resp.text().catch(() => "");
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][ollama-native] HTTP error ${resp.status} (${fetchMs}ms): ${errText.slice(0, 200)}`);
           const errMsg: PiAssistantMessage = {
             role: "assistant",
             content: [{ type: "text", text: errText || "Ollama API error" }],
@@ -161,10 +174,17 @@ function ollamaStreamFn(
         const respMsg = json.message as Record<string, unknown> | undefined;
         const rawText = typeof respMsg?.content === "string" ? respMsg.content.trim() : "";
 
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][ollama-native] response (${fetchMs}ms): content_len=${rawText.length} text=${JSON.stringify(rawText.slice(0, 200))}`);
+
         const content: PiAssistantMessage["content"] = [];
         const parsed = parseTextToolCall(rawText);
 
         if (parsed) {
+          const enrichedArgs: Record<string, unknown> = { thought: "", ...parsed.args };
+          if (parsed.name === "finish" && !enrichedArgs.message) {
+            enrichedArgs.message = "Task completed";
+          }
           if (rawText) {
             content.push({ type: "text", text: rawText });
           }
@@ -172,14 +192,30 @@ function ollamaStreamFn(
             type: "toolCall",
             id: `call_${Date.now()}`,
             name: parsed.name,
-            arguments: parsed.args,
+            arguments: enrichedArgs,
           };
           content.push(toolCall);
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][ollama-native] parsed tool: ${parsed.name} args=${JSON.stringify(enrichedArgs)}`);
         } else if (rawText) {
           content.push({ type: "text", text: rawText });
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][ollama-native] no tool parsed, raw text response`);
+        } else {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][ollama-native] WARNING: empty response from model, injecting wait action`);
+          const fallbackText = "ACTION: wait\nARGS: {}";
+          content.push({ type: "text", text: fallbackText });
+          const fallbackToolCall: PiToolCall = {
+            type: "toolCall",
+            id: `call_${Date.now()}`,
+            name: "wait",
+            arguments: { thought: "" },
+          };
+          content.push(fallbackToolCall);
         }
 
-        const hasToolCall = parsed !== null;
+        const hasToolCall = parsed !== null || rawText === "";
         const assistantMsg: PiAssistantMessage = {
           role: "assistant",
           content,
@@ -400,6 +436,7 @@ export async function runRuntimeAttempt(
       onUserDecision: request.onUserDecision,
       onUserInput: request.onUserInput,
       onProgress: request.onProgress,
+      skipCapabilityProbe: isLocalLightweight,
     };
 
     const runtimeBackend = resolveRuntimeBackend(deps.config);
@@ -630,6 +667,8 @@ export async function runRuntimeAttempt(
     }
 
     const useOllamaNative = isOllamaModel(profile.baseUrl);
+    // eslint-disable-next-line no-console
+    console.log(`[OpenPocket][agent-setup] useOllamaNative=${useOllamaNative} baseUrl=${profile.baseUrl} model=${profile.model}`);
     const effectiveTools = useOllamaNative
       ? tools.filter((t) => OLLAMA_LIGHTWEIGHT_TOOLS.has(t.name))
       : tools;
@@ -715,10 +754,14 @@ export async function runRuntimeAttempt(
         }
 
         ctx.lastScreenshotStartMs = Date.now();
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][transform] step=${ctx.stepCount + 1} captureScreenSnapshot start`);
         const snapshot = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
         snapshot.installedPackages = launchablePackages;
         ctx.latestSnapshot = snapshot;
         ctx.lastScreenshotEndMs = Date.now();
+        // eslint-disable-next-line no-console
+        console.log(`[OpenPocket][transform] step=${ctx.stepCount + 1} captureScreenSnapshot done (${ctx.lastScreenshotEndMs - ctx.lastScreenshotStartMs}ms) elements=${snapshot.uiElements.length} app=${snapshot.currentApp}`);
         shouldReturnHome = true;
 
         if (deps.config.screenshots.saveStepScreenshots) {

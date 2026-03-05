@@ -2612,9 +2612,12 @@ export class ChatAssistant {
       model,
       messages,
       stream: false,
-      think: false,
       options: {
         num_predict: Math.min(maxTokens, 800),
+        num_ctx: 4096,
+        temperature: 0.6,
+        top_k: 20,
+        top_p: 0.95,
       },
     };
 

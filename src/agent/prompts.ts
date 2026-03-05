@@ -106,25 +106,15 @@ export function buildSystemPrompt(
 
   if (mode === "none" && options?.lightweight) {
     return [
-      "You control an Android phone. Reply with EXACTLY one action per step.",
-      "",
-      "OUTPUT FORMAT (strict):",
+      "Android agent. One action per step. Format:",
       "ACTION: tool_name",
       "ARGS: {\"key\": \"value\"}",
       "",
-      "TOOLS:",
-      "- tap_element: tap UI element. ARGS: {\"elementId\": \"<id>\"}",
-      "- type_text: type English text only. ARGS: {\"text\": \"hello\"}. Chinese WILL FAIL.",
-      "- keyevent: press key. ARGS: {\"keycode\": \"KEYCODE_ENTER\"} or KEYCODE_BACK",
-      "- launch_app: open app. ARGS: {\"packageName\": \"com.android.chrome\"}",
-      "- swipe: scroll. ARGS: {\"x1\":100,\"y1\":500,\"x2\":100,\"y2\":200}",
-      "- wait: pause. ARGS: {\"durationMs\": 1000}",
-      "- finish: task done. ARGS: {\"result\": \"summary\"}",
+      "Tools: tap_element({elementId}), type_text({text}), keyevent({keycode}), launch_app({packageName}), swipe({x1,y1,x2,y2}), wait({}), finish({message})",
       "",
-      "RULES:",
-      "- After type_text, always do keyevent KEYCODE_ENTER to submit.",
-      "- Never repeat a failed action. Try different approach.",
-      "- To open Chrome: ACTION: launch_app ARGS: {\"packageName\": \"com.android.chrome\"}",
+      "CRITICAL: Call finish IMMEDIATELY when the task goal is achieved. Check FIRST if the task is already done before acting.",
+      "To open an app, ALWAYS use launch_app with packageName. Common: chrome=com.android.chrome, settings=com.android.settings, youtube=com.google.android.youtube, gmail=com.google.android.gm, maps=com.google.android.apps.maps, camera=com.android.camera2, calendar=com.google.android.calendar",
+      "After type_text, do keyevent KEYCODE_ENTER. Never repeat failed actions.",
     ].join("\n");
   }
 
@@ -500,6 +490,33 @@ export function buildUserPrompt(
   ].join("\n");
 }
 
+const APP_NAME_MAP: Record<string, string> = {
+  "com.android.chrome": "Chrome",
+  "com.android.settings": "Settings",
+  "com.google.android.youtube": "YouTube",
+  "com.google.android.gm": "Gmail",
+  "com.google.android.apps.photos": "Photos",
+  "com.google.android.apps.maps": "Maps",
+  "com.android.contacts": "Contacts",
+  "com.android.dialer": "Phone",
+  "com.android.calculator2": "Calculator",
+  "com.android.camera2": "Camera",
+  "com.android.vending": "Play Store",
+  "com.google.android.calendar": "Calendar",
+  "com.google.android.deskclock": "Clock",
+};
+
+function detectTaskDone(task: string, currentApp: string): boolean {
+  const t = task.toLowerCase();
+  const appName = APP_NAME_MAP[currentApp]?.toLowerCase();
+  if (!appName) return false;
+  if (t.includes(appName)) return true;
+  if (t.includes("chrome") && currentApp.includes("chrome")) return true;
+  if (t.includes("设置") && currentApp.includes("settings")) return true;
+  if (t.includes("浏览器") && currentApp.includes("chrome")) return true;
+  return false;
+}
+
 export function buildLightweightUserPrompt(
   task: string,
   step: number,
@@ -509,44 +526,29 @@ export function buildLightweightUserPrompt(
   const safeHistory = Array.isArray(history) ? history : [];
   const uiElements = Array.isArray(snapshot.uiElements) ? snapshot.uiElements : [];
 
-  const recentHistory = safeHistory.slice(-4);
-  const recentActions = recentHistory.map(parseActionFromHistoryLine);
-  const actionStreak = trailingStreak(recentActions);
+  const appLabel = APP_NAME_MAP[snapshot.currentApp] || snapshot.currentApp.split(".").pop() || snapshot.currentApp;
+  const taskDone = step > 1 && detectTaskDone(task, snapshot.currentApp);
 
-  const uiCandidatesText = uiElements.length > 0
-    ? uiElements
-      .slice(0, 10)
-      .map((item) => {
-        const label = item.text || item.contentDesc || item.resourceId || "(unlabeled)";
-        return `${item.id}: "${label}" ${item.clickable ? "tap" : "view"} (${item.scaledCenter.x},${item.scaledCenter.y})`;
-      })
-      .join("\n")
-    : "(none)";
-
-  const warnings: string[] = [];
-  if (actionStreak.count >= 2) {
-    warnings.push(`WARNING: "${actionStreak.value}" repeated ${actionStreak.count}x. Use a DIFFERENT tool/action NOW.`);
-  }
-  const lastAction = recentHistory[recentHistory.length - 1] || "";
-  if (lastAction.includes("error") || lastAction.includes("failed")) {
-    warnings.push("LAST ACTION FAILED. Try a different approach.");
+  if (taskDone) {
+    return `Task:${task}\nApp:${appLabel} (OPEN)\nTask is DONE. Call finish now.\nACTION: finish\nARGS: {"message": "${appLabel} opened"}`;
   }
 
-  const parts = [
-    `Task: ${task}`,
-    `Step: ${step} | App: ${snapshot.currentApp}`,
-    "",
-    "UI elements (id: label, tap/view, center):",
-    uiCandidatesText,
-  ];
+  const uiText = uiElements
+    .slice(0, 8)
+    .map((item) => {
+      const label = item.text || item.contentDesc || item.resourceId || "?";
+      return `${item.id}:${label}${item.clickable ? "*" : ""}`;
+    })
+    .join("|");
 
-  if (recentHistory.length > 0) {
-    parts.push("", `History:\n${recentHistory.join("\n")}`);
-  }
-  if (warnings.length > 0) {
-    parts.push("", warnings.join("\n"));
-  }
-  parts.push("", "Reply with ACTION: and ARGS: now.");
+  const lastSteps = safeHistory.slice(-3).map((h) => {
+    const m = h.match(/step \d+:.*?action=(\w+).*?result=(.*)/);
+    return m ? `${m[1]}→${m[2].slice(0, 40)}` : h.slice(0, 50);
+  });
+
+  const parts = [`Task:${task}`, `App:${appLabel} Step:${step}`, `UI:${uiText || "none"}`];
+  if (lastSteps.length > 0) parts.push(`Did:${lastSteps.join("; ")}`);
+  parts.push("ACTION:");
 
   return parts.join("\n");
 }

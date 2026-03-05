@@ -314,6 +314,7 @@ interface PhoneAgentRunContext {
   lastScreenshotEndMs: number;
   lastModelInferenceStartMs: number;
   capabilityProbeApprovalByKey: Map<string, CapabilityProbeApprovalRecord>;
+  skipCapabilityProbe?: boolean;
 }
 
 type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {
@@ -2540,7 +2541,8 @@ export class AgentRuntime {
               const canProbe =
                 this.config.humanAuth.enabled
                 && Boolean(snapshot)
-                && finishApp !== "unknown";
+                && finishApp !== "unknown"
+                && !ctx.skipCapabilityProbe;
               if (canProbe) {
                 const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
                 const events = this.capabilityProbe.poll({
@@ -2891,7 +2893,9 @@ export class AgentRuntime {
           }
 
           // ---- all other actions (tap, swipe, type, keyevent, launch_app, shell, run_script, read, write, edit, etc.) ----
-          const executionResult = await runtime.executePhoneAction(action, ctx);
+          const executionResult = await runtime.executePhoneAction(action, ctx, {
+            skipCapabilityProbe: ctx.skipCapabilityProbe,
+          });
           const stepResult = executionResult + buildScreenshotSuffix();
           logStepSection("result", stepResult);
 
