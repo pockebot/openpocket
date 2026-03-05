@@ -23,7 +23,7 @@ test("SkillLoader loads workspace skills", () => {
   const loader = new SkillLoader(cfg);
   const skills = loader.loadAll();
   assert.equal(skills.some((s) => s.id === "search-app"), true);
-  const summary = loader.summaryText();
+  const summary = loader.summaryText(200);
   assert.match(summary, /Search App/);
   assert.match(summary, /location="/);
 });
