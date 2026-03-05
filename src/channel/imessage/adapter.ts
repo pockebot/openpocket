@@ -174,6 +174,21 @@ export class IMessageAdapter implements ChannelAdapter {
     await this.imsgSendFile(peerId, imagePath);
   }
 
+  async sendFile(peerId: string, filePath: string, caption?: string): Promise<void> {
+    if (caption) {
+      await this.sendText(peerId, caption);
+    }
+    if (!fs.existsSync(filePath)) {
+      this.log(`sendFile: file not found path=${filePath}`);
+      return;
+    }
+    await this.imsgSendFile(peerId, filePath);
+  }
+
+  async sendVoice(peerId: string, voicePath: string, caption?: string): Promise<void> {
+    await this.sendFile(peerId, voicePath, caption);
+  }
+
   // -----------------------------------------------------------------------
   // Inbound
   // -----------------------------------------------------------------------

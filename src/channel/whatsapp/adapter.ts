@@ -140,6 +140,46 @@ export class WhatsAppAdapter implements ChannelAdapter {
     });
   }
 
+  async sendFile(peerId: string, filePath: string, caption?: string): Promise<void> {
+    if (!this.sock) return;
+    const jid = this.ensureJid(peerId);
+
+    if (!fs.existsSync(filePath)) {
+      this.log(`sendFile: file not found path=${filePath}`);
+      if (caption) await this.sock.sendMessage(jid, { text: caption });
+      return;
+    }
+
+    const fileBuffer = fs.readFileSync(filePath);
+    await this.sock.sendMessage(jid, {
+      document: fileBuffer,
+      mimetype: this.guessMimeType(filePath),
+      fileName: path.basename(filePath),
+      caption: caption ?? undefined,
+    });
+  }
+
+  async sendVoice(peerId: string, voicePath: string, caption?: string): Promise<void> {
+    if (!this.sock) return;
+    const jid = this.ensureJid(peerId);
+
+    if (!fs.existsSync(voicePath)) {
+      this.log(`sendVoice: file not found path=${voicePath}`);
+      if (caption) await this.sock.sendMessage(jid, { text: caption });
+      return;
+    }
+
+    const voiceBuffer = fs.readFileSync(voicePath);
+    await this.sock.sendMessage(jid, {
+      audio: voiceBuffer,
+      ptt: true,
+      mimetype: "audio/ogg; codecs=opus",
+    });
+    if (caption) {
+      await this.sock.sendMessage(jid, { text: caption });
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Inbound
   // -----------------------------------------------------------------------
@@ -576,6 +616,29 @@ export class WhatsAppAdapter implements ChannelAdapter {
     }
     if (current) chunks.push(current);
     return chunks;
+  }
+
+  private guessMimeType(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    switch (ext) {
+      case ".jpg":
+      case ".jpeg": return "image/jpeg";
+      case ".png": return "image/png";
+      case ".webp": return "image/webp";
+      case ".gif": return "image/gif";
+      case ".pdf": return "application/pdf";
+      case ".txt": return "text/plain";
+      case ".json": return "application/json";
+      case ".csv": return "text/csv";
+      case ".zip": return "application/zip";
+      case ".mp3": return "audio/mpeg";
+      case ".m4a": return "audio/mp4";
+      case ".wav": return "audio/wav";
+      case ".ogg":
+      case ".opus": return "audio/ogg";
+      case ".mp4": return "video/mp4";
+      default: return "application/octet-stream";
+    }
   }
 
   private htmlToPlainText(html: string): string {

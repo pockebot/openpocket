@@ -28,6 +28,8 @@ function makeEnvelope(overrides = {}) {
 function createMockAdapter(channelType = "telegram") {
   const sent = [];
   const images = [];
+  const files = [];
+  const voices = [];
   let inboundHandler = null;
   let started = false;
   let stopped = false;
@@ -36,6 +38,8 @@ function createMockAdapter(channelType = "telegram") {
     channelType,
     sent,
     images,
+    files,
+    voices,
     get started() { return started; },
     get stopped() { return stopped; },
 
@@ -47,6 +51,12 @@ function createMockAdapter(channelType = "telegram") {
     },
     async sendImage(peerId, imagePath, caption) {
       images.push({ peerId, imagePath, caption });
+    },
+    async sendFile(peerId, filePath, caption) {
+      files.push({ peerId, filePath, caption });
+    },
+    async sendVoice(peerId, voicePath, caption) {
+      voices.push({ peerId, voicePath, caption });
     },
 
     onInbound(handler) { inboundHandler = handler; },
@@ -213,6 +223,38 @@ test("ChannelRouter: replyImage routes to originating channel", async () => {
   assert.equal(tg.images.length, 0);
 });
 
+test("ChannelRouter: replyFile routes to originating channel", async () => {
+  const router = new DefaultChannelRouter({ log: () => {} });
+  const tg = createMockAdapter("telegram");
+  const dc = createMockAdapter("discord");
+  router.register(tg);
+  router.register(dc);
+
+  const envelope = makeEnvelope({ channelType: "discord", peerId: "channel-99" });
+  await router.replyFile(envelope, "/tmp/report.pdf", "report");
+
+  assert.equal(dc.files.length, 1);
+  assert.equal(dc.files[0].peerId, "channel-99");
+  assert.equal(dc.files[0].caption, "report");
+  assert.equal(tg.files.length, 0);
+});
+
+test("ChannelRouter: replyVoice routes to originating channel", async () => {
+  const router = new DefaultChannelRouter({ log: () => {} });
+  const tg = createMockAdapter("telegram");
+  const dc = createMockAdapter("discord");
+  router.register(tg);
+  router.register(dc);
+
+  const envelope = makeEnvelope({ channelType: "telegram", peerId: "chat-42" });
+  await router.replyVoice(envelope, "/tmp/voice.ogg", "voice");
+
+  assert.equal(tg.voices.length, 1);
+  assert.equal(tg.voices[0].peerId, "chat-42");
+  assert.equal(tg.voices[0].caption, "voice");
+  assert.equal(dc.voices.length, 0);
+});
+
 test("ChannelRouter: replyText to unregistered channel is no-op", async () => {
   const router = new DefaultChannelRouter({ log: () => {} });
   const envelope = makeEnvelope({ channelType: "whatsapp", peerId: "phone-1" });
@@ -271,6 +313,8 @@ test("getDefaultCapabilities returns Telegram capabilities", () => {
   assert.equal(caps.supportsMarkdown, true);
   assert.equal(caps.supportsHtml, true);
   assert.equal(caps.supportsInlineButtons, true);
+  assert.equal(caps.supportsFileUpload, true);
+  assert.equal(caps.supportsVoiceUpload, true);
   assert.equal(caps.maxMessageLength, 4096);
 });
 

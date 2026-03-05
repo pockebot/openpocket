@@ -90,6 +90,8 @@ test("TelegramAdapter: getCapabilities returns Telegram capabilities", () => {
     assert.equal(caps.supportsHtml, true);
     assert.equal(caps.supportsInlineButtons, true);
     assert.equal(caps.supportsImageUpload, true);
+    assert.equal(caps.supportsFileUpload, true);
+    assert.equal(caps.supportsVoiceUpload, true);
     assert.equal(caps.supportsTypingIndicator, true);
     assert.equal(caps.maxMessageLength, 4096);
   });

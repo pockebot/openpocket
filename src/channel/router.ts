@@ -94,6 +94,24 @@ export class DefaultChannelRouter implements ChannelRouter {
     await adapter.sendImage(envelope.peerId, imagePath, caption);
   }
 
+  async replyFile(envelope: InboundEnvelope, filePath: string, caption?: string): Promise<void> {
+    const adapter = this.adapters.get(envelope.channelType);
+    if (!adapter) {
+      this.log("warn", `no adapter for reply channel=${envelope.channelType}`);
+      return;
+    }
+    await adapter.sendFile(envelope.peerId, filePath, caption);
+  }
+
+  async replyVoice(envelope: InboundEnvelope, voicePath: string, caption?: string): Promise<void> {
+    const adapter = this.adapters.get(envelope.channelType);
+    if (!adapter) {
+      this.log("warn", `no adapter for reply channel=${envelope.channelType}`);
+      return;
+    }
+    await adapter.sendVoice(envelope.peerId, voicePath, caption);
+  }
+
   onInbound(handler: InboundHandler): void {
     this.inboundHandler = handler;
   }

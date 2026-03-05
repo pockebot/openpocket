@@ -214,6 +214,27 @@ export class DiscordAdapter implements ChannelAdapter {
     });
   }
 
+  async sendFile(peerId: string, filePath: string, caption?: string): Promise<void> {
+    const channel = await this.resolveChannel(peerId);
+    if (!channel) return;
+
+    if (!fs.existsSync(filePath)) {
+      this.log(`sendFile: file not found path=${filePath}`);
+      if (caption) await channel.send({ content: caption });
+      return;
+    }
+
+    const attachment = new AttachmentBuilder(filePath);
+    await channel.send({
+      content: caption ?? undefined,
+      files: [attachment],
+    });
+  }
+
+  async sendVoice(peerId: string, voicePath: string, caption?: string): Promise<void> {
+    await this.sendFile(peerId, voicePath, caption);
+  }
+
   // -----------------------------------------------------------------------
   // Inbound
   // -----------------------------------------------------------------------

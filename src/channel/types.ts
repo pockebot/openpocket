@@ -134,6 +134,8 @@ export interface ChannelCapabilities {
   supportsInlineButtons: boolean;
   supportsReactions: boolean;
   supportsImageUpload: boolean;
+  supportsFileUpload: boolean;
+  supportsVoiceUpload: boolean;
   supportsTypingIndicator: boolean;
   supportsSlashCommands: boolean;
   supportsThreads: boolean;
@@ -161,6 +163,8 @@ export interface ChannelAdapter {
 
   sendText(peerId: string, text: string, opts?: SendOptions): Promise<void>;
   sendImage(peerId: string, imagePath: string, caption?: string): Promise<void>;
+  sendFile(peerId: string, filePath: string, caption?: string): Promise<void>;
+  sendVoice(peerId: string, voicePath: string, caption?: string): Promise<void>;
 
   // --- Inbound message registration ---
 
@@ -231,6 +235,10 @@ export interface ChannelRouter {
   replyText(envelope: InboundEnvelope, text: string, opts?: SendOptions): Promise<void>;
   /** Reply with image on the originating channel. */
   replyImage(envelope: InboundEnvelope, imagePath: string, caption?: string): Promise<void>;
+  /** Reply with file on the originating channel. */
+  replyFile(envelope: InboundEnvelope, filePath: string, caption?: string): Promise<void>;
+  /** Reply with voice/audio on the originating channel. */
+  replyVoice(envelope: InboundEnvelope, voicePath: string, caption?: string): Promise<void>;
 
   /** Set the unified inbound handler (GatewayCore registers this). */
   onInbound(handler: InboundHandler): void;
@@ -284,6 +292,10 @@ export interface GatewayCoreCallbacks {
   sendText(envelope: InboundEnvelope, text: string, opts?: SendOptions): Promise<void>;
   /** Send image to the originating peer. */
   sendImage(envelope: InboundEnvelope, imagePath: string, caption?: string): Promise<void>;
+  /** Send file to the originating peer. */
+  sendFile(envelope: InboundEnvelope, filePath: string, caption?: string): Promise<void>;
+  /** Send voice/audio to the originating peer. */
+  sendVoice(envelope: InboundEnvelope, voicePath: string, caption?: string): Promise<void>;
   /** Set typing indicator on the originating channel. */
   setTypingIndicator(envelope: InboundEnvelope, active: boolean): Promise<void>;
   /** Request user decision on the originating channel. */

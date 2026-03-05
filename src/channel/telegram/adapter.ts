@@ -167,6 +167,16 @@ export class TelegramAdapter implements ChannelAdapter {
     await this.bot.sendPhoto(chatId, imagePath, { caption });
   }
 
+  async sendFile(peerId: string, filePath: string, caption?: string): Promise<void> {
+    const chatId = Number(peerId);
+    await this.bot.sendDocument(chatId, filePath, caption ? { caption } : undefined);
+  }
+
+  async sendVoice(peerId: string, voicePath: string, caption?: string): Promise<void> {
+    const chatId = Number(peerId);
+    await this.bot.sendVoice(chatId, voicePath, caption ? { caption } : undefined);
+  }
+
   // -----------------------------------------------------------------------
   // Inbound
   // -----------------------------------------------------------------------
