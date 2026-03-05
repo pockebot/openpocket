@@ -137,19 +137,28 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
     provider = "openai";
   }
 
-  return {
+  const modelIdLower = profile.model.toLowerCase();
+  const isQwenThinkingModel = /qwen[_-]?3/.test(modelIdLower);
+
+  const model: Model<Api> = {
     id: profile.model,
     name: profile.model,
     api,
     provider,
     baseUrl: profile.baseUrl,
-    reasoning: profile.reasoningEffort !== null,
+    reasoning: profile.reasoningEffort !== null || isQwenThinkingModel,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: profile.maxTokens,
     ...(headers ? { headers } : {}),
   };
+
+  if (isQwenThinkingModel) {
+    (model as any).compat = { thinkingFormat: "qwen" };
+  }
+
+  return model;
 }
 
 // ---------------------------------------------------------------------------

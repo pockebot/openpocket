@@ -44,6 +44,7 @@ const modelSupport = [
   { id: "qwen-coder-plus", provider: "Qwen (DashScope)", model: "Qwen Coder Plus", logo: "/models/qwen.svg" },
   { id: "minimax-m2.5", provider: "MiniMax", model: "MiniMax M2.5", logo: "/models/minimax.svg" },
   { id: "minimax-m2.1", provider: "MiniMax", model: "MiniMax M2.1", logo: "/models/minimax.svg" },
+  { id: "qwen3.5-4b", provider: "Ollama (本地)", model: "Qwen3.5-4B", logo: "/models/qwen.svg" },
   { id: "volcengine/doubao-seed-1-8", provider: "Volcano Engine", model: "Doubao Seed 1.8", logo: "/models/doubao.svg" },
   { id: "volcengine/deepseek-v3-2", provider: "Volcano Engine", model: "DeepSeek V3.2", logo: "/models/deepseek.svg" },
 ];

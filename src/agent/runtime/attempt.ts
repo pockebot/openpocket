@@ -8,13 +8,17 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import {
   type AssistantMessage as PiAssistantMessage,
+  type AssistantMessageEvent as PiAssistantMessageEvent,
   type Message as PiMessage,
   type TextContent as PiTextContent,
   type ImageContent as PiImageContent,
+  type ToolCall as PiToolCall,
+  type Context as PiContext,
   type Model as PiModel,
   type Api as PiApi,
   type SimpleStreamOptions as PiSimpleStreamOptions,
   streamSimple,
+  createAssistantMessageEventStream,
 } from "@mariozechner/pi-ai";
 
 import type { OpenPocketConfig, ScreenSnapshot } from "../../types.js";
@@ -23,7 +27,7 @@ import { sleep } from "../../utils/time.js";
 import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
 import { buildPiAiModel } from "../model-client.js";
 import { normalizePiSessionEvent } from "../pi-session-events.js";
-import { buildSystemPrompt, buildUserPrompt } from "../prompts.js";
+import { buildSystemPrompt, buildUserPrompt, buildLightweightUserPrompt } from "../prompts.js";
 import { AutoSkillRefiner } from "../../skills/auto-skill-refiner.js";
 import type {
   PhoneAgentRunContext,
@@ -61,6 +65,166 @@ const PHONE_ONLY_TOOL_NAMES = new Set([
   "request_user_input",
   "wait",
 ]);
+
+const OLLAMA_LIGHTWEIGHT_TOOLS = new Set([
+  "tap_element", "type_text", "swipe", "keyevent", "launch_app", "wait", "finish",
+]);
+
+function isOllamaModel(baseUrl: string): boolean {
+  return (baseUrl.includes("localhost") || baseUrl.includes("127.0.0.1")) && baseUrl.includes("11434");
+}
+
+function extractLastUserText(allMessages: PiMessage[]): string {
+  for (let i = allMessages.length - 1; i >= 0; i--) {
+    const msg = allMessages[i];
+    if (msg.role === "user") {
+      if (typeof msg.content === "string") return msg.content;
+      if (Array.isArray(msg.content)) {
+        return msg.content
+          .filter((c) => c.type === "text")
+          .map((c) => (c as PiTextContent).text)
+          .join("\n");
+      }
+    }
+  }
+  return "";
+}
+
+function parseTextToolCall(text: string): { name: string; args: Record<string, unknown> } | null {
+  const actionMatch = text.match(/ACTION:\s*(\w+)/i);
+  if (!actionMatch) return null;
+  const name = actionMatch[1];
+
+  const argsMatch = text.match(/ARGS:\s*(\{[^}]*\})/i);
+  if (!argsMatch) return { name, args: {} };
+
+  try {
+    const args = JSON.parse(argsMatch[1]) as Record<string, unknown>;
+    return { name, args };
+  } catch {
+    return { name, args: {} };
+  }
+}
+
+function ollamaStreamFn(
+  ollamaBaseUrl: string,
+  modelName: string,
+): (model: PiModel<PiApi>, context: PiContext, options?: PiSimpleStreamOptions) => ReturnType<typeof streamSimple> {
+  return (_model, context, _options) => {
+    const eventStream = createAssistantMessageEventStream();
+
+    const messages: Array<Record<string, unknown>> = [];
+    if (context.systemPrompt) {
+      messages.push({ role: "system", content: context.systemPrompt });
+    }
+
+    const userText = extractLastUserText(context.messages);
+    if (userText) {
+      messages.push({ role: "user", content: userText });
+    }
+
+    const ollamaBase = ollamaBaseUrl.replace(/\/v1\/?$/, "");
+    const body = {
+      model: modelName,
+      messages,
+      stream: false,
+      think: false,
+      options: { num_predict: 256, temperature: 0.3 },
+    };
+
+    (async () => {
+      try {
+        const resp = await fetch(`${ollamaBase}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => "");
+          const errMsg: PiAssistantMessage = {
+            role: "assistant",
+            content: [{ type: "text", text: errText || "Ollama API error" }],
+            api: "openai-completions" as PiApi,
+            provider: "ollama",
+            model: modelName,
+            stopReason: "error",
+            errorMessage: `HTTP ${resp.status}`,
+            timestamp: Date.now(),
+          } as PiAssistantMessage;
+          eventStream.push({ type: "error", reason: "error", error: errMsg } as PiAssistantMessageEvent);
+          eventStream.end(errMsg);
+          return;
+        }
+
+        const json = await resp.json() as Record<string, unknown>;
+        const respMsg = json.message as Record<string, unknown> | undefined;
+        const rawText = typeof respMsg?.content === "string" ? respMsg.content.trim() : "";
+
+        const content: PiAssistantMessage["content"] = [];
+        const parsed = parseTextToolCall(rawText);
+
+        if (parsed) {
+          if (rawText) {
+            content.push({ type: "text", text: rawText });
+          }
+          const toolCall: PiToolCall = {
+            type: "toolCall",
+            id: `call_${Date.now()}`,
+            name: parsed.name,
+            arguments: parsed.args,
+          };
+          content.push(toolCall);
+        } else if (rawText) {
+          content.push({ type: "text", text: rawText });
+        }
+
+        const hasToolCall = parsed !== null;
+        const assistantMsg: PiAssistantMessage = {
+          role: "assistant",
+          content,
+          api: "openai-completions" as PiApi,
+          provider: "ollama",
+          model: modelName,
+          stopReason: hasToolCall ? "toolUse" : "stop",
+          timestamp: Date.now(),
+        } as PiAssistantMessage;
+
+        eventStream.push({ type: "start", partial: assistantMsg } as PiAssistantMessageEvent);
+
+        for (let i = 0; i < content.length; i++) {
+          const block = content[i];
+          if (block.type === "text") {
+            eventStream.push({ type: "text_start", contentIndex: i, partial: assistantMsg } as PiAssistantMessageEvent);
+            eventStream.push({ type: "text_end", contentIndex: i, content: block.text, partial: assistantMsg } as PiAssistantMessageEvent);
+          } else if (block.type === "toolCall") {
+            eventStream.push({ type: "toolcall_start", contentIndex: i, partial: assistantMsg } as PiAssistantMessageEvent);
+            eventStream.push({ type: "toolcall_end", contentIndex: i, toolCall: block, partial: assistantMsg } as PiAssistantMessageEvent);
+          }
+        }
+
+        const stopReason = hasToolCall ? "toolUse" : "stop";
+        eventStream.push({ type: "done", reason: stopReason, message: assistantMsg } as PiAssistantMessageEvent);
+        eventStream.end(assistantMsg);
+      } catch (error) {
+        const errMsg: PiAssistantMessage = {
+          role: "assistant",
+          content: [{ type: "text", text: String(error) }],
+          api: "openai-completions" as PiApi,
+          provider: "ollama",
+          model: modelName,
+          stopReason: "error",
+          errorMessage: String(error),
+          timestamp: Date.now(),
+        } as PiAssistantMessage;
+        eventStream.push({ type: "error", reason: "error", error: errMsg } as PiAssistantMessageEvent);
+        eventStream.end(errMsg);
+      }
+    })();
+
+    return eventStream;
+  };
+}
 
 export function resolveRuntimeBackend(config: OpenPocketConfig): "legacy_agent_core" | "pi_session_bridge" {
   return config.agent.runtimeBackend === "pi_session_bridge"
@@ -170,10 +334,12 @@ export async function runRuntimeAttempt(
     const skillPromptContext = deps.skillLoader.buildPromptContextForTask(request.task);
     const workspacePromptContext = deps.buildWorkspacePromptContext();
     const effectivePromptMode = request.promptMode ?? deps.config.agent.systemPromptMode;
+    const isLocalLightweight = isOllamaModel(profile.baseUrl);
     const systemPrompt = buildSystemPrompt(skillPromptContext.summaryText, workspacePromptContext.text, {
       mode: effectivePromptMode,
       availableToolNames: request.availableToolNames,
       activeSkillsText: skillPromptContext.activePromptText,
+      lightweight: isLocalLightweight,
     });
     const report = deps.buildSystemPromptReport({
       source: "run",
@@ -463,51 +629,70 @@ export async function runRuntimeAttempt(
       };
     }
 
+    const useOllamaNative = isOllamaModel(profile.baseUrl);
+    const effectiveTools = useOllamaNative
+      ? tools.filter((t) => OLLAMA_LIGHTWEIGHT_TOOLS.has(t.name))
+      : tools;
+
     const agent = deps.agentFactory({
       initialState: {
         systemPrompt,
         model: finalModel,
-        tools,
+        tools: effectiveTools,
         thinkingLevel: thinkingLevel as any,
         messages: reusedSessionMessages,
       },
       sessionId: session.id,
-      streamFn: (model, context, options) => {
-        const supportsToolChoice = model.api === "openai-completions";
-        const opts = supportsToolChoice
-          ? { ...options, toolChoice: "required" } as PiSimpleStreamOptions & { toolChoice: "required" }
-          : options;
-        return streamSimple(model, context, opts as PiSimpleStreamOptions);
-      },
+      streamFn: useOllamaNative
+        ? ollamaStreamFn(profile.baseUrl, profile.model)
+        : (model, context, options) => {
+            const supportsToolChoice = model.api === "openai-completions";
+            const opts = supportsToolChoice
+              ? { ...options, toolChoice: "required" } as PiSimpleStreamOptions & { toolChoice: "required" }
+              : options;
+            return streamSimple(model, context, opts as PiSimpleStreamOptions);
+          },
       getApiKey: async () => apiKey,
       convertToLlm: (messages: AgentMessage[]): PiMessage[] => {
         return messages.flatMap((message): PiMessage[] => {
           if (message.role === "screenObservation") {
             const observation = message as ScreenObservationMessage;
             const snapshot = observation.snapshot;
-            const observationText = buildUserPrompt(
-              ctx.task,
-              observation.stepIndex,
-              snapshot,
-              ctx.history,
-              observation.recentSnapshots,
-            );
+
+            const observationText = isLocalLightweight
+              ? buildLightweightUserPrompt(
+                  ctx.task,
+                  observation.stepIndex,
+                  snapshot,
+                  ctx.history,
+                )
+              : buildUserPrompt(
+                  ctx.task,
+                  observation.stepIndex,
+                  snapshot,
+                  ctx.history,
+                  observation.recentSnapshots,
+                );
+
             const content: Array<PiTextContent | PiImageContent> = [
               { type: "text", text: observationText },
             ];
 
-            // Always send all recent frames so the model has full visual context
-            for (const recent of observation.recentSnapshots) {
-              if (recent.somScreenshotBase64) {
-                content.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });
-              } else {
-                content.push({ type: "image", data: recent.screenshotBase64, mimeType: "image/png" });
+            if (!isLocalLightweight) {
+              const imgMime = snapshot.screenshotMimeType || "image/png";
+              for (const recent of observation.recentSnapshots) {
+                const recentMime = recent.screenshotMimeType || "image/png";
+                if (recent.somScreenshotBase64) {
+                  content.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });
+                } else {
+                  content.push({ type: "image", data: recent.screenshotBase64, mimeType: recentMime });
+                }
               }
+              if (snapshot.somScreenshotBase64) {
+                content.push({ type: "image", data: snapshot.somScreenshotBase64, mimeType: "image/png" });
+              }
+              content.push({ type: "image", data: snapshot.screenshotBase64, mimeType: imgMime });
             }
-            if (snapshot.somScreenshotBase64) {
-              content.push({ type: "image", data: snapshot.somScreenshotBase64, mimeType: "image/png" });
-            }
-            content.push({ type: "image", data: snapshot.screenshotBase64, mimeType: "image/png" });
             return [{ role: "user", content, timestamp: message.timestamp }];
           }
           if (message.role === "user" || message.role === "assistant" || message.role === "toolResult") {

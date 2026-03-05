@@ -1148,6 +1148,7 @@ export class AdbRuntime {
       width,
       height,
       screenshotBase64: scaled.data.toString("base64"),
+      screenshotMimeType: scaled.mimeType,
       somScreenshotBase64,
       capturedAt: nowIso(),
       scaleX: scaled.scaleX,

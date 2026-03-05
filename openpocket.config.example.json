@@ -403,6 +403,15 @@
       "reasoningEffort": null,
       "temperature": null
     },
+    "qwen3.5-4b": {
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "qwen3.5:4b",
+      "apiKey": "ollama",
+      "apiKeyEnv": "",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null
+    },
     "volcengine/doubao-seed-1-8": {
       "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
       "model": "doubao-seed-1-8-251228",

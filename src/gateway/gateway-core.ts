@@ -542,6 +542,30 @@ export class GatewayCore {
     if (!text) return;
 
     const chatId = this.peerIdNum(envelope);
+
+    if (this.config.agent.chatOnlyMode) {
+      this.log(
+        `chat-only channel=${envelope.channelType} sender=${envelope.senderId} model=${this.config.defaultModel}`,
+        "info",
+        "task",
+      );
+      const reply = await this.chat.reply(chatId, text);
+      await this.router.replyText(envelope, this.sanitizeForChat(reply, 1800));
+      return;
+    }
+
+    if (this.config.agent.skipDecideClassification) {
+      if (this.looksLikeChat(text)) {
+        this.log(`local-classify=chat channel=${envelope.channelType} sender=${envelope.senderId}`, "debug", "task");
+        const reply = await this.chat.reply(chatId, text);
+        await this.router.replyText(envelope, this.sanitizeForChat(reply, 1800));
+        return;
+      }
+      this.chat.appendExternalTurn(chatId, "user", text);
+      await this.enqueueTask(envelope, text);
+      return;
+    }
+
     const decision = await this.chat.decide(chatId, text);
     this.log(
       `decision channel=${envelope.channelType} sender=${envelope.senderId} model=${this.config.defaultModel} mode=${decision.mode} confidence=${decision.confidence.toFixed(2)}`,
@@ -558,6 +582,41 @@ export class GatewayCore {
 
     const reply = decision.reply || (await this.chat.reply(chatId, text));
     await this.router.replyText(envelope, this.sanitizeForChat(reply, 1800));
+  }
+
+  /**
+   * Fast local heuristic: returns true if the message looks like casual chat
+   * rather than a phone-operation task. Avoids an LLM call for greetings,
+   * questions about the bot, and other short conversational messages.
+   */
+  private looksLikeChat(text: string): boolean {
+    const t = text.toLowerCase().replace(/[!！?？。，,.\s]+/g, "");
+    if (t.length === 0) return true;
+
+    const chatPatterns = [
+      /^(你好|您好|hi|hello|hey|嗨|哈喽|在吗|在不在|早上好|晚上好|下午好|早安|晚安)$/,
+      /^(谢谢|感谢|thanks|thank\s*you|thx|ok|好的|了解|明白|收到|嗯|哦|哈哈|lol|haha)$/,
+      /^(你是谁|你叫什么|你能做什么|你会什么|介绍一下|what\s*are\s*you|who\s*are\s*you)$/,
+    ];
+    for (const p of chatPatterns) {
+      if (p.test(t)) return true;
+    }
+
+    const taskKeywords = [
+      "打开", "安装", "卸载", "搜索", "发送", "拍照", "截图", "录屏",
+      "下载", "上传", "设置", "修改", "删除", "创建", "拨打", "电话",
+      "短信", "微信", "支付宝", "淘宝", "抖音", "百度", "地图", "导航",
+      "app", "应用", "浏览器", "网页", "链接", "wifi", "蓝牙", "音量",
+      "亮度", "闹钟", "日历", "备忘录", "相册", "视频", "音乐",
+      "open", "install", "search", "send", "launch", "tap", "click",
+      "navigate", "go to", "find", "download", "uninstall", "call", "text",
+    ];
+    const hasTaskKeyword = taskKeywords.some((kw) => text.toLowerCase().includes(kw));
+    if (hasTaskKeyword) return false;
+
+    if (text.length <= 10 && !hasTaskKeyword) return true;
+
+    return false;
   }
 
   // -----------------------------------------------------------------------

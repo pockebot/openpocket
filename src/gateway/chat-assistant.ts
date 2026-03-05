@@ -2272,13 +2272,58 @@ export class ChatAssistant {
   private systemPrompt(): string {
     return [
       "You are OpenPocket conversational assistant.",
-      "Keep answers concise and practical.",
-      "Users can talk naturally without command syntax.",
-      "Assume operation requests are phone actions by default unless the user clearly asks for advice-only chat.",
-      "Treat questions about current runtime/device/app/environment/version/status as state-dependent and require executable verification.",
-      "Do not expose internal file paths, session files, skills, or scripts in user-facing replies.",
-      "Only answer directly in chat when no external observation or execution is needed.",
+      "CRITICAL: Reply ONLY with the final answer. NEVER output your thinking process, reasoning steps, analysis, or chain-of-thought. No 'Thinking Process', no numbered reasoning steps, no internal monologue.",
+      "Keep answers concise — ideally 1-3 sentences.",
+      "Reply in the same language as the user's message.",
+      "If the user asks about current time, date, weather, or device status, say you need to check and suggest they ask as a task.",
+      "Do not expose internal file paths, session files, skills, or scripts.",
     ].join("\n");
+  }
+
+  private stripThinkingNoise(text: string): string {
+    let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+    const answerKeywords = [
+      "Selected Response", "Final Response", "Final Answer", "Final Reply",
+      "Final Output Generation", "Final Output", "Response to User",
+    ];
+    const keywordRegex = new RegExp(
+      `(?:\\*\\*)?(?:${answerKeywords.join("|")})(?:\\*\\*)?\\s*[:：]\\s*`,
+      "gi",
+    );
+    let lastIdx = -1;
+    let lastLen = 0;
+    let m: RegExpExecArray | null;
+    while ((m = keywordRegex.exec(cleaned)) !== null) {
+      lastIdx = m.index;
+      lastLen = m[0].length;
+    }
+    if (lastIdx >= 0) {
+      let extracted = cleaned.slice(lastIdx + lastLen).trim();
+      extracted = extracted.replace(/^\(.*?\)\s*/s, "").trim();
+      if (extracted) return extracted;
+    }
+
+    const hasThinkingPrefix = /^(?:Thinking Process|##\s*Thinking|\*\*Thinking|Step\s+1\s*[:.：]|1\.\s*\*\*Analyze)/i.test(cleaned);
+    if (hasThinkingPrefix) {
+      const lines = cleaned.split("\n");
+      const lastLines: string[] = [];
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        if (/^\d+\.\s*\*\*|^Step\s+\d|^\*\*Step|^[-*]\s*\*\*|^(?:Thinking|Analysis|Check|Review|Correction|Wait|Okay)/i.test(line)) {
+          break;
+        }
+        lastLines.unshift(line);
+        if (lastLines.length >= 3) break;
+      }
+      const candidate = lastLines.join("\n").trim();
+      if (candidate && candidate.length >= 2 && !/^(?:Thinking|Step\s+\d|##)/i.test(candidate)) {
+        return candidate;
+      }
+    }
+
+    return cleaned;
   }
 
   private recentTurns(chatId: number): ChatTurn[] {
@@ -2551,6 +2596,47 @@ export class ChatAssistant {
     return text;
   }
 
+  private isOllamaUrl(baseUrl: string): boolean {
+    return (baseUrl.includes("localhost") || baseUrl.includes("127.0.0.1")) && baseUrl.includes("11434");
+  }
+
+  private async askOllamaNative(baseUrl: string, model: string, maxTokens: number, inputText: string, chatId: number): Promise<string> {
+    const ollamaBase = baseUrl.replace(/\/v1\/?$/, "");
+    const messages = [
+      { role: "system", content: this.systemPrompt() },
+      ...this.recentTurns(chatId).map((turn) => ({ role: turn.role, content: turn.content })),
+      { role: "user", content: inputText },
+    ];
+
+    const body = {
+      model,
+      messages,
+      stream: false,
+      think: false,
+      options: {
+        num_predict: Math.min(maxTokens, 800),
+      },
+    };
+
+    const resp = await fetch(`${ollamaBase}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      throw new Error(`Ollama native API error: ${resp.status} ${resp.statusText}`);
+    }
+
+    const json = await resp.json() as Record<string, unknown>;
+    const msg = json.message as Record<string, unknown> | undefined;
+    const content = typeof msg?.content === "string" ? msg.content.trim() : "";
+    if (content) {
+      return this.stripThinkingNoise(content);
+    }
+    throw new Error("Ollama native API returned empty content.");
+  }
+
   private async askChat(client: OpenAI, model: string, maxTokens: number, inputText: string, chatId: number): Promise<string> {
     const messages: Array<Record<string, unknown>> = [
       { role: "system", content: this.systemPrompt() },
@@ -2558,15 +2644,18 @@ export class ChatAssistant {
       { role: "user", content: inputText },
     ];
 
-    const response = await client.chat.completions.create({
+    const params: Record<string, unknown> = {
       model,
       max_tokens: Math.min(maxTokens, 800),
       messages,
-    } as never);
+    };
 
-    const content = response.choices?.[0]?.message?.content;
+    const response = await client.chat.completions.create(params as never);
+
+    const msg = response.choices?.[0]?.message as unknown as Record<string, unknown> | undefined;
+    const content = msg?.content;
     if (typeof content === "string" && content.trim()) {
-      return content.trim();
+      return this.stripThinkingNoise(content.trim());
     }
     if (Array.isArray(content)) {
       const text = content
@@ -2575,9 +2664,15 @@ export class ChatAssistant {
         .join("\n")
         .trim();
       if (text) {
-        return text;
+        return this.stripThinkingNoise(text);
       }
     }
+
+    const reasoning = msg?.reasoning_content ?? msg?.reasoning;
+    if (typeof reasoning === "string" && reasoning.trim()) {
+      return this.stripThinkingNoise(reasoning.trim());
+    }
+
     throw new Error("Chat Completions API returned empty text output.");
   }
 
@@ -3152,6 +3247,22 @@ export class ChatAssistant {
       } catch (error) {
         return `Conversation failed: codex-responses: ${stringifyError(error)}`;
       }
+    }
+
+    if (this.isOllamaUrl(profile.baseUrl)) {
+      try {
+        const reply = await this.askOllamaNative(profile.baseUrl, profile.model, profile.maxTokens, inputText, chatId);
+        this.pushTurn(chatId, "user", inputText);
+        this.pushTurn(chatId, "assistant", reply);
+        return reply;
+      } catch (error) {
+        this.logChat("warn", `Ollama native API failed, falling back: ${stringifyError(error)}`);
+      }
+    }
+
+    const isLocalModel = profile.baseUrl.includes("localhost") || profile.baseUrl.includes("127.0.0.1");
+    if (isLocalModel && this.modeHint === "responses") {
+      this.modeHint = "chat";
     }
 
     const modes: Array<"responses" | "chat" | "completions"> =

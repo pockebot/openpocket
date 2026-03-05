@@ -61,6 +61,8 @@ function defaultConfigObject() {
       deviceId: null,
       runtimeBackend: "legacy_agent_core" as const,
       legacyCodingExecutor: false,
+      chatOnlyMode: false,
+      skipDecideClassification: false,
     },
     screenshots: {
       saveStepScreenshots: true,
@@ -417,6 +419,15 @@ function defaultConfigObject() {
         model: "MiniMax-M2.1",
         apiKey: "",
         apiKeyEnv: "MINIMAX_API_KEY",
+        maxTokens: 4096,
+        reasoningEffort: null,
+        temperature: null,
+      },
+      "qwen3.5-4b": {
+        baseUrl: "http://localhost:11434/v1",
+        model: "qwen3.5:4b",
+        apiKey: "ollama",
+        apiKeyEnv: "",
         maxTokens: 4096,
         reasoningEffort: null,
         temperature: null,
@@ -1034,6 +1045,8 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
         ? "pi_session_bridge"
         : "legacy_agent_core",
       legacyCodingExecutor: Boolean(agent.legacyCodingExecutor ?? false),
+      chatOnlyMode: Boolean(agent.chatOnlyMode ?? false),
+      skipDecideClassification: Boolean(agent.skipDecideClassification ?? false),
     },
     screenshots: {
       saveStepScreenshots: Boolean(screenshots.saveStepScreenshots ?? true),

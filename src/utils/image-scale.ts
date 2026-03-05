@@ -8,6 +8,7 @@ export interface ScaledImage {
   originalHeight: number;
   width: number;
   height: number;
+  mimeType: "image/png" | "image/jpeg";
 }
 
 export interface SoMOverlayMark {
@@ -24,6 +25,9 @@ function getScaleTarget(modelName: string): { side: "short" | "long"; pixels: nu
   const lower = modelName.toLowerCase();
   if (lower.includes("claude") || lower.includes("anthropic")) {
     return { side: "long", pixels: 1568 };
+  }
+  if (lower.includes("qwen3") && (lower.includes(":4b") || lower.includes("-4b"))) {
+    return { side: "short", pixels: 384 };
   }
   // Default: OpenAI-style (short side = 768)
   return { side: "short", pixels: 768 };
@@ -46,6 +50,7 @@ export async function scaleScreenshot(
   const origHeight = metadata.height!;
 
   const target = getScaleTarget(modelName ?? "");
+  const useJpeg = target.pixels <= 512;
   const referenceSide =
     target.side === "short"
       ? Math.min(origWidth, origHeight)
@@ -53,6 +58,19 @@ export async function scaleScreenshot(
 
   // Skip scaling if already at or below target size.
   if (referenceSide <= target.pixels) {
+    if (useJpeg) {
+      const jpegData = await sharp(pngBuffer).jpeg({ quality: 60 }).toBuffer();
+      return {
+        data: jpegData,
+        scaleX: 1,
+        scaleY: 1,
+        originalWidth: origWidth,
+        originalHeight: origHeight,
+        width: origWidth,
+        height: origHeight,
+        mimeType: "image/jpeg",
+      };
+    }
     return {
       data: pngBuffer,
       scaleX: 1,
@@ -61,6 +79,7 @@ export async function scaleScreenshot(
       originalHeight: origHeight,
       width: origWidth,
       height: origHeight,
+      mimeType: "image/png",
     };
   }
 
@@ -68,20 +87,20 @@ export async function scaleScreenshot(
   const newWidth = Math.round(origWidth * ratio);
   const newHeight = Math.round(origHeight * ratio);
 
-  const data = await sharp(pngBuffer)
-    .resize(newWidth, newHeight, { fit: "inside" })
-    .png()
-    .toBuffer();
+  const pipeline = sharp(pngBuffer).resize(newWidth, newHeight, { fit: "inside" });
+  const data = useJpeg
+    ? await pipeline.jpeg({ quality: 60 }).toBuffer()
+    : await pipeline.png().toBuffer();
 
   return {
     data,
-    // scaleX/Y: multiply model coordinates by these to get original-resolution coordinates.
     scaleX: origWidth / newWidth,
     scaleY: origHeight / newHeight,
     originalWidth: origWidth,
     originalHeight: origHeight,
     width: newWidth,
     height: newHeight,
+    mimeType: useJpeg ? "image/jpeg" : "image/png",
   };
 }
 

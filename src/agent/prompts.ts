@@ -97,12 +97,36 @@ function parseAppFromHistoryLine(line: string): string {
 export function buildSystemPrompt(
   skillsSummary = "(no skills loaded)",
   workspaceContext = "",
-  options?: { mode?: SystemPromptMode; availableToolNames?: string[]; activeSkillsText?: string },
+  options?: { mode?: SystemPromptMode; availableToolNames?: string[]; activeSkillsText?: string; lightweight?: boolean },
 ): string {
   const mode = options?.mode ?? "full";
   const trimmedSkills = skillsSummary.trim() || "(no skills loaded)";
   const trimmedWorkspaceContext = workspaceContext.trim();
   const toolCatalog = buildToolCatalog(options?.availableToolNames);
+
+  if (mode === "none" && options?.lightweight) {
+    return [
+      "You control an Android phone. Reply with EXACTLY one action per step.",
+      "",
+      "OUTPUT FORMAT (strict):",
+      "ACTION: tool_name",
+      "ARGS: {\"key\": \"value\"}",
+      "",
+      "TOOLS:",
+      "- tap_element: tap UI element. ARGS: {\"elementId\": \"<id>\"}",
+      "- type_text: type English text only. ARGS: {\"text\": \"hello\"}. Chinese WILL FAIL.",
+      "- keyevent: press key. ARGS: {\"keycode\": \"KEYCODE_ENTER\"} or KEYCODE_BACK",
+      "- launch_app: open app. ARGS: {\"packageName\": \"com.android.chrome\"}",
+      "- swipe: scroll. ARGS: {\"x1\":100,\"y1\":500,\"x2\":100,\"y2\":200}",
+      "- wait: pause. ARGS: {\"durationMs\": 1000}",
+      "- finish: task done. ARGS: {\"result\": \"summary\"}",
+      "",
+      "RULES:",
+      "- After type_text, always do keyevent KEYCODE_ENTER to submit.",
+      "- Never repeat a failed action. Try different approach.",
+      "- To open Chrome: ACTION: launch_app ARGS: {\"packageName\": \"com.android.chrome\"}",
+    ].join("\n");
+  }
 
   if (mode === "none") {
     return [
@@ -474,4 +498,55 @@ export function buildUserPrompt(
     "",
     "Call exactly one tool now.",
   ].join("\n");
+}
+
+export function buildLightweightUserPrompt(
+  task: string,
+  step: number,
+  snapshot: ScreenSnapshot,
+  history: string[],
+): string {
+  const safeHistory = Array.isArray(history) ? history : [];
+  const uiElements = Array.isArray(snapshot.uiElements) ? snapshot.uiElements : [];
+
+  const recentHistory = safeHistory.slice(-4);
+  const recentActions = recentHistory.map(parseActionFromHistoryLine);
+  const actionStreak = trailingStreak(recentActions);
+
+  const uiCandidatesText = uiElements.length > 0
+    ? uiElements
+      .slice(0, 10)
+      .map((item) => {
+        const label = item.text || item.contentDesc || item.resourceId || "(unlabeled)";
+        return `${item.id}: "${label}" ${item.clickable ? "tap" : "view"} (${item.scaledCenter.x},${item.scaledCenter.y})`;
+      })
+      .join("\n")
+    : "(none)";
+
+  const warnings: string[] = [];
+  if (actionStreak.count >= 2) {
+    warnings.push(`WARNING: "${actionStreak.value}" repeated ${actionStreak.count}x. Use a DIFFERENT tool/action NOW.`);
+  }
+  const lastAction = recentHistory[recentHistory.length - 1] || "";
+  if (lastAction.includes("error") || lastAction.includes("failed")) {
+    warnings.push("LAST ACTION FAILED. Try a different approach.");
+  }
+
+  const parts = [
+    `Task: ${task}`,
+    `Step: ${step} | App: ${snapshot.currentApp}`,
+    "",
+    "UI elements (id: label, tap/view, center):",
+    uiCandidatesText,
+  ];
+
+  if (recentHistory.length > 0) {
+    parts.push("", `History:\n${recentHistory.join("\n")}`);
+  }
+  if (warnings.length > 0) {
+    parts.push("", warnings.join("\n"));
+  }
+  parts.push("", "Reply with ACTION: and ARGS: now.");
+
+  return parts.join("\n");
 }

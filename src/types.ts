@@ -72,6 +72,16 @@ export interface AgentConfig {
    * Default is false and this key will be removed in a future release.
    */
   legacyCodingExecutor?: boolean;
+  /**
+   * When true, all incoming messages are handled as plain chat (ChatAssistant.reply)
+   * without phone/agent tools, screenshots, or task routing.
+   */
+  chatOnlyMode?: boolean;
+  /**
+   * When true, skip the LLM-based decide() classification and route all
+   * messages directly to task mode. Saves one model call per message.
+   */
+  skipDecideClassification?: boolean;
 }
 
 export interface ScreenshotConfig {
@@ -380,6 +390,7 @@ export interface ScreenSnapshot {
   width: number;
   height: number;
   screenshotBase64: string;
+  screenshotMimeType: "image/png" | "image/jpeg";
   /** Set-of-Mark overlay image (same scaled resolution) with numbered UI boxes. */
   somScreenshotBase64: string | null;
   capturedAt: string;
