@@ -70,12 +70,15 @@ test("WorkspaceStore defaults to OpenClaw store + pi tree transcript + markdown 
     assert.equal(transcriptLines[0].type, "session");
     assert.equal(Number(transcriptLines[0].version), 3);
 
+    const treeEntries = transcriptLines.filter((entry) => entry.type !== "session");
+    assert.equal(treeEntries.length >= 3, true);
+    assert.equal(treeEntries[0].parentId, null);
+    for (let i = 1; i < treeEntries.length; i += 1) {
+      assert.equal(treeEntries[i].parentId, treeEntries[i - 1].id);
+    }
+
     const messageEntries = transcriptLines.filter((entry) => entry.type === "message");
     assert.equal(messageEntries.length >= 3, true);
-    assert.equal(messageEntries[0].parentId, null);
-    for (let i = 1; i < messageEntries.length; i += 1) {
-      assert.equal(messageEntries[i].parentId, messageEntries[i - 1].id);
-    }
 
     const messageTexts = messageEntries.map((entry) => collectText(entry.message));
     assert.equal(messageTexts.some((text) => text.includes("default output test")), true);

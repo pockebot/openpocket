@@ -157,3 +157,52 @@ test("normalizeAction supports batch_actions", () => {
   assert.deepEqual(batch.actions[2], { type: "type", text: "hello", reason: undefined });
   assert.deepEqual(batch.actions[3], { type: "wait", durationMs: 250, reason: undefined });
 });
+
+test("normalizeAction supports task journal tools", () => {
+  const todo = normalizeAction({
+    type: "todo_write",
+    op: "add",
+    id: "t1",
+    text: "Compare 3 stores",
+    status: "in_progress",
+  });
+  assert.equal(todo.type, "todo_write");
+  assert.equal(todo.op, "add");
+  assert.equal(todo.id, "t1");
+  assert.equal(todo.text, "Compare 3 stores");
+  assert.equal(todo.status, "in_progress");
+
+  const evidence = normalizeAction({
+    type: "evidence_add",
+    kind: "offer",
+    title: "Paris Baguette cafe latte",
+    fields: { price: 5.87, currency: "USD" },
+    confidence: 0.8,
+  });
+  assert.equal(evidence.type, "evidence_add");
+  assert.equal(evidence.kind, "offer");
+  assert.equal(evidence.title, "Paris Baguette cafe latte");
+  assert.deepEqual(evidence.fields, { price: 5.87, currency: "USD" });
+  assert.equal(evidence.confidence, 0.8);
+
+  const artifact = normalizeAction({
+    type: "artifact_add",
+    kind: "file",
+    value: "sessions/session-123.md",
+    description: "debug log",
+  });
+  assert.equal(artifact.type, "artifact_add");
+  assert.equal(artifact.kind, "file");
+  assert.equal(artifact.value, "sessions/session-123.md");
+  assert.equal(artifact.description, "debug log");
+
+  const read = normalizeAction({ type: "journal_read", scope: "evidence", limit: 10 });
+  assert.equal(read.type, "journal_read");
+  assert.equal(read.scope, "evidence");
+  assert.equal(read.limit, 10);
+
+  const checkpoint = normalizeAction({ type: "journal_checkpoint", name: "search_started", notes: "Uber Eats" });
+  assert.equal(checkpoint.type, "journal_checkpoint");
+  assert.equal(checkpoint.name, "search_started");
+  assert.equal(checkpoint.notes, "Uber Eats");
+});

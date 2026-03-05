@@ -7,6 +7,7 @@ import test from "node:test";
 const { loadConfig } = await import("../dist/config/index.js");
 const { AgentRuntime } = await import("../dist/agent/agent-runtime.js");
 const { buildPaymentArtifactKey } = await import("../dist/phone-use-util/index.js");
+const { readLatestTaskJournalSnapshot } = await import("../dist/agent/journal/task-journal-store.js");
 
 function makeSnapshot(overrides = {}) {
   return {
@@ -378,6 +379,38 @@ test("AgentRuntime prefers quick observation for post-action state delta when av
   assert.equal(screenCaptureCalls, 2);
 });
 
+test("AgentRuntime evidence_add tool writes to task journal snapshot", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "record evidence",
+        action: {
+          type: "evidence_add",
+          kind: "offer",
+          title: "Paris Baguette cafe latte",
+          fields: { price: 5.87, currency: "USD" },
+          confidence: 0.8,
+        },
+      },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("latte journal test");
+  assert.equal(result.ok, true);
+
+  const snapshot = readLatestTaskJournalSnapshot(result.sessionPath);
+  assert.equal(Boolean(snapshot), true);
+  assert.equal(snapshot.evidence.some((item) => item.title === "Paris Baguette cafe latte"), true);
+});
+
 test("AgentRuntime executes batch_actions as a single model step", async () => {
   const executed = [];
   const runtime = setupRuntime({
@@ -438,6 +471,30 @@ test("AgentRuntime keeps workspace tools available for phone-style tasks", async
   assert.equal(capturedToolNames.includes("memory_search"), true);
   assert.equal(capturedToolNames.includes("tap"), true);
   assert.equal(capturedToolNames.includes("finish"), true);
+});
+
+test("AgentRuntime system prompt includes task journal guidance", async () => {
+  let capturedSystemPrompt = "";
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedSystemPrompt = options.initialState?.systemPrompt ?? "";
+      },
+    },
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("journal guidance test");
+  assert.equal(result.ok, true);
+  assert.match(capturedSystemPrompt, /Before finish, call journal_read/i);
+  assert.match(capturedSystemPrompt, /Record .* evidence_add/i);
 });
 
 test("AgentRuntime keeps workspace tools for workspace-oriented tasks", async () => {

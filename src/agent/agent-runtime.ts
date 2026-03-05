@@ -49,6 +49,11 @@ import { buildPiAiModel } from "./model-client.js";
 import { buildSystemPrompt, buildUserPrompt, type SystemPromptMode } from "./prompts.js";
 import { CHAT_TOOLS, TOOL_METAS, toolNameToActionType, type ToolMeta } from "./tools.js";
 import { normalizeAction } from "./actions.js";
+import {
+  appendTaskJournalSnapshot,
+  readLatestTaskJournalSnapshot,
+  type TaskJournalSnapshot,
+} from "./journal/task-journal-store.js";
 import { runRuntimeAttempt } from "./runtime/attempt.js";
 import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
@@ -2219,7 +2224,15 @@ export class AgentRuntime {
     let executionResult = "";
     let stateDeltaLine = "";
     try {
-      if (action.type === "run_script") {
+      if (
+        action.type === "todo_write" ||
+        action.type === "evidence_add" ||
+        action.type === "artifact_add" ||
+        action.type === "journal_read" ||
+        action.type === "journal_checkpoint"
+      ) {
+        executionResult = this.executeJournalAction(action, ctx);
+      } else if (action.type === "run_script") {
         const sr = await this.scriptExecutor.execute(action.script, action.timeoutSec);
         executionResult = [
           `run_script exitCode=${sr.exitCode} timedOut=${sr.timedOut}`,
@@ -2348,6 +2361,122 @@ export class AgentRuntime {
       }
     }
     return executionResult;
+  }
+
+  private executeJournalAction(
+    action: Extract<AgentAction, {
+      type: "todo_write" | "evidence_add" | "artifact_add" | "journal_read" | "journal_checkpoint";
+    }>,
+    ctx: PhoneAgentRunContext,
+  ): string {
+    const existing = readLatestTaskJournalSnapshot(ctx.session.path);
+    const base: TaskJournalSnapshot = existing && existing.task === ctx.task
+      ? existing
+      : {
+        version: 1,
+        task: ctx.task,
+        runId: `run-${ctx.session.id}-${Date.now()}`,
+        updatedAt: nowIso(),
+        todos: [],
+        evidence: [],
+        artifacts: [],
+        progress: { milestones: ["task_start"], blockers: [] },
+        completion: { status: "in_progress" },
+      };
+
+    if (action.type === "journal_read") {
+      const limit = Math.max(1, Math.min(50, Math.round(action.limit ?? 20)));
+      const payload = {
+        version: base.version,
+        task: base.task,
+        runId: base.runId,
+        updatedAt: base.updatedAt,
+        ...(action.scope === "todos" || action.scope === "all" ? { todos: base.todos.slice(-limit) } : {}),
+        ...(action.scope === "evidence" || action.scope === "all" ? { evidence: base.evidence.slice(-limit) } : {}),
+        ...(action.scope === "artifacts" || action.scope === "all" ? { artifacts: base.artifacts.slice(-limit) } : {}),
+        ...(action.scope === "all" ? { progress: base.progress, completion: base.completion } : {}),
+      };
+      return JSON.stringify(payload, null, 2);
+    }
+
+    if (action.type === "todo_write") {
+      const id = action.id || `t-${Date.now().toString(36)}`;
+      const idx = base.todos.findIndex((item) => item.id === id);
+      if (action.op === "delete") {
+        if (idx >= 0) {
+          base.todos.splice(idx, 1);
+        }
+      } else {
+        const nextText = action.text ?? (idx >= 0 ? base.todos[idx]?.text : "");
+        const nextStatus = action.op === "complete"
+          ? "done"
+          : action.status ?? (idx >= 0 ? base.todos[idx]?.status : "pending");
+        const nextTags = action.tags ?? (idx >= 0 ? base.todos[idx]?.tags : undefined);
+
+        if (idx >= 0) {
+          base.todos[idx] = {
+            ...base.todos[idx],
+            ...(nextText ? { text: nextText } : {}),
+            status: nextStatus,
+            ...(Array.isArray(nextTags) ? { tags: nextTags } : {}),
+          };
+        } else {
+          base.todos.push({
+            id,
+            text: nextText || "(empty)",
+            status: nextStatus,
+            ...(Array.isArray(nextTags) ? { tags: nextTags } : {}),
+          });
+        }
+      }
+    } else if (action.type === "evidence_add") {
+      const id = `e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      base.evidence.push({
+        id,
+        kind: action.kind,
+        title: action.title,
+        ...(action.fields ? { fields: action.fields } : {}),
+        source: { step: ctx.stepCount, tool: "evidence_add" },
+        ...(typeof action.confidence === "number" ? { confidence: action.confidence } : {}),
+      });
+    } else if (action.type === "artifact_add") {
+      const id = `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      base.artifacts.push({
+        id,
+        kind: action.kind,
+        value: action.value,
+        ...(action.description ? { description: action.description } : {}),
+      });
+    } else if (action.type === "journal_checkpoint") {
+      const name = action.name || "checkpoint";
+      if (!base.progress.milestones.includes(name)) {
+        base.progress.milestones.push(name);
+      }
+      if (action.notes) {
+        const id = `e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        base.evidence.push({
+          id,
+          kind: "checkpoint",
+          title: `checkpoint:${name}`,
+          fields: { notes: action.notes },
+          source: { step: ctx.stepCount, tool: "journal_checkpoint" },
+        });
+      }
+    }
+
+    base.updatedAt = nowIso();
+    appendTaskJournalSnapshot(ctx.session.path, base);
+
+    if (action.type === "todo_write") {
+      return `todo_write ok todos=${base.todos.length}`;
+    }
+    if (action.type === "evidence_add") {
+      return `evidence_add ok evidence=${base.evidence.length}`;
+    }
+    if (action.type === "artifact_add") {
+      return `artifact_add ok artifacts=${base.artifacts.length}`;
+    }
+    return "journal_checkpoint ok";
   }
 
   private async executeBatchPhoneActions(

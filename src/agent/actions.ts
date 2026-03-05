@@ -409,6 +409,86 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "todo_write") {
+    const opRaw = String(input.op ?? "add").trim().toLowerCase();
+    const op = (
+      opRaw === "add" ||
+      opRaw === "update" ||
+      opRaw === "complete" ||
+      opRaw === "delete"
+    ) ? opRaw : "add";
+    const statusRaw = String(input.status ?? "").trim().toLowerCase();
+    const status = (
+      statusRaw === "pending" ||
+      statusRaw === "in_progress" ||
+      statusRaw === "done"
+    )
+      ? statusRaw
+      : undefined;
+    const tags = Array.isArray(input.tags)
+      ? input.tags.map((item) => String(item ?? "").trim()).filter(Boolean).slice(0, 12)
+      : undefined;
+    return {
+      type,
+      op: op as any,
+      id: toOptionalTrimmedString(input.id),
+      text: toOptionalTrimmedString(input.text),
+      status: status as any,
+      tags,
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "evidence_add") {
+    const fields = isObject(input.fields) ? input.fields : undefined;
+    const source = isObject(input.source) ? input.source : undefined;
+    const confidence = input.confidence === undefined ? undefined : toNumber(input.confidence, NaN);
+    return {
+      type,
+      kind: String(input.kind ?? "").trim(),
+      title: String(input.title ?? "").trim(),
+      fields,
+      source,
+      confidence: Number.isFinite(confidence) ? confidence : undefined,
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "artifact_add") {
+    return {
+      type,
+      kind: String(input.kind ?? "").trim(),
+      value: String(input.value ?? "").trim(),
+      description: toOptionalTrimmedString(input.description),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "journal_read") {
+    const scopeRaw = String(input.scope ?? "all").trim().toLowerCase();
+    const scope = (
+      scopeRaw === "todos" ||
+      scopeRaw === "evidence" ||
+      scopeRaw === "artifacts" ||
+      scopeRaw === "all"
+    ) ? scopeRaw : "all";
+    return {
+      type,
+      scope: scope as any,
+      limit: toNumber(input.limit, 20),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "journal_checkpoint") {
+    return {
+      type,
+      name: String(input.name ?? "").trim(),
+      notes: toOptionalTrimmedString(input.notes),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "finish") {
     return {
       type,

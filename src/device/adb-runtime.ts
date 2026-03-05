@@ -1422,6 +1422,13 @@ export class AdbRuntime {
       case "batch_actions": {
         return "batch_actions is handled by AgentRuntime.";
       }
+      case "todo_write":
+      case "evidence_add":
+      case "artifact_add":
+      case "journal_read":
+      case "journal_checkpoint": {
+        return `${action.type} is handled by AgentRuntime.`;
+      }
       case "wait": {
         const durationMs = Math.max(100, Math.round(action.durationMs ?? 1000));
         await sleep(durationMs);

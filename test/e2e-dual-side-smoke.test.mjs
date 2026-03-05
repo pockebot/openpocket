@@ -223,17 +223,15 @@ test("Dual-side smoke: Android build-install-run diagnostics chain persists unif
 
     const entries = readJsonl(outcome.result.sessionPath);
     const customEvents = entries.filter((entry) => (
-      entry.type === "message"
-      && entry.message?.role === "custom"
-      && entry.message?.customType === "openpocket_event"
+      entry.type === "custom" && entry.customType === "openpocket_event"
     ));
 
     const eventTriples = customEvents
       .map((entry) => ({
-        eventType: entry.message?.details?.eventType,
-        toolCallId: entry.message?.details?.toolCallId,
-        toolName: entry.message?.details?.toolName,
-        args: entry.message?.details?.args,
+        eventType: entry.data?.details?.eventType,
+        toolCallId: entry.data?.details?.toolCallId,
+        toolName: entry.data?.details?.toolName,
+        args: entry.data?.details?.args,
       }))
       .filter((item) => item.toolCallId);
 
