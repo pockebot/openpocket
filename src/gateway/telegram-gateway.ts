@@ -2450,7 +2450,7 @@ export class TelegramGateway {
               const isIntervalStep = progressNarrationState.skippedSteps >= NARRATION_LLM_INTERVAL;
               const useLlm = isFirstProgress || isHighSignal || isIntervalStep;
 
-              const decision = useLlm
+              let decision = useLlm
                 ? await this.chat.narrateTaskProgress({
                   task,
                   locale: progressLocale,
@@ -2467,6 +2467,20 @@ export class TelegramGateway {
                   lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
                   skippedSteps: progressNarrationState.skippedSteps,
                 });
+
+              // Ensure users always receive at least one "task has started" update.
+              // If the model skips the first progress event, force the existing
+              // deterministic fallback for the first step.
+              if (isFirstProgress && (!decision.notify || !String(decision.message || "").trim())) {
+                decision = this.chat.fallbackTaskProgressNarration({
+                  task,
+                  locale: progressLocale,
+                  progress,
+                  recentProgress,
+                  lastNotifiedProgress: progressNarrationState.lastNotifiedProgress,
+                  skippedSteps: progressNarrationState.skippedSteps,
+                });
+              }
 
               if (!decision.notify) {
                 progressNarrationState.skippedSteps += 1;

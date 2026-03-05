@@ -2065,6 +2065,72 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
   });
 });
 
+test("TelegramGateway forces first progress narration when model skips step 1", async () => {
+  await withTempHome("openpocket-telegram-first-progress-fallback-", async () => {
+    const cfg = loadConfig();
+    cfg.telegram.botToken = "test-bot-token";
+
+    const gateway = new TelegramGateway(cfg, { typingIntervalMs: 30 });
+    gateway.bot.on("polling_error", () => {});
+    await gateway.bot.stopPolling().catch(() => {});
+
+    const sent = [];
+    gateway.bot.sendMessage = async (chatId, text) => {
+      sent.push({ chatId, text });
+      return {};
+    };
+    gateway.bot.sendChatAction = async () => true;
+
+    let llmCalls = 0;
+    gateway.chat.narrateTaskProgress = async () => {
+      llmCalls += 1;
+      return { notify: false, message: "", reason: "model_skip" };
+    };
+    gateway.chat.fallbackTaskProgressNarration = (input) => {
+      if (input.progress.step === 1) {
+        return {
+          notify: true,
+          message: "小更新：任务已开始，我先拿到最新照片再继续处理。",
+          reason: "fallback_first_progress",
+        };
+      }
+      return { notify: false, message: "", reason: "fallback_skip" };
+    };
+    gateway.chat.narrateTaskOutcome = async () => "done";
+
+    gateway.agent.runTask = async (_task, _modelName, onProgress) => {
+      await onProgress({
+        step: 1,
+        maxSteps: 5,
+        currentApp: "com.google.android.apps.nexuslauncher",
+        actionType: "todo_write",
+        message: "todo_write ok todos=1",
+        thought: "setting up task todos",
+        screenshotPath: null,
+      });
+      return {
+        ok: true,
+        message: "ok",
+        sessionPath: "/tmp/session-first-progress.md",
+      };
+    };
+
+    const result = await gateway.runTaskAndReport({
+      chatId: 9202,
+      task: "读取手机上最新的照片并进行美化编辑",
+      source: "chat",
+      modelName: null,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(llmCalls, 1);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[0].chatId, 9202);
+    assert.equal(sent[0].text, "小更新：任务已开始，我先拿到最新照片再继续处理。");
+    assert.equal(sent[1].text, "done");
+  });
+});
+
 test("TelegramGateway suppresses low-signal repetitive narration even if model requests notify", async () => {
   await withTempHome("openpocket-telegram-progress-suppress-", async () => {
     const cfg = loadConfig();
