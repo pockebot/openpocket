@@ -107,6 +107,63 @@ test("HumanAuthRelayServer create, resolve, and poll lifecycle", async () => {
   }
 });
 
+test("HumanAuthRelayServer photos flow defaults to album mode wiring", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-auth-relay-photos-"));
+  const stateFile = path.join(temp, "relay-state.json");
+
+  const relay = new HumanAuthRelayServer({
+    host: "127.0.0.1",
+    port: 0,
+    publicBaseUrl: "",
+    apiKey: "",
+    apiKeyEnv: "",
+    stateFile,
+  });
+
+  await relay.start();
+  const base = relay.address;
+
+  try {
+    const createResponse = await fetch(`${base}/v1/human-auth/requests`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        requestId: "req-photos-1",
+        task: "pick latest photos",
+        sessionId: "session-photos",
+        step: 1,
+        capability: "photos",
+        instruction: "Authorize album access",
+        reason: "Need recent photos",
+        timeoutSec: 120,
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const created = await createResponse.json();
+    const openUrl = new URL(created.openUrl);
+    const openToken = String(openUrl.searchParams.get("token") || "");
+    assert.equal(Boolean(openToken), true);
+
+    const portalRes = await fetch(
+      `${base}/human-auth/req-photos-1?token=${encodeURIComponent(openToken)}`,
+    );
+    assert.equal(portalRes.status, 200);
+    const portalHtml = await portalRes.text();
+    assert.match(
+      portalHtml,
+      /const allowStandaloneFileDelegation = Boolean\(uiTemplate\.allowFileAttachment\)\s*&& !useCameraPrimaryFlow\s*&& !uiTemplate\.allowPhotoAttachment;/,
+    );
+    assert.match(
+      portalHtml,
+      /Switched to album access mode\. Choose photos to authorize now\./,
+    );
+  } finally {
+    await relay.stop();
+  }
+});
+
 test("HumanAuthRelayServer exposes takeover snapshot/action APIs with open token", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-auth-relay-takeover-"));
   const stateFile = path.join(temp, "relay-state.json");

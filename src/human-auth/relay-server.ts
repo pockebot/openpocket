@@ -2021,7 +2021,9 @@ export class HumanAuthRelayServer {
       const normalizedCapability = String(capability || "").trim().toLowerCase();
       const isPaymentCapability = normalizedCapability === "payment";
       const useCameraPrimaryFlow = isCameraPrimaryFlowEnabled();
-      const allowStandaloneFileDelegation = Boolean(uiTemplate.allowFileAttachment) && !useCameraPrimaryFlow;
+      const allowStandaloneFileDelegation = Boolean(uiTemplate.allowFileAttachment)
+        && !useCameraPrimaryFlow
+        && !uiTemplate.allowPhotoAttachment;
       const showPaymentDelegation = isPaymentCapability;
       const allowTextDelegation = Boolean(uiTemplate.allowTextAttachment) && !isPaymentCapability;
       mountCameraDelegation(useCameraPrimaryFlow);
@@ -3279,7 +3281,8 @@ export class HumanAuthRelayServer {
     if (photoModeLibraryBtn) {
       photoModeLibraryBtn.addEventListener("click", () => {
         setPhotoAuthMode(PHOTO_AUTH_MODE_LIBRARY);
-        setStatus("Switched to album access mode.", "info");
+        setStatus("Switched to album access mode. Choose photos to authorize now.", "info");
+        void pickPhoto();
       });
     }
     document.getElementById("startRec").addEventListener("click", startRecording);
