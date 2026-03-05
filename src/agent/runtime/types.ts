@@ -6,6 +6,8 @@ import type {
   AgentAction,
   AgentProgressUpdate,
   AgentRunResult,
+  ChannelMediaDeliveryResult,
+  ChannelMediaRequest,
   HumanAuthDecision,
   HumanAuthRequest,
   ModelProfile,
@@ -28,6 +30,7 @@ export interface RunTaskRequest {
   modelName?: string;
   sessionKey?: string;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
+  onChannelMedia?: (request: ChannelMediaRequest) => Promise<ChannelMediaDeliveryResult> | ChannelMediaDeliveryResult;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
   promptMode?: SystemPromptMode;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
@@ -146,6 +149,7 @@ export interface PhoneAgentRunContext {
   effectivePromptMode: SystemPromptMode;
   systemPrompt: string;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
+  onChannelMedia?: (request: ChannelMediaRequest) => Promise<ChannelMediaDeliveryResult> | ChannelMediaDeliveryResult;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;

@@ -316,6 +316,27 @@ export interface UserInputResponse {
   resolvedAt: string;
 }
 
+export type ChannelMediaType = "auto" | "image" | "file" | "voice";
+
+export interface ChannelMediaRequest {
+  sessionId: string;
+  sessionPath: string;
+  task: string;
+  step: number;
+  path: string;
+  mediaType: ChannelMediaType;
+  caption?: string;
+  reason?: string;
+  currentApp: string;
+  screenshotPath: string | null;
+}
+
+export interface ChannelMediaDeliveryResult {
+  ok: boolean;
+  mediaType: Exclude<ChannelMediaType, "auto"> | null;
+  message: string;
+}
+
 export interface ModelProfile {
   baseUrl: string;
   model: string;
@@ -515,7 +536,14 @@ export type AgentAction =
       actions: BatchableAgentAction[];
       reason?: string;
     }
-    | {
+  | {
+      type: "send_media";
+      path: string;
+      mediaType?: ChannelMediaType;
+      caption?: string;
+      reason?: string;
+    }
+  | {
       type: "request_human_auth";
       capability: HumanAuthCapability;
       instruction: string;

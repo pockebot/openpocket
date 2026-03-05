@@ -1524,6 +1524,9 @@ export class AdbRuntime {
       case "request_user_input": {
         return "request_user_input is handled by AgentRuntime via gateway callback.";
       }
+      case "send_media": {
+        return "send_media is handled by AgentRuntime via gateway callback.";
+      }
       case "batch_actions": {
         return "batch_actions is handled by AgentRuntime.";
       }

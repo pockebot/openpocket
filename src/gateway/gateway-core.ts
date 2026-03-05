@@ -3,6 +3,8 @@ import path from "node:path";
 
 import type {
   AgentProgressUpdate,
+  ChannelMediaDeliveryResult,
+  ChannelMediaRequest,
   CronJob,
   HumanAuthCapability,
   OpenPocketConfig,
@@ -12,6 +14,7 @@ import type {
   UserInputResponse,
 } from "../types.js";
 import type {
+  ChannelAdapter,
   ChannelRouter,
   InboundEnvelope,
   SendOptions,
@@ -731,6 +734,9 @@ export class GatewayCore {
         adapter
           ? async (request) => adapter.requestUserInput(envelope.peerId, request)
           : undefined,
+        adapter
+          ? async (request) => this.deliverChannelMedia(envelope, request, adapter)
+          : undefined,
       );
       await progressWork;
 
@@ -957,6 +963,137 @@ export class GatewayCore {
     } catch {
       return fallback;
     }
+  }
+
+  private async deliverChannelMedia(
+    envelope: InboundEnvelope,
+    request: ChannelMediaRequest,
+    adapter: ChannelAdapter,
+  ): Promise<ChannelMediaDeliveryResult> {
+    const rawPath = String(request.path || "").trim();
+    if (!rawPath) {
+      return { ok: false, mediaType: null, message: "send_media path is empty." };
+    }
+
+    const capabilities = adapter.getCapabilities();
+    let localPath = "";
+    let cleanupPath: string | null = null;
+    try {
+      if (this.isAndroidDevicePath(rawPath)) {
+        const deviceId = this.resolveOnlineDeviceId();
+        if (!deviceId) {
+          return { ok: false, mediaType: null, message: "No online Android device available to pull media." };
+        }
+        const outDir = path.join(this.config.stateDir, "outbound-media");
+        fs.mkdirSync(outDir, { recursive: true });
+        const safeBase = (path.basename(rawPath) || `artifact-${Date.now()}`)
+          .replace(/[^a-zA-Z0-9._-]+/g, "_");
+        localPath = path.join(outDir, `${Date.now()}-step-${request.step}-${safeBase}`);
+        this.emulator.runAdb(["-s", deviceId, "pull", rawPath, localPath], 30_000);
+        cleanupPath = localPath;
+      } else {
+        localPath = path.isAbsolute(rawPath)
+          ? rawPath
+          : path.resolve(this.config.workspaceDir, rawPath);
+      }
+
+      if (!fs.existsSync(localPath)) {
+        return { ok: false, mediaType: null, message: `Media file not found: ${localPath}` };
+      }
+
+      const mediaType = this.resolveChannelMediaType(request.mediaType, localPath);
+      const caption = request.caption?.trim() || undefined;
+
+      if (mediaType === "image") {
+        if (capabilities.supportsImageUpload) {
+          await this.router.replyImage(envelope, localPath, caption);
+          return { ok: true, mediaType, message: `Image sent from ${rawPath}` };
+        }
+        if (capabilities.supportsFileUpload) {
+          await this.router.replyFile(envelope, localPath, caption);
+          return { ok: true, mediaType: "file", message: `Image sent as file from ${rawPath}` };
+        }
+        return { ok: false, mediaType: null, message: `Channel ${adapter.channelType} does not support image/file upload.` };
+      }
+
+      if (mediaType === "voice") {
+        if (capabilities.supportsVoiceUpload) {
+          await this.router.replyVoice(envelope, localPath, caption);
+          return { ok: true, mediaType, message: `Voice sent from ${rawPath}` };
+        }
+        if (capabilities.supportsFileUpload) {
+          await this.router.replyFile(envelope, localPath, caption);
+          return { ok: true, mediaType: "file", message: `Voice sent as file from ${rawPath}` };
+        }
+        return { ok: false, mediaType: null, message: `Channel ${adapter.channelType} does not support voice/file upload.` };
+      }
+
+      if (capabilities.supportsFileUpload) {
+        await this.router.replyFile(envelope, localPath, caption);
+        return { ok: true, mediaType: "file", message: `File sent from ${rawPath}` };
+      }
+
+      if (capabilities.supportsImageUpload) {
+        await this.router.replyImage(envelope, localPath, caption);
+        return { ok: true, mediaType: "image", message: `File sent as image from ${rawPath}` };
+      }
+
+      return { ok: false, mediaType: null, message: `Channel ${adapter.channelType} cannot upload media.` };
+    } catch (error) {
+      return { ok: false, mediaType: null, message: `send_media failed: ${(error as Error).message}` };
+    } finally {
+      if (cleanupPath) {
+        try {
+          fs.unlinkSync(cleanupPath);
+        } catch {
+          // Ignore temp cleanup failure.
+        }
+      }
+    }
+  }
+
+  private isAndroidDevicePath(value: string): boolean {
+    const normalized = String(value || "").trim();
+    return /^\/(?:sdcard|storage\/emulated\/0)\//i.test(normalized);
+  }
+
+  private resolveOnlineDeviceId(): string | null {
+    try {
+      const status = this.emulator.status();
+      const online = status.devices;
+      if (online.length === 0) {
+        return null;
+      }
+      const preferred = this.config.agent.deviceId?.trim() || "";
+      if (preferred && online.includes(preferred)) {
+        return preferred;
+      }
+      if (status.bootedDevices.length > 0) {
+        return status.bootedDevices[0];
+      }
+      return online[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveChannelMediaType(
+    preferred: ChannelMediaRequest["mediaType"] | undefined,
+    filePath: string,
+  ): "image" | "file" | "voice" {
+    if (preferred === "image" || preferred === "file" || preferred === "voice") {
+      return preferred;
+    }
+    const ext = path.extname(filePath).toLowerCase();
+    const imageExts = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif"]);
+    const voiceExts = new Set([".mp3", ".m4a", ".wav", ".ogg", ".opus", ".aac", ".flac", ".amr", ".3gp"]);
+    if (imageExts.has(ext)) {
+      return "image";
+    }
+    if (voiceExts.has(ext)) {
+      return "voice";
+    }
+    return "file";
   }
 
   // -----------------------------------------------------------------------

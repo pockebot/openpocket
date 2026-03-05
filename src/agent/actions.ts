@@ -365,6 +365,21 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "send_media") {
+    const mediaTypeRaw = String(input.mediaType ?? "auto").trim().toLowerCase();
+    const mediaType =
+      mediaTypeRaw === "image" || mediaTypeRaw === "file" || mediaTypeRaw === "voice"
+        ? mediaTypeRaw
+        : "auto";
+    return {
+      type,
+      path: String(input.path ?? ""),
+      mediaType,
+      caption: toOptionalTrimmedString(input.caption),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "request_human_auth") {
     const capabilityRaw = String(input.capability ?? "unknown").trim().toLowerCase();
     const uiTemplate = isObject(input.uiTemplate) ? input.uiTemplate : undefined;

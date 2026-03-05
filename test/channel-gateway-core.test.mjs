@@ -46,23 +46,45 @@ function makeEnvelope(overrides = {}) {
 function createMockAdapter(channelType = "telegram") {
   const sent = [];
   const images = [];
+  const files = [];
+  const voices = [];
   let inboundHandler = null;
 
   return {
     channelType,
     sent,
     images,
+    files,
+    voices,
     async start() {},
     async stop() {},
     async sendText(peerId, text, opts) { sent.push({ peerId, text, opts }); },
     async sendImage(peerId, imagePath, caption) { images.push({ peerId, imagePath, caption }); },
+    async sendFile(peerId, filePath, caption) { files.push({ peerId, filePath, caption }); },
+    async sendVoice(peerId, voicePath, caption) { voices.push({ peerId, voicePath, caption }); },
     onInbound(handler) { inboundHandler = handler; },
     async setTypingIndicator() {},
     async requestUserDecision() { return { selectedOption: "ok", rawInput: "ok", resolvedAt: new Date().toISOString() }; },
     async requestUserInput() { return { text: "input", resolvedAt: new Date().toISOString() }; },
     async sendHumanAuthEscalation() {},
     async resolveDisplayName() { return null; },
-    getCapabilities() { return { supportsMarkdown: true, supportsHtml: true, supportsInlineButtons: true, supportsReactions: false, supportsImageUpload: true, supportsTypingIndicator: true, supportsSlashCommands: true, supportsThreads: true, supportsDisplayNameSync: true, maxMessageLength: 4096, textChunkMode: "length" }; },
+    getCapabilities() {
+      return {
+        supportsMarkdown: true,
+        supportsHtml: true,
+        supportsInlineButtons: true,
+        supportsReactions: false,
+        supportsImageUpload: true,
+        supportsFileUpload: true,
+        supportsVoiceUpload: true,
+        supportsTypingIndicator: true,
+        supportsSlashCommands: true,
+        supportsThreads: true,
+        supportsDisplayNameSync: true,
+        maxMessageLength: 4096,
+        textChunkMode: "length",
+      };
+    },
     isAllowed() { return true; },
     simulateInbound(envelope) { if (inboundHandler) return inboundHandler(envelope); },
   };
@@ -778,5 +800,65 @@ test("GatewayCore: iMessage group open policy allows message", async () => {
 
     const ownerClaimMsg = adapter.sent.find((m) => m.text.includes("owner") || m.text.includes("auto-registered"));
     assert.equal(ownerClaimMsg, undefined, "Group messages must not trigger owner claim");
+  });
+});
+
+test("GatewayCore: deliverChannelMedia sends local image via channel image upload", async () => {
+  await withTempHome("gwcore-media-image-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+    const imagePath = path.join(home, "local-output.png");
+    fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const result = await core.deliverChannelMedia(
+      makeEnvelope({ peerId: "user-1" }),
+      {
+        sessionId: "s1",
+        sessionPath: path.join(home, "sessions", "s1.jsonl"),
+        task: "send output",
+        step: 1,
+        path: imagePath,
+        mediaType: "image",
+        caption: "done",
+        reason: "unit-test",
+        currentApp: "com.example",
+        screenshotPath: null,
+      },
+      adapter,
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.mediaType, "image");
+    assert.equal(adapter.images.length, 1);
+    assert.equal(adapter.images[0].caption, "done");
+  });
+});
+
+test("GatewayCore: deliverChannelMedia sends local voice via channel voice upload", async () => {
+  await withTempHome("gwcore-media-voice-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+    const voicePath = path.join(home, "voice-note.ogg");
+    fs.writeFileSync(voicePath, Buffer.from([0x4f, 0x67, 0x67, 0x53]));
+
+    const result = await core.deliverChannelMedia(
+      makeEnvelope({ peerId: "user-1" }),
+      {
+        sessionId: "s1",
+        sessionPath: path.join(home, "sessions", "s1.jsonl"),
+        task: "send voice",
+        step: 1,
+        path: voicePath,
+        mediaType: "auto",
+        caption: "voice",
+        reason: "unit-test",
+        currentApp: "com.example",
+        screenshotPath: null,
+      },
+      adapter,
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.mediaType, "voice");
+    assert.equal(adapter.voices.length, 1);
+    assert.equal(adapter.voices[0].caption, "voice");
   });
 });

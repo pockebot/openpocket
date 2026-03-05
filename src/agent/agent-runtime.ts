@@ -7,6 +7,8 @@ import type {
   AgentRunResult,
   AgentAction,
   BatchableAgentAction,
+  ChannelMediaDeliveryResult,
+  ChannelMediaRequest,
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
@@ -312,6 +314,7 @@ interface PhoneAgentRunContext {
   effectivePromptMode: SystemPromptMode;
   systemPrompt: string;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
+  onChannelMedia?: (request: ChannelMediaRequest) => Promise<ChannelMediaDeliveryResult> | ChannelMediaDeliveryResult;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
@@ -3188,6 +3191,76 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: modelResultText }], details: {} };
           }
 
+          // ---- send_media ----
+          if (action.type === "send_media") {
+            if (!ctx.onChannelMedia) {
+              const msg = "Channel media delivery is not available in this runtime context.";
+              ctx.failMessage = msg;
+              logStepSection("result", msg);
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+
+            let delivery: ChannelMediaDeliveryResult;
+            try {
+              delivery = await awaitWithStopGuard(() => ctx.onChannelMedia!({
+                sessionId: ctx.session.id,
+                sessionPath: ctx.session.path,
+                task: ctx.task,
+                step,
+                path: action.path,
+                mediaType: action.mediaType ?? "auto",
+                caption: action.caption,
+                reason: action.reason ?? thought,
+                currentApp: snapshot?.currentApp ?? "unknown",
+                screenshotPath: ctx.lastScreenshotPath,
+              }));
+            } catch (error) {
+              const msg = isStopError(error)
+                ? stopErrorMessage
+                : `send_media failed: ${(error as Error).message}`;
+              ctx.failMessage = msg;
+              logStepSection("result", msg);
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "error"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+
+            const resultText = delivery.ok
+              ? `send_media ok media_type=${delivery.mediaType ?? "unknown"} message=${delivery.message}`
+              : `send_media error message=${delivery.message}`;
+            if (!delivery.ok) {
+              ctx.failMessage = resultText;
+            }
+            logStepSection("result", resultText);
+            runtime.workspace.appendStep(
+              ctx.session,
+              step,
+              thought,
+              JSON.stringify(action, null, 2),
+              resultText,
+              buildStepTrace(snapshot?.currentApp ?? "unknown", delivery.ok ? "ok" : "error"),
+            );
+            ctx.traces.push({ step, action, result: resultText, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+            ctx.history.push(`step ${step}: action=send_media status=${delivery.ok ? "ok" : "error"} type=${delivery.mediaType ?? "unknown"}`);
+            return { content: [{ type: "text" as const, text: resultText }], details: {} };
+          }
+
           // ---- wait ----
           if (action.type === "wait") {
             const ms = action.durationMs ?? 1000;
@@ -3536,6 +3609,7 @@ export class AgentRuntime {
     onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse,
     sessionKey?: string,
     onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse,
+    onChannelMedia?: (request: ChannelMediaRequest) => Promise<ChannelMediaDeliveryResult> | ChannelMediaDeliveryResult,
   ): Promise<AgentRunResult> {
     const activeToolNames = this.resolveToolMetasForTask(task).map((item) => item.name);
     const request: RunTaskRequest = {
@@ -3544,6 +3618,7 @@ export class AgentRuntime {
       sessionKey,
       onProgress,
       onHumanAuth,
+      onChannelMedia,
       promptMode,
       onUserDecision,
       availableToolNames: activeToolNames,

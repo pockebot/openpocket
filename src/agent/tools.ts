@@ -234,6 +234,25 @@ export const memoryGetSchema = Type.Object({
   reason: ReasonParam,
 });
 
+export const sendMediaSchema = Type.Object({
+  thought: ThoughtParam,
+  path: Type.String({
+    description:
+      "Path to send to the user. Supports host-local absolute paths and Android device paths (e.g. /sdcard/...).",
+  }),
+  mediaType: Type.Optional(Type.Union([
+    Type.Literal("auto"),
+    Type.Literal("image"),
+    Type.Literal("file"),
+    Type.Literal("voice"),
+  ], {
+    description:
+      "Delivery type override. Use auto when unsure; runtime resolves image/file/voice by extension and channel capability.",
+  })),
+  caption: Type.Optional(Type.String({ description: "Optional caption/message attached to the media." })),
+  reason: ReasonParam,
+});
+
 export const requestHumanAuthSchema = Type.Object({
   thought: ThoughtParam,
   capability: Type.String({
@@ -361,6 +380,7 @@ export type ExecParams = Static<typeof execSchema>;
 export type ProcessParams = Static<typeof processSchema>;
 export type MemorySearchParams = Static<typeof memorySearchSchema>;
 export type MemoryGetParams = Static<typeof memoryGetSchema>;
+export type SendMediaParams = Static<typeof sendMediaSchema>;
 export type RequestHumanAuthParams = Static<typeof requestHumanAuthSchema>;
 export type RequestUserDecisionParams = Static<typeof requestUserDecisionSchema>;
 export type RequestUserInputParams = Static<typeof requestUserInputSchema>;
@@ -402,6 +422,7 @@ export const TOOL_METAS: ToolMeta[] = [
   { name: "process", description: "Manage exec background sessions: list, poll, log, write, kill.", parameters: processSchema },
   { name: "memory_search", description: "Search MEMORY.md and memory/*.md for relevant snippets before memory-based answers.", parameters: memorySearchSchema },
   { name: "memory_get", description: "Read a safe snippet from MEMORY.md or memory/*.md with line range.", parameters: memoryGetSchema },
+  { name: "send_media", description: "Send an image/file/voice artifact to the user via the current channel.", parameters: sendMediaSchema },
   { name: "request_human_auth", description: "Request human authorization for actions requiring real-device capabilities (camera, SMS/2FA, biometric, payment, OAuth, etc.).", parameters: requestHumanAuthSchema },
   { name: "request_user_decision", description: "Ask user to choose one option during task execution (mixed-initiative flow).", parameters: requestUserDecisionSchema },
   { name: "request_user_input", description: "Ask user for a short non-sensitive text input needed to continue the task.", parameters: requestUserInputSchema },
