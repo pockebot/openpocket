@@ -1,7 +1,7 @@
 import type { ScreenSnapshot } from "../types.js";
 
 const HUMAN_AUTH_CAPABILITIES =
-  "camera, qr, microphone, voice, nfc, sms, 2fa, location, biometric, notification, contacts, calendar, files, oauth, payment, permission, unknown";
+  "camera, photos, qr, microphone, voice, nfc, sms, 2fa, location, biometric, notification, contacts, calendar, files, oauth, payment, permission, unknown";
 
 const TOOL_CATALOG_ORDER = [
   "tap",
@@ -398,6 +398,9 @@ export function buildUserPrompt(
 ): string {
   const safeHistory = Array.isArray(history) ? history : [];
   const uiElements = Array.isArray(snapshot.uiElements) ? snapshot.uiElements : [];
+  const secureSurfaceDetected = Boolean(snapshot.secureSurfaceDetected);
+  const secureSurfaceEvidence = String(snapshot.secureSurfaceEvidence || "");
+  const secureNoUiCandidates = secureSurfaceDetected && uiElements.length === 0;
   const recentHistory = safeHistory.slice(-8);
   const recentActions = recentHistory.map(parseActionFromHistoryLine);
   const recentApps = recentHistory.map(parseAppFromHistoryLine);
@@ -440,18 +443,33 @@ export function buildUserPrompt(
         height: snapshot.scaledHeight,
         deviceId: snapshot.deviceId,
         capturedAt: snapshot.capturedAt,
+        secureSurfaceDetected,
+        secureSurfaceEvidence: secureSurfaceEvidence || undefined,
         installedPackages: snapshot.installedPackages,
       },
       null,
       2,
     ),
     "",
-    snapshot.somScreenshotBase64
-      ? "Image notes: previous frames (if any) appear first; the final images are current-frame SoM overlay then current raw screenshot."
-      : "Image notes: previous frames (if any) appear first; final image is current raw screenshot.",
+    secureSurfaceDetected
+      ? (
+          snapshot.somScreenshotBase64
+            ? "Image notes: secure surface detected (FLAG_SECURE). Previous frames appear first; current frame uses SoM overlay only. Raw screenshot may be black/unreliable."
+            : "Image notes: secure surface detected (FLAG_SECURE). Raw screenshot is intentionally omitted; rely on UI candidates + history."
+        )
+      : (
+          snapshot.somScreenshotBase64
+            ? "Image notes: previous frames (if any) appear first; the final images are current-frame SoM overlay then current raw screenshot."
+            : "Image notes: previous frames (if any) appear first; final image is current raw screenshot."
+        ),
     "",
     "Recent visual frames (oldest -> newest, excluding current frame):",
     recentFramesText,
+    "",
+    "Secure-surface status:",
+    `- secure_surface_detected: ${secureSurfaceDetected ? "true" : "false"}`,
+    `- secure_surface_ui_candidates_empty: ${secureNoUiCandidates ? "true" : "false"}`,
+    secureSurfaceEvidence ? `- secure_surface_evidence: ${secureSurfaceEvidence}` : "- secure_surface_evidence: (none)",
     "",
     "UI candidates (scaled coordinate space):",
     uiCandidatesText,
@@ -481,6 +499,7 @@ export function buildUserPrompt(
     "3.0) If task is app usage, verify whether app already exists before install/web flow.",
     "3.1) If clickable UI candidates exist, pick one mark id and use tap_element(mark_id).",
     "3.2) If last step had `state_delta changed=false`, switch to a different target/interaction instead of retrying same one.",
+    "3.3) If secure_surface_detected=true, prioritize UI candidates/history over raw screenshot interpretation.",
     "4) If this is text-entry intent: max 2 focus taps, then type_text once and submit with keyevent if needed.",
     "5) Never type logs/history/JSON strings; text must come from user intent or on-screen content.",
     "6) For in-emulator permission dialogs, tap Allow locally. Use request_human_auth only for real-device data/authorization.",

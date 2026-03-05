@@ -17,7 +17,7 @@ import {
   streamSimple,
 } from "@mariozechner/pi-ai";
 
-import type { OpenPocketConfig, ScreenSnapshot } from "../../types.js";
+import type { HumanAuthDecision, OpenPocketConfig, ScreenSnapshot } from "../../types.js";
 import { getModelProfile, resolveModelAuth } from "../../config/index.js";
 import { sleep } from "../../utils/time.js";
 import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
@@ -41,6 +41,21 @@ interface ScreenObservationMessage {
   stepIndex: number;
   screenshotPath: string | null;
   timestamp: number;
+}
+
+function selectObservationImage(
+  snapshot: Pick<ScreenSnapshot, "somScreenshotBase64" | "screenshotBase64" | "secureSurfaceDetected">,
+): { data: string; tag: "som" | "raw" } | null {
+  if (snapshot.somScreenshotBase64) {
+    return { data: snapshot.somScreenshotBase64, tag: "som" };
+  }
+  if (snapshot.secureSurfaceDetected) {
+    return null;
+  }
+  if (!snapshot.screenshotBase64) {
+    return null;
+  }
+  return { data: snapshot.screenshotBase64, tag: "raw" };
 }
 
 const MAX_REUSED_SESSION_MESSAGES = 64;
@@ -227,6 +242,7 @@ export async function runRuntimeAttempt(
       lastScreenshotEndMs: 0,
       lastModelInferenceStartMs: 0,
       capabilityProbeApprovalByKey: new Map(),
+      secureSurfaceTakeoverRequestedApps: new Set(),
       launchablePackages,
       effectivePromptMode,
       systemPrompt,
@@ -249,6 +265,88 @@ export async function runRuntimeAttempt(
     const tools = deps.buildPhoneAgentTools(ctx, availableToolNamesForRun);
     const apiKey = auth.apiKey;
     const turnFallbackTasks: Promise<void>[] = [];
+
+    const maybeEscalateSecureSurfaceTakeover = async (): Promise<void> => {
+      if (ctx.finishMessage || ctx.failMessage) {
+        return;
+      }
+      const snapshot = ctx.latestSnapshot;
+      const uiCandidates = Array.isArray(snapshot?.uiElements) ? snapshot.uiElements : [];
+      if (!snapshot || !snapshot.secureSurfaceDetected || uiCandidates.length > 0) {
+        return;
+      }
+      const appKey = String(snapshot.currentApp || "unknown").trim().toLowerCase() || "unknown";
+      if (ctx.secureSurfaceTakeoverRequestedApps.has(appKey)) {
+        return;
+      }
+      if (!deps.config.humanAuth.enabled) {
+        ctx.failMessage = `Secure surface detected in ${snapshot.currentApp} with no UI-tree candidates, but human auth is disabled.`;
+        return;
+      }
+      if (!ctx.onHumanAuth) {
+        ctx.failMessage = `Secure surface detected in ${snapshot.currentApp} with no UI-tree candidates, but no human auth handler is configured.`;
+        return;
+      }
+
+      ctx.secureSurfaceTakeoverRequestedApps.add(appKey);
+      const timeoutCapSec = Math.max(30, Math.round(deps.config.humanAuth.requestTimeoutSec));
+      const timeoutSec = Math.min(timeoutCapSec, 240);
+      const instruction = `FLAG_SECURE screen detected in ${snapshot.currentApp} and UI tree has no actionable nodes. Open Remote Takeover live stream, control the Agent Phone directly, then approve to resume automation.`;
+
+      let decision: HumanAuthDecision;
+      try {
+        decision = await ctx.onHumanAuth({
+          sessionId: session.id,
+          sessionPath: session.path,
+          task: ctx.task,
+          step: ctx.stepCount + 1,
+          capability: "unknown",
+          instruction,
+          reason: "secure_surface_no_ui_tree_takeover",
+          timeoutSec,
+          currentApp: snapshot.currentApp,
+          screenshotPath: ctx.lastScreenshotPath,
+          uiTemplate: {
+            templateId: "secure-surface-takeover-v1",
+            title: "Human Takeover Required: Secure Screen",
+            summary: `OpenPocket detected FLAG_SECURE in ${snapshot.currentApp} and could not extract actionable UI nodes. Use the live stream to remotely control Agent Phone, then approve to continue.`,
+            capabilityHint: "detected=secure_surface_no_ui_tree takeover=required",
+            requireArtifactOnApprove: false,
+            allowTextAttachment: false,
+            allowLocationAttachment: false,
+            allowPhotoAttachment: false,
+            allowAudioAttachment: false,
+            allowFileAttachment: false,
+            approveLabel: "Takeover Complete",
+            rejectLabel: "Stop Task",
+            notePlaceholder: "Optional context after takeover",
+          },
+        });
+      } catch (error) {
+        decision = {
+          requestId: "secure-surface-takeover-error",
+          approved: false,
+          status: "rejected",
+          message: `Human auth error: ${(error as Error).message}`,
+          decidedAt: new Date().toISOString(),
+          artifactPath: null,
+        };
+      }
+
+      ctx.history.push(
+        `step ${ctx.stepCount + 1}: secure_takeover decision=${decision.status} app=${snapshot.currentApp}`,
+      );
+
+      if (!decision.approved) {
+        ctx.failMessage = decision.message || "Human takeover was not approved for secure surface.";
+        return;
+      }
+
+      await sleep(350);
+      const refreshed = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+      refreshed.installedPackages = launchablePackages;
+      ctx.latestSnapshot = refreshed;
+    };
 
     const thinkingMap: Record<string, Exclude<ThinkingLevel, "off">> = {
       low: "low",
@@ -496,18 +594,17 @@ export async function runRuntimeAttempt(
               { type: "text", text: observationText },
             ];
 
-            // Always send all recent frames so the model has full visual context
+            // Send recent frames when visual payload is available for each frame.
             for (const recent of observation.recentSnapshots) {
-              if (recent.somScreenshotBase64) {
-                content.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });
-              } else {
-                content.push({ type: "image", data: recent.screenshotBase64, mimeType: "image/png" });
+              const selected = selectObservationImage(recent);
+              if (selected) {
+                content.push({ type: "image", data: selected.data, mimeType: "image/png" });
               }
             }
-            if (snapshot.somScreenshotBase64) {
-              content.push({ type: "image", data: snapshot.somScreenshotBase64, mimeType: "image/png" });
+            const currentSelected = selectObservationImage(snapshot);
+            if (currentSelected) {
+              content.push({ type: "image", data: currentSelected.data, mimeType: "image/png" });
             }
-            content.push({ type: "image", data: snapshot.screenshotBase64, mimeType: "image/png" });
             return [{ role: "user", content, timestamp: message.timestamp }];
           }
           if (message.role === "user" || message.role === "assistant" || message.role === "toolResult") {
@@ -557,15 +654,17 @@ export async function runRuntimeAttempt(
             ctx.lastSomScreenshotPath = null;
           }
           // Save recent snapshot screenshots (prior frames sent to model).
-          // The model receives SoM if available, otherwise raw — match that exactly.
+          // The model receives SoM first, otherwise raw if not secure-blackout.
           const recentForSave = ctx.recentSnapshotWindow.slice(-2);
           const recentPaths: string[] = [];
           for (const recent of recentForSave) {
             try {
-              const buf = recent.somScreenshotBase64
-                ? Buffer.from(recent.somScreenshotBase64, "base64")
-                : Buffer.from(recent.screenshotBase64, "base64");
-              const suffix = recent.somScreenshotBase64 ? "-recent-som" : "-recent";
+              const selected = selectObservationImage(recent);
+              if (!selected) {
+                continue;
+              }
+              const buf = Buffer.from(selected.data, "base64");
+              const suffix = selected.tag === "som" ? "-recent-som" : "-recent";
               const p = deps.screenshotStore.save(
                 buf,
                 { sessionId: session.id, step: ctx.stepCount + 1, currentApp: `${recent.currentApp}${suffix}` },
@@ -588,6 +687,11 @@ export async function runRuntimeAttempt(
             refreshed.installedPackages = launchablePackages;
             ctx.latestSnapshot = refreshed;
           }
+        }
+
+        await maybeEscalateSecureSurfaceTakeover();
+        if (ctx.failMessage) {
+          return messages;
         }
 
         const latestSnapshot = ctx.latestSnapshot;

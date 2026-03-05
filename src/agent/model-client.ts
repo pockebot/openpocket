@@ -86,6 +86,16 @@ function extractThinking(msg: AssistantMessage): string {
   return "";
 }
 
+function selectObservationImage(snapshot: ScreenSnapshot): string | null {
+  if (snapshot.somScreenshotBase64) {
+    return snapshot.somScreenshotBase64;
+  }
+  if (snapshot.secureSurfaceDetected) {
+    return null;
+  }
+  return snapshot.screenshotBase64 || null;
+}
+
 // ---------------------------------------------------------------------------
 // Model resolution
 // ---------------------------------------------------------------------------
@@ -237,20 +247,17 @@ export class ModelClient {
 
     // Add recent snapshot images
     for (const recent of params.recentSnapshots ?? []) {
-      if (recent.somScreenshotBase64) {
-        userContent.push({ type: "image", data: recent.somScreenshotBase64, mimeType: "image/png" });
-      } else {
-        userContent.push({ type: "image", data: recent.screenshotBase64, mimeType: "image/png" });
+      const selected = selectObservationImage(recent);
+      if (selected) {
+        userContent.push({ type: "image", data: selected, mimeType: "image/png" });
       }
     }
 
-    // Add current snapshot SoM overlay (if available)
-    if (params.snapshot.somScreenshotBase64) {
-      userContent.push({ type: "image", data: params.snapshot.somScreenshotBase64, mimeType: "image/png" });
+    // Add current snapshot image (SoM preferred; raw omitted on secure blackout)
+    const selectedCurrent = selectObservationImage(params.snapshot);
+    if (selectedCurrent) {
+      userContent.push({ type: "image", data: selectedCurrent, mimeType: "image/png" });
     }
-
-    // Add current raw screenshot
-    userContent.push({ type: "image", data: params.snapshot.screenshotBase64, mimeType: "image/png" });
 
     const context: Context = {
       systemPrompt: params.systemPrompt,

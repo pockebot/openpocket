@@ -153,6 +153,7 @@ export interface PhoneAgentRunContext {
   lastScreenshotEndMs: number;
   lastModelInferenceStartMs: number;
   capabilityProbeApprovalByKey: Map<string, CapabilityProbeApprovalRecord>;
+  secureSurfaceTakeoverRequestedApps: Set<string>;
 }
 
 export type AgentLike = Pick<Agent, "followUp" | "subscribe" | "prompt" | "waitForIdle"> & {

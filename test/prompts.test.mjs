@@ -143,3 +143,32 @@ test("buildUserPrompt keeps only recent 8 history items", () => {
   assert.doesNotMatch(prompt, /step-history-1(?!\d)/);
   assert.doesNotMatch(prompt, /step-history-4(?!\d)/);
 });
+
+test("buildUserPrompt marks secure surface and omits raw-screenshot guidance", () => {
+  const prompt = buildUserPrompt(
+    "complete secure checkout",
+    2,
+    {
+      deviceId: "emulator-5554",
+      currentApp: "com.shop.app",
+      width: 1080,
+      height: 2400,
+      capturedAt: new Date().toISOString(),
+      screenshotBase64: "abc",
+      secureSurfaceDetected: true,
+      secureSurfaceEvidence: "FLAG_SECURE in focused window",
+      scaleX: 1,
+      scaleY: 1,
+      scaledWidth: 1080,
+      scaledHeight: 2400,
+      uiElements: [],
+      somScreenshotBase64: null,
+    },
+    [],
+  );
+
+  assert.match(prompt, /secure_surface_detected: true/);
+  assert.match(prompt, /secure_surface_ui_candidates_empty: true/);
+  assert.match(prompt, /FLAG_SECURE in focused window/);
+  assert.match(prompt, /Raw screenshot is intentionally omitted/i);
+});

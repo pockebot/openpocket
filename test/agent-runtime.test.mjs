@@ -16,11 +16,15 @@ function makeSnapshot(overrides = {}) {
     width: 1080,
     height: 2400,
     screenshotBase64: "abc",
+    secureSurfaceDetected: false,
+    secureSurfaceEvidence: "",
+    somScreenshotBase64: null,
     capturedAt: new Date().toISOString(),
     scaleX: 1,
     scaleY: 1,
     scaledWidth: 1080,
     scaledHeight: 2400,
+    uiElements: [],
     ...overrides,
   };
 }
@@ -1008,6 +1012,68 @@ test("AgentRuntime escalates payment capability probe with dynamic fields from u
   assert.equal(authRequests[0].uiTemplate?.requireArtifactOnApprove, true);
   assert.equal(authRequests[0].uiTemplate?.fields?.length, 3);
   assert.equal(authRequests[0].uiTemplate?.allowPhotoAttachment, false);
+});
+
+test("AgentRuntime requests human takeover when secure surface has no UI candidates", async () => {
+  const authRequests = [];
+  let captureCount = 0;
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "done after takeover", action: { type: "finish", message: "secure step handled" } },
+    ],
+  });
+
+  runtime.config.humanAuth.enabled = true;
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => {
+      captureCount += 1;
+      if (captureCount === 1) {
+        return makeSnapshot({
+          currentApp: "com.bank.app",
+          screenshotBase64: Buffer.from("secure-black").toString("base64"),
+          secureSurfaceDetected: true,
+          secureSurfaceEvidence: "FLAG_SECURE focused window",
+          somScreenshotBase64: null,
+          uiElements: [],
+        });
+      }
+      return makeSnapshot({
+        currentApp: "com.bank.app",
+        screenshotBase64: Buffer.from("post-takeover").toString("base64"),
+        secureSurfaceDetected: false,
+        secureSurfaceEvidence: "",
+        somScreenshotBase64: null,
+        uiElements: [],
+      });
+    },
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask(
+    "secure takeover fallback",
+    undefined,
+    undefined,
+    async (request) => {
+      authRequests.push(request);
+      return {
+        requestId: "req-secure-takeover-1",
+        approved: true,
+        status: "approved",
+        message: "takeover completed",
+        decidedAt: new Date().toISOString(),
+        artifactPath: null,
+      };
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0].capability, "unknown");
+  assert.match(authRequests[0].instruction, /FLAG_SECURE/i);
+  assert.equal(authRequests[0].uiTemplate?.templateId, "secure-surface-takeover-v1");
+  assert.equal(captureCount >= 2, true);
 });
 
 test("AgentRuntime reuses approved capability probe auth within one task", async () => {
