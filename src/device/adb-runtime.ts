@@ -411,6 +411,7 @@ const UI_DUMP_CACHE_MAX_AGE_MS = 15_000;
 const UI_DUMP_CACHE_MAX_REUSE = 1;
 const UI_DUMP_MAX_HASH_DISTANCE = 4;
 const UI_NODE_MIN_SCORE = 4;
+const WINDOW_FLAG_SECURE_RE = /\bFLAG_SECURE\b/i;
 const VISUAL_HASH_BITS = 64;
 const VISUAL_HASH_GRID_WIDTH = 9;
 const VISUAL_HASH_COMPARE_WIDTH = 8;
@@ -450,6 +451,11 @@ type UiDumpCacheEntry = {
   uiElements: UiElementSnapshot[];
   updatedAtMs: number;
   reuseCount: number;
+};
+
+type SecureSurfaceObservation = {
+  detected: boolean;
+  evidence: string;
 };
 
 export class AdbRuntime {
@@ -1002,6 +1008,64 @@ export class AdbRuntime {
     return { reuse: true, visualHashDistance };
   }
 
+  private detectSecureSurface(deviceId: string, currentApp: string): SecureSurfaceObservation {
+    let windowDump = "";
+    try {
+      windowDump = this.emulator.runAdb(
+        ["-s", deviceId, "shell", "dumpsys", "window", "windows"],
+        6_000,
+      );
+    } catch {
+      return { detected: false, evidence: "" };
+    }
+    const raw = String(windowDump || "");
+    if (!raw) {
+      return { detected: false, evidence: "" };
+    }
+
+    const focusedPackage = extractPackageName(raw);
+    const candidates = [currentApp, focusedPackage]
+      .map((item) => String(item || "").trim())
+      .filter((item, index, all) => (
+        item
+        && item !== "unknown"
+        && all.findIndex((other) => other.toLowerCase() === item.toLowerCase()) === index
+      ));
+
+    for (const packageName of candidates) {
+      const escapedPackage = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const packageWindowRe = new RegExp(`Window\\{[^\\n]*\\s${escapedPackage}/[^\\n]*\\}`, "ig");
+      let packageMatch = packageWindowRe.exec(raw);
+      while (packageMatch) {
+        const hitIndex = packageMatch.index;
+        const start = Math.max(0, hitIndex - 900);
+        const end = Math.min(raw.length, hitIndex + 1_400);
+        const snippet = raw.slice(start, end);
+        if (WINDOW_FLAG_SECURE_RE.test(snippet)) {
+          return {
+            detected: true,
+            evidence: snippet.replace(/\s+/g, " ").trim().slice(0, 260),
+          };
+        }
+        packageMatch = packageWindowRe.exec(raw);
+      }
+    }
+
+    if (candidates.length === 0) {
+      const secureIndex = raw.search(WINDOW_FLAG_SECURE_RE);
+      if (secureIndex >= 0) {
+        const start = Math.max(0, secureIndex - 120);
+        const end = Math.min(raw.length, secureIndex + 220);
+        return {
+          detected: true,
+          evidence: raw.slice(start, end).replace(/\s+/g, " ").trim().slice(0, 260),
+        };
+      }
+    }
+
+    return { detected: false, evidence: "" };
+  }
+
   async captureScreenSnapshot(preferred?: string | null, modelName?: string): Promise<ScreenSnapshot> {
     const captureStartedAtMs = Date.now();
     const metrics: ScreenSnapshotCaptureMetrics = {
@@ -1018,6 +1082,8 @@ export class AdbRuntime {
       visualHash: "",
       visualHashHammingDistance: null,
       uiDumpTimedOut: false,
+      secureSurfaceDetected: false,
+      secureSurfaceEvidence: "",
     };
 
     const deviceId = this.resolveDeviceId(preferred);
@@ -1032,6 +1098,9 @@ export class AdbRuntime {
     const currentAppStartMs = Date.now();
     const currentApp = this.resolveCurrentApp(deviceId);
     metrics.currentAppMs = Date.now() - currentAppStartMs;
+    const secureSurface = this.detectSecureSurface(deviceId, currentApp);
+    metrics.secureSurfaceDetected = secureSurface.detected;
+    metrics.secureSurfaceEvidence = secureSurface.evidence;
 
     const scaleStartMs = Date.now();
     const scaled = await scaleScreenshot(data, modelName);
@@ -1052,14 +1121,20 @@ export class AdbRuntime {
 
     const nowMs = Date.now();
     const cached = this.uiDumpCache.get(deviceId);
-    const cacheDecision = this.shouldReuseUiDumpCache(cached, {
-      currentApp,
-      scaledWidth: scaled.width,
-      scaledHeight: scaled.height,
-      visualHash,
-      nowMs,
-    });
+    const cacheDecision = secureSurface.detected
+      ? { reuse: false, visualHashDistance: null }
+      : this.shouldReuseUiDumpCache(cached, {
+        currentApp,
+        scaledWidth: scaled.width,
+        scaledHeight: scaled.height,
+        visualHash,
+        nowMs,
+      });
     metrics.visualHashHammingDistance = cacheDecision.visualHashDistance;
+
+    if (secureSurface.detected) {
+      this.uiDumpCache.delete(deviceId);
+    }
 
     let uiElements: UiElementSnapshot[] = [];
     let uiElementsSource: ScreenSnapshotCaptureMetrics["uiElementsSource"] = "fresh_empty";
@@ -1081,7 +1156,7 @@ export class AdbRuntime {
       );
       uiDumpTimedOut = freshCapture.timedOut;
 
-      const canFallbackToCache = cached
+      const canFallbackToCache = !secureSurface.detected && cached
         ? (
             cached.currentApp === currentApp
             && cached.scaledWidth === scaled.width
@@ -1101,15 +1176,17 @@ export class AdbRuntime {
       if (freshCapture.uiElements.length > 0) {
         uiElements = freshCapture.uiElements;
         uiElementsSource = "fresh";
-        this.uiDumpCache.set(deviceId, {
-          currentApp,
-          scaledWidth: scaled.width,
-          scaledHeight: scaled.height,
-          visualHash,
-          uiElements: this.cloneUiElements(freshCapture.uiElements),
-          updatedAtMs: nowMs,
-          reuseCount: 0,
-        });
+        if (!secureSurface.detected) {
+          this.uiDumpCache.set(deviceId, {
+            currentApp,
+            scaledWidth: scaled.width,
+            scaledHeight: scaled.height,
+            visualHash,
+            uiElements: this.cloneUiElements(freshCapture.uiElements),
+            updatedAtMs: nowMs,
+            reuseCount: 0,
+          });
+        }
       } else if (canFallbackToCache && cached) {
         uiElements = this.cloneUiElements(cached.uiElements);
         cached.reuseCount = Math.min(cached.reuseCount + 1, UI_DUMP_CACHE_MAX_REUSE);
@@ -1148,6 +1225,8 @@ export class AdbRuntime {
       width,
       height,
       screenshotBase64: scaled.data.toString("base64"),
+      secureSurfaceDetected: secureSurface.detected,
+      secureSurfaceEvidence: secureSurface.evidence,
       somScreenshotBase64,
       capturedAt: nowIso(),
       scaleX: scaled.scaleX,

@@ -179,6 +179,7 @@ export interface HumanAuthConfig {
 
 export type HumanAuthCapability =
   | "camera"
+  | "photos"
   | "qr"
   | "microphone"
   | "voice"
@@ -372,6 +373,8 @@ export interface ScreenSnapshotCaptureMetrics {
   visualHash: string;
   visualHashHammingDistance: number | null;
   uiDumpTimedOut: boolean;
+  secureSurfaceDetected: boolean;
+  secureSurfaceEvidence: string;
 }
 
 export interface ScreenSnapshot {
@@ -380,6 +383,10 @@ export interface ScreenSnapshot {
   width: number;
   height: number;
   screenshotBase64: string;
+  /** True when current focused app window includes FLAG_SECURE. */
+  secureSurfaceDetected: boolean;
+  /** Short dumpsys snippet proving secure surface detection (if any). */
+  secureSurfaceEvidence: string;
   /** Set-of-Mark overlay image (same scaled resolution) with numbered UI boxes. */
   somScreenshotBase64: string | null;
   capturedAt: string;

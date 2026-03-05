@@ -67,6 +67,7 @@ class FakeEmulator {
     this.powerDumps = Array.isArray(options.powerDumps) ? [...options.powerDumps] : [];
     this.policyDumps = Array.isArray(options.policyDumps) ? [...options.policyDumps] : [];
     this.currentApp = options.currentApp ?? "com.example";
+    this.windowDump = typeof options.windowDump === "string" ? options.windowDump : "";
     this.uiDumpXml = options.uiDumpXml ?? makeUiDumpXml("Open");
     this.failUiDumpTimes = Math.max(0, Number(options.failUiDumpTimes ?? 0));
     this.failUiDumpWithTimeout = Boolean(options.failUiDumpWithTimeout);
@@ -127,6 +128,9 @@ class FakeEmulator {
       args[4] === "window" &&
       args[5] === "windows"
     ) {
+      if (this.windowDump.trim()) {
+        return this.windowDump;
+      }
       return `mCurrentFocus=Window{u0 ${this.currentApp}/.MainActivity}`;
     }
 
@@ -851,6 +855,46 @@ test("captureScreenSnapshot caches stable UI dumps and forces periodic refresh",
     (args) => args[0] === "-s" && args[2] === "exec-out" && args[3] === "uiautomator" && args[4] === "dump",
   ).length;
   assert.equal(uiDumpCommandCalls, 2);
+});
+
+test("captureScreenSnapshot forces fresh UI dump when FLAG_SECURE is present", async () => {
+  const screenshotBuffer = await sharp({
+    create: {
+      width: 1080,
+      height: 1920,
+      channels: 3,
+      background: { r: 18, g: 24, b: 32 },
+    },
+  }).png().toBuffer();
+  const emulator = new FakeEmulator({
+    screenshotBuffer,
+    currentApp: "com.shop.app",
+    uiDumpXml: makeUiDumpXml("Pay"),
+    windowDump: [
+      "mCurrentFocus=Window{ab12cd3 u0 com.shop.app/.CheckoutActivity}",
+      "Window #9 Window{ab12cd3 u0 com.shop.app/.CheckoutActivity}:",
+      "  mAttrs={(0,0)(fillxfill) sim=#20 ty=APPLICATION fl=FLAG_SECURE HARDWARE_ACCELERATED}",
+    ].join("\n"),
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const first = await runtime.captureScreenSnapshot();
+  const second = await runtime.captureScreenSnapshot();
+  const third = await runtime.captureScreenSnapshot();
+
+  assert.equal(first.secureSurfaceDetected, true);
+  assert.equal(second.secureSurfaceDetected, true);
+  assert.equal(third.secureSurfaceDetected, true);
+  assert.equal(first.captureMetrics?.secureSurfaceDetected, true);
+  assert.match(first.captureMetrics?.secureSurfaceEvidence || "", /FLAG_SECURE/i);
+  assert.equal(first.captureMetrics?.uiElementsSource, "fresh");
+  assert.equal(second.captureMetrics?.uiElementsSource, "fresh");
+  assert.equal(third.captureMetrics?.uiElementsSource, "fresh");
+
+  const uiDumpCommandCalls = emulator.calls.filter(
+    (args) => args[0] === "-s" && args[2] === "exec-out" && args[3] === "uiautomator" && args[4] === "dump",
+  ).length;
+  assert.equal(uiDumpCommandCalls, 3);
 });
 
 test("captureScreenSnapshot bypasses cache when visual hash changes", async () => {
