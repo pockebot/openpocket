@@ -2995,6 +2995,13 @@ export class ChatAssistant {
       : "Started a fresh session. Tell me what you want to do now, or use /help for commands.";
   }
 
+  private fallbackTaskAcceptedReply(task: string, locale: OnboardingLocale): string {
+    const taskLine = this.trimForPrompt(String(task || "").replace(/\s+/g, " ").trim(), 160) || "task";
+    return locale === "zh"
+      ? `收到，开始处理这个任务：${taskLine}`
+      : `On it, I am starting this task: ${taskLine}`;
+  }
+
   async startReadyReply(locale: OnboardingLocale): Promise<string> {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
@@ -3062,6 +3069,43 @@ export class ChatAssistant {
       return normalized || this.fallbackSessionResetUserReply(locale);
     } catch {
       return this.fallbackSessionResetUserReply(locale);
+    }
+  }
+
+  async taskAcceptedReply(task: string, locale: OnboardingLocale): Promise<string> {
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return this.fallbackTaskAcceptedReply(task, locale);
+    }
+
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+    const prompt = [
+      "You are OpenPocket task-start narrator.",
+      "A new user task was just accepted and is about to run.",
+      "Write one short user-facing sentence in the target locale.",
+      "The sentence must acknowledge that execution has started right now.",
+      "Do not include progress numbers, internal tool names, or policy text.",
+      "Do not mention prompts, files, models, APIs, or implementation details.",
+      `Task: ${task}`,
+      `Locale: ${locale}`,
+    ].join("\n");
+
+    try {
+      const output = await this.callModelRaw(
+        client,
+        profile.model,
+        Math.min(profile.maxTokens, 120),
+        prompt,
+        "task accepted reply",
+      );
+      const normalized = this.normalizeOneLine(output);
+      return normalized || this.fallbackTaskAcceptedReply(task, locale);
+    } catch {
+      return this.fallbackTaskAcceptedReply(task, locale);
     }
   }
 

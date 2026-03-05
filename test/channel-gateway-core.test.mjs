@@ -400,10 +400,11 @@ test("GatewayCore: unknown command falls through to plain message handler", asyn
   });
 });
 
-test("GatewayCore enqueueTask does not emit fixed immediate ack when idle", async () => {
+test("GatewayCore enqueueTask sends model-driven start ack when idle", async () => {
   await withTempHome("gwcore-idle-no-fixed-ack-", async (home) => {
     const { adapter, core } = createGatewayCore(home);
 
+    core.chat.taskAcceptedReply = async () => "model-start-ack";
     core.runTaskAndReport = async () => ({
       accepted: true,
       ok: true,
@@ -419,10 +420,9 @@ test("GatewayCore enqueueTask does not emit fixed immediate ack when idle", asyn
     await core.enqueueTask(makeEnvelope({ text: "run task" }), "run task");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.equal(
-      adapter.sent.some((item) => /收到，我先处理这个任务|On it:/i.test(item.text)),
-      false,
-    );
+    assert.equal(adapter.sent.length, 1);
+    assert.equal(adapter.sent[0].text, "model-start-ack");
+    assert.equal(adapter.sent.some((item) => /收到，我先处理这个任务|On it:/i.test(item.text)), false);
   });
 });
 

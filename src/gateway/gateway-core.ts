@@ -574,10 +574,12 @@ export class GatewayCore {
     const isIdle = !this.drainingTaskQueue && !this.agent.isBusy() && this.pendingTasks.length === 0;
     const position = this.pendingTasks.length + 1;
 
-    if (!options?.skipAck && !isIdle) {
-      const ack = locale === "zh"
-        ? `当前有任务在执行。你的新任务已加入队列（第 ${position} 位）。`
-        : `A previous task is still running. Your new task is queued (position ${position}).`;
+    if (!options?.skipAck) {
+      const ack = isIdle
+        ? await this.resolveTaskAcceptedAck(task, locale)
+        : (locale === "zh"
+          ? `当前有任务在执行。你的新任务已加入队列（第 ${position} 位）。`
+          : `A previous task is still running. Your new task is queued (position ${position}).`);
       await this.router.replyText(envelope, ack);
       this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", ack);
     }
@@ -933,6 +935,28 @@ export class GatewayCore {
     const remain = this.pendingTasks.filter((t) => t.envelope.peerId !== peerId);
     this.pendingTasks.splice(0, this.pendingTasks.length, ...remain);
     return before - remain.length;
+  }
+
+  private async resolveTaskAcceptedAck(task: string, locale: OnboardingLocale): Promise<string> {
+    const fallback = locale === "zh"
+      ? `收到，开始处理这个任务：${this.previewPayload(task, 160)}`
+      : `On it, I am starting this task: ${this.previewPayload(task, 160)}`;
+
+    const timeoutMs = 1200;
+    const timeoutPromise = new Promise<string>((resolve) => {
+      setTimeout(() => resolve(fallback), timeoutMs);
+    });
+
+    try {
+      const ack = await Promise.race([
+        this.chat.taskAcceptedReply(task, locale),
+        timeoutPromise,
+      ]);
+      const sanitized = this.sanitizeForChat(ack, 1800);
+      return sanitized || fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   // -----------------------------------------------------------------------
