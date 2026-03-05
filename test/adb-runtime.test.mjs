@@ -71,6 +71,9 @@ class FakeEmulator {
     this.uiDumpXml = options.uiDumpXml ?? makeUiDumpXml("Open");
     this.failUiDumpTimes = Math.max(0, Number(options.failUiDumpTimes ?? 0));
     this.failUiDumpWithTimeout = Boolean(options.failUiDumpWithTimeout);
+    this.shellOutputByCommand = options.shellOutputByCommand && typeof options.shellOutputByCommand === "object"
+      ? { ...options.shellOutputByCommand }
+      : {};
   }
 
   status() {
@@ -261,6 +264,12 @@ class FakeEmulator {
       this.failInputTextOnce = false;
       throw new Error("input text failed");
     }
+    if (args[0] === "-s" && args[2] === "shell") {
+      const commandKey = args.slice(3).join(" ");
+      if (Object.prototype.hasOwnProperty.call(this.shellOutputByCommand, commandKey)) {
+        return String(this.shellOutputByCommand[commandKey]);
+      }
+    }
     return "";
   }
 }
@@ -352,6 +361,42 @@ test("AdbRuntime uses escaped adb input for passwords with special characters", 
     emulator.calls.some((args) => args.includes("clipboard") || args.includes("KEYCODE_PASTE") || args.includes("ADB_INPUT_B64")),
     false,
   );
+});
+
+test("AdbRuntime includes shell stdout in action result", async () => {
+  const emulator = new FakeEmulator({
+    shellOutputByCommand: {
+      "echo shell-ok": "shell-ok",
+    },
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({
+    type: "shell",
+    command: "echo shell-ok",
+  });
+
+  assert.match(result, /Executed shell command: echo shell-ok/);
+  assert.match(result, /Output:/);
+  assert.match(result, /shell-ok/);
+});
+
+test("AdbRuntime truncates oversized shell output in action result", async () => {
+  const emulator = new FakeEmulator({
+    shellOutputByCommand: {
+      "echo large-output": "x".repeat(4_200),
+    },
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({
+    type: "shell",
+    command: "echo large-output",
+  });
+
+  assert.match(result, /Executed shell command: echo large-output/);
+  assert.match(result, /Output \(truncated, totalChars=4200\):/);
+  assert.match(result, /\.\.\.\[truncated\]\.\.\./);
 });
 
 test("AdbRuntime executes drag with swipe gesture", async () => {

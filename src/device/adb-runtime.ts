@@ -303,6 +303,32 @@ function looksLikeBroadcastFailure(text: string): boolean {
   return /no receivers|unable to resolve|exception|error/.test(normalized);
 }
 
+const SHELL_OUTPUT_MAX_CHARS = 3_000;
+
+function formatShellCommandResult(command: string, output: string): string {
+  const normalizedCommand = String(command || "").trim() || "(empty)";
+  const normalizedOutput = String(output || "").replace(/\r\n/g, "\n").trim();
+  if (!normalizedOutput) {
+    return `Executed shell command: ${normalizedCommand}`;
+  }
+  if (normalizedOutput.length <= SHELL_OUTPUT_MAX_CHARS) {
+    return `Executed shell command: ${normalizedCommand}\nOutput:\n${normalizedOutput}`;
+  }
+
+  const marker = "\n...[truncated]...\n";
+  const payloadLimit = Math.max(0, SHELL_OUTPUT_MAX_CHARS - marker.length);
+  const headChars = Math.max(1, Math.floor(payloadLimit * 0.7));
+  const tailChars = Math.max(1, payloadLimit - headChars);
+  const head = normalizedOutput.slice(0, headChars).trimEnd();
+  const tail = normalizedOutput.slice(-tailChars).trimStart();
+
+  return [
+    `Executed shell command: ${normalizedCommand}`,
+    `Output (truncated, totalChars=${normalizedOutput.length}):`,
+    `${head}${marker}${tail}`,
+  ].join("\n");
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -1450,13 +1476,13 @@ export class AdbRuntime {
           return "Skipped empty shell command";
         }
         if (action.useShellWrap) {
-          this.emulator.runAdb(["-s", deviceId, "shell", "sh", "-lc", command]);
-          return `Executed shell command: ${action.command}`;
+          const output = this.emulator.runAdb(["-s", deviceId, "shell", "sh", "-lc", command]);
+          return formatShellCommandResult(command, output);
         }
 
         const wrapped = parseExplicitShellWrap(command);
         if (wrapped) {
-          this.emulator.runAdb([
+          const output = this.emulator.runAdb([
             "-s",
             deviceId,
             "shell",
@@ -1464,15 +1490,15 @@ export class AdbRuntime {
             wrapped.mode,
             wrapped.script,
           ]);
-          return `Executed shell command: ${action.command}`;
+          return formatShellCommandResult(command, output);
         }
 
         const parts = splitShellArgs(command);
         if (parts.length === 0) {
           return "Skipped empty shell command";
         }
-        this.emulator.runAdb(["-s", deviceId, "shell", ...parts]);
-        return `Executed shell command: ${action.command}`;
+        const output = this.emulator.runAdb(["-s", deviceId, "shell", ...parts]);
+        return formatShellCommandResult(command, output);
       }
       case "run_script": {
         return "run_script is handled by ScriptExecutor in AgentRuntime.";
