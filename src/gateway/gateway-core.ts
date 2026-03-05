@@ -642,6 +642,8 @@ export class GatewayCore {
         progressWork = progressWork.then(async () => {
           const recentProgress = [...narrationState.recentProgress, progress].slice(-8);
           narrationState.allProgress = [...narrationState.allProgress, progress].slice(-16);
+          const isFirstProgress =
+            narrationState.lastNotifiedProgress === null && progress.step === 1;
 
           const action = String(progress.actionType || "").toLowerCase();
           const isHighSignal =
@@ -651,7 +653,7 @@ export class GatewayCore {
           const isIntervalStep = narrationState.skippedSteps >= GatewayCore.NARRATION_LLM_INTERVAL;
           const useLlm = isHighSignal || isIntervalStep;
 
-          const decision = useLlm
+          let decision = useLlm
             ? await this.chat.narrateTaskProgress({
               task, locale, progress, recentProgress,
               lastNotifiedProgress: narrationState.lastNotifiedProgress,
@@ -662,6 +664,15 @@ export class GatewayCore {
               lastNotifiedProgress: narrationState.lastNotifiedProgress,
               skippedSteps: narrationState.skippedSteps,
             });
+
+          // Keep model-first behavior, but guarantee users see task start.
+          if (isFirstProgress && (!decision.notify || !String(decision.message || "").trim())) {
+            decision = this.chat.fallbackTaskProgressNarration({
+              task, locale, progress, recentProgress,
+              lastNotifiedProgress: narrationState.lastNotifiedProgress,
+              skippedSteps: narrationState.skippedSteps,
+            });
+          }
 
           if (!decision.notify) {
             narrationState.skippedSteps += 1;

@@ -235,6 +235,67 @@ test("GatewayCore passes latest task journal snapshot into final narration input
   });
 });
 
+test("GatewayCore falls back to first progress narration when model skips step 1", async () => {
+  await withTempHome("gwcore-first-progress-fallback-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    let llmCalls = 0;
+    core.chat = {
+      async narrateTaskProgress() {
+        llmCalls += 1;
+        return { notify: false, message: "", reason: "model_skip" };
+      },
+      fallbackTaskProgressNarration(input) {
+        if (input.progress.step === 1) {
+          return {
+            notify: true,
+            message: "Task started (fallback).",
+            reason: "fallback_first_progress",
+          };
+        }
+        return { notify: false, message: "", reason: "fallback_skip" };
+      },
+      async narrateTaskOutcome() {
+        return "FINAL";
+      },
+      async narrateEscalation() {
+        return "ESCALATION";
+      },
+      appendExternalTurn() {},
+    };
+
+    core.agent.runTask = async (_task, _modelName, onProgress) => {
+      await onProgress({
+        step: 1,
+        maxSteps: 5,
+        currentApp: "com.google.android.apps.nexuslauncher",
+        actionType: "todo_write",
+        message: "todo_write ok todos=1",
+        thought: "set up todos",
+        screenshotPath: null,
+      });
+      return {
+        ok: true,
+        message: "ok",
+        sessionPath: "/tmp/session-first-progress.jsonl",
+        skillPath: null,
+        scriptPath: null,
+      };
+    };
+
+    await core.runTaskAndReport(
+      makeEnvelope({ text: "beautify latest photo" }),
+      "beautify latest photo",
+      "session-key-1",
+    );
+
+    assert.equal(llmCalls, 1);
+    assert.equal(adapter.sent.length, 2);
+    assert.equal(adapter.sent[0].text, "Task started (fallback).");
+    assert.equal(adapter.sent[1].text, "FINAL");
+  });
+});
+
 test("GatewayCore: /cronrun without args returns usage", async () => {
   await withTempHome("gwcore-cronrun-", async (home) => {
     const { adapter, core } = createGatewayCore(home);
