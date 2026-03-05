@@ -2995,11 +2995,33 @@ export class ChatAssistant {
       : "Started a fresh session. Tell me what you want to do now, or use /help for commands.";
   }
 
-  private fallbackTaskAcceptedReply(task: string, locale: OnboardingLocale): string {
-    const taskLine = this.trimForPrompt(String(task || "").replace(/\s+/g, " ").trim(), 160) || "task";
-    return locale === "zh"
-      ? `收到，开始处理这个任务：${taskLine}`
-      : `On it, I am starting this task: ${taskLine}`;
+  private stableHash(input: string): number {
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i += 1) {
+      hash ^= input.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  taskAcceptedFallbackReply(task: string, locale: OnboardingLocale): string {
+    const fallbackTask = locale === "zh" ? "当前任务" : "this task";
+    const taskLine = this.trimForPrompt(String(task || "").replace(/\s+/g, " ").trim(), 160) || fallbackTask;
+    const templates = locale === "zh"
+      ? [
+        `收到，我现在开始处理：${taskLine}`,
+        `任务已接收，马上执行：${taskLine}`,
+        `明白，我这就开始：${taskLine}`,
+        `好的，正在处理：${taskLine}`,
+      ]
+      : [
+        `Starting now: ${taskLine}.`,
+        `Task received. Beginning now: ${taskLine}.`,
+        `I am starting this now: ${taskLine}.`,
+        `Working on it now: ${taskLine}.`,
+      ];
+    const index = this.stableHash(`${locale}:${taskLine}`) % templates.length;
+    return templates[index];
   }
 
   async startReadyReply(locale: OnboardingLocale): Promise<string> {
@@ -3076,7 +3098,7 @@ export class ChatAssistant {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
-      return this.fallbackTaskAcceptedReply(task, locale);
+      return this.taskAcceptedFallbackReply(task, locale);
     }
 
     const client = new OpenAI({
@@ -3103,9 +3125,9 @@ export class ChatAssistant {
         "task accepted reply",
       );
       const normalized = this.normalizeOneLine(output);
-      return normalized || this.fallbackTaskAcceptedReply(task, locale);
+      return normalized || this.taskAcceptedFallbackReply(task, locale);
     } catch {
-      return this.fallbackTaskAcceptedReply(task, locale);
+      return this.taskAcceptedFallbackReply(task, locale);
     }
   }
 

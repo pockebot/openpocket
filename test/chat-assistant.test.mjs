@@ -609,6 +609,24 @@ test("ChatAssistant updates profile from regular rename message", async () => {
   assert.equal(payload?.locale, "zh");
 });
 
+test("ChatAssistant taskAcceptedReply fallback uses natural non-fixed wording in English", async () => {
+  const { assistant } = createAssistant();
+  const out = await assistant.taskAcceptedReply("Read the latest picture and beautify it", "en");
+
+  assert.match(
+    out,
+    /^(Starting now|Task received\. Beginning now|I am starting this now|Working on it now):/i,
+  );
+  assert.doesNotMatch(out, /^On it,\s*I am starting this task:/i);
+});
+
+test("ChatAssistant taskAcceptedReply fallback uses natural non-fixed wording in Chinese", async () => {
+  const { assistant } = createAssistant();
+  const out = await assistant.taskAcceptedReply("读取手机上最新的照片并进行美化编辑", "zh");
+
+  assert.match(out, /^(收到，我现在开始处理|任务已接收，马上执行|明白，我这就开始|好的，正在处理)：/);
+});
+
 test("ChatAssistant narrateTaskProgress uses model decision output", async () => {
   const { assistant } = createAssistant({ withApiKey: true });
   let capturedPrompt = "";
