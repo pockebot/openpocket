@@ -211,3 +211,20 @@ test("SkillLoader lists all discovered skills in summary regardless task text", 
   assert.equal(context.activeEntries.length > 0, true);
   assert.match(context.activePromptText, /X Twitter Login Recovery/);
 });
+
+test("SkillLoader activates bundled device-file-search for file handoff task", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-device-file-search-"));
+  process.env.OPENPOCKET_HOME = home;
+  const cfg = loadConfig();
+
+  const loader = new SkillLoader(cfg);
+  const context = loader.buildPromptContextForTask(
+    "Find the latest edited photo and send it to me in chat.",
+  );
+
+  assert.equal(
+    context.activeEntries.some((entry) => entry.skill.id === "device-file-search"),
+    true,
+  );
+  assert.match(context.activePromptText, /Device File Search/);
+});
