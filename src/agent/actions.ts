@@ -19,6 +19,7 @@ function toOptionalTrimmedString(value: unknown): string | undefined {
 
 const HUMAN_AUTH_CAPABILITIES = new Set([
   "camera",
+  "photos",
   "qr",
   "microphone",
   "voice",

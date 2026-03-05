@@ -313,7 +313,7 @@ function defaultPortalTemplate(capabilityRaw?: unknown): RelayPortalResolvedTemp
     return {
       ...base,
       title: capability === "camera" ? "Human Auth Required: Camera" : "Human Auth Required: Photos",
-      summary: "Attach photo data from your Human Phone to continue.",
+      summary: "Attach photo data from your Human Phone to continue. You can upload one photo or authorize album access.",
       requireArtifactOnApprove: true,
       allowTextAttachment: false,
       allowPhotoAttachment: true,
@@ -1089,6 +1089,53 @@ export class HumanAuthRelayServer {
       color: #374151;
       border-color: #d1d5db;
     }
+    .photoAuthModePanel {
+      margin-top: 10px;
+      border: 1px solid #d9dfe8;
+      border-radius: 12px;
+      background: #f8fafc;
+      padding: 10px;
+    }
+    .photoAuthModeTitle {
+      font-size: 12px;
+      color: #4b5563;
+      margin-bottom: 8px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .photoAuthModeOptions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .photoAuthModeOption {
+      border-radius: 12px;
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #1f2937;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.3;
+      text-align: left;
+      padding: 10px;
+    }
+    .photoAuthModeOption small {
+      display: block;
+      margin-top: 4px;
+      font-weight: 500;
+      color: #6b7280;
+    }
+    .photoAuthModeOption.active {
+      border-color: rgba(255, 138, 0, 0.65);
+      background: rgba(255, 138, 0, 0.12);
+      color: #1f2937;
+    }
+    .photoAuthModeHint {
+      margin-top: 8px;
+      color: #5f6368;
+      font-size: 12px;
+      line-height: 1.45;
+    }
     .status {
       margin-top: 10px;
       font-size: 14px;
@@ -1420,6 +1467,20 @@ export class HumanAuthRelayServer {
             <div class="cameraPlaceholder" id="cameraPlaceholder">
               Camera preview will appear here after permission is granted.
             </div>
+            <div class="photoAuthModePanel hidden" id="photoAuthModeSection">
+              <div class="photoAuthModeTitle">Photo Authorization Mode</div>
+              <div class="photoAuthModeOptions">
+                <button id="photoModeSingle" class="photoAuthModeOption" type="button">
+                  Upload One Photo
+                  <small>You pick one exact photo now.</small>
+                </button>
+                <button id="photoModeLibrary" class="photoAuthModeOption" type="button">
+                  Authorize Album Access
+                  <small>Pick multiple photos; agent can choose latest automatically.</small>
+                </button>
+              </div>
+              <div class="photoAuthModeHint" id="photoModeNote"></div>
+            </div>
             <div class="actions">
               <button id="snapCam" type="button">Take Photo & Continue</button>
               <button id="pickPhoto" type="button">Upload From Album</button>
@@ -1535,6 +1596,10 @@ export class HumanAuthRelayServer {
     const cameraDelegationEl = document.getElementById("cameraDelegation");
     const cameraPlaceholderEl = document.getElementById("cameraPlaceholder");
     const cameraHelpTextEl = document.getElementById("cameraHelpText");
+    const photoAuthModeSectionEl = document.getElementById("photoAuthModeSection");
+    const photoModeSingleBtn = document.getElementById("photoModeSingle");
+    const photoModeLibraryBtn = document.getElementById("photoModeLibrary");
+    const photoModeNoteEl = document.getElementById("photoModeNote");
     const startCamBtn = document.getElementById("startCam");
     const snapCamBtn = document.getElementById("snapCam");
     const pickPhotoBtn = document.getElementById("pickPhoto");
@@ -1568,6 +1633,9 @@ export class HumanAuthRelayServer {
     let takeoverRunning = false;
     let decisionInFlight = false;
     let cameraAutoBootstrapTriggered = false;
+    const PHOTO_AUTH_MODE_SINGLE = "single_upload";
+    const PHOTO_AUTH_MODE_LIBRARY = "album_grant";
+    let photoAuthMode = PHOTO_AUTH_MODE_SINGLE;
     const dynamicFieldRegistry = new Map();
     const takeoverControlIds = [
       "takeoverStop",
@@ -1624,6 +1692,77 @@ export class HumanAuthRelayServer {
     function isAlbumPrimaryFlow() {
       var cap = String(capability || "").trim().toLowerCase();
       return (cap === "files" || cap === "photos") && Boolean(uiTemplate.allowPhotoAttachment);
+    }
+
+    function supportsPhotoLibraryGrant() {
+      if (!uiTemplate.allowPhotoAttachment) {
+        return false;
+      }
+      var cap = String(capability || "").trim().toLowerCase();
+      return cap === "camera" || cap === "files" || cap === "photos";
+    }
+
+    function isPhotoLibraryMode() {
+      return photoAuthMode === PHOTO_AUTH_MODE_LIBRARY;
+    }
+
+    function syncPhotoModeButtonState() {
+      if (photoModeSingleBtn) {
+        photoModeSingleBtn.classList.toggle("active", !isPhotoLibraryMode());
+      }
+      if (photoModeLibraryBtn) {
+        photoModeLibraryBtn.classList.toggle("active", isPhotoLibraryMode());
+      }
+      if (photoModeNoteEl) {
+        photoModeNoteEl.textContent = isPhotoLibraryMode()
+          ? "Album mode: choose multiple photos once. Agent will prefer the latest photo automatically."
+          : "Single mode: choose one exact photo manually.";
+      }
+    }
+
+    function setPhotoAuthMode(nextMode) {
+      var normalized = String(nextMode || "").trim();
+      if (normalized !== PHOTO_AUTH_MODE_LIBRARY || !supportsPhotoLibraryGrant()) {
+        photoAuthMode = PHOTO_AUTH_MODE_SINGLE;
+      } else {
+        photoAuthMode = PHOTO_AUTH_MODE_LIBRARY;
+      }
+      var primaryFlow = isCameraPrimaryFlowEnabled();
+      if (photoInputEl) {
+        photoInputEl.multiple = isPhotoLibraryMode();
+      }
+      if (pickPhotoBtn) {
+        pickPhotoBtn.textContent = isPhotoLibraryMode()
+          ? "Authorize Album Access"
+          : (primaryFlow ? "Upload From Album" : "Capture / Upload Photo");
+        if (isPhotoLibraryMode() && !primaryFlow) {
+          pickPhotoBtn.style.background = "var(--op-brand)";
+          pickPhotoBtn.style.color = "#121212";
+          pickPhotoBtn.style.borderColor = "rgba(255, 138, 0, 0.6)";
+        } else {
+          pickPhotoBtn.style.background = "#f7f8fb";
+          pickPhotoBtn.style.color = "#2d3136";
+          pickPhotoBtn.style.borderColor = "#d9dfe8";
+        }
+      }
+      if (snapCamBtn) {
+        snapCamBtn.textContent = isPhotoLibraryMode()
+          ? "Capture Single Photo"
+          : (primaryFlow ? "Take Photo & Continue" : "Capture Snapshot");
+      }
+      if (cameraHelpTextEl) {
+        cameraHelpTextEl.textContent = isPhotoLibraryMode()
+          ? "Authorize album access by choosing multiple photos. Agent can auto-pick the latest photo."
+          : (primaryFlow
+            ? "After a photo is attached, approval will auto-submit and this page will close."
+            : "Use your Human Phone camera for this step. After photo attachment, authorization can continue.");
+      }
+      if (cameraPlaceholderEl && !primaryFlow) {
+        cameraPlaceholderEl.textContent = isPhotoLibraryMode()
+          ? "Authorize album access by choosing photos from your library."
+          : "Camera preview will appear here after permission is granted.";
+      }
+      syncPhotoModeButtonState();
     }
 
     function focusCameraPrimarySection() {
@@ -1913,31 +2052,25 @@ export class HumanAuthRelayServer {
         : "Not required for this authorization";
       audioInputEl.accept = uiTemplate.fileAccept || "audio/*";
       fileInputEl.accept = uiTemplate.fileAccept || "*/*";
-      photoInputEl.multiple = !useCameraPrimaryFlow;
+      show("photoAuthModeSection", Boolean(uiTemplate.allowPhotoAttachment && supportsPhotoLibraryGrant()));
       if (snapCamBtn && "disabled" in snapCamBtn) {
         snapCamBtn.disabled = true;
       }
 
-      if (isAlbumPrimaryFlow() && !useCameraPrimaryFlow) {
-        if (pickPhotoBtn) {
-          pickPhotoBtn.textContent = "Choose From Album";
-          pickPhotoBtn.style.background = "var(--op-brand)";
-          pickPhotoBtn.style.color = "#121212";
-          pickPhotoBtn.style.borderColor = "rgba(255, 138, 0, 0.6)";
-        }
-        if (snapCamBtn) {
-          snapCamBtn.textContent = "Use Camera Instead";
-          snapCamBtn.style.background = "#f7f8fb";
-          snapCamBtn.style.color = "#2d3136";
-        }
-        if (cameraHelpTextEl) {
-          cameraHelpTextEl.textContent =
-            "Select photos from your phone album. You can also use the camera if needed.";
-        }
-        if (cameraPlaceholderEl) {
-          cameraPlaceholderEl.textContent = "Choose photos from your album, or use camera above.";
-        }
+      if (pickPhotoBtn) {
+        pickPhotoBtn.style.background = "#f7f8fb";
+        pickPhotoBtn.style.color = "#2d3136";
+        pickPhotoBtn.style.borderColor = "#d9dfe8";
       }
+      if (snapCamBtn) {
+        snapCamBtn.style.background = "#f7f8fb";
+        snapCamBtn.style.color = "#2d3136";
+      }
+      const defaultPhotoMode =
+        isAlbumPrimaryFlow() && !useCameraPrimaryFlow
+          ? PHOTO_AUTH_MODE_LIBRARY
+          : PHOTO_AUTH_MODE_SINGLE;
+      setPhotoAuthMode(defaultPhotoMode);
 
       if (useCameraPrimaryFlow) {
         if (cameraPrimaryHintEl) {
@@ -1952,10 +2085,10 @@ export class HumanAuthRelayServer {
           startCamBtn.textContent = "Retry Camera";
         }
         if (snapCamBtn) {
-          snapCamBtn.textContent = "Take Photo & Continue";
+          snapCamBtn.textContent = isPhotoLibraryMode() ? "Capture Single Photo" : "Take Photo & Continue";
         }
         if (pickPhotoBtn) {
-          pickPhotoBtn.textContent = "Upload From Album";
+          pickPhotoBtn.textContent = isPhotoLibraryMode() ? "Authorize Album Access" : "Upload From Album";
         }
         if (!cameraAutoBootstrapTriggered) {
           cameraAutoBootstrapTriggered = true;
@@ -1966,18 +2099,29 @@ export class HumanAuthRelayServer {
       } else {
         if (cameraHelpTextEl) {
           cameraHelpTextEl.textContent =
-            "Use your Human Phone camera for this step. After photo attachment, authorization can continue.";
+            isPhotoLibraryMode()
+              ? "Authorize album access by choosing multiple photos. Agent can auto-pick the latest photo."
+              : "Use your Human Phone camera for this step. After photo attachment, authorization can continue.";
         }
         if (startCamBtn) {
           startCamBtn.textContent = "Enable Camera";
         }
         if (snapCamBtn) {
-          snapCamBtn.textContent = "Capture Snapshot";
+          snapCamBtn.textContent = isPhotoLibraryMode() ? "Capture Single Photo" : "Capture Snapshot";
         }
         if (pickPhotoBtn) {
-          pickPhotoBtn.textContent = "Capture / Upload Photo";
+          pickPhotoBtn.textContent = isPhotoLibraryMode() ? "Authorize Album Access" : "Capture / Upload Photo";
+          if (isPhotoLibraryMode()) {
+            pickPhotoBtn.style.background = "var(--op-brand)";
+            pickPhotoBtn.style.color = "#121212";
+            pickPhotoBtn.style.borderColor = "rgba(255, 138, 0, 0.6)";
+          }
         }
-        setCameraPlaceholder("Camera preview will appear here after permission is granted.");
+        setCameraPlaceholder(
+          isPhotoLibraryMode()
+            ? "Authorize album access by choosing photos from your library."
+            : "Camera preview will appear here after permission is granted.",
+        );
       }
 
       if ((uiTemplate.middleScript || "").trim()) {
@@ -2318,6 +2462,125 @@ export class HumanAuthRelayServer {
       });
     }
 
+    function base64SizeEstimate(base64) {
+      const cleaned = String(base64 || "").replace(/\s+/g, "");
+      if (!cleaned) {
+        return 0;
+      }
+      let padding = 0;
+      if (cleaned.endsWith("==")) {
+        padding = 2;
+      } else if (cleaned.endsWith("=")) {
+        padding = 1;
+      }
+      return Math.max(0, Math.floor((cleaned.length * 3) / 4) - padding);
+    }
+
+    function dataUrlSizeBytes(dataUrl) {
+      const base64 = String(dataUrl || "").split(",")[1] || "";
+      return base64SizeEstimate(base64);
+    }
+
+    function formatBytes(bytes) {
+      const value = Number(bytes);
+      if (!Number.isFinite(value) || value <= 0) {
+        return "0 KB";
+      }
+      if (value < 1024 * 1024) {
+        return (value / 1024).toFixed(0) + " KB";
+      }
+      return (value / (1024 * 1024)).toFixed(2) + " MB";
+    }
+
+    function loadImageElement(dataUrl) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("Failed to decode image."));
+        img.src = dataUrl;
+      });
+    }
+
+    async function optimizeImageDataUrl(file, sourceDataUrl) {
+      const sourceMime = String(file.type || "").toLowerCase();
+      const sourceBytes = dataUrlSizeBytes(sourceDataUrl);
+      const rawResult = {
+        dataUrl: sourceDataUrl,
+        mimeType: file.type || "application/octet-stream",
+        optimized: false,
+        sourceBytes,
+        outputBytes: sourceBytes,
+      };
+
+      if (!sourceMime.startsWith("image/")) {
+        return rawResult;
+      }
+
+      const MAX_IMAGE_DIMENSION = 1920;
+      const MAX_IMAGE_BYTES = 2_200_000;
+      const MIN_QUALITY = 0.58;
+      const STEP_QUALITY = 0.08;
+
+      let img;
+      try {
+        img = await loadImageElement(sourceDataUrl);
+      } catch {
+        return rawResult;
+      }
+
+      const srcW = Number(img.naturalWidth || img.width || 0);
+      const srcH = Number(img.naturalHeight || img.height || 0);
+      if (!srcW || !srcH) {
+        return rawResult;
+      }
+
+      const maxEdge = Math.max(srcW, srcH);
+      const scale = maxEdge > MAX_IMAGE_DIMENSION ? MAX_IMAGE_DIMENSION / maxEdge : 1;
+      const targetW = Math.max(1, Math.round(srcW * scale));
+      const targetH = Math.max(1, Math.round(srcH * scale));
+      const shouldReencode =
+        targetW !== srcW
+        || targetH !== srcH
+        || sourceBytes > MAX_IMAGE_BYTES
+        || sourceMime === "image/heic"
+        || sourceMime === "image/heif";
+      if (!shouldReencode) {
+        return rawResult;
+      }
+
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          return rawResult;
+        }
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+
+        let quality = 0.84;
+        let encoded = canvas.toDataURL("image/jpeg", quality);
+        let encodedBytes = dataUrlSizeBytes(encoded);
+        while (encodedBytes > MAX_IMAGE_BYTES && quality > MIN_QUALITY) {
+          quality = Math.max(MIN_QUALITY, quality - STEP_QUALITY);
+          encoded = canvas.toDataURL("image/jpeg", quality);
+          encodedBytes = dataUrlSizeBytes(encoded);
+          if (quality <= MIN_QUALITY) {
+            break;
+          }
+        }
+        return {
+          dataUrl: encoded,
+          mimeType: "image/jpeg",
+          optimized: true,
+          sourceBytes,
+          outputBytes: encodedBytes,
+        };
+      } catch {
+        return rawResult;
+      }
+    }
+
     function shouldAutoSubmitAfterPhotoAttachment() {
       return isCameraPrimaryFlowEnabled() && Boolean(uiTemplate.requireArtifactOnApprove);
     }
@@ -2384,7 +2647,27 @@ export class HumanAuthRelayServer {
       ctx.drawImage(videoEl, 0, 0);
       const dataUrl = canvasEl.toDataURL("image/jpeg", 0.88);
       const base64 = dataUrl.split(",")[1] || "";
-      artifact = { mimeType: "image/jpeg", base64 };
+      if (isPhotoLibraryMode()) {
+        setJsonArtifact({
+          kind: "photo_library_grant_v1",
+          mode: "album_grant",
+          count: 1,
+          latestIndex: 0,
+          latestName: "captured_" + Date.now() + ".jpg",
+          capability,
+          capturedAt: new Date().toISOString(),
+          photos: [
+            {
+              name: "captured_" + Date.now() + ".jpg",
+              mimeType: "image/jpeg",
+              base64,
+              lastModifiedMs: Date.now(),
+            },
+          ],
+        });
+      } else {
+        artifact = { mimeType: "image/jpeg", base64 };
+      }
       photoPreviewEl.src = dataUrl;
       photoPreviewEl.hidden = false;
       canvasEl.hidden = true;
@@ -2392,13 +2675,73 @@ export class HumanAuthRelayServer {
       setCameraPlaceholder("Captured preview ready.");
       setCameraCaptureReady(false);
       stopCameraStream();
-      setStatus("Snapshot captured and attached.", "success");
+      setStatus(
+        isPhotoLibraryMode()
+          ? "Album authorization artifact attached with captured photo."
+          : "Snapshot captured and attached.",
+        "success",
+      );
       queueAutoSubmitAfterPhoto();
     }
 
     async function pickPhoto() {
       photoInputEl.value = "";
+      photoInputEl.multiple = isPhotoLibraryMode();
       photoInputEl.click();
+    }
+
+    async function buildPhotoLibraryGrantPayload(fileList) {
+      if (!fileList || fileList.length === 0) {
+        throw new Error("No photos selected.");
+      }
+      const MAX_LIBRARY_PHOTOS = 20;
+      if (fileList.length > MAX_LIBRARY_PHOTOS) {
+        throw new Error("Too many photos selected. Please pick up to " + MAX_LIBRARY_PHOTOS + " photos.");
+      }
+      var photos = [];
+      var totalBytes = 0;
+      var latestIndex = 0;
+      var latestMs = -1;
+      for (var i = 0; i < fileList.length; i++) {
+        var current = fileList[i];
+        var sourceDu = await fileToDataUrl(current);
+        var optimized = await optimizeImageDataUrl(current, sourceDu);
+        var base64 = String(optimized.dataUrl || "").split(",")[1] || "";
+        var outputBytes = Number(optimized.outputBytes || base64SizeEstimate(base64));
+        totalBytes += outputBytes;
+        if (totalBytes > 16_000_000) {
+          throw new Error("Selected photos are too large for reliable relay upload. Please choose fewer photos.");
+        }
+        var modifiedMs = Number(current.lastModified || Date.now());
+        if (!Number.isFinite(modifiedMs)) {
+          modifiedMs = Date.now();
+        }
+        photos.push({
+          name: current.name || ("photo_" + i + ".jpg"),
+          mimeType: optimized.mimeType || current.type || "image/jpeg",
+          base64,
+          sizeBytes: outputBytes,
+          lastModifiedMs: modifiedMs,
+        });
+        if (modifiedMs >= latestMs) {
+          latestMs = modifiedMs;
+          latestIndex = i;
+        }
+      }
+      const latest = photos[latestIndex] || photos[0];
+      return {
+        payload: {
+          kind: "photo_library_grant_v1",
+          mode: "album_grant",
+          count: photos.length,
+          latestIndex,
+          latestName: latest ? String(latest.name || "") : "",
+          capability,
+          capturedAt: new Date().toISOString(),
+          photos,
+        },
+        totalBytes,
+      };
     }
 
     async function onPhotoChange() {
@@ -2407,10 +2750,40 @@ export class HumanAuthRelayServer {
         return;
       }
       try {
+        if (isPhotoLibraryMode()) {
+          const library = await buildPhotoLibraryGrantPayload(files);
+          setJsonArtifact(library.payload);
+          const latest = library.payload.photos[library.payload.latestIndex] || library.payload.photos[0] || null;
+          if (latest) {
+            photoPreviewEl.src = "data:" + (latest.mimeType || "image/jpeg") + ";base64," + String(latest.base64 || "");
+            photoPreviewEl.hidden = false;
+          } else {
+            photoPreviewEl.hidden = true;
+          }
+          canvasEl.hidden = true;
+          videoEl.hidden = true;
+          setCameraPlaceholder(library.payload.count + " photos authorized for album access.");
+          setCameraCaptureReady(false);
+          stopCameraStream();
+          setStatus(
+            "Album access authorized: " + library.payload.count + " photos synced (" + formatBytes(library.totalBytes) + ").",
+            "success",
+          );
+          queueAutoSubmitAfterPhoto();
+          return;
+        }
+
+        if (files.length > 1) {
+          setStatus("Single photo mode only allows one photo. Switch to Album Access mode for multi-photo authorization.", "error");
+          return;
+        }
+
         if (files.length === 1) {
-          const dataUrl = await fileToDataUrl(files[0]);
+          const sourceDataUrl = await fileToDataUrl(files[0]);
+          const optimized = await optimizeImageDataUrl(files[0], sourceDataUrl);
+          const dataUrl = optimized.dataUrl;
           const base64 = dataUrl.split(",")[1] || "";
-          const mimeType = files[0].type || "image/jpeg";
+          const mimeType = optimized.mimeType || files[0].type || "image/jpeg";
           artifact = { mimeType, base64 };
           canvasEl.hidden = true;
           videoEl.hidden = true;
@@ -2419,33 +2792,14 @@ export class HumanAuthRelayServer {
           setCameraPlaceholder("Selected photo ready.");
           setCameraCaptureReady(false);
           stopCameraStream();
-          setStatus("Photo attached.", "success");
-          queueAutoSubmitAfterPhoto();
-        } else {
-          var photoPayloads = [];
-          for (var i = 0; i < files.length; i++) {
-            var f = files[i];
-            var du = await fileToDataUrl(f);
-            photoPayloads.push({
-              name: f.name || ("photo_" + i + ".jpg"),
-              mimeType: f.type || "image/jpeg",
-              base64: du.split(",")[1] || "",
-            });
+          if (optimized.optimized) {
+            setStatus(
+              "Photo attached (compressed " + formatBytes(optimized.sourceBytes) + " -> " + formatBytes(optimized.outputBytes) + ").",
+              "success",
+            );
+          } else {
+            setStatus("Photo attached (" + formatBytes(optimized.outputBytes) + ").", "success");
           }
-          setJsonArtifact({
-            kind: "photos_multi",
-            count: photoPayloads.length,
-            photos: photoPayloads,
-            capability: capability,
-            capturedAt: new Date().toISOString(),
-          });
-          canvasEl.hidden = true;
-          videoEl.hidden = true;
-          photoPreviewEl.hidden = true;
-          setCameraPlaceholder(photoPayloads.length + " photos attached.");
-          setCameraCaptureReady(false);
-          stopCameraStream();
-          setStatus(photoPayloads.length + " photos attached.", "success");
           queueAutoSubmitAfterPhoto();
         }
       } catch (err) {
@@ -2597,7 +2951,9 @@ export class HumanAuthRelayServer {
         if (isCameraPrimaryFlowEnabled()) {
           focusCameraPrimarySection();
           setStatus(
-            "This request requires a photo from your Human Phone. Take a photo or upload from album to continue.",
+            isPhotoLibraryMode()
+              ? "This request requires album authorization. Choose photos from your Human Phone album to continue."
+              : "This request requires a photo from your Human Phone. Take a photo or upload from album to continue.",
             "info",
           );
           void startCamera();
@@ -2605,14 +2961,20 @@ export class HumanAuthRelayServer {
         }
         focusDelegatedDataSection();
         setStatus(
-          "This request requires a photo from your Human Phone. Opening camera now; if unavailable, use Capture / Upload Photo and then tap Approve and Continue again.",
+          isPhotoLibraryMode()
+            ? "This request requires album authorization. Choose multiple photos from your album, then tap Approve and Continue again."
+            : "This request requires a photo from your Human Phone. Opening camera now; if unavailable, use Capture / Upload Photo and then tap Approve and Continue again.",
           "info",
         );
-        void startCamera().then((opened) => {
-          if (!opened) {
-            void pickPhoto();
-          }
-        });
+        if (isPhotoLibraryMode()) {
+          void pickPhoto();
+        } else {
+          void startCamera().then((opened) => {
+            if (!opened) {
+              void pickPhoto();
+            }
+          });
+        }
         return true;
       }
       focusDelegatedDataSection();
@@ -2688,6 +3050,50 @@ export class HumanAuthRelayServer {
           }
         } catch {}
       }, 220);
+    }
+
+    function buildResolveEndpoint() {
+      return "/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve";
+    }
+
+    async function submitResolveWithRetry(payload) {
+      const bodyText = JSON.stringify(payload);
+      const payloadBytes = new Blob([bodyText]).size;
+      const timeoutMs = payloadBytes > 3_000_000 ? 90_000 : 45_000;
+      const endpoint = buildResolveEndpoint();
+      const maxAttempts = 2;
+      let lastError = null;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (attempt > 1) {
+          setStatus(
+            "Network seems slow. Retrying submission (" + attempt + "/" + maxAttempts + ")...",
+            "info",
+          );
+          await new Promise((resolve) => setTimeout(resolve, 900));
+        }
+        try {
+          return await withTimeout(
+            fetch(endpoint, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: bodyText,
+            }),
+            timeoutMs,
+            "Relay resolve request timed out. Please check network and retry.",
+          );
+        } catch (err) {
+          lastError = err;
+          postClientEvent("resolve_retry", {
+            attempt,
+            maxAttempts,
+            timeoutMs,
+            payloadBytes,
+            error: String(err && err.message ? err.message : err || "unknown"),
+          });
+        }
+      }
+      throw lastError || new Error("Relay resolve request failed.");
     }
 
     async function submitDecision(approved) {
@@ -2792,27 +3198,50 @@ export class HumanAuthRelayServer {
         } else {
           artifact = null;
         }
+
+        if (artifact) {
+          const artifactBytes = base64SizeEstimate(artifact.base64);
+          if (artifactBytes > 18_000_000) {
+            setStatus(
+              "Attached data is too large (" + formatBytes(artifactBytes) + "). Please choose a smaller photo/file.",
+              "error",
+            );
+            unlockDecisionControls();
+            return;
+          }
+        }
+
         const decisionNote = normalizedCapability === "payment" ? "" : noteValue;
+        const resolvePayload = {
+          token,
+          approved,
+          note: decisionNote,
+          artifact,
+        };
         postClientEvent("resolve_submit", {
           approved: Boolean(approved),
           hasArtifact: Boolean(artifact),
+          payloadBytes: new Blob([JSON.stringify(resolvePayload)]).size,
         });
-        const response = await withTimeout(
-          fetch("/v1/human-auth/requests/" + encodeURIComponent(requestId) + "/resolve", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              token,
-              approved,
-              note: decisionNote,
-              artifact
-            })
-          }),
-          20_000,
-          "Relay resolve request timed out. Please check network and retry.",
-        );
+        const response = await submitResolveWithRetry(resolvePayload);
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
+          const errorText = String(body.error || response.statusText || "").toLowerCase();
+          const alreadyApproved = response.status === 409 && errorText.includes("already approved");
+          const alreadyRejected = response.status === 409 && errorText.includes("already rejected");
+          if (alreadyApproved || alreadyRejected) {
+            postClientEvent("resolve_already_finalized", {
+              status: alreadyApproved ? "approved" : "rejected",
+            });
+            setStatus(alreadyApproved ? "Approved. Closing..." : "Rejected. Closing...", "success");
+            stopCameraStream();
+            stopTakeoverPolling();
+            takeoverRunning = false;
+            takeoverStreamEl.removeAttribute("src");
+            setTakeoverControlsEnabled(false);
+            setTimeout(autoCloseResolvedPage, 120);
+            return;
+          }
           postClientEvent("resolve_error", {
             status: Number(response.status || 0),
             error: String(body.error || response.statusText || "unknown"),
@@ -2841,6 +3270,18 @@ export class HumanAuthRelayServer {
     document.getElementById("startCam").addEventListener("click", startCamera);
     document.getElementById("snapCam").addEventListener("click", captureSnapshot);
     document.getElementById("pickPhoto").addEventListener("click", pickPhoto);
+    if (photoModeSingleBtn) {
+      photoModeSingleBtn.addEventListener("click", () => {
+        setPhotoAuthMode(PHOTO_AUTH_MODE_SINGLE);
+        setStatus("Switched to single photo mode.", "info");
+      });
+    }
+    if (photoModeLibraryBtn) {
+      photoModeLibraryBtn.addEventListener("click", () => {
+        setPhotoAuthMode(PHOTO_AUTH_MODE_LIBRARY);
+        setStatus("Switched to album access mode.", "info");
+      });
+    }
     document.getElementById("startRec").addEventListener("click", startRecording);
     document.getElementById("stopRec").addEventListener("click", stopRecording);
     document.getElementById("pickAudio").addEventListener("click", pickAudio);

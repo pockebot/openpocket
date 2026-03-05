@@ -25,7 +25,7 @@ import { getModelProfile, resolveModelAuth } from "../config/index.js";
 import { WorkspaceStore } from "../memory/workspace.js";
 import { ScreenshotStore } from "../memory/screenshot-store.js";
 import { sleep } from "../utils/time.js";
-import { nowIso } from "../utils/paths.js";
+import { ensureDir, nowIso } from "../utils/paths.js";
 import { AdbRuntime } from "../device/adb-runtime.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
 import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder.js";
@@ -1442,7 +1442,7 @@ export class AgentRuntime {
       case "location":
         return "location";
       case "photos":
-        return "files";
+        return "photos";
       case "payment":
         return "payment";
       default:
@@ -2113,6 +2113,118 @@ export class AgentRuntime {
     }
   }
 
+  private mimeTypeToExtension(mimeTypeRaw: unknown): string {
+    const mimeType = String(mimeTypeRaw ?? "").trim().toLowerCase();
+    if (!mimeType) {
+      return ".jpg";
+    }
+    if (mimeType.includes("png")) return ".png";
+    if (mimeType.includes("webp")) return ".webp";
+    if (mimeType.includes("heic")) return ".heic";
+    if (mimeType.includes("heif")) return ".heif";
+    if (mimeType.includes("gif")) return ".gif";
+    if (mimeType.includes("bmp")) return ".bmp";
+    if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return ".jpg";
+    return ".jpg";
+  }
+
+  private sanitizePhotoBaseName(nameRaw: unknown, fallback: string): string {
+    const name = String(nameRaw ?? "").trim();
+    const source = name || fallback;
+    const stripped = source.replace(/\.[a-z0-9]{1,5}$/i, "");
+    const safe = stripped.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
+    return safe || fallback;
+  }
+
+  private materializePhotoCollectionArtifact(
+    artifactPath: string,
+    artifactJson: Record<string, unknown>,
+  ): {
+    photoCount: number;
+    pushedCount: number;
+    latestLocalPath: string | null;
+    latestDevicePath: string | null;
+    bundleDir: string | null;
+    mode: string;
+  } {
+    const photosRaw = Array.isArray(artifactJson.photos) ? artifactJson.photos : [];
+    const mode = String(artifactJson.mode ?? "");
+    if (photosRaw.length === 0) {
+      return {
+        photoCount: 0,
+        pushedCount: 0,
+        latestLocalPath: null,
+        latestDevicePath: null,
+        bundleDir: null,
+        mode,
+      };
+    }
+
+    const maxPhotos = 20;
+    const targetPhotos = photosRaw.slice(0, maxPhotos);
+    const baseName = path.basename(artifactPath, path.extname(artifactPath));
+    const bundleDir = ensureDir(path.join(path.dirname(artifactPath), `${baseName}-photos`));
+
+    const hintedLatestIndex = Number(artifactJson.latestIndex ?? -1);
+    let latestIndex = Number.isInteger(hintedLatestIndex) ? hintedLatestIndex : -1;
+    if (latestIndex < 0 || latestIndex >= targetPhotos.length) {
+      latestIndex = 0;
+      let latestTs = -1;
+      for (let i = 0; i < targetPhotos.length; i += 1) {
+        const item = targetPhotos[i];
+        if (typeof item !== "object" || item === null || Array.isArray(item)) {
+          continue;
+        }
+        const lastModified = Number((item as Record<string, unknown>).lastModifiedMs ?? -1);
+        if (Number.isFinite(lastModified) && lastModified >= latestTs) {
+          latestTs = lastModified;
+          latestIndex = i;
+        }
+      }
+    }
+
+    let latestLocalPath: string | null = null;
+    let latestDevicePath: string | null = null;
+    let pushedCount = 0;
+
+    for (let i = 0; i < targetPhotos.length; i += 1) {
+      const item = targetPhotos[i];
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        continue;
+      }
+      const record = item as Record<string, unknown>;
+      const base64 = String(record.base64 ?? "").trim();
+      if (!base64) {
+        continue;
+      }
+      const ext = this.mimeTypeToExtension(record.mimeType);
+      const name = this.sanitizePhotoBaseName(record.name, `photo_${i + 1}`);
+      const localPath = path.join(bundleDir, `${String(i + 1).padStart(2, "0")}_${name}${ext}`);
+      try {
+        fs.writeFileSync(localPath, Buffer.from(base64, "base64"));
+      } catch {
+        continue;
+      }
+      const devicePath = this.pushArtifactToDevice(localPath);
+      if (devicePath) {
+        pushedCount += 1;
+      }
+      if (i === latestIndex) {
+        latestLocalPath = localPath;
+        latestDevicePath = devicePath;
+      }
+    }
+
+    return {
+      photoCount: photosRaw.length,
+      pushedCount,
+      latestLocalPath,
+      latestDevicePath,
+      bundleDir,
+      mode,
+    };
+  }
+
   private describeArtifact(artifactPath: string, capability: HumanAuthCapability): string {
     const ext = path.extname(artifactPath).toLowerCase();
     const stats = fs.statSync(artifactPath);
@@ -2143,9 +2255,26 @@ export class AgentRuntime {
         );
         lines.push(`payment_fields=[${fieldKeys.join(",")}]`);
         lines.push("SENSITIVE: delete artifact after use with exec(\"rm <path>\")");
-      } else if (kind === "photos_multi") {
-        const count = Array.isArray(artifactJson.photos) ? artifactJson.photos.length : 0;
-        lines.push(`photo_count=${count}`);
+      } else if (kind === "photos_multi" || kind === "photo_library_grant_v1") {
+        const photoBundle = this.materializePhotoCollectionArtifact(artifactPath, artifactJson);
+        lines.push(`photo_count=${photoBundle.photoCount}`);
+        if (kind === "photo_library_grant_v1") {
+          lines.push(`photo_library_mode=${photoBundle.mode || "album_grant"}`);
+          lines.push("photo_library_authorized=true");
+        }
+        if (photoBundle.bundleDir) {
+          lines.push(`photo_bundle_dir=${photoBundle.bundleDir}`);
+        }
+        lines.push(`photo_pushed_count=${photoBundle.pushedCount}`);
+        if (photoBundle.latestLocalPath) {
+          lines.push(`photo_latest_path=${photoBundle.latestLocalPath}`);
+        }
+        if (photoBundle.latestDevicePath) {
+          lines.push(`photo_latest_device_path=${photoBundle.latestDevicePath}`);
+          lines.push("Latest photo has been pushed to Agent Phone Downloads for immediate upload.");
+        } else {
+          lines.push("WARNING: failed to push latest photo to Agent Phone. Use adb push manually if needed.");
+        }
       } else if (kind === "form") {
         const fieldKeys = Object.keys(artifactJson.fields ?? artifactJson.form_data ?? {});
         lines.push(`form_fields=[${fieldKeys.join(",")}]`);

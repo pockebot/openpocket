@@ -238,7 +238,7 @@ export const requestHumanAuthSchema = Type.Object({
   thought: ThoughtParam,
   capability: Type.String({
     description:
-      "The capability that needs authorization: camera, qr, microphone, voice, nfc, sms, 2fa, location, biometric, notification, contacts, calendar, files, oauth, payment, permission, or unknown.",
+      "The capability that needs authorization: camera, photos, qr, microphone, voice, nfc, sms, 2fa, location, biometric, notification, contacts, calendar, files, oauth, payment, permission, or unknown.",
   }),
   instruction: Type.String({
     description: "Clear instruction for the human on what to do.",
