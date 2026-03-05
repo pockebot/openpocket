@@ -17,6 +17,22 @@ This skill follows CapCut official app capabilities (video editing, effects/tran
 - If sign-in is required for cloud/template assets, use `request_human_auth(oauth)`.
 - If gallery/media permission is requested, approve locally on Agent Phone.
 
+## Human Auth Photo Mapping (Critical)
+
+When photos come from Human Phone authorization, use this strict picker rule:
+
+1. Prefer `Downloads` first.
+2. If filename is visible, select `openpocket-human-auth-latest.*` first.
+3. If the picker is thumbnail-only, select the top-left tile first (most recently imported).
+4. Do not randomly scan old thumbnails before trying the latest slot above.
+
+Runtime summaries may include:
+- `photo_latest_device_path=...`
+- `photo_latest_alias_device_path=...`
+- `photo_latest_name=...`
+
+Use these hints to match the correct media item before editing.
+
 ## Core Modes
 
 Identify and choose the correct mode before editing:

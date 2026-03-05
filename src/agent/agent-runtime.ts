@@ -2091,12 +2091,17 @@ export class AgentRuntime {
     return fileExts.has(ext);
   }
 
-  private pushArtifactToDevice(artifactPath: string): string | null {
+  private pushArtifactToDevice(
+    artifactPath: string,
+    options?: {
+      remotePath?: string;
+    },
+  ): string | null {
     try {
       const deviceId = this.adb.resolveDeviceId(this.config.agent.deviceId);
       const ext = path.extname(artifactPath).toLowerCase() || ".bin";
-      const remoteName = `openpocket-human-auth-${Date.now()}${ext}`;
-      const remotePath = `/sdcard/Download/${remoteName}`;
+      const configuredRemotePath = String(options?.remotePath ?? "").trim();
+      const remotePath = configuredRemotePath || `/sdcard/Download/openpocket-human-auth-${Date.now()}${ext}`;
       this.emulator.runAdb(["-s", deviceId, "push", artifactPath, remotePath], 30_000);
       try {
         this.emulator.runAdb([
@@ -2144,6 +2149,7 @@ export class AgentRuntime {
     pushedCount: number;
     latestLocalPath: string | null;
     latestDevicePath: string | null;
+    latestAliasDevicePath: string | null;
     bundleDir: string | null;
     mode: string;
   } {
@@ -2155,6 +2161,7 @@ export class AgentRuntime {
         pushedCount: 0,
         latestLocalPath: null,
         latestDevicePath: null,
+        latestAliasDevicePath: null,
         bundleDir: null,
         mode,
       };
@@ -2183,8 +2190,14 @@ export class AgentRuntime {
       }
     }
 
+    const materialized: Array<{
+      index: number;
+      localPath: string;
+    }> = [];
+
     let latestLocalPath: string | null = null;
     let latestDevicePath: string | null = null;
+    let latestAliasDevicePath: string | null = null;
     let pushedCount = 0;
 
     for (let i = 0; i < targetPhotos.length; i += 1) {
@@ -2205,13 +2218,29 @@ export class AgentRuntime {
       } catch {
         continue;
       }
-      const devicePath = this.pushArtifactToDevice(localPath);
+      if (i === latestIndex) {
+        latestLocalPath = localPath;
+      }
+      materialized.push({ index: i, localPath });
+    }
+
+    const ordered = [
+      ...materialized.filter((item) => item.index !== latestIndex),
+      ...materialized.filter((item) => item.index === latestIndex),
+    ];
+
+    for (const item of ordered) {
+      const devicePath = this.pushArtifactToDevice(item.localPath);
       if (devicePath) {
         pushedCount += 1;
       }
-      if (i === latestIndex) {
-        latestLocalPath = localPath;
+      if (item.index === latestIndex) {
         latestDevicePath = devicePath;
+        const latestExt = path.extname(item.localPath).toLowerCase() || ".jpg";
+        latestAliasDevicePath = this.pushArtifactToDevice(
+          item.localPath,
+          { remotePath: `/sdcard/Download/openpocket-human-auth-latest${latestExt}` },
+        );
       }
     }
 
@@ -2220,6 +2249,7 @@ export class AgentRuntime {
       pushedCount,
       latestLocalPath,
       latestDevicePath,
+      latestAliasDevicePath,
       bundleDir,
       mode,
     };
@@ -2268,9 +2298,15 @@ export class AgentRuntime {
         lines.push(`photo_pushed_count=${photoBundle.pushedCount}`);
         if (photoBundle.latestLocalPath) {
           lines.push(`photo_latest_path=${photoBundle.latestLocalPath}`);
+          lines.push(`photo_latest_name=${path.basename(photoBundle.latestLocalPath)}`);
         }
         if (photoBundle.latestDevicePath) {
           lines.push(`photo_latest_device_path=${photoBundle.latestDevicePath}`);
+          if (photoBundle.latestAliasDevicePath) {
+            lines.push(`photo_latest_alias_device_path=${photoBundle.latestAliasDevicePath}`);
+            lines.push("If picker shows filenames, prefer openpocket-human-auth-latest.* first.");
+          }
+          lines.push("In thumbnail grid, prefer the top-left most recently imported photo.");
           lines.push("Latest photo has been pushed to Agent Phone Downloads for immediate upload.");
         } else {
           lines.push("WARNING: failed to push latest photo to Agent Phone. Use adb push manually if needed.");

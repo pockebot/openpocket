@@ -2095,6 +2095,106 @@ test("AgentRuntime describes image artifact and pushes to device (agentic delega
   }
 });
 
+test("AgentRuntime pushes delegated latest photo last and publishes stable latest alias", async () => {
+  const artifactFile = path.join(os.tmpdir(), `openpocket-artifact-photo-library-${Date.now()}.json`);
+  fs.writeFileSync(
+    artifactFile,
+    JSON.stringify({
+      kind: "photo_library_grant_v1",
+      mode: "album_grant",
+      latestIndex: 0,
+      photos: [
+        {
+          name: "latest-from-human.jpg",
+          mimeType: "image/jpeg",
+          base64: Buffer.from("photo-latest").toString("base64"),
+          lastModifiedMs: Date.now(),
+        },
+        {
+          name: "older-from-human.jpg",
+          mimeType: "image/jpeg",
+          base64: Buffer.from("photo-older").toString("base64"),
+          lastModifiedMs: Date.now() - 10_000,
+        },
+      ],
+    }),
+    "utf-8",
+  );
+
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "Need delegated album access",
+        action: {
+          type: "request_human_auth",
+          capability: "camera",
+          instruction: "Authorize album photos from Human Phone.",
+          timeoutSec: 120,
+        },
+      },
+      { thought: "Continue with selected latest photo", action: { type: "finish", message: "Completed with delegated latest photo" } },
+    ],
+  });
+
+  const pushCommands = [];
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    resolveDeviceId: () => "emulator-5554",
+    executeAction: async () => "ok",
+  };
+  runtime.emulator = {
+    runAdb: (args) => {
+      pushCommands.push(args);
+      return "ok";
+    },
+  };
+
+  try {
+    const result = await runtime.runTask(
+      "delegated photo library ordering test",
+      undefined,
+      undefined,
+      async () => ({
+        requestId: "req-photo-library",
+        approved: true,
+        status: "approved",
+        message: "Album access granted",
+        decidedAt: new Date().toISOString(),
+        artifactPath: artifactFile,
+      }),
+    );
+    assert.equal(result.ok, true);
+
+    const adbPushes = pushCommands.filter(
+      (args) => Array.isArray(args) && args[0] === "-s" && args[2] === "push",
+    );
+    assert.equal(adbPushes.length >= 3, true);
+
+    const pushSources = adbPushes.map((args) => String(args[3] || ""));
+    assert.equal(
+      pushSources.some((source) => source.includes("02_older-from-human.jpg")),
+      true,
+    );
+    assert.equal(
+      pushSources.some((source) => source.includes("01_latest-from-human.jpg")),
+      true,
+    );
+
+    const lastPush = adbPushes[adbPushes.length - 1];
+    assert.match(String(lastPush[4] || ""), /\/sdcard\/Download\/openpocket-human-auth-latest\.jpg$/);
+    assert.match(String(lastPush[3] || ""), /01_latest-from-human\.jpg$/);
+
+    const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+    assert.match(sessionText, /photo_latest_device_path=.*\/sdcard\/Download\/openpocket-human-auth-/);
+    assert.match(sessionText, /photo_latest_alias_device_path=.*\/sdcard\/Download\/openpocket-human-auth-latest\.jpg/);
+    assert.match(sessionText, /top-left most recently imported photo/i);
+  } finally {
+    fs.rmSync(artifactFile, { force: true });
+  }
+});
+
 test("AgentRuntime routes Codex CLI auth through openai-codex responses", async () => {
   await withTempCodexHome("openpocket-runtime-codex-", async (codexHome) => {
     fs.writeFileSync(
