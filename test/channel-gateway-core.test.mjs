@@ -448,6 +448,44 @@ test("GatewayCore enqueueTask sends model-driven start ack when idle", async () 
   });
 });
 
+test("GatewayCore handlePlainMessage reuses task ack from routing decision without extra ack inference", async () => {
+  await withTempHome("gwcore-task-ack-from-decision-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+    let taskAcceptedReplyCalls = 0;
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "open camera",
+      reply: "",
+      taskAcceptedReply: "Starting now: open camera.",
+      confidence: 0.99,
+      reason: "model_task",
+    });
+    core.chat.taskAcceptedReply = async () => {
+      taskAcceptedReplyCalls += 1;
+      return "should-not-be-used";
+    };
+    core.runTaskAndReport = async () => ({
+      accepted: true,
+      ok: true,
+      message: "ok",
+      task: "noop",
+      durationMs: 0,
+      sessionPath: null,
+      skillPath: null,
+      scriptPath: null,
+      modelName: "test-model",
+    });
+
+    await core.handleInbound(makeEnvelope({ text: "open camera" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.equal(adapter.sent[0].text, "Starting now: open camera.");
+    assert.equal(taskAcceptedReplyCalls, 0);
+  });
+});
+
 test("GatewayCore enqueueTask keeps queued ack when another task is running", async () => {
   await withTempHome("gwcore-queue-ack-", async (home) => {
     const { adapter, core } = createGatewayCore(home);

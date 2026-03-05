@@ -556,7 +556,9 @@ export class GatewayCore {
     if (decision.mode === "task") {
       const task = decision.task || text;
       this.chat.appendExternalTurn(chatId, "user", task);
-      await this.enqueueTask(envelope, task);
+      await this.enqueueTask(envelope, task, {
+        acceptedAck: decision.taskAcceptedReply || "",
+      });
       return;
     }
 
@@ -571,20 +573,27 @@ export class GatewayCore {
   private async enqueueTask(
     envelope: InboundEnvelope,
     task: string,
-    options?: { sessionKey?: string; onDone?: (result: CronRunResult) => void | Promise<void>; skipAck?: boolean },
+    options?: {
+      sessionKey?: string;
+      onDone?: (result: CronRunResult) => void | Promise<void>;
+      skipAck?: boolean;
+      acceptedAck?: string;
+    },
   ): Promise<void> {
     const locale = this.inferTaskLocale(task);
     const isIdle = !this.drainingTaskQueue && !this.agent.isBusy() && this.pendingTasks.length === 0;
     const position = this.pendingTasks.length + 1;
 
     if (!options?.skipAck) {
+      const providedAck = String(options?.acceptedAck ?? "").trim();
       const ack = isIdle
-        ? await this.resolveTaskAcceptedAck(task, locale)
+        ? (providedAck || await this.resolveTaskAcceptedAck(task, locale))
         : (locale === "zh"
           ? `当前有任务在执行。你的新任务已加入队列（第 ${position} 位）。`
           : `A previous task is still running. Your new task is queued (position ${position}).`);
-      await this.router.replyText(envelope, ack);
-      this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", ack);
+      const sanitizedAck = this.sanitizeForChat(ack, 1800);
+      await this.router.replyText(envelope, sanitizedAck);
+      this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", sanitizedAck);
     }
 
     this.pendingTasks.push({

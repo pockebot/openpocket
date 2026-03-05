@@ -267,6 +267,7 @@ export interface ChatDecision {
   mode: "task" | "chat";
   task: string;
   reply: string;
+  taskAcceptedReply?: string;
   confidence: number;
   reason: string;
   requiresExternalObservation?: boolean;
@@ -2353,7 +2354,7 @@ export class ChatAssistant {
     const prompt = [
       "Classify the user message for phone assistant routing.",
       "Output strict JSON only:",
-      '{"mode":"task|chat","task":"<task or empty>","reply":"<chat reply or empty>","confidence":0-1,"reason":"...","requiresExternalObservation":true|false,"canAnswerDirectly":true|false}',
+      '{"mode":"task|chat","task":"<task or empty>","reply":"<chat reply or empty>","taskAcceptedReply":"<one-line start ack for task mode, else empty>","confidence":0-1,"reason":"...","requiresExternalObservation":true|false,"canAnswerDirectly":true|false}',
       "Rules:",
       "1) mode=task when user wants the assistant to operate phone/apps.",
       "1.1) Treat operation as happening on phone by default.",
@@ -2367,6 +2368,8 @@ export class ChatAssistant {
       "6) task should be executable imperative sentence.",
       "7) for chat mode, reply should be concise.",
       "8) If requiresExternalObservation=true, prefer mode=task.",
+      "9) If mode=task, taskAcceptedReply must be one short natural sentence that confirms execution starts now.",
+      "10) If mode=chat, taskAcceptedReply must be empty.",
       `User message: ${inputText}`,
     ].join("\n");
 
@@ -2388,6 +2391,9 @@ export class ChatAssistant {
         mode,
         task: typeof parsed.task === "string" ? parsed.task.trim() : "",
         reply: typeof parsed.reply === "string" ? parsed.reply.trim() : "",
+        taskAcceptedReply: typeof parsed.taskAcceptedReply === "string"
+          ? this.normalizeOneLine(parsed.taskAcceptedReply)
+          : "",
         confidence:
           typeof parsed.confidence === "number" && parsed.confidence >= 0 && parsed.confidence <= 1
             ? parsed.confidence
@@ -3005,22 +3011,16 @@ export class ChatAssistant {
   }
 
   taskAcceptedFallbackReply(task: string, locale: OnboardingLocale): string {
-    const fallbackTask = locale === "zh" ? "当前任务" : "this task";
+    void locale;
+    const fallbackTask = "this task";
     const taskLine = this.trimForPrompt(String(task || "").replace(/\s+/g, " ").trim(), 160) || fallbackTask;
-    const templates = locale === "zh"
-      ? [
-        `收到，我现在开始处理：${taskLine}`,
-        `任务已接收，马上执行：${taskLine}`,
-        `明白，我这就开始：${taskLine}`,
-        `好的，正在处理：${taskLine}`,
-      ]
-      : [
-        `Starting now: ${taskLine}.`,
-        `Task received. Beginning now: ${taskLine}.`,
-        `I am starting this now: ${taskLine}.`,
-        `Working on it now: ${taskLine}.`,
-      ];
-    const index = this.stableHash(`${locale}:${taskLine}`) % templates.length;
+    const templates = [
+      `Starting now: ${taskLine}.`,
+      `Task received. Beginning now: ${taskLine}.`,
+      `I am starting this now: ${taskLine}.`,
+      `Working on it now: ${taskLine}.`,
+    ];
+    const index = this.stableHash(taskLine) % templates.length;
     return templates[index];
   }
 
