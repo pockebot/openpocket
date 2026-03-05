@@ -62,6 +62,9 @@ test("HumanAuthRelayServer create, resolve, and poll lifecycle", async () => {
     assert.match(portalHtml, /Take Photo & Continue/);
     assert.match(portalHtml, /Upload From Album/);
     assert.match(portalHtml, /Requesting camera access on your Human Phone/);
+    assert.match(portalHtml, /"allowPhotoAttachment":true/);
+    assert.match(portalHtml, /"allowTextAttachment":false/);
+    assert.match(portalHtml, /"requireArtifactOnApprove":true/);
 
     const pollPending = await fetch(
       `${base}/v1/human-auth/requests/req-test-1?pollToken=${encodeURIComponent(created.pollToken)}`,

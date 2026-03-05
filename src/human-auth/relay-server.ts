@@ -273,8 +273,14 @@ function sanitizeUiField(input: unknown, index: number): HumanAuthUiField | null
   };
 }
 
-function defaultPortalTemplate(): RelayPortalResolvedTemplate {
-  return {
+function normalizeCapabilityToken(capabilityRaw: unknown): string {
+  return String(capabilityRaw ?? "").trim().toLowerCase();
+}
+
+function defaultPortalTemplate(capabilityRaw?: unknown): RelayPortalResolvedTemplate {
+  const capability = normalizeCapabilityToken(capabilityRaw);
+
+  const base: RelayPortalResolvedTemplate = {
     templateId: "human-auth-generic",
     title: "Authorization Required",
     summary: "Review the request and approve or reject.",
@@ -302,12 +308,81 @@ function defaultPortalTemplate(): RelayPortalResolvedTemplate {
       fontFamily: DEFAULT_PORTAL_FONT_FAMILY,
     },
   };
+
+  if (capability === "camera" || capability === "photos") {
+    return {
+      ...base,
+      title: capability === "camera" ? "Human Auth Required: Camera" : "Human Auth Required: Photos",
+      summary: "Attach photo data from your Human Phone to continue.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      allowPhotoAttachment: true,
+      allowFileAttachment: true,
+      fileAccept: "image/*",
+      approveLabel: "Approve and Continue",
+    };
+  }
+
+  if (capability === "microphone" || capability === "voice") {
+    return {
+      ...base,
+      title: "Human Auth Required: Microphone",
+      summary: "Attach audio data from your Human Phone to continue.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      allowAudioAttachment: true,
+      allowFileAttachment: true,
+      fileAccept: "audio/*",
+      approveLabel: "Approve and Continue",
+    };
+  }
+
+  if (capability === "location") {
+    return {
+      ...base,
+      title: "Human Auth Required: Location",
+      summary: "Attach your location from Human Phone to continue.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      allowLocationAttachment: true,
+      approveLabel: "Approve and Continue",
+    };
+  }
+
+  if (capability === "payment") {
+    return {
+      ...base,
+      title: "Human Auth Required: Payment",
+      summary: "Attach secure payment fields from Human Phone to continue.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: false,
+      approveLabel: "Approve and Continue",
+      notePlaceholder: "Optional context (never paste card data here)",
+    };
+  }
+
+  if (capability === "2fa" || capability === "sms" || capability === "qr") {
+    return {
+      ...base,
+      title: capability === "qr" ? "Human Auth Required: QR Result" : "Human Auth Required: Verification Code",
+      summary: "Attach the required code from your Human Phone to continue.",
+      requireArtifactOnApprove: true,
+      allowTextAttachment: true,
+      allowPhotoAttachment: capability === "qr",
+      allowFileAttachment: capability === "qr",
+      fileAccept: capability === "qr" ? "image/*" : base.fileAccept,
+      approveLabel: "Approve and Continue",
+    };
+  }
+
+  return base;
 }
 
 function mergeTemplateOverride(
   overrideRaw: unknown,
+  capabilityRaw?: unknown,
 ): RelayPortalResolvedTemplate {
-  const base = defaultPortalTemplate();
+  const base = defaultPortalTemplate(capabilityRaw);
   if (!isObject(overrideRaw)) {
     return base;
   }
@@ -468,7 +543,7 @@ export class HumanAuthRelayServer {
   }
 
   private resolvePortalTemplate(record: Pick<RelayRecord, "capability" | "uiTemplate">): RelayPortalResolvedTemplate {
-    return mergeTemplateOverride(record.uiTemplate);
+    return mergeTemplateOverride(record.uiTemplate, record.capability);
   }
 
   private describePortalTemplateSource(
