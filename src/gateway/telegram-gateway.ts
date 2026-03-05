@@ -18,6 +18,7 @@ import { extractPackageName } from "../device/adb-runtime.js";
 import { deviceTargetLabel, isEmulatorTarget } from "../device/target-types.js";
 import { HumanAuthBridge } from "../human-auth/bridge.js";
 import { LocalHumanAuthStack } from "../human-auth/local-stack.js";
+import { readLatestTaskJournalSnapshot } from "../agent/journal/task-journal-store.js";
 import { ChatAssistant } from "./chat-assistant.js";
 import { CronService, type CronRunResult } from "./cron-service.js";
 import { HeartbeatRunner } from "./heartbeat-runner.js";
@@ -2677,12 +2678,14 @@ export class TelegramGateway {
           );
 
           if (chatId !== null) {
+            const evidenceSnapshot = readLatestTaskJournalSnapshot(result.sessionPath);
             const finalMessage = await this.chat.narrateTaskOutcome({
               task,
               locale: progressLocale,
               ok: result.ok,
               rawResult: result.message,
               recentProgress: progressNarrationState.allProgress,
+              evidenceSnapshot,
               skillPath: result.skillPath ?? null,
               scriptPath: result.scriptPath ?? null,
             });

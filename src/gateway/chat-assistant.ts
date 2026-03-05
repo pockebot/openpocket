@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { AgentProgressUpdate, GatewayLogLevel, OpenPocketConfig } from "../types.js";
+import type { TaskJournalSnapshot } from "../agent/journal/task-journal-store.js";
 import { CODEX_CLI_BASE_URL } from "../config/codex-cli.js";
 import { getModelProfile, resolveModelAuth } from "../config/index.js";
 import {
@@ -59,6 +60,7 @@ interface TaskOutcomeNarrationInput {
   ok: boolean;
   rawResult: string;
   recentProgress: AgentProgressUpdate[];
+  evidenceSnapshot: TaskJournalSnapshot | null;
   skillPath: string | null;
   scriptPath: string | null;
 }
@@ -1439,6 +1441,47 @@ export class ChatAssistant {
     };
   }
 
+  private compactEvidenceSnapshotForPrompt(snapshot: TaskJournalSnapshot | null): Record<string, unknown> | null {
+    if (!snapshot) {
+      return null;
+    }
+
+    const compactTodo = (item: TaskJournalSnapshot["todos"][number]) => ({
+      id: this.trimForPrompt(item.id, 64),
+      text: this.trimForPrompt(item.text, 180),
+      status: item.status,
+      tags: item.tags?.slice(0, 6) ?? undefined,
+    });
+
+    const compactEvidence = (item: TaskJournalSnapshot["evidence"][number]) => ({
+      id: this.trimForPrompt(item.id, 64),
+      kind: this.trimForPrompt(item.kind, 64),
+      title: this.trimForPrompt(item.title, 220),
+      fields: item.fields ?? undefined,
+      source: item.source ?? undefined,
+      confidence: item.confidence ?? undefined,
+    });
+
+    const compactArtifact = (item: TaskJournalSnapshot["artifacts"][number]) => ({
+      id: this.trimForPrompt(item.id, 64),
+      kind: this.trimForPrompt(item.kind, 64),
+      value: this.trimForPrompt(item.value, 220),
+      description: item.description ? this.trimForPrompt(item.description, 220) : undefined,
+    });
+
+    return {
+      version: snapshot.version,
+      task: this.trimForPrompt(snapshot.task, 240),
+      runId: this.trimForPrompt(snapshot.runId, 64),
+      updatedAt: this.trimForPrompt(snapshot.updatedAt, 48),
+      todos: snapshot.todos.slice(-10).map(compactTodo),
+      evidence: snapshot.evidence.slice(-20).map(compactEvidence),
+      artifacts: snapshot.artifacts.slice(-10).map(compactArtifact),
+      progress: snapshot.progress,
+      completion: snapshot.completion,
+    };
+  }
+
   private readTaskProgressReporterGuide(): string {
     const guide = this.readTextSafe(this.workspaceFilePath(TASK_PROGRESS_REPORTER_TEMPLATE_FILE)).trim();
     if (guide) {
@@ -1520,6 +1563,7 @@ export class ChatAssistant {
       localeHint: input.locale,
       ok: input.ok,
       rawResult: this.trimForPrompt(input.rawResult, 1200),
+      evidenceSnapshot: this.compactEvidenceSnapshotForPrompt(input.evidenceSnapshot),
       recentProgress: input.recentProgress.slice(-6).map((item) => this.compactProgressForPrompt(item)),
       artifacts: {
         skillGenerated: Boolean(input.skillPath),
@@ -1537,16 +1581,17 @@ export class ChatAssistant {
       '{"message":"..."}',
       "Rules:",
       "1) Lead with concrete findings/result details, not status boilerplate.",
-      "2) If success and rawResult has data (numbers/facts), surface those first.",
-      "3) Do not start with 'Task completed' unless no better data exists.",
-      "4) If failure, explain key reason and one practical next move.",
-      "5) If reusable artifacts were generated, mention reuse in one short natural sentence.",
-      "6) Use locale hint language.",
-      "7) Keep concise and natural; do not expose internal logs.",
-      "8) Preserve line breaks. Use short bullets when listing multiple stores/options.",
-      "9) For shopping/comparison tasks, list one seller per line in this shape:",
+      "2) Prefer evidenceSnapshot for concrete listings/prices/options when present. Use recentProgress only as backup context.",
+      "3) If success and rawResult has data (numbers/facts), surface those first.",
+      "4) Do not start with 'Task completed' unless no better data exists.",
+      "5) If failure, explain key reason and one practical next move.",
+      "6) If reusable artifacts were generated, mention reuse in one short natural sentence.",
+      "7) Use locale hint language.",
+      "8) Keep concise and natural; do not expose internal logs.",
+      "9) Preserve line breaks. Use short bullets when listing multiple stores/options.",
+      "10) For shopping/comparison tasks, list one seller per line in this shape:",
       '   "- Seller — price — stock — link"',
-      "10) If you do not have a reliable direct link, explicitly say 'link unavailable'. Never invent links.",
+      "11) If you do not have a reliable direct link, explicitly say 'link unavailable'. Never invent links.",
       "",
       "TASK_OUTCOME_REPORTER.md:",
       this.readTaskOutcomeReporterGuide(),

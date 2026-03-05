@@ -271,6 +271,62 @@ export const requestUserInputSchema = Type.Object({
   reason: ReasonParam,
 });
 
+export const todoWriteSchema = Type.Object({
+  thought: ThoughtParam,
+  op: Type.Union([
+    Type.Literal("add"),
+    Type.Literal("update"),
+    Type.Literal("complete"),
+    Type.Literal("delete"),
+  ], { description: "Todo mutation type." }),
+  id: Type.Optional(Type.String({ description: "Stable todo id (required for update/complete/delete)." })),
+  text: Type.Optional(Type.String({ description: "Todo text (required for add/update)." })),
+  status: Type.Optional(Type.Union([
+    Type.Literal("pending"),
+    Type.Literal("in_progress"),
+    Type.Literal("done"),
+  ], { description: "Todo status override." })),
+  tags: Type.Optional(Type.Array(Type.String(), { description: "Optional tags to help grouping/filtering." })),
+  reason: ReasonParam,
+});
+
+export const evidenceAddSchema = Type.Object({
+  thought: ThoughtParam,
+  kind: Type.String({ description: "Evidence type (offer, price, url, confirmation, etc.)." }),
+  title: Type.String({ description: "Short evidence label shown in final report." }),
+  fields: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Structured fields for the evidence." })),
+  source: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Optional provenance fields (step/tool/url)." })),
+  confidence: Type.Optional(Type.Number({ description: "Confidence 0-1 (optional)." })),
+  reason: ReasonParam,
+});
+
+export const artifactAddSchema = Type.Object({
+  thought: ThoughtParam,
+  kind: Type.String({ description: "Artifact kind (file, link, other)." }),
+  value: Type.String({ description: "Path or URL." }),
+  description: Type.Optional(Type.String({ description: "Short description." })),
+  reason: ReasonParam,
+});
+
+export const journalReadSchema = Type.Object({
+  thought: ThoughtParam,
+  scope: Type.Union([
+    Type.Literal("todos"),
+    Type.Literal("evidence"),
+    Type.Literal("artifacts"),
+    Type.Literal("all"),
+  ], { description: "Which journal data to return." }),
+  limit: Type.Optional(Type.Number({ description: "Max items to return (default 20)." })),
+  reason: ReasonParam,
+});
+
+export const journalCheckpointSchema = Type.Object({
+  thought: ThoughtParam,
+  name: Type.String({ description: "Checkpoint name (snake_case preferred)." }),
+  notes: Type.Optional(Type.String({ description: "Optional short note." })),
+  reason: ReasonParam,
+});
+
 export const waitSchema = Type.Object({
   thought: ThoughtParam,
   durationMs: Type.Optional(Type.Number({ description: "Duration to wait in milliseconds (default 1000)." })),
@@ -308,6 +364,11 @@ export type MemoryGetParams = Static<typeof memoryGetSchema>;
 export type RequestHumanAuthParams = Static<typeof requestHumanAuthSchema>;
 export type RequestUserDecisionParams = Static<typeof requestUserDecisionSchema>;
 export type RequestUserInputParams = Static<typeof requestUserInputSchema>;
+export type TodoWriteParams = Static<typeof todoWriteSchema>;
+export type EvidenceAddParams = Static<typeof evidenceAddSchema>;
+export type ArtifactAddParams = Static<typeof artifactAddSchema>;
+export type JournalReadParams = Static<typeof journalReadSchema>;
+export type JournalCheckpointParams = Static<typeof journalCheckpointSchema>;
 export type WaitParams = Static<typeof waitSchema>;
 export type FinishParams = Static<typeof finishSchema>;
 
@@ -344,6 +405,11 @@ export const TOOL_METAS: ToolMeta[] = [
   { name: "request_human_auth", description: "Request human authorization for actions requiring real-device capabilities (camera, SMS/2FA, biometric, payment, OAuth, etc.).", parameters: requestHumanAuthSchema },
   { name: "request_user_decision", description: "Ask user to choose one option during task execution (mixed-initiative flow).", parameters: requestUserDecisionSchema },
   { name: "request_user_input", description: "Ask user for a short non-sensitive text input needed to continue the task.", parameters: requestUserInputSchema },
+  { name: "todo_write", description: "Update the task todo list (used for progress tracking and final reporting).", parameters: todoWriteSchema },
+  { name: "evidence_add", description: "Record a high-signal finding as evidence for the final report.", parameters: evidenceAddSchema },
+  { name: "artifact_add", description: "Record a reusable artifact (file/link) produced during the task.", parameters: artifactAddSchema },
+  { name: "journal_read", description: "Read the current task journal snapshot (todos/evidence/artifacts).", parameters: journalReadSchema },
+  { name: "journal_checkpoint", description: "Mark a checkpoint/milestone in the task journal.", parameters: journalCheckpointSchema },
   { name: "wait", description: "Wait / do nothing for a short period, e.g. while content is loading.", parameters: waitSchema },
   { name: "finish", description: "Signal that the user task is complete.", parameters: finishSchema },
 ];

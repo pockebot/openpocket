@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 
+import { TASK_JOURNAL_SNAPSHOT_CUSTOM_TYPE } from "./journal/task-journal-store.js";
 import type {
   SessionBackend,
   SessionCreatePayload,
@@ -67,13 +68,11 @@ function appendCustomLogMessage(params: {
   timestamp: number;
   details?: Record<string, unknown>;
 }): void {
-  params.manager.appendMessage({
-    role: "custom",
-    customType: params.customType,
-    content: [{ type: "text", text: params.content }],
-    display: false,
-    details: params.details,
+  // Custom entries never participate in LLM context (unlike role:"custom" messages).
+  params.manager.appendCustomEntry(params.customType, {
+    content: params.content,
     timestamp: params.timestamp,
+    details: params.details ?? null,
   });
 }
 
@@ -120,6 +119,18 @@ export class SessionPiTreeJsonlBackend implements SessionBackend {
         modelProfile: payload.modelProfile,
         modelName: payload.modelName,
       },
+    });
+
+    manager.appendCustomEntry(TASK_JOURNAL_SNAPSHOT_CUSTOM_TYPE, {
+      version: 1,
+      task: payload.task,
+      runId: `run-${payload.sessionId}-${startedAtMs}`,
+      updatedAt: payload.startedAt,
+      todos: [],
+      evidence: [],
+      artifacts: [],
+      progress: { milestones: ["task_start"], blockers: [] },
+      completion: { status: "in_progress" },
     });
 
     // SessionManager only flushes once an assistant message exists in the file.

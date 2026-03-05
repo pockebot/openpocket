@@ -9,6 +9,8 @@ const { GatewayCore } = await import("../dist/gateway/gateway-core.js");
 const { DefaultChannelRouter } = await import("../dist/channel/router.js");
 const { DefaultSessionKeyResolver } = await import("../dist/channel/session-keys.js");
 const { FilePairingStore } = await import("../dist/channel/pairing.js");
+const { SessionPiTreeJsonlBackend } = await import("../dist/agent/session-pi-tree-jsonl-backend.js");
+const { appendTaskJournalSnapshot } = await import("../dist/agent/journal/task-journal-store.js");
 
 function withTempHome(prefix, fn) {
   const prevHome = process.env.OPENPOCKET_HOME;
@@ -177,6 +179,59 @@ test("GatewayCore: /run without args returns usage", async () => {
 
     assert.equal(adapter.sent.length, 1);
     assert.ok(adapter.sent[0].text.includes("Usage:"));
+  });
+});
+
+test("GatewayCore passes latest task journal snapshot into final narration input", async () => {
+  await withTempHome("gwcore-journal-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    const sessionPath = path.join(config.workspaceDir, "sessions", "session-test.jsonl");
+    const backend = new SessionPiTreeJsonlBackend();
+    const now = new Date().toISOString();
+    backend.create({
+      sessionId: "s1",
+      sessionPath,
+      sessionKey: "k1",
+      task: "latte task",
+      modelProfile: "profile",
+      modelName: "model",
+      startedAt: now,
+    });
+    appendTaskJournalSnapshot(sessionPath, {
+      version: 1,
+      task: "latte task",
+      runId: "run-1",
+      updatedAt: now,
+      todos: [],
+      evidence: [{ id: "e1", kind: "offer", title: "Paris Baguette cafe latte", fields: { price: 5.87 } }],
+      artifacts: [],
+      progress: { milestones: ["task_start"], blockers: [] },
+      completion: { status: "ready_to_finish" },
+    });
+
+    core.agent.runTask = async () => ({
+      ok: true,
+      message: "raw result",
+      sessionPath,
+      skillPath: null,
+      scriptPath: null,
+    });
+
+    let capturedOutcomeInput = null;
+    core.chat = {
+      async narrateTaskOutcome(input) {
+        capturedOutcomeInput = input;
+        return "FINAL";
+      },
+      appendExternalTurn() {},
+    };
+
+    await core.runTaskAndReport(makeEnvelope({ text: "latte" }), "latte task", "k1");
+
+    assert.equal(adapter.sent.length >= 1, true);
+    assert.equal(Boolean(capturedOutcomeInput?.evidenceSnapshot), true);
+    assert.equal(capturedOutcomeInput.evidenceSnapshot.evidence[0].title, "Paris Baguette cafe latte");
   });
 });
 

@@ -88,17 +88,15 @@ test("WorkspaceStore appends normalized runtime events into unified session json
 
     store.finalizeSession(session, true, "done");
     const entries = readJsonl(session.path);
-    const customEvents = entries.filter((entry) => {
-      return entry.type === "message"
-        && entry.message?.role === "custom"
-        && entry.message?.customType === "openpocket_event";
-    });
+    const customEvents = entries.filter((entry) => (
+      entry.type === "custom" && entry.customType === "openpocket_event"
+    ));
 
     assert.equal(customEvents.length >= 2, true);
-    assert.equal(customEvents[0].message.details.eventType, "tool_execution_start");
-    assert.equal(customEvents[0].message.details.toolCallId, "call-evt-1");
-    assert.equal(customEvents[0].message.details.toolName, "write");
-    assert.equal(customEvents[1].message.details.eventType, "tool_execution_end");
-    assert.equal(customEvents[1].message.details.isError, false);
+    assert.equal(customEvents[0].data.details.eventType, "tool_execution_start");
+    assert.equal(customEvents[0].data.details.toolCallId, "call-evt-1");
+    assert.equal(customEvents[0].data.details.toolName, "write");
+    assert.equal(customEvents[1].data.details.eventType, "tool_execution_end");
+    assert.equal(customEvents[1].data.details.isError, false);
   });
 });

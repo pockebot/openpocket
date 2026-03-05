@@ -531,6 +531,43 @@ export type AgentAction =
       timeoutSec?: number;
       reason?: string;
     }
+  | {
+      type: "todo_write";
+      op: "add" | "update" | "complete" | "delete";
+      id?: string;
+      text?: string;
+      status?: "pending" | "in_progress" | "done";
+      tags?: string[];
+      reason?: string;
+    }
+  | {
+      type: "evidence_add";
+      kind: string;
+      title: string;
+      fields?: Record<string, unknown>;
+      source?: Record<string, unknown>;
+      confidence?: number;
+      reason?: string;
+    }
+  | {
+      type: "artifact_add";
+      kind: string;
+      value: string;
+      description?: string;
+      reason?: string;
+    }
+  | {
+      type: "journal_read";
+      scope: "todos" | "evidence" | "artifacts" | "all";
+      limit?: number;
+      reason?: string;
+    }
+  | {
+      type: "journal_checkpoint";
+      name: string;
+      notes?: string;
+      reason?: string;
+    }
   | { type: "finish"; message: string };
 
 export interface ModelStepOutput {
