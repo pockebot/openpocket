@@ -1966,7 +1966,7 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     };
     gateway.bot.sendChatAction = async () => true;
 
-    // Step 1 emits an agent-loop start message directly (no extra LLM rewrite).
+    // Step 1 now also goes through model narration.
     // Steps 2 and 3 are low-signal (wait) and below the interval threshold,
     // so they use the fallback path which skips notification for "wait" actions.
     // Step 4 (tap) also uses fallback and notifies.
@@ -2045,13 +2045,14 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     });
 
     assert.equal(result.ok, true);
-    // LLM should not be called for step 1 start narration.
-    assert.equal(llmIndex, 0);
-    // 3 messages: step 1 start narration + step 4 fallback narration + final outcome.
+    // LLM should be called once for step 1 narration.
+    assert.equal(llmIndex, 1);
+    // 3 messages: step 1 model narration + step 4 fallback narration + final outcome.
     assert.equal(sent.length, 3);
     assert.equal(sent[0].chatId, 9201);
-    assert.match(sent[0].text, /已开始执行任务/);
+    assert.equal(sent[0].text, "进度：已打开 Gmail 首页。");
     assert.doesNotMatch(sent[0].text, /收到，我先处理这个任务/);
+    assert.doesNotMatch(sent[0].text, /已开始执行任务/);
     assert.doesNotMatch(sent[0].text, /\[(goal|screen|next)\]/i);
     assert.doesNotMatch(sent[0].text, /Sub-goal|Screen is|Next:/i);
     assert.equal(sent[2].text, "收件箱已打开，当前可见最新邮件列表。");

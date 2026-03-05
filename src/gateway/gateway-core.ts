@@ -574,14 +574,10 @@ export class GatewayCore {
     const isIdle = !this.drainingTaskQueue && !this.agent.isBusy() && this.pendingTasks.length === 0;
     const position = this.pendingTasks.length + 1;
 
-    if (!options?.skipAck) {
-      const ack = isIdle
-        ? (locale === "zh"
-          ? `收到，我先处理这个任务：${task}\n有明确进展我会及时告诉你。`
-          : `On it: ${task}\nI'll update you when there's meaningful progress.`)
-        : (locale === "zh"
-          ? `当前有任务在执行。你的新任务已加入队列（第 ${position} 位）。`
-          : `A previous task is still running. Your new task is queued (position ${position}).`);
+    if (!options?.skipAck && !isIdle) {
+      const ack = locale === "zh"
+        ? `当前有任务在执行。你的新任务已加入队列（第 ${position} 位）。`
+        : `A previous task is still running. Your new task is queued (position ${position}).`;
       await this.router.replyText(envelope, ack);
       this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", ack);
     }

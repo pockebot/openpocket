@@ -339,6 +339,44 @@ test("GatewayCore: unknown command falls through to plain message handler", asyn
   });
 });
 
+test("GatewayCore enqueueTask does not emit fixed immediate ack when idle", async () => {
+  await withTempHome("gwcore-idle-no-fixed-ack-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    core.runTaskAndReport = async () => ({
+      accepted: true,
+      ok: true,
+      message: "ok",
+      task: "noop",
+      durationMs: 0,
+      sessionPath: null,
+      skillPath: null,
+      scriptPath: null,
+      modelName: "test-model",
+    });
+
+    await core.enqueueTask(makeEnvelope({ text: "run task" }), "run task");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(
+      adapter.sent.some((item) => /收到，我先处理这个任务|On it:/i.test(item.text)),
+      false,
+    );
+  });
+});
+
+test("GatewayCore enqueueTask keeps queued ack when another task is running", async () => {
+  await withTempHome("gwcore-queue-ack-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+    core.agent.isBusy = () => true;
+
+    await core.enqueueTask(makeEnvelope({ text: "run task" }), "run task");
+
+    assert.equal(adapter.sent.length, 1);
+    assert.match(adapter.sent[0].text, /queued|排队/i);
+  });
+});
+
 test("GatewayCore: registerCommand allows custom commands", async () => {
   await withTempHome("gwcore-custom-cmd-", async (home) => {
     const { adapter, core } = createGatewayCore(home);
