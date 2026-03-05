@@ -5,14 +5,19 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  schedule:
+    - cron: '0 11 * * 1' # Weekly on Monday at 11:00 UTC
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    if: >
+      (github.event_name != 'schedule' && matrix.node-version == '22.x') ||
+      (github.event_name == 'schedule' && matrix.node-version == '24.x')
 
     strategy:
       matrix:
-        node-version: [22.x, 24.x] # Runs tests on these versions
+        node-version: [22.x, 24.x] # 22.x for push/PR; 24.x for scheduled compatibility checks
 
     steps:
     - uses: actions/checkout@v4
