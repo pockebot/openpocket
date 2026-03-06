@@ -632,6 +632,46 @@ test("AgentRuntime supports none system prompt mode for constrained runs", async
   assert.doesNotMatch(capturedSystemPrompt, /Planning Loop/);
 });
 
+test("AgentRuntime injects model-routed execution surface guidance into system prompt", async () => {
+  let capturedSystemPrompt = "";
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedSystemPrompt = options.initialState?.systemPrompt ?? "";
+      },
+    },
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask(
+    "Check which model is currently being used",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {
+      surface: "coding_first",
+      confidence: 0.91,
+      reason: "The first reliable evidence should come from runtime and CLI state.",
+    },
+  );
+  assert.equal(result.ok, true);
+  assert.match(capturedSystemPrompt, /Execution Surface Arbitration \(model-routed\)/);
+  assert.match(capturedSystemPrompt, /coding\/runtime tools first/);
+  assert.match(capturedSystemPrompt, /switch to the other surface/i);
+});
+
 test("AgentRuntime seeds prior transcript context when sessionKey is reused", async () => {
   const initMessages = [];
   const runtime = setupRuntime({

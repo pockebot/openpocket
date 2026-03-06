@@ -629,6 +629,14 @@ export interface AgentProgressUpdate {
   screenshotPath: string | null;
 }
 
+export type TaskExecutionSurface = "coding_first" | "phone_first" | "hybrid";
+
+export interface TaskExecutionPlan {
+  surface: TaskExecutionSurface;
+  confidence: number;
+  reason: string;
+}
+
 export interface SkillInfo {
   id: string;
   name: string;

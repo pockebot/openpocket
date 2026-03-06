@@ -17,7 +17,12 @@ import {
   streamSimple,
 } from "@mariozechner/pi-ai";
 
-import type { HumanAuthDecision, OpenPocketConfig, ScreenSnapshot } from "../../types.js";
+import type {
+  HumanAuthDecision,
+  OpenPocketConfig,
+  ScreenSnapshot,
+  TaskExecutionPlan,
+} from "../../types.js";
 import { getModelProfile, resolveModelAuth } from "../../config/index.js";
 import { sleep } from "../../utils/time.js";
 import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
@@ -115,6 +120,29 @@ function loadReusedSessionMessages(sessionPath: string): AgentMessage[] {
   }
 }
 
+function buildExecutionSurfaceGuidance(plan: TaskExecutionPlan | null | undefined): string {
+  if (!plan || plan.confidence < 0.55) {
+    return "";
+  }
+  const surface = plan.surface === "coding_first"
+    ? "coding/runtime tools first"
+    : plan.surface === "phone_first"
+      ? "phone-use tools first"
+      : "hybrid probing";
+  const confidence = Number.isFinite(plan.confidence) ? Math.max(0, Math.min(1, plan.confidence)) : 0.5;
+  const reason = String(plan.reason || "").replace(/\s+/g, " ").trim().slice(0, 240) || "model_execution_surface";
+  return [
+    "",
+    "## Execution Surface Arbitration (model-routed)",
+    `- Preferred starting surface: ${surface}.`,
+    `- Confidence: ${confidence.toFixed(2)}.`,
+    `- Rationale: ${reason}.`,
+    "- Start with tools from the preferred surface to gather first concrete evidence.",
+    "- If two consecutive steps do not improve certainty, switch to the other surface.",
+    "- Do not default to phone UI when runtime/workspace evidence is more direct.",
+  ].join("\n");
+}
+
 export async function runRuntimeAttempt(
   deps: RuntimeAttemptDependencies,
   request: RunTaskRequest,
@@ -201,11 +229,12 @@ export async function runRuntimeAttempt(
     const skillPromptContext = deps.skillLoader.buildPromptContextForTask(request.task);
     const workspacePromptContext = deps.buildWorkspacePromptContext();
     const effectivePromptMode = request.promptMode ?? deps.config.agent.systemPromptMode;
-    const systemPrompt = buildSystemPrompt(skillPromptContext.summaryText, workspacePromptContext.text, {
+    const baseSystemPrompt = buildSystemPrompt(skillPromptContext.summaryText, workspacePromptContext.text, {
       mode: effectivePromptMode,
       availableToolNames: request.availableToolNames,
       activeSkillsText: skillPromptContext.activePromptText,
     });
+    const systemPrompt = `${baseSystemPrompt}${buildExecutionSurfaceGuidance(request.taskExecutionPlan)}`;
     const report = deps.buildSystemPromptReport({
       source: "run",
       promptMode: effectivePromptMode,

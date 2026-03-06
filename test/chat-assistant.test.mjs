@@ -291,6 +291,30 @@ test("ChatAssistant reply forces codex-responses transport for Codex CLI auth", 
   });
 });
 
+test("ChatAssistant plans task execution surface with model-driven output", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.callModelRaw = async () => JSON.stringify({
+    surface: "coding_first",
+    confidence: 0.92,
+    reason: "Primary evidence is expected from local runtime and CLI state.",
+  });
+
+  const plan = await assistant.planTaskExecution("Check which model is currently being used.");
+  assert.equal(plan?.surface, "coding_first");
+  assert.equal(plan?.confidence, 0.92);
+  assert.match(plan?.reason ?? "", /runtime and CLI state/i);
+});
+
+test("ChatAssistant task execution planner falls back to hybrid on invalid model output", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.callModelRaw = async () => "not-a-json";
+
+  const plan = await assistant.planTaskExecution("Inspect current execution surface");
+  assert.equal(plan?.surface, "hybrid");
+  assert.equal(plan?.confidence, 0.5);
+  assert.match(plan?.reason ?? "", /fallback/i);
+});
+
 test("ChatAssistant runs profile onboarding when identity and user are empty", async () => {
   const { assistant, cfg } = createAssistant({ keepProfileEmpty: true });
 

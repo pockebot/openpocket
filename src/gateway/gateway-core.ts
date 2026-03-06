@@ -8,6 +8,7 @@ import type {
   CronJob,
   HumanAuthCapability,
   OpenPocketConfig,
+  TaskExecutionPlan,
   UserDecisionRequest,
   UserDecisionResponse,
   UserInputRequest,
@@ -635,6 +636,15 @@ export class GatewayCore {
     sessionKey: string,
   ): Promise<CronRunResult> {
     const enrichedTask = this.enrichTaskWithChatContext(task, envelope.peerId);
+    const taskExecutionPlan: TaskExecutionPlan | null = await this.planTaskExecutionSafe(task);
+    if (taskExecutionPlan) {
+      this.log(
+        `task execution plan channel=${envelope.channelType} sender=${envelope.senderId} surface=${taskExecutionPlan.surface}` +
+        ` confidence=${taskExecutionPlan.confidence.toFixed(2)} reason=${JSON.stringify(taskExecutionPlan.reason)}`,
+        "debug",
+        "task",
+      );
+    }
     const locale = this.inferTaskLocale(task);
     const narrationState: ProgressNarrationState = {
       lastNotifiedProgress: null, lastNotifiedMessage: "",
@@ -746,6 +756,7 @@ export class GatewayCore {
         adapter
           ? async (request) => this.deliverChannelMedia(envelope, request, adapter)
           : undefined,
+        taskExecutionPlan,
       );
       await progressWork;
 
@@ -772,6 +783,20 @@ export class GatewayCore {
     } finally {
       if (adapter) await adapter.setTypingIndicator(envelope.peerId, false).catch(() => {});
       void this.drainTaskQueue();
+    }
+  }
+
+  private async planTaskExecutionSafe(task: string): Promise<TaskExecutionPlan | null> {
+    const planner = this.chat as unknown as {
+      planTaskExecution?: (value: string) => Promise<TaskExecutionPlan | null>;
+    };
+    if (typeof planner.planTaskExecution !== "function") {
+      return null;
+    }
+    try {
+      return await planner.planTaskExecution(task);
+    } catch {
+      return null;
     }
   }
 

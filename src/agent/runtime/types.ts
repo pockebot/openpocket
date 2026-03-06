@@ -13,6 +13,7 @@ import type {
   ModelProfile,
   OpenPocketConfig,
   ScreenSnapshot,
+  TaskExecutionPlan,
   UserDecisionRequest,
   UserDecisionResponse,
   UserInputRequest,
@@ -36,6 +37,7 @@ export interface RunTaskRequest {
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   availableToolNames?: string[];
+  taskExecutionPlan?: TaskExecutionPlan | null;
 }
 
 export interface RunTaskAttemptOutcome {

@@ -6,6 +6,7 @@ import type {
   AgentProgressUpdate,
   CronJob,
   OpenPocketConfig,
+  TaskExecutionPlan,
   UserDecisionRequest,
   UserDecisionResponse,
   UserInputRequest,
@@ -2405,6 +2406,13 @@ export class TelegramGateway {
     const { chatId, task, source, modelName, sessionKey } = params;
     const taskAcceptedAtHr = process.hrtime.bigint();
     const agentTask = this.enrichTaskWithChatContext(task, chatId);
+    const taskExecutionPlan: TaskExecutionPlan | null = await this.planTaskExecutionSafe(task);
+    if (taskExecutionPlan) {
+      this.log(
+        `task execution plan source=${source} chat=${chatId ?? "(none)"} surface=${taskExecutionPlan.surface}` +
+        ` confidence=${taskExecutionPlan.confidence.toFixed(2)} reason=${JSON.stringify(taskExecutionPlan.reason)}`,
+      );
+    }
     const progressLocale = this.inferTaskLocale(task);
     const progressNarrationState: ProgressNarrationState = {
       lastNotifiedProgress: null,
@@ -2625,6 +2633,8 @@ export class TelegramGateway {
             chatId === null
               ? undefined
               : async (request) => this.requestUserInputFromChat(chatId, request),
+            undefined,
+            taskExecutionPlan,
           );
           await progressWork;
 
@@ -2685,6 +2695,20 @@ export class TelegramGateway {
       });
     } finally {
       void this.drainQueuedChatTasks();
+    }
+  }
+
+  private async planTaskExecutionSafe(task: string): Promise<TaskExecutionPlan | null> {
+    const planner = this.chat as unknown as {
+      planTaskExecution?: (value: string) => Promise<TaskExecutionPlan | null>;
+    };
+    if (typeof planner.planTaskExecution !== "function") {
+      return null;
+    }
+    try {
+      return await planner.planTaskExecution(task);
+    } catch {
+      return null;
     }
   }
 

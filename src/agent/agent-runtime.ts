@@ -18,6 +18,7 @@ import type {
   UserDecisionResponse,
   UserInputRequest,
   UserInputResponse,
+  TaskExecutionPlan,
   OpenPocketConfig,
   ModelProfile,
   SkillInfo,
@@ -3610,6 +3611,7 @@ export class AgentRuntime {
     sessionKey?: string,
     onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse,
     onChannelMedia?: (request: ChannelMediaRequest) => Promise<ChannelMediaDeliveryResult> | ChannelMediaDeliveryResult,
+    taskExecutionPlan?: TaskExecutionPlan | null,
   ): Promise<AgentRunResult> {
     const activeToolNames = this.resolveToolMetasForTask(task).map((item) => item.name);
     const request: RunTaskRequest = {
@@ -3623,6 +3625,7 @@ export class AgentRuntime {
       onUserDecision,
       availableToolNames: activeToolNames,
       onUserInput,
+      taskExecutionPlan,
     };
 
     return runRuntimeTask(

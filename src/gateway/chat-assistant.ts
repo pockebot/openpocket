@@ -2,7 +2,13 @@ import OpenAI from "openai";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AgentProgressUpdate, GatewayLogLevel, OpenPocketConfig } from "../types.js";
+import type {
+  AgentProgressUpdate,
+  GatewayLogLevel,
+  OpenPocketConfig,
+  TaskExecutionPlan,
+  TaskExecutionSurface,
+} from "../types.js";
 import type { TaskJournalSnapshot } from "../agent/journal/task-journal-store.js";
 import { CODEX_CLI_BASE_URL } from "../config/codex-cli.js";
 import { getModelProfile, resolveModelAuth } from "../config/index.js";
@@ -755,6 +761,85 @@ export class ChatAssistant {
       this.logChat("warn", `${label} failed all_endpoints=${errors.join(" | ")}`);
     }
     return output;
+  }
+
+  private normalizeTaskExecutionSurface(value: unknown): TaskExecutionSurface {
+    if (value === "coding_first" || value === "phone_first" || value === "hybrid") {
+      return value;
+    }
+    return "hybrid";
+  }
+
+  private normalizeTaskExecutionPlan(value: Partial<TaskExecutionPlan> | null | undefined): TaskExecutionPlan {
+    const surface = this.normalizeTaskExecutionSurface(value?.surface);
+    const confidence =
+      typeof value?.confidence === "number" && value.confidence >= 0 && value.confidence <= 1
+        ? value.confidence
+        : 0.5;
+    const reason = typeof value?.reason === "string" && value.reason.trim()
+      ? this.normalizeOneLine(value.reason).slice(0, 240)
+      : "model_execution_surface_fallback";
+    return {
+      surface,
+      confidence,
+      reason,
+    };
+  }
+
+  private async planTaskExecutionWithModel(
+    client: OpenAI,
+    model: string,
+    maxTokens: number,
+    task: string,
+  ): Promise<TaskExecutionPlan> {
+    const prompt = [
+      "Plan the initial execution surface for a dual-capability agent.",
+      "The agent can use coding/runtime tools and Android phone-use tools.",
+      "Output strict JSON only:",
+      '{"surface":"coding_first|phone_first|hybrid","confidence":0-1,"reason":"..."}',
+      "Rules:",
+      "1) Decide from task intent and likely evidence location, not lexical keyword matching.",
+      "2) surface=coding_first when first reliable evidence is likely in local runtime/CLI/workspace/logs/config/process state.",
+      "3) surface=phone_first when first reliable evidence is likely on current phone UI/device app state.",
+      "4) surface=hybrid when both surfaces are likely needed early or uncertainty is high.",
+      "5) If uncertain, choose hybrid and lower confidence.",
+      `Task: ${task}`,
+    ].join("\n");
+
+    const output = await this.callModelRaw(
+      client,
+      model,
+      Math.min(maxTokens, 600),
+      prompt,
+      "task execution surface planning",
+    );
+    if (!output) {
+      return this.normalizeTaskExecutionPlan(null);
+    }
+    const jsonText = extractJsonObjectText(output);
+    try {
+      const parsed = JSON.parse(jsonText) as Partial<TaskExecutionPlan>;
+      return this.normalizeTaskExecutionPlan(parsed);
+    } catch {
+      return this.normalizeTaskExecutionPlan(null);
+    }
+  }
+
+  async planTaskExecution(task: string): Promise<TaskExecutionPlan | null> {
+    const normalizedTask = String(task || "").trim();
+    if (!normalizedTask) {
+      return null;
+    }
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return null;
+    }
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+    return this.planTaskExecutionWithModel(client, profile.model, profile.maxTokens, normalizedTask);
   }
 
   clear(chatId: number): void {
