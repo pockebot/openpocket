@@ -57,6 +57,11 @@ function isCodexModelId(modelId: string): boolean {
   return modelId.trim().toLowerCase().includes("codex");
 }
 
+function isCodexBackendModelId(modelId: string): boolean {
+  const model = modelId.trim().toLowerCase();
+  return model.includes("codex") || model === "gpt-5.4" || model.startsWith("gpt-5.4-");
+}
+
 /** Build a pi-ai Tool[] from our TOOL_METAS (schema-only, no execute). */
 function buildPiAiTools(): Tool[] {
   return TOOL_METAS.map((meta) => ({
@@ -115,7 +120,7 @@ export function buildPiAiModel(profile: ModelProfile): Model<Api> {
   let provider = "openai";
   let headers: Record<string, string> | undefined;
 
-  if (isChatGptBackendUrl(baseUrlLower) && isCodexModelId(profile.model)) {
+  if (isChatGptBackendUrl(baseUrlLower) && isCodexBackendModelId(profile.model)) {
     api = "openai-codex-responses";
     provider = "openai-codex";
   } else if (isOpenAiBaseUrl(baseUrlLower) && isCodexModelId(profile.model)) {

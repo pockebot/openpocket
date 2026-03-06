@@ -2246,6 +2246,57 @@ test("AgentRuntime routes Codex CLI auth through openai-codex responses", async 
   });
 });
 
+test("AgentRuntime routes gpt-5.4 Codex CLI auth through openai-codex responses", async () => {
+  await withTempCodexHome("openpocket-runtime-codex-gpt54-", async (codexHome) => {
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: "codex-access-token",
+          refresh_token: "codex-refresh-token",
+        },
+      }),
+      "utf-8",
+    );
+
+    const prevOpenAi = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    let capturedModel = null;
+    const runtime = setupRuntime({
+      returnHomeOnTaskEnd: false,
+      scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+      hooks: {
+        onInit: (options) => {
+          capturedModel = options.initialState?.model ?? null;
+        },
+      },
+    });
+
+    runtime.config.defaultModel = "gpt-5.4";
+    runtime.config.models["gpt-5.4"].apiKey = "";
+    runtime.config.models["gpt-5.4"].apiKeyEnv = "OPENAI_API_KEY";
+    runtime.adb = {
+      queryLaunchablePackages: () => [],
+      captureScreenSnapshot: () => makeSnapshot(),
+      executeAction: async () => "ok",
+    };
+
+    try {
+      const result = await runtime.runTask("codex routing test gpt-5.4");
+      assert.equal(result.ok, true);
+      assert.equal(capturedModel?.provider, "openai-codex");
+      assert.equal(capturedModel?.api, "openai-codex-responses");
+    } finally {
+      if (prevOpenAi === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = prevOpenAi;
+      }
+    }
+  });
+});
+
 test("AgentRuntime aborts continuation after finish to avoid post-finish hang", async () => {
   const probe = { abortCalls: 0, secondTurnAttempted: false };
   const runtime = setupRuntime({
