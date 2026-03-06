@@ -1518,7 +1518,7 @@ export class ChatAssistant {
     if (normalized.length <= maxChars) {
       return normalized;
     }
-    return `${normalized.slice(0, Math.max(0, maxChars - 12))}...[truncated]`;
+    return `${normalized.slice(0, Math.max(0, maxChars - 3))}...`;
   }
 
   private compactProgressForPrompt(progress: AgentProgressUpdate | null): Record<string, unknown> | null {
@@ -2751,7 +2751,7 @@ export class ChatAssistant {
     return text;
   }
 
-  private cleanProgressSummaryForUser(raw: string, maxChars = 160): string {
+  private cleanProgressSummaryForUser(raw: string, maxChars = 320): string {
     const oneLine = this.normalizeOneLine(raw);
     if (!oneLine) {
       return "";
@@ -2786,13 +2786,15 @@ export class ChatAssistant {
     }
 
     const app = this.trimForPrompt(input.progress.currentApp || "unknown", 120);
-    const summary = this.cleanProgressSummaryForUser(
-      input.progress.thought || input.progress.message || "",
-      140,
-    );
+    const summary = isErrorLike
+      ? this.cleanProgressSummaryForUser(
+        input.progress.message || input.progress.thought || "",
+        280,
+      )
+      : "";
     const messageText = input.locale === "zh"
-      ? `小更新：我还在 ${app}，刚做了 ${input.progress.actionType}${summary ? `，${summary}` : ""}。`
-      : `Quick update: still on ${app}, I just ran ${input.progress.actionType}${summary ? `, ${summary}` : ""}.`;
+      ? `小更新：我还在 ${app}。正在继续处理${summary ? `，当前遇到：${summary}` : "，确认后会马上给你结果"}。`
+      : `Quick update: still on ${app}. I am continuing${summary ? `, current blocker: ${summary}` : " and will share the verified result shortly"}.`;
 
     return {
       notify: true,
