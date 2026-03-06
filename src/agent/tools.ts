@@ -166,6 +166,11 @@ export const runScriptSchema = Type.Object({
   reason: ReasonParam,
 });
 
+export const runtimeInfoSchema = Type.Object({
+  thought: ThoughtParam,
+  reason: ReasonParam,
+});
+
 export const readSchema = Type.Object({
   thought: ThoughtParam,
   path: Type.String({ description: "Workspace-relative path to read." }),
@@ -372,6 +377,7 @@ export type LaunchAppParams = Static<typeof launchAppSchema>;
 export type ShellParams = Static<typeof shellSchema>;
 export type BatchActionsParams = Static<typeof batchActionsSchema>;
 export type RunScriptParams = Static<typeof runScriptSchema>;
+export type RuntimeInfoParams = Static<typeof runtimeInfoSchema>;
 export type ReadParams = Static<typeof readSchema>;
 export type WriteParams = Static<typeof writeSchema>;
 export type EditParams = Static<typeof editSchema>;
@@ -414,6 +420,7 @@ export const TOOL_METAS: ToolMeta[] = [
   { name: "shell", description: "Execute an adb shell command (optionally wrapped with sh -lc).", parameters: shellSchema },
   { name: "batch_actions", description: "Execute a short batch of low-risk UI actions on the current screen without re-planning between each action.", parameters: batchActionsSchema },
   { name: "run_script", description: "Run a short deterministic script as a fallback action.", parameters: runScriptSchema },
+  { name: "runtime_info", description: "Return authoritative runtime metadata for the current attempt (active model/api/provider/session/auth source).", parameters: runtimeInfoSchema },
   { name: "read", description: "Read a workspace file (optionally with line range).", parameters: readSchema },
   { name: "write", description: "Create or overwrite a workspace file. Supports append mode.", parameters: writeSchema },
   { name: "edit", description: "Apply a precise find/replace edit to a workspace file.", parameters: editSchema },

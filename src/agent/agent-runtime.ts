@@ -296,7 +296,7 @@ interface PhoneAgentRunContext {
   task: string;
   profileKey: string;
   profile: ModelProfile;
-  session: { id: string; path: string };
+  session: { id: string; path: string; reused?: boolean };
   stepCount: number;
   maxSteps: number;
   latestSnapshot: ScreenSnapshot | null;
@@ -312,6 +312,14 @@ interface PhoneAgentRunContext {
   stopRequested: () => boolean;
   lastAutoPermissionAllowAtMs: number;
   launchablePackages: string[];
+  taskExecutionPlan: TaskExecutionPlan | null;
+  runtimeModel: {
+    id: string;
+    provider: string;
+    api: string;
+    baseUrl: string;
+    authSource: "config" | "env" | "codex-cli-keychain" | "codex-cli-auth-json";
+  };
   effectivePromptMode: SystemPromptMode;
   systemPrompt: string;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
@@ -2394,13 +2402,18 @@ export class AgentRuntime {
     let stateDeltaLine = "";
     try {
       if (
+        action.type === "runtime_info" ||
         action.type === "todo_write" ||
         action.type === "evidence_add" ||
         action.type === "artifact_add" ||
         action.type === "journal_read" ||
         action.type === "journal_checkpoint"
       ) {
-        executionResult = this.executeJournalAction(action, ctx);
+        if (action.type === "runtime_info") {
+          executionResult = this.buildRuntimeInfoActionResult(ctx);
+        } else {
+          executionResult = this.executeJournalAction(action, ctx);
+        }
       } else if (action.type === "run_script") {
         const sr = await this.scriptExecutor.execute(action.script, action.timeoutSec);
         executionResult = [
@@ -2530,6 +2543,35 @@ export class AgentRuntime {
       }
     }
     return executionResult;
+  }
+
+  private buildRuntimeInfoActionResult(ctx: PhoneAgentRunContext): string {
+    const payload = {
+      session: {
+        id: ctx.session.id,
+        path: ctx.session.path,
+        reused: Boolean(ctx.session.reused),
+      },
+      model: {
+        profileKey: ctx.profileKey,
+        profileModel: ctx.profile.model,
+        activeModelId: ctx.runtimeModel.id,
+        provider: ctx.runtimeModel.provider,
+        api: ctx.runtimeModel.api,
+        baseUrl: ctx.runtimeModel.baseUrl,
+        authSource: ctx.runtimeModel.authSource,
+      },
+      executionPlan: ctx.taskExecutionPlan
+        ? {
+          surface: ctx.taskExecutionPlan.surface,
+          confidence: ctx.taskExecutionPlan.confidence,
+          reason: ctx.taskExecutionPlan.reason,
+        }
+        : null,
+      task: ctx.task,
+      generatedAt: nowIso(),
+    };
+    return JSON.stringify(payload, null, 2);
   }
 
   private executeJournalAction(

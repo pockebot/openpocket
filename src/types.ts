@@ -494,6 +494,7 @@ export type AgentAction =
       reason?: string;
     }
   | { type: "run_script"; script: string; timeoutSec?: number; reason?: string }
+  | { type: "runtime_info"; reason?: string }
   | { type: "read"; path: string; from?: number; lines?: number; reason?: string }
   | { type: "write"; path: string; content: string; append?: boolean; reason?: string }
   | { type: "edit"; path: string; find: string; replace: string; replaceAll?: boolean; reason?: string }

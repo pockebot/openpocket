@@ -272,6 +272,13 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "runtime_info") {
+    return {
+      type,
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "read") {
     return {
       type,

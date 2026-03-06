@@ -672,6 +672,39 @@ test("AgentRuntime injects model-routed execution surface guidance into system p
   assert.match(capturedSystemPrompt, /switch to the other surface/i);
 });
 
+test("AgentRuntime runtime_info returns active model metadata for current attempt", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      { thought: "collect runtime metadata", action: { type: "runtime_info" } },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.config.models["gpt-5.4"].apiKey = "dummy";
+  runtime.config.models["gpt-5.4"].apiKeyEnv = "MISSING_OPENAI_KEY";
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask(
+    "Inspect active runtime model metadata",
+    "gpt-5.4",
+  );
+  assert.equal(result.ok, true);
+
+  const sessionJsonl = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionJsonl, /"actionType":"runtime_info"/);
+  assert.match(sessionJsonl, /activeModelId/);
+  assert.match(sessionJsonl, /gpt-5\.4/);
+  assert.match(sessionJsonl, /openai-responses/);
+  assert.match(sessionJsonl, /authSource/);
+  assert.match(sessionJsonl, /config/);
+});
+
 test("AgentRuntime seeds prior transcript context when sessionKey is reused", async () => {
   const initMessages = [];
   const runtime = setupRuntime({

@@ -140,6 +140,15 @@ test("normalizeAction supports shell wrapping flag", () => {
   assert.equal(shell.useShellWrap, true);
 });
 
+test("normalizeAction supports runtime_info action", () => {
+  const action = normalizeAction({
+    type: "runtime_info",
+    reason: "Inspect active runtime model metadata",
+  });
+  assert.equal(action.type, "runtime_info");
+  assert.equal(action.reason, "Inspect active runtime model metadata");
+});
+
 test("normalizeAction supports batch_actions", () => {
   const batch = normalizeAction({
     type: "batch_actions",

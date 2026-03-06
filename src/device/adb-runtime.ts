@@ -1503,6 +1503,9 @@ export class AdbRuntime {
       case "run_script": {
         return "run_script is handled by ScriptExecutor in AgentRuntime.";
       }
+      case "runtime_info": {
+        return "runtime_info is handled by AgentRuntime.";
+      }
       case "read":
       case "write":
       case "edit":

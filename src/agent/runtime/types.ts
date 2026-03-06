@@ -97,6 +97,14 @@ export type ParsedTextualToolFallback = {
   params: Record<string, unknown>;
 };
 
+export interface RuntimeModelMetadata {
+  id: string;
+  provider: string;
+  api: string;
+  baseUrl: string;
+  authSource: "config" | "env" | "codex-cli-keychain" | "codex-cli-auth-json";
+}
+
 export type DelegationApplyLike = {
   action?: AgentAction | null;
 };
@@ -148,6 +156,8 @@ export interface PhoneAgentRunContext {
   stopRequested: () => boolean;
   lastAutoPermissionAllowAtMs: number;
   launchablePackages: string[];
+  taskExecutionPlan: TaskExecutionPlan | null;
+  runtimeModel: RuntimeModelMetadata;
   effectivePromptMode: SystemPromptMode;
   systemPrompt: string;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
