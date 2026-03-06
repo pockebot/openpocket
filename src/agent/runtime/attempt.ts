@@ -59,6 +59,21 @@ function selectObservationImage(
 }
 
 const MAX_REUSED_SESSION_MESSAGES = 64;
+
+function isOpenAiLikeBaseUrl(baseUrl: string): boolean {
+  const lower = baseUrl.toLowerCase();
+  return lower.includes("openai.com") || lower.includes("chatgpt.com");
+}
+
+function isCodexCliCapableModelId(modelId: string): boolean {
+  const model = modelId.trim().toLowerCase();
+  return model.includes("codex") || model === "gpt-5.4" || model.startsWith("gpt-5.4-");
+}
+
+function shouldShowCodexCliHint(modelId: string, baseUrl: string): boolean {
+  return isOpenAiLikeBaseUrl(baseUrl) && isCodexCliCapableModelId(modelId);
+}
+
 const PHONE_ONLY_TOOL_NAMES = new Set([
   "tap",
   "tap_element",
@@ -148,7 +163,7 @@ export async function runRuntimeAttempt(
   try {
     const auth = resolveModelAuth(profile);
     if (!auth) {
-      const codexHint = profile.model.toLowerCase().includes("codex")
+      const codexHint = shouldShowCodexCliHint(profile.model, profile.baseUrl)
         ? " or login via Codex CLI (`~/.codex/auth.json`)" : "";
       const message = `Missing API key for model '${profile.model}'. Set env ${profile.apiKeyEnv} or config.models.${profileKey}.apiKey${codexHint}`;
       deps.workspace.finalizeSession(session, false, message);

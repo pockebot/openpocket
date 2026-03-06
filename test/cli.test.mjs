@@ -423,6 +423,7 @@ test("model list prints configured profiles including Gemini 3.1", () => {
   assert.equal(run.status, 0, run.stderr || run.stdout);
   assert.match(run.stdout, /Model Profiles/i);
   assert.match(run.stdout, /google\/gemini-3\.1-pro-preview/i);
+  assert.match(run.stdout, /gpt-5\.4/i);
 });
 
 test("model set updates default model persistently", () => {

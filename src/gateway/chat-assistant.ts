@@ -395,12 +395,21 @@ export class ChatAssistant {
   }
 
   private shouldUseCodexResponsesTransport(client: OpenAI, model: string): boolean {
-    const modelLower = model.toLowerCase();
-    if (!modelLower.includes("codex")) {
+    if (!this.isCodexCliCapableModelId(model)) {
       return false;
     }
     const baseUrl = String((client as { baseURL?: string }).baseURL ?? "").toLowerCase();
     return baseUrl.includes("/backend-api/codex");
+  }
+
+  private isCodexCliCapableModelId(modelId: string): boolean {
+    const model = modelId.trim().toLowerCase();
+    return model.includes("codex") || model === "gpt-5.4" || model.startsWith("gpt-5.4-");
+  }
+
+  private isOpenAiLikeBaseUrl(baseUrl: string): boolean {
+    const lower = baseUrl.toLowerCase();
+    return lower.includes("openai.com") || lower.includes("chatgpt.com");
   }
 
   private readClientApiKey(client: OpenAI): string {
@@ -3242,7 +3251,7 @@ export class ChatAssistant {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
-      const codexHint = profile.model.toLowerCase().includes("codex")
+      const codexHint = this.isOpenAiLikeBaseUrl(profile.baseUrl) && this.isCodexCliCapableModelId(profile.model)
         ? " or login with Codex CLI"
         : "";
       return `API key for model '${profile.model}' is not configured. Configure it${codexHint} and try again.`;

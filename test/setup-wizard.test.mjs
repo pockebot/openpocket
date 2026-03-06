@@ -173,6 +173,7 @@ test("setup wizard configures OpenAI key and records Gmail onboarding state", as
     const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
     assert.equal(savedCfg.models["gpt-5.2-codex"].apiKey, "sk-test-openpocket");
     assert.equal(savedCfg.models["gpt-5.3-codex"].apiKey, "sk-test-openpocket");
+    assert.equal(savedCfg.models["gpt-5.4"].apiKey, "sk-test-openpocket");
 
     const statePath = path.join(cfg.stateDir, "onboarding.json");
     assert.equal(fs.existsSync(statePath), true);
@@ -517,7 +518,7 @@ test("setup wizard supports codex cli auth option in model selection", async () 
       let loginCalled = 0;
       const prompter = new FakePrompter({
         confirms: [true, true, false, false],
-        selects: ["emulator", "gpt-5.2-codex::codex-cli", "skip", "pairing", "skip", "disabled"],
+        selects: ["emulator", "gpt-5.4::codex-cli", "skip", "pairing", "skip", "disabled"],
         texts: [""],
         pauseCount: 0,
       });
@@ -552,7 +553,7 @@ test("setup wizard supports codex cli auth option in model selection", async () 
       const statePath = path.join(cfg.stateDir, "onboarding.json");
       assert.equal(fs.existsSync(statePath), true);
       const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-      assert.equal(state.modelProfile, "gpt-5.2-codex");
+      assert.equal(state.modelProfile, "gpt-5.4");
       assert.equal(state.apiKeySource, "codex-cli");
       assert.equal(typeof state.apiKeyConfiguredAt, "string");
     });

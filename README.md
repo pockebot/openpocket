@@ -80,7 +80,7 @@ Runtime and target references:
 ```bash
 openpocket model show
 openpocket model list
-openpocket model set --name gpt-5.3-codex
+openpocket model set --name gpt-5.4
 openpocket model set --provider google --model gemini-3.1-pro-preview
 ```
 

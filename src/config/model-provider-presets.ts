@@ -17,7 +17,7 @@ const MODEL_PROVIDER_PRESETS: ReadonlyArray<ModelProviderPreset> = [
     baseUrl: "https://api.openai.com/v1",
     apiKeyEnv: "OPENAI_API_KEY",
     defaultModelId: "gpt-5.2-codex",
-    suggestedModelIds: ["gpt-5.2-codex", "gpt-5.3-codex"],
+    suggestedModelIds: ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4"],
     matchHosts: ["api.openai.com"],
   },
   {

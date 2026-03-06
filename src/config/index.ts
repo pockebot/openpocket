@@ -205,6 +205,15 @@ function defaultConfigObject() {
         reasoningEffort: "medium" as const,
         temperature: null,
       },
+      "gpt-5.4": {
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-5.4",
+        apiKey: "",
+        apiKeyEnv: "OPENAI_API_KEY",
+        maxTokens: 4096,
+        reasoningEffort: "medium" as const,
+        temperature: null,
+      },
       "claude-sonnet-4.6": {
         baseUrl: "https://openrouter.ai/api/v1",
         model: "claude-sonnet-4.6",
@@ -1279,9 +1288,13 @@ function isOpenAiLikeBaseUrl(baseUrl: string): boolean {
   return lower.includes("openai.com") || lower.includes("chatgpt.com");
 }
 
+function isCodexCliCapableModelId(modelId: string): boolean {
+  const model = modelId.trim().toLowerCase();
+  return model.includes("codex") || model === "gpt-5.4" || model.startsWith("gpt-5.4-");
+}
+
 function shouldUseCodexCliFallback(profile: ModelProfile): boolean {
-  const model = profile.model.toLowerCase();
-  if (!model.includes("codex")) {
+  if (!isCodexCliCapableModelId(profile.model)) {
     return false;
   }
   return isOpenAiLikeBaseUrl(profile.baseUrl);

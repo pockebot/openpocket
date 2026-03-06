@@ -20,6 +20,7 @@ function onVideoEnd(e) {
 const modelSupport = [
   { id: "gpt-5.2-codex", provider: "OpenAI", model: "GPT-5.2 Codex", logo: "/models/openai.svg" },
   { id: "gpt-5.3-codex", provider: "OpenAI", model: "GPT-5.3 Codex", logo: "/models/openai.svg" },
+  { id: "gpt-5.4", provider: "OpenAI", model: "GPT-5.4", logo: "/models/openai.svg" },
   { id: "claude-sonnet-4.6", provider: "OpenRouter", model: "Claude Sonnet 4.6", logo: "/models/anthropic.svg" },
   { id: "claude-opus-4.6", provider: "OpenRouter", model: "Claude Opus 4.6", logo: "/models/anthropic.svg" },
   { id: "blockrun/gpt-4o", provider: "Blockrun", model: "GPT-4o", logo: "/models/openai.svg" },

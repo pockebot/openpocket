@@ -194,6 +194,15 @@ This page is the source-of-truth for current default config values and normaliza
       "reasoningEffort": "medium",
       "temperature": null
     },
+    "gpt-5.4": {
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-5.4",
+      "apiKey": "",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": "medium",
+      "temperature": null
+    },
     "claude-sonnet-4.6": {
       "baseUrl": "https://openrouter.ai/api/v1",
       "model": "claude-sonnet-4.6",

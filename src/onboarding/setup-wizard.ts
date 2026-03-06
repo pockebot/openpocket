@@ -279,6 +279,9 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
   if (profileKey === "gpt-5.3-codex") {
     return "GPT-5.3 Codex (OpenAI)";
   }
+  if (profileKey === "gpt-5.4") {
+    return "GPT-5.4 (OpenAI)";
+  }
   if (profileKey === "claude-sonnet-4.6") {
     return "Claude Sonnet 4.6 (OpenRouter)";
   }
@@ -350,8 +353,13 @@ function isOpenAiLikeHost(baseUrl: string): boolean {
   return lower.includes("openai.com") || lower.includes("chatgpt.com");
 }
 
+function isCodexCliModelId(modelId: string): boolean {
+  const model = modelId.trim().toLowerCase();
+  return model.includes("codex") || model === "gpt-5.4" || model.startsWith("gpt-5.4-");
+}
+
 function isCodexCliCapableModel(profile: ModelProfile): boolean {
-  return profile.model.toLowerCase().includes("codex") && isOpenAiLikeHost(profile.baseUrl);
+  return isCodexCliModelId(profile.model) && isOpenAiLikeHost(profile.baseUrl);
 }
 
 function modelSelectionValue(profileKey: string, authMode: ModelAuthMode): string {

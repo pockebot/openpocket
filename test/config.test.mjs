@@ -70,6 +70,9 @@ test("loadConfig creates defaults including returnHomeOnTaskEnd", async () => {
     assert.equal(cfg.models["google/gemini-3.1-pro-preview"].baseUrl, "https://generativelanguage.googleapis.com/v1beta");
     assert.equal(cfg.models["google/gemini-3.1-pro-preview"].model, "gemini-3.1-pro-preview");
     assert.equal(cfg.models["google/gemini-3.1-pro-preview"].apiKeyEnv, "GEMINI_API_KEY");
+    assert.equal(cfg.models["gpt-5.4"].baseUrl, "https://api.openai.com/v1");
+    assert.equal(cfg.models["gpt-5.4"].model, "gpt-5.4");
+    assert.equal(cfg.models["gpt-5.4"].apiKeyEnv, "OPENAI_API_KEY");
     assert.equal(cfg.humanAuth.enabled, false);
     assert.equal(cfg.humanAuth.useLocalRelay, true);
     assert.equal(cfg.humanAuth.localRelayPort, 8787);
@@ -447,6 +450,47 @@ test("resolveModelAuth falls back to Codex CLI auth.json for codex models", asyn
         });
 
         assert.equal(resolved?.apiKey, "codex-access-token");
+        assert.match(String(resolved?.source ?? ""), /codex-cli/i);
+        assert.equal(resolved?.preferredMode, "responses");
+        assert.match(String(resolved?.baseUrl ?? ""), /chatgpt\.com\/backend-api\/codex/i);
+      } finally {
+        if (prevOpenAi === undefined) {
+          delete process.env.OPENAI_API_KEY;
+        } else {
+          process.env.OPENAI_API_KEY = prevOpenAi;
+        }
+      }
+    });
+  });
+});
+
+test("resolveModelAuth falls back to Codex CLI auth.json for gpt-5.4", async () => {
+  await withTempHome("openpocket-config-codex-fallback-gpt54-", async (home) => {
+    await withTempCodexHome("openpocket-codex-auth-gpt54-", async (codexHome) => {
+      const cfg = loadConfig(path.join(home, "config.json"));
+      const profile = getModelProfile(cfg, "gpt-5.4");
+      const authPath = path.join(codexHome, "auth.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          tokens: {
+            access_token: "codex-access-token-gpt54",
+            refresh_token: "codex-refresh-token-gpt54",
+          },
+        }),
+        "utf-8",
+      );
+
+      const prevOpenAi = process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+      try {
+        const resolved = resolveModelAuth({
+          ...profile,
+          apiKey: "",
+          apiKeyEnv: "OPENAI_API_KEY",
+        });
+
+        assert.equal(resolved?.apiKey, "codex-access-token-gpt54");
         assert.match(String(resolved?.source ?? ""), /codex-cli/i);
         assert.equal(resolved?.preferredMode, "responses");
         assert.match(String(resolved?.baseUrl ?? ""), /chatgpt\.com\/backend-api\/codex/i);
