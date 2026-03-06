@@ -641,7 +641,7 @@ export class GatewayCore {
       this.log(
         `task execution plan channel=${envelope.channelType} sender=${envelope.senderId} surface=${taskExecutionPlan.surface}` +
         ` confidence=${taskExecutionPlan.confidence.toFixed(2)} reason=${JSON.stringify(taskExecutionPlan.reason)}`,
-        "debug",
+        "info",
         "task",
       );
     }
