@@ -48,7 +48,7 @@ OpenPocket is a local device-first phone-use agent aimed at real consumer scenar
 - Script format and execution rules: [Scripts](./tools/scripts.md)
 - CLI and channel commands: [CLI and Gateway](./reference/cli-and-gateway.md)
 - Remote auth and delegation design: [Remote Human Authorization](./concepts/remote-human-authorization.md)
-- Practical squad design: [Recommended Multi-Agent Deployment Patterns](./ops/multi-agent-deployment-patterns.md)
+- Practical multi-agent design: [Recommended Multi-Agent Deployment Patterns](./ops/multi-agent-deployment-patterns.md)
 
 ## Scope Policy
 

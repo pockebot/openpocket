@@ -41,7 +41,7 @@ This separation reduces accidental leakage from personal daily-use devices into 
 
 ### Local Data + Auditability
 
-OpenPocket is not a cloud execution farm.
+OpenPocket is not a hosted cloud execution service.
 
 - device automation runs locally through `adb`
 - workspace artifacts remain local (`sessions`, `memory`, `scripts`, screenshots)
