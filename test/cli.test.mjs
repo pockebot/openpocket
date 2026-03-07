@@ -79,6 +79,132 @@ test("init does not install CLI shortcut implicitly", () => {
   assert.equal(fs.existsSync(path.join(shellHome, ".bashrc")), false, "init should not touch .bashrc");
 });
 
+test("cron list prints seeded jobs from the registry", () => {
+  const home = makeHome("openpocket-ts-cron-list-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const result = runCli(["cron", "list"], { OPENPOCKET_HOME: home });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /Cron Jobs/i);
+  assert.match(result.stdout, /heartbeat-status/);
+});
+
+test("cron add disable enable and remove manage structured jobs", () => {
+  const home = makeHome("openpocket-ts-cron-manage-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const add = runCli([
+    "cron",
+    "add",
+    "--id",
+    "daily-slack-checkin",
+    "--name",
+    "Daily Slack Check-in",
+    "--cron",
+    "0 8 * * *",
+    "--tz",
+    "Asia/Shanghai",
+    "--task",
+    "Open Slack and complete check-in",
+    "--channel",
+    "telegram",
+    "--to",
+    "12345",
+  ], { OPENPOCKET_HOME: home });
+  assert.equal(add.status, 0, add.stderr || add.stdout);
+  assert.match(add.stdout, /daily-slack-checkin/);
+
+  const jobsFile = path.join(home, "workspace", "cron", "jobs.json");
+  let saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  let created = saved.jobs.find((job) => job.id === "daily-slack-checkin");
+  assert.equal(created.schedule.kind, "cron");
+  assert.equal(created.delivery.channel, "telegram");
+  assert.equal(created.delivery.to, "12345");
+
+  const disable = runCli(["cron", "disable", "--id", "daily-slack-checkin"], { OPENPOCKET_HOME: home });
+  assert.equal(disable.status, 0, disable.stderr || disable.stdout);
+  saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  created = saved.jobs.find((job) => job.id === "daily-slack-checkin");
+  assert.equal(created.enabled, false);
+
+  const enable = runCli(["cron", "enable", "--id", "daily-slack-checkin"], { OPENPOCKET_HOME: home });
+  assert.equal(enable.status, 0, enable.stderr || enable.stdout);
+  saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  created = saved.jobs.find((job) => job.id === "daily-slack-checkin");
+  assert.equal(created.enabled, true);
+
+  const remove = runCli(["cron", "remove", "--id", "daily-slack-checkin"], { OPENPOCKET_HOME: home });
+  assert.equal(remove.status, 0, remove.stderr || remove.stdout);
+  saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  created = saved.jobs.find((job) => job.id === "daily-slack-checkin");
+  assert.equal(created, undefined);
+});
+
+test("cron remove rejects unexpected extra args", () => {
+  const home = makeHome("openpocket-ts-cron-remove-extra-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const result = runCli(["cron", "remove", "--id", "heartbeat-status", "extra"], { OPENPOCKET_HOME: home });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr || result.stdout, /Unexpected cron remove arguments/i);
+
+  const jobsFile = path.join(home, "workspace", "cron", "jobs.json");
+  const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  const seeded = saved.jobs.find((job) => job.id === "heartbeat-status");
+  assert.equal(Boolean(seeded), true);
+});
+
+test("cron add requires channel and to together when delivery is specified", () => {
+  const home = makeHome("openpocket-ts-cron-delivery-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const result = runCli([
+    "cron",
+    "add",
+    "--id",
+    "daily-slack-checkin",
+    "--name",
+    "Daily Slack Check-in",
+    "--cron",
+    "0 8 * * *",
+    "--tz",
+    "Asia/Shanghai",
+    "--task",
+    "Open Slack and complete check-in",
+    "--channel",
+    "telegram",
+  ], { OPENPOCKET_HOME: home });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr || result.stdout, /must be provided together/i);
+});
+
+test("cron add rejects conflicting schedule flags", () => {
+  const home = makeHome("openpocket-ts-cron-conflict-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const result = runCli([
+    "cron",
+    "add",
+    "--id",
+    "daily-slack-checkin",
+    "--name",
+    "Daily Slack Check-in",
+    "--cron",
+    "0 8 * * *",
+    "--every-sec",
+    "60",
+    "--task",
+    "Open Slack and complete check-in",
+  ], { OPENPOCKET_HOME: home });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr || result.stdout, /exactly one schedule option/i);
+});
+
 test("onboard installs CLI launcher once on first run", () => {
   const runtimeHome = makeHome("openpocket-ts-onboard-runtime-");
   const shellHome = makeHome("openpocket-ts-onboard-shell-");
