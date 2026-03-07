@@ -104,6 +104,17 @@ openpocket human-auth-relay start
 - `openpocket dashboard manager` shows every registered agent, its target binding, configured channels, dashboard URL, and gateway status.
 - `openpocket human-auth-relay start` starts one shared relay hub for all managed agents, with one optional ngrok public URL.
 
+### Create scheduled jobs from chat or CLI
+
+- In Telegram or another chat channel, say a natural-language schedule such as `Every day at 8am open Slack and complete check-in`.
+- OpenPocket will reply with a confirmation message first and only persist the job after you confirm.
+- Triggered jobs run later in isolated `cron:<jobId>` sessions, so they do not reuse the normal chat conversation state.
+
+```bash
+openpocket cron list
+openpocket cron add --id daily-slack-checkin --name "Daily Slack Check-in" --cron "0 8 * * *" --tz Asia/Shanghai --task "Open Slack and complete check-in" --channel telegram --to 12345
+openpocket cron disable --id daily-slack-checkin
+```
 ### Optional target setup examples
 
 ```bash

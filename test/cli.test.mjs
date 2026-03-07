@@ -445,6 +445,8 @@ test("help output uses onboard as primary command and lists legacy aliases", () 
   assert.match(result.stdout, /--agent <id>/);
   assert.match(result.stdout, /create agent/);
   assert.match(result.stdout, /dashboard manager/);
+  assert.match(result.stdout, /create scheduled jobs from chat after confirmation/i);
+  assert.match(result.stdout, /cron list\|add\|remove\|enable\|disable/i);
   assert.match(result.stdout, /(channels whoami|telegram whoami)/);
   assert.match(result.stdout, /Legacy aliases/);
   assert.match(result.stdout, /\binit\b/);

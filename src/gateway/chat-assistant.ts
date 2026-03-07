@@ -18,6 +18,10 @@ import {
   isWorkspaceOnboardingCompleted,
   markWorkspaceOnboardingCompleted,
 } from "../memory/workspace.js";
+import {
+  inferScheduleIntentLocale,
+  normalizeScheduleIntentCandidate,
+} from "./schedule-intent.js";
 
 type MsgRole = "user" | "assistant";
 
@@ -285,6 +289,12 @@ export interface ChatDecision {
 interface GroundingAuditDecision {
   requiresExternalObservation: boolean;
   canAnswerDirectly: boolean;
+  confidence: number;
+  reason: string;
+}
+
+interface ScheduleIntentExtractionDecision {
+  intent: ScheduleIntent;
   confidence: number;
   reason: string;
 }
@@ -1364,211 +1374,14 @@ export class ChatAssistant {
     return hasImperativeCue || hasConcreteTarget || hasOutputConstraint;
   }
 
-  private inferInputLocale(input: string): OnboardingLocale {
-    return /[\u3400-\u9fff]/.test(input) ? "zh" : "en";
-  }
-
   private scheduleTimezoneForInput(input: string): string {
-    const locale = this.inferInputLocale(input);
+    const locale: OnboardingLocale = inferScheduleIntentLocale(input);
     const snapshot = this.readProfileSnapshot(locale);
     const configured = this.normalizeOneLine(snapshot.timezone ?? "");
     if (configured) {
       return configured;
     }
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  }
-
-  private stripLeadingExecutionCue(input: string): string {
-    return this.normalizeOneLine(input)
-      .replace(/^(?:帮我|请你|请|麻烦你|麻烦|给我)\s*/i, "")
-      .trim();
-  }
-
-  private formatScheduleTime(hour: number, minute: number): string {
-    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-  }
-
-  private parseChineseTimePrefix(input: string): { hour: number; minute: number; remainder: string } | null {
-    let remaining = this.normalizeOneLine(input);
-    if (!remaining) {
-      return null;
-    }
-
-    let period = "";
-    const periodMatch = remaining.match(/^(早上|上午|中午|下午|晚上|凌晨)\s*/);
-    if (periodMatch) {
-      period = periodMatch[1] ?? "";
-      remaining = remaining.slice(periodMatch[0].length).trim();
-    }
-
-    let hour = NaN;
-    let minute = NaN;
-    let remainder = "";
-
-    const colonMatch = remaining.match(/^(\d{1,2})\s*[:：]\s*(\d{1,2})(.*)$/);
-    const halfMatch = remaining.match(/^(\d{1,2})\s*点\s*半(.*)$/);
-    const minuteMatch = remaining.match(/^(\d{1,2})\s*点\s*(\d{1,2})\s*分?(.*)$/);
-    const hourMatch = remaining.match(/^(\d{1,2})\s*点(.*)$/);
-
-    if (colonMatch) {
-      hour = Number(colonMatch[1]);
-      minute = Number(colonMatch[2]);
-      remainder = colonMatch[3] ?? "";
-    } else if (halfMatch) {
-      hour = Number(halfMatch[1]);
-      minute = 30;
-      remainder = halfMatch[2] ?? "";
-    } else if (minuteMatch) {
-      hour = Number(minuteMatch[1]);
-      minute = Number(minuteMatch[2]);
-      remainder = minuteMatch[3] ?? "";
-    } else if (hourMatch) {
-      hour = Number(hourMatch[1]);
-      minute = 0;
-      remainder = hourMatch[2] ?? "";
-    } else {
-      return null;
-    }
-
-    if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-      return null;
-    }
-
-    if ((period === "下午" || period === "晚上") && hour < 12) {
-      hour += 12;
-    } else if (period === "中午" && hour < 11) {
-      hour += 12;
-    } else if ((period === "凌晨" || period === "早上" || period === "上午") && hour === 12) {
-      hour = 0;
-    }
-
-    return {
-      hour,
-      minute,
-      remainder: this.stripLeadingExecutionCue(remainder),
-    };
-  }
-
-  private looksLikeScheduleActionTask(taskText: string): boolean {
-    const normalized = this.stripLeadingExecutionCue(taskText);
-    if (!normalized) {
-      return false;
-    }
-    if (/(为什么|原因|排查|修复|修一下|看下原因|都打不开|打不开|无法|失败|出错|异常|怎么回事|翻译|怎么说|什么意思|含义|meaning|translation|translate|why|debug|diagnose|fix)/i.test(normalized)) {
-      return false;
-    }
-    return /^(?:打开|启动|运行|执行|提醒|通知|查询|检查|打卡|查看|看看|搜索|登录|使用|前往|去)/.test(normalized)
-      || /^(?:open|launch|start|run|check|query|remind|notify|search|log in|sign in|use|go to)\b/i.test(normalized);
-  }
-
-  private parseScheduleIntent(input: string): ScheduleIntent | null {
-    const normalized = this.normalizeOneLine(input);
-    if (!normalized) {
-      return null;
-    }
-    if (!this.looksLikeExecutableIntent(normalized) && !this.looksLikeTaskInstruction(normalized)) {
-      return null;
-    }
-
-    const locale = this.inferInputLocale(normalized);
-    const candidate = this.stripLeadingExecutionCue(normalized);
-    const timeLabelFor = (hour: number, minute: number) => this.formatScheduleTime(hour, minute);
-    const confirmationPromptFor = (summaryText: string, taskText: string) => (
-      locale === "zh"
-        ? `我理解为：创建一个${summaryText}执行的定时任务，内容是“${taskText}”。回复“确认”创建，回复“取消”放弃。`
-        : `I understand this as a scheduled job: ${summaryText}, task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`
-    );
-
-    const dailyMatch = candidate.match(/^每天\s*(.*)$/);
-    if (dailyMatch) {
-      const parsedTime = this.parseChineseTimePrefix(dailyMatch[1] ?? "");
-      if (parsedTime && this.looksLikeScheduleActionTask(parsedTime.remainder)) {
-        const summaryText = locale === "zh"
-          ? `每天 ${timeLabelFor(parsedTime.hour, parsedTime.minute)} `
-          : `every day at ${timeLabelFor(parsedTime.hour, parsedTime.minute)} `;
-        const tz = this.scheduleTimezoneForInput(normalized);
-        return {
-          sourceText: normalized,
-          normalizedTask: parsedTime.remainder,
-          schedule: {
-            kind: "cron",
-            expr: `${parsedTime.minute} ${parsedTime.hour} * * *`,
-            at: null,
-            everyMs: null,
-            tz,
-            summaryText: summaryText.trim(),
-          },
-          delivery: null,
-          requiresConfirmation: true,
-          confirmationPrompt: confirmationPromptFor(summaryText, parsedTime.remainder),
-        };
-      }
-    }
-
-    const tomorrowMatch = candidate.match(/^明天\s*(.*)$/);
-    if (tomorrowMatch) {
-      const parsedTime = this.parseChineseTimePrefix(tomorrowMatch[1] ?? "");
-      if (parsedTime && this.looksLikeScheduleActionTask(parsedTime.remainder)) {
-        const summaryText = locale === "zh"
-          ? `明天 ${timeLabelFor(parsedTime.hour, parsedTime.minute)}`
-          : `tomorrow at ${timeLabelFor(parsedTime.hour, parsedTime.minute)}`;
-        const tz = this.scheduleTimezoneForInput(normalized);
-        return {
-          sourceText: normalized,
-          normalizedTask: parsedTime.remainder,
-          schedule: {
-            kind: "at",
-            expr: null,
-            at: null,
-            everyMs: null,
-            tz,
-            summaryText,
-          },
-          delivery: null,
-          requiresConfirmation: true,
-          confirmationPrompt: confirmationPromptFor(summaryText, parsedTime.remainder),
-        };
-      }
-    }
-
-    const weeklyMatch = candidate.match(/^每周([一二三四五六日天])\s*(.*)$/);
-    if (weeklyMatch) {
-      const weekdayMap: Record<string, number> = {
-        一: 1,
-        二: 2,
-        三: 3,
-        四: 4,
-        五: 5,
-        六: 6,
-        日: 0,
-        天: 0,
-      };
-      const weekdayToken = weeklyMatch[1] ?? "";
-      const parsedTime = this.parseChineseTimePrefix(weeklyMatch[2] ?? "");
-      if (parsedTime && this.looksLikeScheduleActionTask(parsedTime.remainder) && weekdayToken in weekdayMap) {
-        const summaryText = locale === "zh"
-          ? `每周${weekdayToken} ${timeLabelFor(parsedTime.hour, parsedTime.minute)}`
-          : `every week on ${weekdayToken} at ${timeLabelFor(parsedTime.hour, parsedTime.minute)}`;
-        const tz = this.scheduleTimezoneForInput(normalized);
-        return {
-          sourceText: normalized,
-          normalizedTask: parsedTime.remainder,
-          schedule: {
-            kind: "cron",
-            expr: `${parsedTime.minute} ${parsedTime.hour} * * ${weekdayMap[weekdayToken]}`,
-            at: null,
-            everyMs: null,
-            tz,
-            summaryText,
-          },
-          delivery: null,
-          requiresConfirmation: true,
-          confirmationPrompt: confirmationPromptFor(summaryText, parsedTime.remainder),
-        };
-      }
-    }
-
-    return null;
   }
 
   private personaPresetFromAnswer(answer: string, locale: OnboardingLocale): string {
@@ -2648,6 +2461,73 @@ export class ChatAssistant {
     this.pushTurn(chatId, role, normalized);
   }
 
+  private async extractScheduleIntentWithModel(
+    client: OpenAI,
+    model: string,
+    maxTokens: number,
+    inputText: string,
+  ): Promise<ScheduleIntentExtractionDecision | null> {
+    const locale: OnboardingLocale = inferScheduleIntentLocale(inputText);
+    const prompt = [
+      "Determine whether the user message asks to create or update a scheduled job.",
+      "Output strict JSON only:",
+      '{"isScheduleIntent":true|false,"task":"<executable task without schedule phrasing>","schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","summaryText":"<concise schedule summary in the user language>"},"confidence":0-1,"reason":"..."}',
+      "Rules:",
+      "1) Return isScheduleIntent=true for explicit or implicit schedule requests such as recurring daily/weekly jobs or one-shot future reminders/tasks.",
+      "2) Return isScheduleIntent=false for translation, explanation, troubleshooting, capability, or meta questions about schedule-shaped text.",
+      "3) task must contain only the executable action, not the time phrase.",
+      "4) Use kind=cron for recurring calendar schedules when you can express them with a standard 5-field cron expression.",
+      "5) Use kind=every only for fixed interval schedules and set everyMs.",
+      "6) Use kind=at only for one-shot future schedules when you can provide an RFC3339 datetime.",
+      "7) summaryText must be short and in the user's language.",
+      "8) If the schedule is ambiguous or any required field is missing, return isScheduleIntent=false instead of guessing.",
+      `User locale hint: ${locale}`,
+      `User message: ${inputText}`,
+    ].join("\n");
+
+    const output = await this.callModelRaw(
+      client,
+      model,
+      Math.min(maxTokens, 1024),
+      prompt,
+      "schedule classify",
+    );
+    if (!output) {
+      throw new Error("schedule classify failed: all endpoint modes returned empty output");
+    }
+
+    const jsonText = extractJsonObjectText(output);
+    this.logChat(
+      "debug",
+      `schedule_classify raw_output_chars=${output.length} preview=${JSON.stringify(this.payloadForChatLog(output, 500))}`,
+    );
+
+    try {
+      const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+      const intent = normalizeScheduleIntentCandidate(inputText, parsed, {
+        locale,
+        resolveTimezone: () => this.scheduleTimezoneForInput(inputText),
+      });
+      if (!intent) {
+        return null;
+      }
+      return {
+        intent,
+        confidence:
+          typeof parsed.confidence === "number" && parsed.confidence >= 0 && parsed.confidence <= 1
+            ? parsed.confidence
+            : 0.9,
+        reason: typeof parsed.reason === "string" ? parsed.reason : "schedule_model",
+      };
+    } catch {
+      this.logChat(
+        "warn",
+        `schedule_classify parse failed json=${JSON.stringify(this.payloadForChatLog(jsonText, 300))}`,
+      );
+      return null;
+    }
+  }
+
   private async classifyWithModel(
     client: OpenAI,
     model: string,
@@ -3652,21 +3532,6 @@ export class ChatAssistant {
       };
     }
 
-    const scheduleIntent = this.parseScheduleIntent(normalizedInput);
-    if (scheduleIntent) {
-      return {
-        mode: "schedule_intent",
-        task: scheduleIntent.normalizedTask,
-        reply: scheduleIntent.confirmationPrompt,
-        taskAcceptedReply: "",
-        confidence: 0.96,
-        reason: `schedule_intent:${scheduleIntent.schedule.kind}`,
-        requiresExternalObservation: false,
-        canAnswerDirectly: false,
-        scheduleIntent,
-      };
-    }
-
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
@@ -3684,6 +3549,31 @@ export class ChatAssistant {
       baseURL: auth.baseUrl ?? profile.baseUrl,
     });
     try {
+      let extractedSchedule: ScheduleIntentExtractionDecision | null = null;
+      try {
+        extractedSchedule = await this.extractScheduleIntentWithModel(
+          client,
+          profile.model,
+          profile.maxTokens,
+          normalizedInput,
+        );
+      } catch {
+        extractedSchedule = null;
+      }
+      if (extractedSchedule) {
+        return {
+          mode: "schedule_intent",
+          task: extractedSchedule.intent.normalizedTask,
+          reply: extractedSchedule.intent.confirmationPrompt,
+          taskAcceptedReply: "",
+          confidence: extractedSchedule.confidence,
+          reason: `schedule_intent:${extractedSchedule.intent.schedule.kind};${extractedSchedule.reason}`,
+          requiresExternalObservation: false,
+          canAnswerDirectly: false,
+          scheduleIntent: extractedSchedule.intent,
+        };
+      }
+
       const classified = await this.classifyWithModel(
         client,
         profile.model,

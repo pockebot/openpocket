@@ -124,6 +124,8 @@ test("GatewayCore: /help command returns command list", async () => {
     assert.ok(adapter.sent[0].text.includes("/start"));
     assert.ok(adapter.sent[0].text.includes("/run"));
     assert.ok(adapter.sent[0].text.includes("/pairing"));
+    assert.match(adapter.sent[0].text, /confirm/i);
+    assert.match(adapter.sent[0].text, /openpocket cron list/i);
   });
 });
 

@@ -147,6 +147,11 @@ Scheduling:
   Chat example: "Every day at 8am open Slack and complete check-in"
   CLI management: openpocket cron list|add|remove|enable|disable
 
+Scheduling:
+  Create scheduled jobs from chat after confirmation.
+  Chat example: "Every day at 8am open Slack and complete check-in"
+  CLI management: openpocket cron list|add|remove|enable|disable
+
 Legacy aliases (deprecated):
   openpocket [--config <path> | --agent <id>] init
   openpocket [--config <path> | --agent <id>] setup

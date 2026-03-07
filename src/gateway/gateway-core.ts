@@ -246,6 +246,12 @@ export class GatewayCore {
         "/reset", "/stop", "/restart",
         "/cronrun <job-id>", "/auth", "/run <task>",
         "/pairing list [channel]", "/pairing approve <channel> <code>",
+        "",
+        "Scheduling:",
+        "Say a natural-language schedule like \"Every day at 8am open Slack and complete check-in\".",
+        "I will ask you to confirm before creating the scheduled job.",
+        "/cronrun only triggers an existing cron job manually.",
+        "CLI management: openpocket cron list|add|remove|enable|disable",
       ];
       await this.router.replyText(env, commands.join("\n"));
     });

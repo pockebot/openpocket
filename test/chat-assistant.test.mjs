@@ -213,7 +213,29 @@ test("ChatAssistant decide routes capability-style runtime introspection questio
 });
 
 test("ChatAssistant decide detects implicit Chinese schedule intent and prepares confirmation preview", async () => {
-  const { assistant } = createAssistant();
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.extractScheduleIntentWithModel = async () => ({
+    intent: {
+      sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+      normalizedTask: "打开 Slack 去打卡",
+      schedule: {
+        kind: "cron",
+        expr: "0 8 * * *",
+        at: null,
+        everyMs: null,
+        tz: "Asia/Shanghai",
+        summaryText: "每天 08:00",
+      },
+      delivery: null,
+      requiresConfirmation: true,
+      confirmationPrompt: "我理解为：创建一个每天 08:00执行的定时任务，内容是“打开 Slack 去打卡”。回复“确认”创建，回复“取消”放弃。",
+    },
+    confidence: 0.98,
+    reason: "schedule_model",
+  });
+  assistant.classifyWithModel = async () => {
+    throw new Error("classifyWithModel should not run after schedule extraction");
+  };
 
   const out = await assistant.decide(28, "每天早上 8 点帮我打开 Slack 去打卡");
   assert.equal(out.mode, "schedule_intent");
@@ -250,6 +272,7 @@ test("ChatAssistant decide keeps time-related capability question in chat mode",
 
 test("ChatAssistant decide does not misroute troubleshooting text into schedule intent", async () => {
   const { assistant } = createAssistant({ withApiKey: true });
+  assistant.extractScheduleIntentWithModel = async () => null;
   assistant.classifyWithModel = async () => ({
     mode: "task",
     task: "每天早上8点都打不开 Slack，帮我看下原因",
@@ -266,6 +289,7 @@ test("ChatAssistant decide does not misroute troubleshooting text into schedule 
 
 test("ChatAssistant decide skips profile timezone reads for non-schedule executable tasks", async () => {
   const { assistant } = createAssistant({ withApiKey: true });
+  assistant.extractScheduleIntentWithModel = async () => null;
   assistant.readProfileSnapshot = () => {
     throw new Error("readProfileSnapshot should not run for non-schedule tasks");
   };
@@ -284,7 +308,29 @@ test("ChatAssistant decide skips profile timezone reads for non-schedule executa
 });
 
 test("ChatAssistant decide treats one-shot tomorrow phrasing as schedule intent", async () => {
-  const { assistant } = createAssistant();
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.extractScheduleIntentWithModel = async () => ({
+    intent: {
+      sourceText: "明天早上 8 点帮我打开 Slack 去打卡",
+      normalizedTask: "打开 Slack 去打卡",
+      schedule: {
+        kind: "at",
+        expr: null,
+        at: null,
+        everyMs: null,
+        tz: "Asia/Shanghai",
+        summaryText: "明天 08:00",
+      },
+      delivery: null,
+      requiresConfirmation: true,
+      confirmationPrompt: "我理解为：创建一个明天 08:00执行的定时任务，内容是“打开 Slack 去打卡”。回复“确认”创建，回复“取消”放弃。",
+    },
+    confidence: 0.98,
+    reason: "schedule_model",
+  });
+  assistant.classifyWithModel = async () => {
+    throw new Error("classifyWithModel should not run after schedule extraction");
+  };
 
   const out = await assistant.decide(32, "明天早上 8 点帮我打开 Slack 去打卡");
   assert.equal(out.mode, "schedule_intent");
@@ -297,6 +343,7 @@ test("ChatAssistant decide treats one-shot tomorrow phrasing as schedule intent"
 
 test("ChatAssistant decide does not misroute schedule-shaped translation request", async () => {
   const { assistant } = createAssistant({ withApiKey: true });
+  assistant.extractScheduleIntentWithModel = async () => null;
   assistant.classifyWithModel = async () => ({
     mode: "chat",
     task: "",
@@ -312,6 +359,14 @@ test("ChatAssistant decide does not misroute schedule-shaped translation request
   assert.equal(out.task, "");
   assert.equal(out.reply, "This is a translation question.");
   assert.match(out.reason, /model_classify/);
+});
+
+test("ChatAssistant decide does not infer schedule intent without model access", async () => {
+  const { assistant } = createAssistant();
+
+  const out = await assistant.decide(34, "每天早上 8 点帮我打开 Slack 去打卡");
+  assert.equal(out.mode, "chat");
+  assert.equal(out.reason, "no_api_key");
 });
 
 test("ChatAssistant decide reports missing API key without heuristics", async () => {

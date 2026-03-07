@@ -27,9 +27,9 @@ export const TELEGRAM_MENU_COMMANDS: TelegramBot.BotCommand[] = [
   { command: "reset", description: "Clear chat memory and stop task" },
   { command: "stop", description: "Stop current running task" },
   { command: "restart", description: "Restart gateway process loop" },
-  { command: "cronrun", description: "Trigger cron job by id" },
+  { command: "cronrun", description: "Trigger existing cron job by id" },
   { command: "auth", description: "Human auth helper commands" },
-  { command: "run", description: "Force task mode with text" },
+  { command: "run", description: "Force immediate task mode" },
 ];
 
 // ---------------------------------------------------------------------------
