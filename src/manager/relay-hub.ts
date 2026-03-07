@@ -162,7 +162,13 @@ export class RelayHubServer {
     if (registerMatch?.[1]) {
       const agentId = decodeURIComponent(registerMatch[1]);
       if (req.method === "PUT") {
-        const body = JSON.parse((await readBody(req)).toString("utf-8") || "{}");
+        let body: Record<string, unknown>;
+        try {
+          body = JSON.parse((await readBody(req)).toString("utf-8") || "{}") as Record<string, unknown>;
+        } catch {
+          json(res, 400, { ok: false, error: "Invalid JSON body." });
+          return;
+        }
         const baseUrl = stripTrailingSlash(String(body.baseUrl ?? ""));
         if (!baseUrl) {
           json(res, 400, { ok: false, error: "baseUrl is required." });
@@ -225,11 +231,17 @@ export class RelayHubServer {
     headers.set("x-openpocket-agent-id", registration.agentId);
     const requestBody = shouldForwardRequestBody(req.method) ? await readBody(req) : null;
 
-    const response = await fetch(targetUrl, {
-      method: req.method,
-      headers,
-      body: requestBody ? new Uint8Array(requestBody) : undefined,
-    });
+    let response: Response;
+    try {
+      response = await fetch(targetUrl, {
+        method: req.method,
+        headers,
+        body: requestBody ? new Uint8Array(requestBody) : undefined,
+      });
+    } catch (error) {
+      json(res, 502, { ok: false, error: `Upstream agent '${registration.agentId}' unreachable: ${(error as Error).message}` });
+      return;
+    }
 
     res.statusCode = response.status;
     for (const [key, value] of response.headers.entries()) {

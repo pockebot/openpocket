@@ -44,16 +44,24 @@ export interface ManagerRegistry {
   agents: Record<string, ManagerAgentRecord>;
 }
 
-function readJsonFile<T>(filePath: string): T | null {
+function readJsonFile<T>(filePath: string, label: string): T | null {
   if (!fs.existsSync(filePath)) {
     return null;
   }
-  return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid ${label} JSON at ${filePath}: ${message}`);
+  }
 }
 
 function writeJsonFile(filePath: string, payload: unknown): void {
-  ensureDir(path.dirname(filePath));
-  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  const dir = path.dirname(filePath);
+  ensureDir(dir);
+  const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.tmp`);
+  fs.writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  fs.renameSync(tmpPath, filePath);
 }
 
 function normalizeAgentId(id: string): string {
@@ -103,7 +111,7 @@ function mergeDefaultRecord(existing: ManagerAgentRecord | null): ManagerAgentRe
 function ensureRegistryFile(): ManagerRegistry {
   ensureDir(agentsRootDir());
   const registryPath = managerRegistryPath();
-  const existing = readJsonFile<ManagerRegistry>(registryPath);
+  const existing = readJsonFile<ManagerRegistry>(registryPath, "manager registry");
   const defaultRecord = mergeDefaultRecord(existing?.agents?.default ?? null);
   const registry: ManagerRegistry = {
     version: 1,
@@ -119,7 +127,7 @@ function ensureRegistryFile(): ManagerRegistry {
 
 function ensureModelTemplateFile(): ManagerModelTemplate {
   const templatePath = managerModelTemplatePath();
-  const existing = readJsonFile<ManagerModelTemplate>(templatePath);
+  const existing = readJsonFile<ManagerModelTemplate>(templatePath, "manager model template");
   if (existing?.defaultModel && existing.models && Object.keys(existing.models).length > 0) {
     return existing;
   }
@@ -151,7 +159,7 @@ export function ensureManagerModelTemplateFromConfig(
   options: { overwrite?: boolean } = {},
 ): ManagerModelTemplate {
   const templatePath = managerModelTemplatePath();
-  const existing = readJsonFile<ManagerModelTemplate>(templatePath);
+  const existing = readJsonFile<ManagerModelTemplate>(templatePath, "manager model template");
   if (existing && !options.overwrite) {
     return existing;
   }

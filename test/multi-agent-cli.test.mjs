@@ -10,7 +10,11 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const cliPath = path.join(repoRoot, "dist", "cli.js");
 
 const { loadConfig, saveConfig } = await import("../dist/config/index.js");
-const { ensureManagerModelTemplateFromConfig } = await import("../dist/manager/registry.js");
+const {
+  ensureManagerModelTemplateFromConfig,
+  loadManagerModelTemplate,
+  loadManagerRegistry,
+} = await import("../dist/manager/registry.js");
 
 function runCli(args, env = {}) {
   return spawnSync("node", [cliPath, ...args], {
@@ -128,4 +132,56 @@ test("create agent rejects duplicate target bindings", () => {
   );
   assert.equal(second.status, 1);
   assert.match(`${second.stderr}\n${second.stdout}`, /already bound to agent 'alpha'/i);
+});
+
+test("manager registry rejects corrupted JSON instead of silently recreating default agent only", () => {
+  const home = makeHome("openpocket-multi-agent-registry-invalid-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const prevHome = process.env.OPENPOCKET_HOME;
+  process.env.OPENPOCKET_HOME = home;
+  try {
+    const managerDir = path.join(home, "manager");
+    fs.mkdirSync(managerDir, { recursive: true });
+    fs.writeFileSync(path.join(managerDir, "registry.json"), "{invalid-json", "utf-8");
+
+    assert.throws(
+      () => loadManagerRegistry(),
+      /Invalid manager registry JSON/i,
+    );
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.OPENPOCKET_HOME;
+    } else {
+      process.env.OPENPOCKET_HOME = prevHome;
+    }
+  }
+});
+
+test("manager model template rejects corrupted JSON instead of recapturing current default config", () => {
+  const home = makeHome("openpocket-multi-agent-template-invalid-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const defaultConfigPath = path.join(home, "config.json");
+  const prevHome = process.env.OPENPOCKET_HOME;
+  process.env.OPENPOCKET_HOME = home;
+  try {
+    ensureManagerModelTemplateFromConfig(loadConfig(defaultConfigPath), { overwrite: true });
+    const managerDir = path.join(home, "manager");
+    fs.mkdirSync(managerDir, { recursive: true });
+    fs.writeFileSync(path.join(managerDir, "model-template.json"), "{invalid-json", "utf-8");
+
+    assert.throws(
+      () => loadManagerModelTemplate(),
+      /Invalid manager model template JSON/i,
+    );
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.OPENPOCKET_HOME;
+    } else {
+      process.env.OPENPOCKET_HOME = prevHome;
+    }
+  }
 });

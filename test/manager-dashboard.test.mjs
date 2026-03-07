@@ -57,6 +57,19 @@ test("manager ports default and persist", async () => {
   });
 });
 
+test("manager ports rejects corrupted JSON instead of resetting to defaults", async () => {
+  await withTempHome("openpocket-manager-ports-invalid-", async (home) => {
+    const managerDir = path.join(home, "manager");
+    fs.mkdirSync(managerDir, { recursive: true });
+    fs.writeFileSync(path.join(managerDir, "ports.json"), "{invalid-json", "utf-8");
+
+    assert.throws(
+      () => loadManagerPorts(),
+      /Invalid manager ports JSON/i,
+    );
+  });
+});
+
 test("manager dashboard exposes agent summaries and HTML index", async () => {
   await withTempHome("openpocket-manager-dashboard-", async (home) => {
     const init = runCli(["init"], { OPENPOCKET_HOME: home });

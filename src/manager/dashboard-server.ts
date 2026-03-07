@@ -89,7 +89,7 @@ function renderHtml(agents: ManagerDashboardAgentSummary[]): string {
             <p class="eyebrow">${agent.kind}</p>
             <h2>${escapeHtml(agent.id)}</h2>
           </div>
-          <span class="status ${agent.gatewayRunning ? "running" : "stopped"}">${status}</span>
+          <span class="status ${agent.gatewayRunning ? "running" : "stopped"}">${escapeHtml(status)}</span>
         </header>
         <dl>
           <div><dt>Project</dt><dd>${escapeHtml(agent.projectName)}</dd></div>
@@ -266,7 +266,8 @@ function escapeHtml(input: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 export class ManagerDashboardServer {
@@ -301,20 +302,24 @@ export class ManagerDashboardServer {
     }
 
     this.server = http.createServer((req, res) => {
-      const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
-      if (req.method === "GET" && url.pathname === "/api/health") {
-        sendJson(res, 200, { ok: true });
-        return;
+      try {
+        const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+        if (req.method === "GET" && url.pathname === "/api/health") {
+          sendJson(res, 200, { ok: true });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/agents") {
+          sendJson(res, 200, { ok: true, agents: this.listAgentSummaries() });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/") {
+          sendHtml(res, 200, renderHtml(this.listAgentSummaries()));
+          return;
+        }
+        sendJson(res, 404, { ok: false, error: "Not found" });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: (error as Error).message });
       }
-      if (req.method === "GET" && url.pathname === "/api/agents") {
-        sendJson(res, 200, { ok: true, agents: this.listAgentSummaries() });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/") {
-        sendHtml(res, 200, renderHtml(this.listAgentSummaries()));
-        return;
-      }
-      sendJson(res, 404, { ok: false, error: "Not found" });
     });
 
     await new Promise<void>((resolve, reject) => {
