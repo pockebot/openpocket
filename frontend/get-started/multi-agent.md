@@ -319,3 +319,4 @@ Suggested usage:
 - [Configuration](./configuration.md)
 - [CLI and Gateway Reference](../reference/cli-and-gateway.md)
 - [Filesystem Layout](../reference/filesystem-layout.md)
+- [Recommended Multi-Agent Deployment Patterns](../ops/multi-agent-deployment-patterns.md)

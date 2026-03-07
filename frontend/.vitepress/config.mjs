@@ -302,6 +302,7 @@ const baseSidebar = [
       { text: "Index", link: "/ops/" },
       { text: "Runbook", link: "/ops/runbook" },
       { text: "Troubleshooting", link: "/ops/troubleshooting" },
+      { text: "Recommended Multi-Agent Deployment Patterns", link: "/ops/multi-agent-deployment-patterns" },
       { text: "Screen Awake Heartbeat", link: "/ops/screen-awake-heartbeat" },
     ],
   },
