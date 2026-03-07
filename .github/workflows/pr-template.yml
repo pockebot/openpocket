@@ -1,0 +1,27 @@
+name: PR Template
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-template:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Validate pull request body
+        run: node scripts/validate-pr-template.mjs
+        env:
+          GITHUB_EVENT_PATH: ${{ github.event_path }}

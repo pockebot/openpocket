@@ -225,6 +225,10 @@ flowchart LR
 
 We welcome issues and pull requests.
 
+Read the full contribution guide before opening a PR:
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
+- [contribution.md](./contribution.md)
+
 1. Fork and create a feature branch.
 2. Keep changes focused and add/update tests.
 3. Run checks locally:
