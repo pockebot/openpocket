@@ -192,3 +192,68 @@ test("CronService still executes V2 every-schedule jobs via compatibility shim",
     assert.deepEqual(runs, [{ id: "job-v2", task: "Open settings app and check Wi-Fi", chatId: 12345 }]);
   });
 });
+
+test("CronService falls back to a safe interval when legacy everySec is invalid", async () => {
+  await withTempHome("openpocket-cron-invalid-legacy-", async () => {
+    const cfg = loadConfig();
+    cfg.cron.enabled = true;
+    cfg.cron.tickSec = 1;
+
+    const jobsFile = path.join(cfg.workspaceDir, "cron", "jobs.json");
+    fs.mkdirSync(path.dirname(jobsFile), { recursive: true });
+    fs.writeFileSync(
+      jobsFile,
+      `${JSON.stringify(
+        {
+          jobs: [
+            {
+              id: "job-invalid",
+              name: "Job Invalid",
+              enabled: true,
+              everySec: "oops",
+              task: "Open settings app and check Wi-Fi",
+              chatId: null,
+              model: null,
+              runOnStartup: false,
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    cfg.cron.jobsFile = jobsFile;
+
+    let nowMs = 0;
+    let tick = () => {};
+    const runs = [];
+
+    const service = new CronService(cfg, {
+      nowMs: () => nowMs,
+      setIntervalFn: (handler) => {
+        tick = handler;
+        return {};
+      },
+      clearIntervalFn: () => {},
+      runTask: async (job) => {
+        runs.push(job.id);
+        return {
+          accepted: true,
+          ok: true,
+          message: "ok",
+        };
+      },
+      log: () => {},
+    });
+
+    service.start();
+    await waitMicrotask();
+    assert.deepEqual(runs, []);
+
+    nowMs = 61_000;
+    tick();
+    await waitMicrotask();
+    assert.deepEqual(runs, ["job-invalid"]);
+  });
+});

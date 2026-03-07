@@ -260,17 +260,20 @@ export class CronRegistry {
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.jobs)) {
       throw new Error("Invalid cron jobs file: expected top-level jobs array.");
     }
+    const jobsRaw = parsed.jobs as unknown[];
 
-    const jobs = (() => {
-      if (parsed.version === 2) {
-        return parsed.jobs
-          .map((job) => normalizeStoredCronJob(job))
-          .filter((job): job is StoredCronJob => Boolean(job));
+    const normalizeJobs = (
+      mapper: (job: unknown) => StoredCronJob | null,
+    ): StoredCronJob[] => jobsRaw.map((job, index) => {
+      const normalized = mapper(job);
+      if (!normalized) {
+        throw new Error(`Invalid cron jobs file: job entry ${index} is malformed.`);
       }
-      return parsed.jobs
-        .map((job) => legacyToStoredCronJob(job))
-        .filter((job): job is StoredCronJob => Boolean(job));
-    })();
+      return normalized;
+    });
+    const jobs = parsed.version === 2
+      ? normalizeJobs((job) => normalizeStoredCronJob(job))
+      : normalizeJobs((job) => legacyToStoredCronJob(job));
     return {
       version: 2,
       jobs,

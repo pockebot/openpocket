@@ -36,6 +36,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function toCronJob(value: unknown): CronJob | null {
   if (!isObject(value)) {
     return null;
@@ -58,7 +63,7 @@ function toCronJob(value: unknown): CronJob | null {
       id,
       name: String(value.name ?? id),
       enabled: value.enabled !== false,
-      everySec: Math.max(5, Number(value.everySec ?? 60)),
+      everySec: Math.max(5, toFiniteNumber(value.everySec ?? 60) ?? 60),
       task: legacyTask,
       chatId,
       model: value.model ? String(value.model) : null,

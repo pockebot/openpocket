@@ -213,6 +213,72 @@ test("CronRegistry fails fast on invalid jobs file contents", async () => {
   });
 });
 
+test("CronRegistry fails fast when any individual stored job is invalid", async () => {
+  await withTempHome("openpocket-cron-registry-invalid-entry-", async () => {
+    const cfg = loadConfig();
+    const jobsFile = path.join(cfg.workspaceDir, "cron", "jobs.json");
+    fs.writeFileSync(
+      jobsFile,
+      `${JSON.stringify(
+        {
+          version: 2,
+          jobs: [
+            {
+              id: "ok-job",
+              name: "OK Job",
+              enabled: true,
+              schedule: {
+                kind: "cron",
+                expr: "0 8 * * *",
+                at: null,
+                everyMs: null,
+                tz: "Asia/Shanghai",
+                summaryText: "每天 08:00",
+              },
+              payload: {
+                kind: "agent_turn",
+                task: "Open Slack and complete check-in",
+              },
+              delivery: null,
+              model: null,
+              createdAt: "2026-03-07T00:00:00.000Z",
+              updatedAt: "2026-03-07T00:00:00.000Z",
+            },
+            {
+              id: "bad-job",
+              name: "Bad Job",
+              enabled: true,
+              schedule: {
+                kind: "every",
+                expr: null,
+                at: null,
+                everyMs: "oops",
+                tz: "UTC",
+                summaryText: "broken",
+              },
+              payload: {
+                kind: "agent_turn",
+                task: "broken",
+              },
+              delivery: null,
+              model: null,
+              createdAt: "2026-03-07T00:00:00.000Z",
+              updatedAt: "2026-03-07T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    cfg.cron.jobsFile = jobsFile;
+
+    const registry = new CronRegistry(cfg);
+    assert.throws(() => registry.list(), /invalid cron jobs file/i);
+  });
+});
+
 test("workspace bootstrap writes the new cron schema guidance and example job", async () => {
   await withTempHome("openpocket-cron-registry-workspace-", async () => {
     const cfg = loadConfig();
