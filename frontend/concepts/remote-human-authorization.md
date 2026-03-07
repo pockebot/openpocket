@@ -2,12 +2,13 @@
 
 This page documents the implemented authorization and delegation system used by OpenPocket today.
 
-Design goal:
+Design goals:
 
-- keep long-running automation inside local Agent Phone task loop
-- ask user on phone only when true real-world authorization/data is required
-- resume VM flow with auditable, scoped delegation
-- **Agent-driven artifact usage**: runtime only saves and describes artifacts; the Agent decides how to apply them
+- keep long-running automation inside the local Agent Phone task loop
+- ask the user only when true real-world authorization/data is required
+- resume the local agent flow with auditable, scoped delegation
+- keep artifacts and request state inside the responsible agent's own `state/`
+- in multi-agent installs, reuse one relay/ngrok entry when needed without mixing requests across agents
 
 ## Boundary Policy
 
@@ -66,58 +67,62 @@ Some flows cannot be completed from local UI automation alone:
 
 OpenPocket handles this with split architecture:
 
-- Agent Phone side: continuous autonomous execution
-- phone side: explicit authorization + optional delegation artifact
+- agent side: continuous autonomous execution on one bound target
+- human side: explicit authorization + optional delegation artifact
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  TG["Telegram Chat"] --> GW["Gateway"]
+  CH["CLI / Telegram / Discord / WhatsApp"] --> GW["Selected Agent Gateway"]
   GW --> AR["AgentRuntime"]
-  AR --> ADB["AdbRuntime + Emulator"]
+  AR --> ADB["AdbRuntime + Target"]
   AR --> HAB["HumanAuthBridge"]
-  HAB --> RELAY["Local HumanAuthRelayServer"]
-  RELAY --> TUNNEL["Optional ngrok tunnel"]
-  TUNNEL --> PHONE["Phone browser auth page"]
-  PHONE --> RELAY
-  RELAY --> HAB
+  HAB --> LR["Private Local Relay\n(one per agent)"]
+  LR --> RH["Shared Relay Hub\n(optional, one per install)"]
+  RH --> N["Optional ngrok tunnel"]
+  N --> PHONE["Phone browser auth page"]
+  PHONE --> RH
+  RH --> LR
+  LR --> HAB
   HAB --> AR
   AR -->|"Agent reads artifact + decides next steps"| ADB
 ```
 
-## End-to-End Sequence (Agentic Delegation)
+## End-to-End Sequence (Managed Agent + Shared Hub)
 
 ```mermaid
 sequenceDiagram
-  participant U as User (Telegram)
-  participant G as Gateway
+  participant U as User
+  participant G as Agent Gateway
   participant A as AgentRuntime
   participant B as HumanAuthBridge
-  participant R as Local Relay
+  participant L as Private Local Relay
+  participant H as Shared Relay Hub
   participant P as Phone Browser
-  participant SK as Skills
 
   U->>G: /run <task>
   G->>A: runTask(...)
   A->>A: continue local execution
-  A->>A: if blocked by real auth checkpoint -> request_human_auth
+  A->>A: if blocked -> request_human_auth
   A->>B: requestAndWait(request)
-  B->>R: POST /v1/human-auth/requests
-  R-->>B: openUrl + pollToken + expiresAt
+  B->>L: POST /v1/human-auth/requests
+  L-->>B: openUrl + pollToken + expiresAt
+  L->>H: register local relay for agentId
   B-->>G: open context
-  G-->>U: Telegram message with auth link
-  U->>P: tap link
-  P->>R: POST /resolve (approve/reject + optional artifact)
-  B->>R: SSE /events or poll decision
-  R-->>B: approved/rejected/timeout (+ artifact)
+  G-->>U: channel message with auth link
+  U->>P: open /a/<agentId>/human-auth/...
+  P->>H: submit approve/reject + optional artifact
+  H->>L: proxy by agentId
+  B->>L: SSE /events or poll decision
+  L-->>B: approved/rejected/timeout (+ artifact)
   B-->>A: HumanAuthDecision + artifactPath
-  A->>A: describeArtifact() → structured summary
-  A->>SK: Agent reads relevant Human Auth Skill
-  A->>A: Agent decides: shell push / type_text / tap / etc.
+  A->>A: describeArtifact() -> structured summary
+  A->>A: decide how to apply artifact on target
   A-->>G: continue steps and finish
-  G-->>U: final result
 ```
+
+If the shared relay hub is unavailable, managed agents fall back to direct local relay URLs.
 
 ## Request and Token Model
 
@@ -134,7 +139,8 @@ Security characteristics:
 - one-time scoped open token hash
 - separate poll token hash
 - timeout auto-resolution (`pending -> timeout`)
-- optional relay API bearer auth (`humanAuth.apiKey` / `humanAuth.apiKeyEnv`)
+- optional relay API bearer auth for standalone/local relay mode
+- shared relay hub routes by `agentId` and only proxies; it does not own per-agent request state
 
 ## Decision Notification
 
@@ -159,7 +165,7 @@ This is guided by **Human Auth Skills** — markdown files in `skills/` that tea
 ### Available Skills
 
 | Skill | Capability | What it teaches |
-|-------|-----------|----------------|
+| --- | --- | --- |
 | `human-auth-delegation` | Overview | General flow and artifact types |
 | `human-auth-camera` | `camera` | Push photo, navigate picker |
 | `human-auth-photos` | `photos` | Single/multi photo, gallery import |
@@ -173,7 +179,7 @@ This is guided by **Human Auth Skills** — markdown files in `skills/` that tea
 | `human-auth-biometric` | `biometric` | Biometric fallback to PIN |
 | `human-auth-contacts-data` | `contacts` / `calendar` / `files` | File import flows |
 
-Contributors can add new capabilities by creating a new `skills/human-auth-<name>/SKILL.md` file — no TypeScript code changes required.
+Contributors can add new capabilities by creating a new `skills/human-auth-<name>/SKILL.md` file without changing TypeScript code.
 
 ## Delegation Artifact Types
 
@@ -191,7 +197,7 @@ Remote approval may include optional artifact payload.
 
 **Sensitive artifact cleanup:** Skills instruct the Agent to delete credential and payment artifacts after use via `exec("rm <path>")`.
 
-**Sensitive data in logs:** OTP/verification code values are NOT written to session logs. Only `value_length=N` is logged. The Agent reads the actual value from the artifact file.
+**Sensitive data in logs:** OTP/verification code values are not written to session logs. Only `value_length=N` is logged. The Agent reads the actual value from the artifact file.
 
 ## Scenario-by-Scenario Behavior
 
@@ -225,77 +231,37 @@ Remote approval may include optional artifact payload.
 
 ## Relay Modes
 
-### Local relay only (LAN)
+### 1) Standalone local relay
+
+Use this when running one agent directly without the manager relay hub.
 
 - `humanAuth.useLocalRelay=true`
 - `humanAuth.tunnel.provider=none`
-- phone must reach local network address
+- phone must reach the local network address
 
-### Local relay + ngrok (remote phone)
+### 2) Standalone local relay + ngrok
 
 - `humanAuth.useLocalRelay=true`
 - `humanAuth.tunnel.provider=ngrok`
 - `humanAuth.tunnel.ngrok.enabled=true`
 - `NGROK_AUTHTOKEN` (or config token) configured
 
-Gateway startup auto-brings relay/tunnel up when enabled.
+### 3) Managed agent + shared relay hub
 
-## Telegram Integration
+Use this when multiple managed agents need to share one external entry point.
 
-When blocked by auth checkpoint:
+- start `openpocket human-auth-relay start`
+- each managed agent starts a private loopback relay
+- private relay registers to the hub by `agentId`
+- shared links are routed as `/a/<agentId>/...`
+- each agent still keeps its own request state and artifacts
 
-- gateway sends request summary
-- includes one-tap link when available
-- manual fallback commands always available:
-  - `/auth pending`
-  - `/auth approve <request-id> [note]`
-  - `/auth reject <request-id> [note]`
+## Persistence
 
-For `sms`/`2fa`, plain code reply (4-10 digits) can resolve pending request directly.
-
-## Test Methodology
-
-### 1) Preflight
-
-```bash
-openpocket config-show
-openpocket telegram whoami
-openpocket target show
-openpocket gateway start
-```
-
-### 2) Run full E2E scenario
-
-```bash
-openpocket test permission-app run --case camera --chat <telegram_chat_id>
-```
-
-### 3) Validate agentic delegation
-
-Inspect latest session file and verify:
-
-- `Human auth approved|rejected|timeout`
-- `artifact_path=...`
-- `artifact_kind=...`
-- Agent's subsequent steps show it reading the artifact and applying it (e.g., `shell adb push ...` or `type_text ...`)
-
-### 4) Failure drills
-
-Simulate faults: stop tunnel, reject request, let request timeout. Verify task does not hang.
-
-## Operational Observability
-
-Primary artifacts:
+All persistence below is relative to the selected agent instance:
 
 - relay request state: `state/human-auth-relay/requests.json`
 - uploaded artifacts: `state/human-auth-artifacts/`
 - task trace: `workspace/sessions/`
-- gateway logs containing `[OpenPocket][human-auth]`
-- Human Auth skills: `skills/human-auth-*/SKILL.md`
 
-## Current Limits
-
-- browser permission behavior differs by Telegram in-app browser and mobile OS
-- real-device GPS injection not supported on non-rooted devices (Agent falls back to manual coordinate input)
-- ngrok free tier allows only one active session; duplicates can break link generation
-- live camera/microphone streaming (WebRTC) is not implemented; current model is capture-then-upload
+The shared relay hub itself only keeps transient in-memory registrations plus its assigned port in `manager/ports.json`.

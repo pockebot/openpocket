@@ -1242,6 +1242,7 @@ export function loadConfig(configPath?: string): OpenPocketConfig {
 }
 
 export function saveConfig(config: OpenPocketConfig): void {
+  ensureDir(path.dirname(config.configPath));
   const payload = {
     projectName: config.projectName,
     workspaceDir: config.workspaceDir,

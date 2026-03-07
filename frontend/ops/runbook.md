@@ -5,13 +5,13 @@ This runbook focuses on day-to-day operation of the current runtime.
 ## Daily Start
 
 1. Ensure Android emulator dependencies are available.
-2. Verify config and environment variables.
+2. Verify config and environment variables for the target agent.
 3. Run onboarding if first launch.
-4. Start emulator and verify booted device.
+4. Start emulator and verify booted device if the agent uses emulator.
 5. Start gateway or run tasks from CLI.
 6. Validate human-auth readiness if remote approvals are enabled.
 
-Commands:
+Commands for the default agent:
 
 ```bash
 openpocket config-show
@@ -21,13 +21,39 @@ openpocket emulator start
 openpocket gateway start
 ```
 
+Commands for a managed agent:
+
+```bash
+openpocket --agent review-bot config-show
+openpocket --agent review-bot target show
+openpocket --agent review-bot gateway start
+```
+
 If launcher is not in PATH yet, use `node dist/cli.js <command>`.
 
-Human-auth readiness checks:
+## Multi-Agent Operational Pattern
 
-- `humanAuth.enabled` and `humanAuth.useLocalRelay` in config
-- `humanAuth.relayBaseUrl` / `humanAuth.publicBaseUrl` populated after gateway boot
-- if ngrok mode is enabled, verify `NGROK_AUTHTOKEN` (or config token)
+Create and inspect agents:
+
+```bash
+openpocket create agent review-bot --type physical-phone --device R5CX123456A
+openpocket create agent ops-bot --type emulator
+openpocket agents list
+openpocket agents show review-bot
+```
+
+Recommended long-running control surfaces:
+
+```bash
+openpocket dashboard manager
+openpocket human-auth-relay start
+```
+
+This gives you:
+
+- one install-level dashboard for all agents
+- one shared relay hub / optional ngrok tunnel for all managed agents
+- one per-agent gateway process per running agent
 
 ## Runtime Prompt Context Check
 
@@ -45,57 +71,49 @@ Use this when investigating unexpected model behavior.
 Use this playbook to verify remote authorization E2E.
 
 ```bash
-openpocket telegram whoami
+openpocket channels whoami --channel telegram
 openpocket test permission-app cases
-openpocket test permission-app run --case camera --chat <telegram_chat_id>
+openpocket test permission-app run --case camera --chat <channel_chat_id>
+```
+
+Or for a managed agent:
+
+```bash
+openpocket --agent review-bot test permission-app run --case camera --chat <channel_chat_id>
 ```
 
 Expected outcome:
 
 1. PermissionLab deploys and launches.
-2. Agent taps scenario button in emulator.
-3. If scenario requires remote authorization, Telegram receives human-auth request with link.
+2. Agent taps scenario button in emulator or device.
+3. If scenario requires remote authorization, the configured channel receives a human-auth request with link.
 4. Phone approval/rejection resolves request.
 5. Agent resumes and reports final result.
 
-Note:
+Notes:
 
-- in-emulator Android runtime permission dialogs are auto-handled locally (no remote auth required for those dialogs).
-
-Recommended scenario matrix:
-
-- `--case camera` for image delegation
-- `--case location` for geo delegation
-- `--case sms` or `--case 2fa` for text/code delegation
-- real app login wall (`capability=oauth`) for credential delegation or optional remote takeover validation
-
-## Automated Agent E2E (Local)
-
-Validate natural-language planning -> emulator actions -> session assertions.
-
-```bash
-npm run build
-OPENPOCKET_E2E_HOME=/tmp/openpocket-e2e-report node test/integration/docker-agent-e2e.mjs
-```
-
-Expected outcome:
-
-1. mock model server starts locally
-2. emulator boots and is detected by `adb`
-3. task session contains expected action chain and `status: SUCCESS`
-4. script exits with `E2E assertions passed`
-
-This test uses local mock endpoint and does not require external model API keys.
+- in-emulator Android runtime permission dialogs are auto-handled locally (no remote auth required for those dialogs)
+- if you need one public relay URL across many agents, start `openpocket human-auth-relay start` before these tests
 
 ## Monitoring
 
-- gateway logs show accepted task, progress narration decisions, and final status
-- heartbeat logs are printed and appended to `state/heartbeat.log`
+Per running agent, monitor:
+
+- gateway logs for accepted task, progress narration decisions, and final status
+- heartbeat logs in `state/heartbeat.log`
 - cron execution state in `state/cron-state.json`
-- each task writes `workspace/sessions/session-*.md`
-- each task appends one line to `workspace/memory/YYYY-MM-DD.md`
+- task traces in `workspace/sessions/session-*.md`
+- daily memory lines in `workspace/memory/YYYY-MM-DD.md`
 - relay requests in `state/human-auth-relay/requests.json`
 - uploaded auth artifacts in `state/human-auth-artifacts/`
+
+Install-level monitoring:
+
+- `openpocket agents list`
+- `openpocket dashboard manager`
+- `manager/registry.json`
+- `manager/ports.json`
+- `manager/locks/targets/*.json`
 
 Log tuning:
 
@@ -105,29 +123,49 @@ Log tuning:
 
 ## Safe Stop
 
-- use `/stop` in Telegram to request cancellation
+- use `/stop` in channel chat to request cancellation for the current agent task
 - runtime checks stop flag between steps and finalizes session as failed with stop reason
 - for blocked auth requests, use `/auth pending` then `/auth approve|reject`
+- stop per-agent gateways individually; deleting an agent requires that agent gateway to be stopped first
 
 ## Debug Evidence Collection
 
-When remote auth flow fails, collect:
+When a run fails, collect artifacts from the relevant agent only:
 
-- gateway lines containing `[OpenPocket][gateway-core][humanAuth]` and `[OpenPocket][human-auth]`
-- latest session under `workspace/sessions/`
+- gateway lines containing `[OpenPocket][gateway]` and `[OpenPocket][human-auth]`
+- latest session under that agent `workspace/sessions/`
 - relay state file `state/human-auth-relay/requests.json`
 - artifact listing under `state/human-auth-artifacts/`
+- `/context json` output when prompt diagnosis is needed
 
-For prompt diagnosis, also collect `/context json` output.
+When the install-level manager layer fails, also collect:
+
+- `manager/registry.json`
+- `manager/ports.json`
+- output from `openpocket agents list`
+- output from `openpocket dashboard manager`
 
 ## Data Retention
+
+Per agent:
 
 - screenshots: bounded by `screenshots.maxCount`
 - sessions/memory/scripts: retained until manually cleaned
 
+Install-level:
+
+- manager registry, ports, and target locks remain until explicitly changed or cleaned
+
 ## Model Switch
 
-Use Telegram `/model <name>` or edit `defaultModel` in config.
+Use `/model <name>` in the selected chat or edit the selected agent's `defaultModel` in config.
+
+CLI examples:
+
+```bash
+openpocket model set --name gpt-5.4
+openpocket --agent review-bot model set --provider google --model gemini-3.1-pro-preview
+```
 
 When changing model, verify:
 
@@ -140,3 +178,4 @@ When changing model, verify:
 - keep `scriptExecutor.allowedCommands` and `codingTools.allowedCommands` minimal in production
 - disable tools when not needed (`scriptExecutor.enabled=false`, `codingTools.enabled=false`)
 - review run artifacts under `workspace/scripts/runs`
+- remember that each agent has its own workspace, so safety policies and generated scripts are isolated per agent

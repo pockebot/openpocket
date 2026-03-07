@@ -1,6 +1,8 @@
 # Sessions and Memory
 
-OpenPocket persists execution and context as markdown/json artifacts under workspace.
+OpenPocket persists execution and context as markdown/json artifacts under the **selected agent workspace**.
+
+In multi-agent installs, every agent has its own workspace and memory timeline. Sessions and memory are not shared across agents.
 
 ## Workspace Bootstrap
 
@@ -28,6 +30,8 @@ And default files (if missing):
 - `TASK_PROGRESS_REPORTER.md`
 - `TASK_OUTCOME_REPORTER.md`
 - `BARE_SESSION_RESET_PROMPT.md`
+
+This happens independently per agent workspace.
 
 ## Onboarding Lifecycle Persistence
 
@@ -87,7 +91,7 @@ Prompt policy encourages memory-first retrieval before answering prior-decision/
 
 When enabled (`screenshots.saveStepScreenshots=true`):
 
-- each step screenshot is saved locally
+- each step screenshot is saved locally in the selected agent's `state/screenshots/`
 - optional screenshot path is appended to step result text
 - debug marker overlays may be saved for tap/swipe steps
 
@@ -110,3 +114,5 @@ Current auto-skill experience behavior:
 - generated skills include a `behavior_fingerprint` for replay dedupe
 - step-derived `ui_target` semantic traces are embedded for element intent reuse
 - runtime can inject active skill content (not only summary metadata) into prompt context when relevance is high
+
+This experience layer is agent-local. A second agent does not see or reuse the first agent's auto-generated memory unless you manually copy files between workspaces.

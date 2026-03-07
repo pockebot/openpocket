@@ -2,16 +2,22 @@
 
 OpenPocket runs locally and controls a configurable **Agent Phone** target through `adb`.
 
+In multi-agent mode, the rule is simple:
+
+- one agent instance binds to one selected target at a time
+- one target cannot be shared by multiple agents
+
 Default behavior:
 
-- Default target type is `emulator`.
-- During `openpocket onboard`, target selection is always shown and preselected to the current config value (first run: `emulator`).
-- After onboarding, you can switch target any time before `gateway start` (gateway must be stopped).
+- default target type is `emulator`
+- during `openpocket onboard`, target selection is always shown and preselected to the current config value (first run: `emulator`)
+- after onboarding, you can switch target for the selected agent any time before that agent's `gateway start`
 
 Recommended practical path today:
 
 - start with `emulator` for quick bring-up
 - use `physical-phone` for production-like task validation
+- create additional agents when you need additional devices, instead of trying to multiplex one agent across many targets
 
 ## Target Types and Status
 
@@ -30,7 +36,7 @@ Onboarding preset (optional):
 openpocket onboard --target physical-phone
 ```
 
-Switch later (gateway must be stopped):
+Switch later for the default agent:
 
 ```bash
 openpocket target show
@@ -38,11 +44,41 @@ openpocket target set --type physical-phone
 openpocket target set --type emulator
 ```
 
+Switch later for a managed agent:
+
+```bash
+openpocket --agent review-bot target show
+openpocket --agent review-bot target set --type physical-phone --device R5CX123456A
+```
+
 When you run `openpocket target set --type physical-phone` (or `android-tv`) without `--device`, OpenPocket will:
 
-- detect online adb devices,
-- auto-select when only one device is online,
-- show an arrow-key selector when multiple devices are online.
+- detect online adb devices
+- auto-select when only one device is online
+- show an arrow-key selector when multiple devices are online
+
+Target switching checks:
+
+- the selected agent gateway must be stopped first
+- the new target fingerprint must not already belong to another agent
+
+## When to Create Another Agent Instead of Switching
+
+Use `target set` when one existing agent should move to a different target.
+
+Use `create agent` when you need:
+
+- a second target running at the same time
+- a second isolated workspace and memory timeline
+- different channels for a different phone or workflow
+
+Example:
+
+```bash
+openpocket create agent review-bot --type physical-phone --device R5CX123456A
+openpocket create agent ops-bot --type emulator
+openpocket agents list
+```
 
 ## Physical Phone Setup (USB)
 
@@ -70,15 +106,23 @@ openpocket target set --type physical-phone
 openpocket target show
 ```
 
+For a managed agent:
+
+```bash
+openpocket --agent review-bot target set --type physical-phone
+openpocket --agent review-bot target show
+```
+
 If multiple devices are connected, select one in the interactive CLI list.
 
 ### 4) Start gateway
 
 ```bash
 openpocket gateway start
+openpocket --agent review-bot gateway start
 ```
 
-OpenPocket will verify the target device is online before gateway runtime starts.
+OpenPocket verifies that the selected target device is online before gateway runtime starts.
 
 ## Physical Phone Setup (Wi-Fi ADB)
 
@@ -90,6 +134,12 @@ adb connect <phone-ip>:5555
 openpocket target set --type physical-phone --adb-endpoint <phone-ip>:5555
 ```
 
+For a managed agent:
+
+```bash
+openpocket --agent review-bot target set --type physical-phone --adb-endpoint <phone-ip>:5555
+```
+
 Then verify:
 
 ```bash
@@ -99,8 +149,8 @@ openpocket target show
 
 Notes:
 
-- Some Android 11+ builds prefer **Wireless debugging** pairing flow from Developer options.
-- Keep the phone unlocked during first pairing/authorization.
+- some Android 11+ builds prefer **Wireless debugging** pairing flow from Developer options
+- keep the phone unlocked during first pairing/authorization
 
 ## Physical Phone Setup (Wi-Fi Pairing via `target pair`)
 
@@ -115,47 +165,45 @@ For Android 11+ **Wireless debugging**, you can use OpenPocket's built-in pairin
    - Pairing port
    - Pairing code
 
-### 2) Run OpenPocket pairing command (non-interactive)
+### 2) Run OpenPocket pairing command
 
 ```bash
 openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type physical-phone
 ```
 
+For a managed agent:
+
+```bash
+openpocket --agent review-bot target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type physical-phone
+```
+
 This command:
 
-- runs `adb pair` with the provided endpoint/code,
-- runs `adb connect` for the same host,
-- updates target config (`type`, `preferredDeviceId`, `adbEndpoint`).
+- runs `adb pair` with the provided endpoint/code
+- runs `adb connect` for the same host
+- updates target config (`type`, `preferredDeviceId`, `adbEndpoint`)
+- supports `--dry-run` for command preview without changing device state
 
-Equivalent endpoint-style form:
-
-```bash
-openpocket target pair --pair-endpoint <device-ip:pair-port> --connect-endpoint <device-ip:adb-port> --code <pairing-code> --type physical-phone
-```
-
-### 3) Optional: specify connect port explicitly
-
-If your device uses a non-default ADB connect port:
-
-```bash
-openpocket target pair --host <device-ip> --pair-port <pair-port> --connect-port <adb-connect-port> --code <pairing-code> --type physical-phone
-```
-
-### 4) Optional: interactive pairing prompts
-
-If you omit some arguments, OpenPocket can prompt for them:
-
-```bash
-openpocket target pair --type physical-phone
-```
-
-### 5) Verify and continue
+### 3) Verify and continue
 
 ```bash
 adb devices -l
 openpocket target show
 openpocket gateway start
 ```
+
+## Emulator Path in Multi-Agent Installs
+
+Each emulator-backed agent still uses one configured AVD name.
+
+Examples:
+
+```bash
+openpocket target set --type emulator
+openpocket --agent ops-bot target set --type emulator
+```
+
+If two agents should both use emulators, assign them different AVDs so the target fingerprint stays unique.
 
 ## Android TV and Cloud Paths
 

@@ -2,6 +2,8 @@
 
 OpenPocket supports controlled script execution through `run_script` action and CLI command.
 
+In multi-agent installs, all `workspace/` paths on this page refer to the **selected agent workspace**.
+
 ## Entry Points
 
 - agent action: `{"type":"run_script","script":"...","timeoutSec":60}`

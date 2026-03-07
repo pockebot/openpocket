@@ -2,6 +2,8 @@
 
 OpenPocket skills are markdown instruction files loaded into the agent loop to provide reusable operational knowledge.
 
+In multi-agent installs, all `workspace/` paths on this page refer to the **selected agent workspace**.
+
 `agent.skillsSpecMode` controls compatibility behavior:
 
 - `legacy`: permissive legacy markdown behavior

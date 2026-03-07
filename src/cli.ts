@@ -20,8 +20,6 @@ import { runGatewayLoop } from "./gateway/run-loop.js";
 import { DashboardServer, type DashboardGatewayStatus } from "./dashboard/server.js";
 import { HumanAuthBridge } from "./human-auth/bridge.js";
 import { LocalHumanAuthStack } from "./human-auth/local-stack.js";
-import { HumanAuthRelayServer } from "./human-auth/relay-server.js";
-import { LocalHumanAuthTakeoverRuntime } from "./human-auth/takeover-runtime.js";
 import { SkillLoader, type LoadedSkill } from "./skills/skill-loader.js";
 import { validateSkillPath } from "./skills/spec-validator.js";
 import { ScriptExecutor } from "./tools/script-executor.js";
@@ -31,6 +29,31 @@ import { ensureAndroidPrerequisites } from "./environment/android-prerequisites.
 import { PermissionLabManager } from "./test/permission-lab.js";
 import { createCliTheme, createOpenPocketBanner, type CliStepStatus, type CliTone } from "./utils/cli-theme.js";
 import { openpocketHome } from "./utils/paths.js";
+import type { ManagerAgentRecord } from "./manager/registry.js";
+import {
+  assertTargetFingerprintAvailable,
+  assertValidAgentId,
+  cloneBaseAgentConfig,
+  deleteManagedAgent,
+  ensureManagerModelTemplateFromConfig,
+  findManagerAgentByConfigPath,
+  getManagerAgent,
+  listManagerAgents,
+  registerManagedAgent,
+  removeAgentFilesystem,
+} from "./manager/registry.js";
+import { computeTargetFingerprint } from "./manager/target-fingerprint.js";
+import {
+  acquireGatewayRuntimeLock,
+  acquireTargetRuntimeLock,
+  readGatewayRuntimeLock,
+  releaseGatewayRuntimeLock,
+  releaseTargetRuntimeLock,
+  updateGatewayRuntimeLock,
+} from "./manager/runtime-locks.js";
+import { ManagerDashboardServer } from "./manager/dashboard-server.js";
+import { loadManagerPorts, saveManagerPorts } from "./manager/ports.js";
+import { RelayHubServer } from "./manager/relay-hub.js";
 import {
   buildModelProfileFromPreset,
   deriveModelProfileKey,
@@ -86,36 +109,41 @@ function printRuntimeLine(line: string): void {
 function printHelp(): void {
   printRaw(`${cliTheme.emphasize("OpenPocket CLI (Node.js + TypeScript)", "accent")}\n
 Usage:
-  openpocket [--config <path>] install-cli
-  openpocket [--config <path>] onboard [--force] [--target <type>]
-  openpocket [--config <path>] config-show
-  openpocket [--config <path>] model show|list|set [--name <profile>|<profile>] [--provider <provider> --model <model-id>]
-  openpocket [--config <path>] target show
-  openpocket [--config <path>] target set|set-target|config --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
-  openpocket [--config <path>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
-  openpocket [--config <path>] emulator status
-  openpocket [--config <path>] emulator start
-  openpocket [--config <path>] emulator stop
-  openpocket [--config <path>] emulator hide
-  openpocket [--config <path>] emulator show
-  openpocket [--config <path>] emulator list-avds
-  openpocket [--config <path>] emulator screenshot [--out <path>]
-  openpocket [--config <path>] emulator tap --x <int> --y <int> [--device <id>]
-  openpocket [--config <path>] emulator type --text <text> [--device <id>]
-  openpocket [--config <path>] agent [--model <name>] <task>
-  openpocket [--config <path>] skills list|load [--all]|validate [--strict]
-  openpocket [--config <path>] script run [--file <path> | --text <script>] [--timeout <sec>]
-  openpocket [--config <path>] channels login --channel <name>
-  openpocket [--config <path>] channels whoami [--channel <name>]
-  openpocket [--config <path>] channels list
-  openpocket [--config <path>] gateway [start|telegram]
-  openpocket [--config <path>] dashboard start [--host <host>] [--port <port>]
-  openpocket [--config <path>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
-  openpocket [--config <path>] human-auth-relay start [--host <host>] [--port <port>] [--public-base-url <url>] [--api-key <key>] [--state-file <path>]
+  openpocket [--config <path> | --agent <id>] install-cli
+  openpocket [--config <path> | --agent <id>] onboard [--force] [--target <type>]
+  openpocket [--config <path> | --agent <id>] config-show
+  openpocket [--config <path> | --agent <id>] model show|list|set [--name <profile>|<profile>] [--provider <provider> --model <model-id>]
+  openpocket [--config <path> | --agent <id>] target show
+  openpocket [--config <path> | --agent <id>] target set|set-target|config --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
+  openpocket [--config <path> | --agent <id>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
+  openpocket [--config <path> | --agent <id>] emulator status
+  openpocket [--config <path> | --agent <id>] emulator start
+  openpocket [--config <path> | --agent <id>] emulator stop
+  openpocket [--config <path> | --agent <id>] emulator hide
+  openpocket [--config <path> | --agent <id>] emulator show
+  openpocket [--config <path> | --agent <id>] emulator list-avds
+  openpocket [--config <path> | --agent <id>] emulator screenshot [--out <path>]
+  openpocket [--config <path> | --agent <id>] emulator tap --x <int> --y <int> [--device <id>]
+  openpocket [--config <path> | --agent <id>] emulator type --text <text> [--device <id>]
+  openpocket [--config <path> | --agent <id>] agent [--model <name>] <task>
+  openpocket [--config <path> | --agent <id>] skills list|load [--all]|validate [--strict]
+  openpocket [--config <path> | --agent <id>] script run [--file <path> | --text <script>] [--timeout <sec>]
+  openpocket [--config <path> | --agent <id>] channels login --channel <name>
+  openpocket [--config <path> | --agent <id>] channels whoami [--channel <name>]
+  openpocket [--config <path> | --agent <id>] channels list
+  openpocket [--config <path> | --agent <id>] gateway [start|telegram]
+  openpocket [--config <path> | --agent <id>] dashboard start [--host <host>] [--port <port>]
+  openpocket dashboard manager [--host <host>] [--port <port>]
+  openpocket [--config <path> | --agent <id>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
+  openpocket [--config <path> | --agent <id>] human-auth-relay start [--host <host>] [--port <port>] [--public-base-url <url>]
+  openpocket create agent <id> [--type <target-type>] [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
+  openpocket agents list
+  openpocket agents show [<id>]
+  openpocket agents delete <id>
 
 Legacy aliases (deprecated):
-  openpocket [--config <path>] init
-  openpocket [--config <path>] setup
+  openpocket [--config <path> | --agent <id>] init
+  openpocket [--config <path> | --agent <id>] setup
 
 Examples:
   openpocket onboard
@@ -144,8 +172,12 @@ Examples:
   openpocket channels login --channel whatsapp
   openpocket channels whoami --channel telegram
   openpocket channels list
+  openpocket create agent review-bot --type physical-phone --device R5CX123456A
+  openpocket agents list
+  openpocket --agent review-bot gateway start
   openpocket gateway start
   openpocket dashboard start
+  openpocket dashboard manager
   openpocket test permission-app deploy
   openpocket test permission-app task
   openpocket test permission-app cases
@@ -210,56 +242,38 @@ function openUrlInBrowser(url: string): void {
   }
 }
 
-function findGatewayProcessPids(): number[] {
-  if (process.env.OPENPOCKET_SKIP_GATEWAY_PID_CHECK === "1") {
-    return [];
+function resolveSelectedConfigPath(configPath: string | null, agentId: string | null): string | undefined {
+  if (configPath && agentId) {
+    throw new Error("Use either --config or --agent, not both.");
   }
-
-  const ps = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if ((ps.status ?? 1) !== 0 || !ps.stdout) {
-    return [];
+  if (configPath) {
+    return configPath;
   }
-
-  const currentPid = process.pid;
-  const matches: number[] = [];
-  for (const rawLine of ps.stdout.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    const match = line.match(/^(\d+)\s+(.*)$/);
-    if (!match?.[1] || !match[2]) {
-      continue;
-    }
-    const pid = Number(match[1]);
-    if (!Number.isFinite(pid) || pid === currentPid) {
-      continue;
-    }
-    const command = match[2].toLowerCase();
-    if (!command.includes("gateway start")) {
-      continue;
-    }
-    if (
-      command.includes("openpocket")
-      || command.includes("/dist/cli.js")
-      || command.includes("/src/cli.ts")
-    ) {
-      matches.push(pid);
-    }
+  if (agentId) {
+    return getManagerAgent(agentId).configPath;
   }
-
-  return [...new Set(matches)].sort((a, b) => a - b);
+  return undefined;
 }
 
-function standaloneDashboardGatewayStatus(): DashboardGatewayStatus {
-  const pids = findGatewayProcessPids();
+function resolveSelectedAgentRecord(
+  configPath: string | undefined,
+  explicitAgentId: string | null,
+): ManagerAgentRecord | null {
+  if (explicitAgentId) {
+    return getManagerAgent(explicitAgentId);
+  }
+  if (!configPath) {
+    return getManagerAgent("default");
+  }
+  return findManagerAgentByConfigPath(configPath);
+}
+
+function standaloneDashboardGatewayStatus(config: OpenPocketConfig): DashboardGatewayStatus {
+  const lock = readGatewayRuntimeLock(config.stateDir);
   return {
-    running: pids.length > 0,
+    running: Boolean(lock),
     managed: false,
-    note: pids.length > 0 ? `detected gateway pid(s): ${pids.join(", ")}` : "no gateway process detected",
+    note: lock ? `agent '${lock.agentId}' running on pid ${lock.pid}` : "no gateway process detected",
   };
 }
 
@@ -280,6 +294,153 @@ function takeOption(args: string[], name: string): { value: string | null; rest:
   }
 
   return { value, rest: out };
+}
+
+function configuredChannelNames(cfg: OpenPocketConfig): string[] {
+  const names: string[] = [];
+  if (cfg.channels?.telegram && cfg.channels.telegram.enabled !== false) names.push("telegram");
+  if (cfg.channels?.discord && cfg.channels.discord.enabled !== false) names.push("discord");
+  if (cfg.channels?.whatsapp && cfg.channels.whatsapp.enabled !== false) names.push("whatsapp");
+  if (cfg.channels?.imessage && cfg.channels.imessage.enabled !== false) names.push("imessage");
+  return names;
+}
+
+function printAgentRecordSummary(record: ManagerAgentRecord): void {
+  const cfg = loadConfig(record.configPath);
+  printRaw(cliTheme.section(`Agent: ${record.id}`));
+  printKeyValue("Config", cfg.configPath);
+  printKeyValue("Workspace", cfg.workspaceDir);
+  printKeyValue("State", cfg.stateDir);
+  printKeyValue("Model", cfg.defaultModel, "accent");
+  printKeyValue("Target", record.targetFingerprint, "accent");
+  printKeyValue("Dashboard port", String(record.dashboardPort));
+  printKeyValue(
+    "Channels",
+    configuredChannelNames(cfg).join(", ") || "(none configured)",
+  );
+}
+
+async function runCreateAgentCommand(
+  sourceConfigPath: string | undefined,
+  args: string[],
+): Promise<number> {
+  const entity = (args[0] ?? "").trim().toLowerCase();
+  if (entity !== "agent") {
+    throw new Error("Usage: openpocket create agent <id> [target options]");
+  }
+
+  const idRaw = (args[1] ?? "").trim();
+  if (!idRaw) {
+    throw new Error("Missing agent id. Usage: openpocket create agent <id> [target options]");
+  }
+
+  const agentId = assertValidAgentId(idRaw);
+  if (agentId === "default") {
+    throw new Error("The id 'default' is reserved for the onboarded root agent.");
+  }
+  const existing = listManagerAgents().find((item) => item.id === agentId);
+  if (existing) {
+    throw new Error(`Agent '${agentId}' already exists.`);
+  }
+
+  const { value: typeRaw, rest: afterType } = takeOption(args.slice(2), "--type");
+  const { value: deviceIdRaw, rest: afterDevice } = takeOption(afterType, "--device");
+  const { value: adbEndpointRaw, rest: afterEndpoint } = takeOption(afterDevice, "--adb-endpoint");
+  const { value: cloudProviderRaw, rest: afterCloudProvider } = takeOption(afterEndpoint, "--cloud-provider");
+  const { value: pinRaw, rest: afterPin } = takeOption(afterCloudProvider, "--pin");
+  const { value: wakeupIntervalRaw, rest: afterWakeupInterval } = takeOption(afterPin, "--wakeup-interval");
+  const { value: dashboardPortRaw, rest: remaining } = takeOption(afterWakeupInterval, "--dashboard-port");
+  if (remaining.length > 0) {
+    throw new Error(`Unexpected create agent arguments: ${remaining.join(" ")}`);
+  }
+
+  const sourceConfig = loadConfig(sourceConfigPath);
+  const cfg = cloneBaseAgentConfig(sourceConfig, agentId);
+
+  if (typeRaw) {
+    const raw = typeRaw.trim().toLowerCase();
+    if (!isDeviceTargetType(raw)) {
+      throw new Error(`Unknown target type: ${typeRaw}`);
+    }
+    cfg.target.type = normalizeDeviceTargetType(raw);
+  }
+  if (deviceIdRaw !== null) {
+    const normalized = deviceIdRaw.trim();
+    cfg.agent.deviceId = normalized || null;
+  }
+  if (adbEndpointRaw !== null) {
+    cfg.target.adbEndpoint = normalizeAdbEndpoint(adbEndpointRaw);
+  }
+  if (cloudProviderRaw !== null) {
+    cfg.target.cloudProvider = cloudProviderRaw.trim();
+  }
+  if (pinRaw !== null) {
+    cfg.target.pin = normalizeFourDigitPin(pinRaw, "--pin");
+  }
+  if (wakeupIntervalRaw !== null) {
+    cfg.target.wakeupIntervalSec = normalizeWakeupIntervalSec(wakeupIntervalRaw, "--wakeup-interval");
+  }
+  if (dashboardPortRaw !== null) {
+    cfg.dashboard.port = normalizePort(dashboardPortRaw, "--dashboard-port");
+  }
+  if (isEmulatorTarget(cfg.target.type)) {
+    cfg.target.adbEndpoint = "";
+  }
+  if (listManagerAgents().some((record) => record.dashboardPort === cfg.dashboard.port)) {
+    throw new Error(`Dashboard port ${cfg.dashboard.port} is already assigned to another agent.`);
+  }
+
+  const nextFingerprint = computeTargetFingerprint(cfg);
+  assertTargetFingerprintAvailable(nextFingerprint, agentId);
+
+  saveConfig(cfg);
+  const saved = loadConfig(cfg.configPath);
+  const record = registerManagedAgent({ agentId, config: saved, dashboardPort: saved.dashboard.port });
+
+  printSuccess(`Agent '${agentId}' created.`);
+  printAgentRecordSummary(record);
+  printInfo(`Start its gateway with: openpocket --agent ${agentId} gateway start`);
+  return 0;
+}
+
+async function runAgentsCommand(args: string[]): Promise<number> {
+  const sub = (args[0] ?? "list").trim().toLowerCase();
+  if (sub === "list") {
+    const records = listManagerAgents();
+    printRaw(cliTheme.section("Agents"));
+    for (const record of records) {
+      const status = readGatewayRuntimeLock(record.stateDir);
+      const running = status ? `running pid=${status.pid}` : "stopped";
+      printRaw(`- ${record.id}  target=${record.targetFingerprint}  dashboard=${record.dashboardPort}  ${running}`);
+    }
+    return 0;
+  }
+
+  if (sub === "show") {
+    const id = (args[1] ?? "default").trim();
+    const record = getManagerAgent(id);
+    printAgentRecordSummary(record);
+    const lock = readGatewayRuntimeLock(record.stateDir);
+    printKeyValue("Gateway", lock ? `running (pid ${lock.pid})` : "stopped");
+    return 0;
+  }
+
+  if (sub === "delete") {
+    const id = (args[1] ?? "").trim();
+    if (!id) {
+      throw new Error("Missing agent id. Usage: openpocket agents delete <id>");
+    }
+    const record = getManagerAgent(id);
+    if (readGatewayRuntimeLock(record.stateDir)) {
+      throw new Error(`Agent '${record.id}' is running. Stop its gateway before deleting it.`);
+    }
+    deleteManagedAgent(record.id);
+    removeAgentFilesystem(record);
+    printSuccess(`Agent '${record.id}' deleted.`);
+    return 0;
+  }
+
+  throw new Error("Unknown agents subcommand. Use: agents list|show|delete");
 }
 
 async function runEmulatorCommand(configPath: string | undefined, args: string[]): Promise<number> {
@@ -414,11 +575,11 @@ function printTargetSummary(cfg: OpenPocketConfig): void {
   printKeyValue("Cloud provider", cfg.target.cloudProvider.trim() || "(none)");
 }
 
-function ensureGatewayStoppedForTargetSwitch(): void {
-  const pids = findGatewayProcessPids();
-  if (pids.length > 0) {
+function ensureGatewayStoppedForTargetSwitch(cfg: OpenPocketConfig): void {
+  const lock = readGatewayRuntimeLock(cfg.stateDir);
+  if (lock) {
     throw new Error(
-      `Gateway is running (pid: ${pids.join(", ")}). Stop it before switching deployment target.`,
+      `Gateway is running for agent '${lock.agentId}' (pid ${lock.pid}). Stop it before switching deployment target.`,
     );
   }
 }
@@ -678,7 +839,8 @@ async function promptTextInput(
 }
 
 async function runTargetPairCommand(configPath: string | undefined, args: string[]): Promise<number> {
-  ensureGatewayStoppedForTargetSwitch();
+  const cfg = loadConfig(configPath);
+  ensureGatewayStoppedForTargetSwitch(cfg);
 
   const dryRun = args.includes("--dry-run");
   const withoutDryRun = args.filter((item) => item !== "--dry-run");
@@ -748,7 +910,6 @@ async function runTargetPairCommand(configPath: string | undefined, args: string
     throw new Error("Missing pairing code. Use --code <code>.");
   }
 
-  const cfg = loadConfig(configPath);
   if (typeRaw !== null) {
     const normalized = normalizeDeviceTargetType(typeRaw);
     if (normalized !== "physical-phone" && normalized !== "android-tv") {
@@ -787,7 +948,15 @@ async function runTargetPairCommand(configPath: string | undefined, args: string
   } else {
     cfg.agent.deviceId = connectEndpoint;
   }
+  const owningAgent = findManagerAgentByConfigPath(cfg.configPath);
+  if (owningAgent) {
+    const nextFingerprint = computeTargetFingerprint(cfg);
+    assertTargetFingerprintAvailable(nextFingerprint, owningAgent.id);
+  }
   saveConfig(cfg);
+  if (owningAgent) {
+    registerManagedAgent({ agentId: owningAgent.id, config: cfg });
+  }
 
   printSuccess("ADB pairing flow completed.");
   printTargetSummary(cfg);
@@ -810,7 +979,7 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
     return 0;
   }
 
-  ensureGatewayStoppedForTargetSwitch();
+  ensureGatewayStoppedForTargetSwitch(cfg);
 
   const clearDevice = args.includes("--clear-device");
   const clearAdbEndpoint = args.includes("--clear-adb-endpoint");
@@ -927,7 +1096,15 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
     }
   }
 
+  const owningAgent = findManagerAgentByConfigPath(cfg.configPath);
+  if (owningAgent) {
+    const nextFingerprint = computeTargetFingerprint(cfg);
+    assertTargetFingerprintAvailable(nextFingerprint, owningAgent.id);
+  }
   saveConfig(cfg);
+  if (owningAgent) {
+    registerManagedAgent({ agentId: owningAgent.id, config: cfg });
+  }
 
   printSuccess("Deployment target updated.");
   printTargetSummary(cfg);
@@ -1063,8 +1240,10 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
   };
 
   const printStartupHeader = (cfg: ReturnType<typeof loadConfig>): void => {
+    const selectedAgent = resolveSelectedAgentRecord(cfg.configPath, null);
     printRaw(createOpenPocketBanner({ subtitle: "GATEWAY STARTUP", stream: output }));
     printRaw(cliTheme.section("Gateway Startup"));
+    printKeyValue("Agent", selectedAgent?.id ?? "standalone", "accent");
     printKeyValue("Config", cfg.configPath);
     printKeyValue("Project", cfg.projectName, "accent");
     printKeyValue("Model", cfg.defaultModel, "accent");
@@ -1103,11 +1282,30 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
     },
     start: async () => {
       let cfg = loadConfig(configPath);
+      const selectedAgent = resolveSelectedAgentRecord(cfg.configPath, null);
+      const agentId = selectedAgent?.id ?? "standalone";
+      const targetFingerprint = computeTargetFingerprint(cfg);
       loopLogLine = createGatewayLogEmitter(cfg, [
         (line) => {
           printRuntimeLine(line);
         },
       ]);
+      acquireGatewayRuntimeLock({
+        agentId,
+        stateDir: cfg.stateDir,
+        configPath: cfg.configPath,
+        targetFingerprint,
+      });
+      try {
+        acquireTargetRuntimeLock({
+          agentId,
+          configPath: cfg.configPath,
+          targetFingerprint,
+        });
+      } catch (error) {
+        releaseGatewayRuntimeLock(cfg.stateDir);
+        throw error;
+      }
       const shortcut = installCliShortcut();
       const tgCfg = cfg.channels?.telegram;
       const envName = tgCfg?.botTokenEnv?.trim() || "TELEGRAM_BOT_TOKEN";
@@ -1128,161 +1326,170 @@ async function runGatewayCommand(configPath: string | undefined, args: string[])
       let gateway: GatewayCore | null = null;
       let dashboard: DashboardServer | null = null;
 
-      printStartupHeader(cfg);
-      printStartupStep(1, totalSteps, "Load config", "ok", "loaded");
-      if (shortcut.shellRcUpdated.length > 0 || !shortcut.binDirAlreadyInPath) {
-        printSuccess(`CLI launcher ensured: ${shortcut.commandPath}`);
-        if (shortcut.preferredPathCommandPath) {
-          printKeyValue("Current-shell", shortcut.preferredPathCommandPath, "accent");
-        }
-        if (shortcut.shellRcUpdated.length > 0) {
-          printKeyValue("Updated shell rc", shortcut.shellRcUpdated.join(", "), "accent");
-        }
-        printWarn(
-          "Reload shell profile (or open a new terminal) before using `openpocket` without `./`.",
-        );
-      }
-      if (channelList.length === 0) {
-        printStartupStep(2, totalSteps, "Validate channels", "failed", "no channels configured");
-        throw new Error(
-          "No messaging channels configured. Run `openpocket onboard` to set up Telegram, Discord, or WhatsApp.",
-        );
-      }
-      printStartupStep(2, totalSteps, "Validate channels", "ok", channelList.join(", "));
-
-      const emulator = new EmulatorManager(cfg);
-      const bootstrapWindowed = process.platform === "darwin";
-      const targetIsEmulator = isEmulatorTarget(cfg.target.type);
-
-      if (targetIsEmulator) {
-        const emulatorStatus = emulator.status();
-        if (emulatorStatus.bootedDevices.length > 0) {
-          let detail = `ok (${emulatorStatus.bootedDevices.join(", ")})`;
-          if (bootstrapWindowed) {
-            const showMessage = await emulator.ensureWindowVisible();
-            const hideMessage = await emulator.hideWindowInPlace();
-            detail = `${detail}; ${showMessage}; ${hideMessage}`;
+      try {
+        printStartupHeader(cfg);
+        printStartupStep(1, totalSteps, "Load config", "ok", "loaded");
+        if (shortcut.shellRcUpdated.length > 0 || !shortcut.binDirAlreadyInPath) {
+          printSuccess(`CLI launcher ensured: ${shortcut.commandPath}`);
+          if (shortcut.preferredPathCommandPath) {
+            printKeyValue("Current-shell", shortcut.preferredPathCommandPath, "accent");
           }
-          printStartupStep(
-            3,
-            totalSteps,
-            "Ensure emulator is running",
-            "ok",
-            detail,
+          if (shortcut.shellRcUpdated.length > 0) {
+            printKeyValue("Updated shell rc", shortcut.shellRcUpdated.join(", "), "accent");
+          }
+          printWarn(
+            "Reload shell profile (or open a new terminal) before using `openpocket` without `./`.",
           );
-        } else {
-          printStartupStep(3, totalSteps, "Ensure emulator is running", "running", "booting emulator");
-          const startMessage = await emulator.start(bootstrapWindowed ? false : true);
-          if (bootstrapWindowed) {
-            const hideMessage = await emulator.hideWindowInPlace();
-            printStartupStep(3, totalSteps, "Ensure emulator is running", "ok", `${startMessage}; ${hideMessage}`);
-          } else {
-            printStartupStep(3, totalSteps, "Ensure emulator is running", "ok", startMessage);
-          }
         }
-        const readyStatus = emulator.status();
-        if (readyStatus.bootedDevices.length === 0) {
+        if (channelList.length === 0) {
+          printStartupStep(2, totalSteps, "Validate channels", "failed", "no channels configured");
           throw new Error(
-            "Emulator is online but not boot-complete yet. Retry after boot or increase emulator.bootTimeoutSec.",
+            "No messaging channels configured. Run `openpocket onboard` to set up Telegram, Discord, or WhatsApp.",
           );
         }
-      } else {
-        printStartupStep(3, totalSteps, "Ensure target device is online", "running", "probing adb target");
-        const message = await emulator.start();
-        const readyStatus = emulator.status();
-        if (readyStatus.devices.length === 0) {
-          throw new Error("No online target device found. Connect USB device or configure target.adbEndpoint.");
-        }
-        printStartupStep(3, totalSteps, "Ensure target device is online", "ok", message);
-      }
+        printStartupStep(2, totalSteps, "Validate channels", "ok", channelList.join(", "));
 
-      if (cfg.dashboard.enabled) {
-        printStartupStep(4, totalSteps, "Ensure local dashboard", "running", "starting");
-        const createDashboard = (port: number): DashboardServer =>
-          new DashboardServer({
-            config: cfg,
-            mode: "integrated",
-            host: cfg.dashboard.host,
-            port,
-            getGatewayStatus: () => ({
-              running: gateway?.isRunning() ?? false,
-              managed: true,
-              note:
-                gateway?.isRunning()
-                  ? "managed by current gateway process"
-                  : "gateway initializing",
-            }),
-            onConfigChanged: (updated) => {
-              cfg = updated;
-              gateway?.applyExternalConfig(updated);
-            },
-          });
+        const emulator = new EmulatorManager(cfg);
+        const bootstrapWindowed = process.platform === "darwin";
+        const targetIsEmulator = isEmulatorTarget(cfg.target.type);
 
-        try {
-          dashboard = createDashboard(cfg.dashboard.port);
-          await dashboard.start();
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code === "EADDRINUSE") {
-            dashboard = createDashboard(0);
-            await dashboard.start();
+        if (targetIsEmulator) {
+          const emulatorStatus = emulator.status();
+          if (emulatorStatus.bootedDevices.length > 0) {
+            let detail = `ok (${emulatorStatus.bootedDevices.join(", ")})`;
+            if (bootstrapWindowed) {
+              const showMessage = await emulator.ensureWindowVisible();
+              const hideMessage = await emulator.hideWindowInPlace();
+              detail = `${detail}; ${showMessage}; ${hideMessage}`;
+            }
+            printStartupStep(
+              3,
+              totalSteps,
+              "Ensure emulator is running",
+              "ok",
+              detail,
+            );
           } else {
-            throw error;
+            printStartupStep(3, totalSteps, "Ensure emulator is running", "running", "booting emulator");
+            const startMessage = await emulator.start(bootstrapWindowed ? false : true);
+            if (bootstrapWindowed) {
+              const hideMessage = await emulator.hideWindowInPlace();
+              printStartupStep(3, totalSteps, "Ensure emulator is running", "ok", `${startMessage}; ${hideMessage}`);
+            } else {
+              printStartupStep(3, totalSteps, "Ensure emulator is running", "ok", startMessage);
+            }
           }
+          const readyStatus = emulator.status();
+          if (readyStatus.bootedDevices.length === 0) {
+            throw new Error(
+              "Emulator is online but not boot-complete yet. Retry after boot or increase emulator.bootTimeoutSec.",
+            );
+          }
+        } else {
+          printStartupStep(3, totalSteps, "Ensure target device is online", "running", "probing adb target");
+          const message = await emulator.start();
+          const readyStatus = emulator.status();
+          if (readyStatus.devices.length === 0) {
+            throw new Error("No online target device found. Connect USB device or configure target.adbEndpoint.");
+          }
+          printStartupStep(3, totalSteps, "Ensure target device is online", "ok", message);
         }
 
-        printStartupStep(4, totalSteps, "Ensure local dashboard", "ok", dashboard.address);
-        if (cfg.dashboard.autoOpenBrowser) {
-          openUrlInBrowser(dashboard.address);
-          printInfo(`Dashboard opened in browser: ${dashboard.address}`);
-        }
-      } else {
-        printStartupStep(4, totalSteps, "Ensure local dashboard", "skipped", "disabled in config");
-      }
+        if (cfg.dashboard.enabled) {
+          printStartupStep(4, totalSteps, "Ensure local dashboard", "running", "starting");
+          const createDashboard = (port: number): DashboardServer =>
+            new DashboardServer({
+              config: cfg,
+              mode: "integrated",
+              host: cfg.dashboard.host,
+              port,
+              getGatewayStatus: () => ({
+                running: gateway?.isRunning() ?? false,
+                managed: true,
+                note:
+                  gateway?.isRunning()
+                    ? "managed by current gateway process"
+                    : "gateway initializing",
+              }),
+              onConfigChanged: (updated) => {
+                cfg = updated;
+                gateway?.applyExternalConfig(updated);
+              },
+            });
 
-      printStartupStep(5, totalSteps, "Initialize gateway runtime", "running", "initializing");
-      const logLine = (line: string) => {
-        printRuntimeLine(line);
-        dashboard?.ingestExternalLogLine(line);
-      };
-      const { core } = createGateway(cfg, {
-        logger: logLine,
-      });
-      gateway = core;
-      printStartupStep(5, totalSteps, "Initialize gateway runtime", "ok", `ready (${channelList.join(", ")})`);
-      printStartupStep(6, totalSteps, "Start services", "running", "starting polling and services");
-      await gateway.start();
-      printStartupStep(6, totalSteps, "Start services", "ok", "all services online");
-      printRaw("");
-      printRaw(cliTheme.section("Runtime Ready"));
-      printSuccess("Gateway is running. Press Ctrl+C to stop.");
-      if (dashboard) {
-        const parsed = new URL(dashboard.address);
-        const dashboardPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-        printKeyValue("Dashboard port", dashboardPort, "success");
-        printKeyValue("Dashboard URL", dashboard.address, "success");
-      }
-      if (cfg.humanAuth.enabled) {
-        const relayBaseUrl = cfg.humanAuth.relayBaseUrl.trim();
-        const publicBaseUrl = cfg.humanAuth.publicBaseUrl.trim();
-        if (relayBaseUrl) {
-          printKeyValue("Relay URL", relayBaseUrl, "accent");
-        }
-        if (publicBaseUrl) {
-          const tone = /^https:\/\//i.test(publicBaseUrl) ? "success" : "warn";
-          printKeyValue("Public URL", publicBaseUrl, tone);
-        }
-      }
-      return {
-        stop: async (reason?: string) => {
-          printWarn(`Stopping gateway (${reason ?? "run-loop-stop"})`);
-          await gateway?.stop(reason ?? "run-loop-stop");
-          if (dashboard) {
-            await dashboard.stop();
+          try {
+            dashboard = createDashboard(cfg.dashboard.port);
+            await dashboard.start();
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === "EADDRINUSE") {
+              dashboard = createDashboard(0);
+              await dashboard.start();
+            } else {
+              throw error;
+            }
           }
-          printInfo("Gateway stopped.");
-        },
-      };
+
+          updateGatewayRuntimeLock(cfg.stateDir, { dashboardAddress: dashboard.address });
+          printStartupStep(4, totalSteps, "Ensure local dashboard", "ok", dashboard.address);
+          if (cfg.dashboard.autoOpenBrowser) {
+            openUrlInBrowser(dashboard.address);
+            printInfo(`Dashboard opened in browser: ${dashboard.address}`);
+          }
+        } else {
+          printStartupStep(4, totalSteps, "Ensure local dashboard", "skipped", "disabled in config");
+        }
+
+        printStartupStep(5, totalSteps, "Initialize gateway runtime", "running", "initializing");
+        const logLine = (line: string) => {
+          printRuntimeLine(line);
+          dashboard?.ingestExternalLogLine(line);
+        };
+        const { core } = createGateway(cfg, {
+          logger: logLine,
+        });
+        gateway = core;
+        printStartupStep(5, totalSteps, "Initialize gateway runtime", "ok", `ready (${channelList.join(", ")})`);
+        printStartupStep(6, totalSteps, "Start services", "running", "starting polling and services");
+        await gateway.start();
+        printStartupStep(6, totalSteps, "Start services", "ok", "all services online");
+        printRaw("");
+        printRaw(cliTheme.section("Runtime Ready"));
+        printSuccess("Gateway is running. Press Ctrl+C to stop.");
+        if (dashboard) {
+          const parsed = new URL(dashboard.address);
+          const dashboardPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+          printKeyValue("Dashboard port", dashboardPort, "success");
+          printKeyValue("Dashboard URL", dashboard.address, "success");
+        }
+        if (cfg.humanAuth.enabled) {
+          const relayBaseUrl = cfg.humanAuth.relayBaseUrl.trim();
+          const publicBaseUrl = cfg.humanAuth.publicBaseUrl.trim();
+          if (relayBaseUrl) {
+            printKeyValue("Relay URL", relayBaseUrl, "accent");
+          }
+          if (publicBaseUrl) {
+            const tone = /^https:\/\//i.test(publicBaseUrl) ? "success" : "warn";
+            printKeyValue("Public URL", publicBaseUrl, tone);
+          }
+        }
+        return {
+          stop: async (reason?: string) => {
+            printWarn(`Stopping gateway (${reason ?? "run-loop-stop"})`);
+            await gateway?.stop(reason ?? "run-loop-stop");
+            if (dashboard) {
+              await dashboard.stop();
+            }
+            releaseGatewayRuntimeLock(cfg.stateDir);
+            releaseTargetRuntimeLock(targetFingerprint);
+            printInfo("Gateway stopped.");
+          },
+        };
+      } catch (error) {
+        releaseGatewayRuntimeLock(cfg.stateDir);
+        releaseTargetRuntimeLock(targetFingerprint);
+        throw error;
+      }
     },
   });
   return 0;
@@ -1459,6 +1666,7 @@ async function runOnboardCommand(configPath: string | undefined, args: string[] 
   const cfg = await runBootstrapCommand(configPath, { promptDataPartitionSize: true });
   installCliShortcutOnFirstOnboard(cfg);
   await runSetupWizard(cfg);
+  ensureManagerModelTemplateFromConfig(loadConfig(cfg.configPath), { overwrite: false });
   return 0;
 }
 
@@ -2928,8 +3136,50 @@ async function runTelegramCommand(
 
 async function runDashboardCommand(configPath: string | undefined, args: string[]): Promise<number> {
   const sub = (args[0] ?? "start").trim();
-  if (sub !== "start") {
-    throw new Error(`Unknown dashboard subcommand: ${sub}. Use: dashboard start`);
+  if (sub !== "start" && sub !== "manager") {
+    throw new Error(`Unknown dashboard subcommand: ${sub}. Use: dashboard start|manager`);
+  }
+
+  if (sub === "manager") {
+    const { value: hostOption, rest: afterHost } = takeOption(args.slice(1), "--host");
+    const { value: portOption, rest } = takeOption(afterHost, "--port");
+    if (rest.length > 0) {
+      throw new Error(`Unexpected dashboard manager arguments: ${rest.join(" ")}`);
+    }
+    const ports = loadManagerPorts();
+    const preferredPort = portOption ? normalizePort(portOption, "--port") : ports.managerDashboardPort;
+    const host = hostOption?.trim() || "127.0.0.1";
+    let server = new ManagerDashboardServer({ host, port: preferredPort });
+    try {
+      await server.start();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EADDRINUSE" || portOption) {
+        throw error;
+      }
+      server = new ManagerDashboardServer({ host, port: 0 });
+      await server.start();
+    }
+    const actualPort = Number(new URL(server.address).port || String(preferredPort));
+    saveManagerPorts({
+      ...ports,
+      managerDashboardPort: actualPort,
+    });
+    printRaw(cliTheme.section("Manager Dashboard"));
+    printSuccess(`[OpenPocket][manager-dashboard] started at ${server.address}`);
+    printInfo("[OpenPocket][manager-dashboard] press Ctrl+C to stop");
+    await new Promise<void>((resolve) => {
+      const onSignal = (): void => {
+        process.removeListener("SIGINT", onSignal);
+        process.removeListener("SIGTERM", onSignal);
+        resolve();
+      };
+      process.on("SIGINT", onSignal);
+      process.on("SIGTERM", onSignal);
+    });
+    await server.stop();
+    printSuccess("[OpenPocket][manager-dashboard] stopped");
+    return 0;
   }
 
   const { value: hostOption, rest: afterHost } = takeOption(args.slice(1), "--host");
@@ -2950,7 +3200,7 @@ async function runDashboardCommand(configPath: string | undefined, args: string[
     mode: "standalone",
     host,
     port,
-    getGatewayStatus: standaloneDashboardGatewayStatus,
+    getGatewayStatus: () => standaloneDashboardGatewayStatus(cfg),
   });
 
   await dashboard.start();
@@ -3001,40 +3251,56 @@ async function runHumanAuthRelayCommand(
   }
 
   const cfg = loadConfig(configPath);
-  const parsedPort = Number(portRaw ?? String(cfg.humanAuth.localRelayPort));
-  const defaultPort = cfg.humanAuth.localRelayPort;
-  const port = Number.isFinite(parsedPort)
-    ? Math.max(1, Math.min(65535, Math.round(parsedPort)))
-    : defaultPort;
+  const ports = loadManagerPorts();
+  const preferredPort = portRaw ? normalizePort(portRaw, "--port") : ports.relayHubPort;
+  if (apiKey?.trim()) {
+    printWarn("`--api-key` is ignored in shared relay-hub mode.");
+  }
+  if (stateFile?.trim()) {
+    printWarn("`--state-file` is ignored in shared relay-hub mode.");
+  }
 
-  const relay = new HumanAuthRelayServer({
-    host: (host ?? cfg.humanAuth.localRelayHost ?? "0.0.0.0").trim(),
-    port,
+  const ngrokConfig =
+    cfg.humanAuth.tunnel.provider === "ngrok" && cfg.humanAuth.tunnel.ngrok.enabled
+      ? cfg.humanAuth.tunnel.ngrok
+      : null;
+
+  let relay = new RelayHubServer({
+    host: (host ?? "127.0.0.1").trim(),
+    port: preferredPort,
     publicBaseUrl: (publicBaseUrl ?? cfg.humanAuth.publicBaseUrl ?? "").trim(),
-    apiKey: (apiKey ?? cfg.humanAuth.apiKey ?? "").trim(),
-    apiKeyEnv: cfg.humanAuth.apiKeyEnv,
-    stateFile:
-      stateFile?.trim() ||
-      cfg.humanAuth.localRelayStateFile,
-    takeoverRuntime: new LocalHumanAuthTakeoverRuntime(cfg),
+    ngrok: ngrokConfig,
   });
 
-  await relay.start();
-  const relayAddress = relay.address || `http://${host ?? "0.0.0.0"}:${port}`;
-  printRaw(cliTheme.section("Human Auth Relay"));
+  try {
+    await relay.start();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EADDRINUSE" || portRaw) {
+      throw error;
+    }
+    relay = new RelayHubServer({
+      host: (host ?? "127.0.0.1").trim(),
+      port: 0,
+      publicBaseUrl: (publicBaseUrl ?? cfg.humanAuth.publicBaseUrl ?? "").trim(),
+      ngrok: ngrokConfig,
+    });
+    await relay.start();
+  }
+
+  const relayAddress = relay.address;
+  const actualPort = Number(new URL(relayAddress).port || String(preferredPort));
+  saveManagerPorts({
+    ...ports,
+    relayHubPort: actualPort,
+  });
+
+  printRaw(cliTheme.section("Human Auth Relay Hub"));
   printSuccess(`[OpenPocket][human-auth-relay] started at ${relayAddress}`);
   printInfo("[OpenPocket][human-auth-relay] press Ctrl+C to stop");
   printKeyValue("Relay URL", relayAddress, "success");
-  if (relayAddress.startsWith("http://")) {
-    const parsed = new URL(relayAddress);
-    const relayPort = parsed.port || "80";
-    printKeyValue("Relay port", relayPort, "accent");
-  }
-  if (relayAddress.startsWith("https://")) {
-    const parsed = new URL(relayAddress);
-    const relayPort = parsed.port || "443";
-    printKeyValue("Relay port", relayPort, "accent");
-  }
+  printKeyValue("Public URL", relay.publicBaseUrl, /^https:\/\//i.test(relay.publicBaseUrl) ? "success" : "accent");
+  printKeyValue("Relay port", String(actualPort), "accent");
 
   await new Promise<void>((resolve) => {
     const onSignal = (): void => {
@@ -3321,7 +3587,8 @@ async function runTestCommand(configPath: string | undefined, args: string[]): P
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  const { value: configPath, rest } = takeOption(argv, "--config");
+  const { value: configPath, rest: afterConfig } = takeOption(argv, "--config");
+  const { value: agentId, rest } = takeOption(afterConfig, "--agent");
 
   if (rest.length === 0 || rest[0] === "-h" || rest[0] === "--help") {
     printHelp();
@@ -3329,14 +3596,27 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   const command = rest[0];
+  const selectedConfigPath = resolveSelectedConfigPath(configPath, agentId);
+
+  if (command === "create") {
+    return runCreateAgentCommand(selectedConfigPath, rest.slice(1));
+  }
+
+  if (command === "agents") {
+    const agentArgs =
+      rest[1] === "show" && rest.length === 2 && agentId
+        ? ["show", agentId]
+        : rest.slice(1);
+    return runAgentsCommand(agentArgs);
+  }
 
   if (command === "init") {
     printWarn("[OpenPocket] `init` is deprecated. Use `openpocket onboard`.");
     const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     if (interactive) {
-      return runOnboardCommand(configPath ?? undefined);
+      return runOnboardCommand(selectedConfigPath);
     }
-    const cfg = await runBootstrapCommand(configPath ?? undefined);
+    const cfg = await runBootstrapCommand(selectedConfigPath);
     printSuccess(`OpenPocket bootstrap completed.\nConfig: ${cfg.configPath}`);
     printInfo("Run `openpocket onboard` in an interactive terminal to complete consent/model/API key onboarding.");
     return 0;
@@ -3347,85 +3627,85 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (command === "config-show") {
-    const cfg = loadConfig(configPath ?? undefined);
+    const cfg = loadConfig(selectedConfigPath);
     printRaw(fs.readFileSync(cfg.configPath, "utf-8").trim());
     return 0;
   }
 
   if (command === "model") {
-    return runModelCommand(configPath ?? undefined, rest.slice(1));
+    return runModelCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "target") {
-    return runTargetCommand(configPath ?? undefined, rest.slice(1));
+    return runTargetCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "emulator") {
-    return runEmulatorCommand(configPath ?? undefined, rest.slice(1));
+    return runEmulatorCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "agent") {
-    return runAgentCommand(configPath ?? undefined, rest.slice(1));
+    return runAgentCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "gateway") {
-    return runGatewayCommand(configPath ?? undefined, rest.slice(1));
+    return runGatewayCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "channels") {
-    return runChannelsCommand(configPath ?? undefined, rest.slice(1));
+    return runChannelsCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "telegram") {
-    return runTelegramCommand(configPath ?? undefined, rest.slice(1));
+    return runTelegramCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "whatsapp") {
     const sub = (rest[1] ?? "").trim();
     if (sub === "link") {
       printWarn("`openpocket whatsapp link` is deprecated. Use `openpocket channels login --channel whatsapp`.");
-      return runWhatsAppLoginCommand(configPath ?? undefined);
+      return runWhatsAppLoginCommand(selectedConfigPath);
     }
     if (sub === "whoami") {
       printWarn("`openpocket whatsapp whoami` is deprecated. Use `openpocket channels whoami --channel whatsapp`.");
-      const cfg = loadConfig(configPath ?? undefined);
+      const cfg = loadConfig(selectedConfigPath);
       return runWhatsAppWhoamiCommand(cfg);
     }
     printWarn("`openpocket whatsapp` is deprecated. Use `openpocket channels` instead.");
-    return runChannelsCommand(configPath ?? undefined, []);
+    return runChannelsCommand(selectedConfigPath, []);
   }
 
   if (command === "pairing") {
-    return runPairingCommand(configPath ?? undefined, rest.slice(1));
+    return runPairingCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "dashboard") {
-    return runDashboardCommand(configPath ?? undefined, rest.slice(1));
+    return runDashboardCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "human-auth-relay") {
-    return runHumanAuthRelayCommand(configPath ?? undefined, rest.slice(1));
+    return runHumanAuthRelayCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "test") {
-    return runTestCommand(configPath ?? undefined, rest.slice(1));
+    return runTestCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "skills") {
-    return runSkillsCommand(configPath ?? undefined, rest.slice(1));
+    return runSkillsCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "script") {
-    return runScriptCommand(configPath ?? undefined, rest.slice(1));
+    return runScriptCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "setup") {
     printWarn("[OpenPocket] `setup` is deprecated. Use `openpocket onboard`.");
-    return runOnboardCommand(configPath ?? undefined, rest.slice(1));
+    return runOnboardCommand(selectedConfigPath, rest.slice(1));
   }
 
   if (command === "onboard") {
-    return runOnboardCommand(configPath ?? undefined, rest.slice(1));
+    return runOnboardCommand(selectedConfigPath, rest.slice(1));
   }
 
   throw new Error(`Unknown command: ${command}`);

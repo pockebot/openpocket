@@ -2,11 +2,12 @@
 
 This page gets OpenPocket running locally with the current Node.js + TypeScript runtime.
 
-OpenPocket controls a configurable Agent Phone target through `adb`.
+OpenPocket controls one configurable Agent Phone target per agent instance through `adb`.
 
-- Default target: `emulator`
-- Recommended production-like target: `physical-phone` (USB/Wi-Fi ADB)
+- default target: `emulator`
+- recommended production-like target: `physical-phone` (USB/Wi-Fi ADB)
 - `android-tv` and `cloud` targets are currently in progress
+- one install can host multiple isolated agents; see [Multi-Agent Setup](./multi-agent.md)
 
 For target-specific setup, see [Device Targets](./device-targets.md).
 
@@ -15,7 +16,7 @@ For target-specific setup, see [Device Targets](./device-targets.md).
 - Node.js 20+
 - Android platform-tools (`adb`) for all targets
 - API key for your configured model profile
-- Telegram bot token (for gateway mode)
+- at least one configured channel if you plan to use gateway mode
 
 For emulator target (default):
 
@@ -35,7 +36,7 @@ npm install -g openpocket
 openpocket onboard
 ```
 
-OpenPocket uses a local web dashboard:
+OpenPocket includes a local dashboard:
 
 ```bash
 openpocket dashboard start
@@ -62,7 +63,7 @@ For commands below:
 
 ## First Onboard Output
 
-On first `onboard`, OpenPocket creates:
+On first `onboard`, OpenPocket creates the default agent:
 
 - `config.json`
 - `workspace/` with bootstrap prompt templates and runtime folders
@@ -74,12 +75,14 @@ CLI onboarding state:
 
 Workspace bootstrap includes prompt/memory identity files (for example `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `TASK_PROGRESS_REPORTER.md`, `TASK_OUTCOME_REPORTER.md`).
 
+Onboard also captures the initial model template used later by `openpocket create agent`.
+
 ## Env Vars
 
 ```bash
 export OPENAI_API_KEY="<your_key>"
 export OPENROUTER_API_KEY="<your_key>"        # if using OpenRouter profiles
-export TELEGRAM_BOT_TOKEN="<your_bot_token>"   # for gateway mode
+export TELEGRAM_BOT_TOKEN="<your_bot_token>"  # if using Telegram
 export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
 ```
 
@@ -149,15 +152,15 @@ Result includes:
 - session file path (`workspace/sessions/session-*.md`)
 - daily memory append (`workspace/memory/YYYY-MM-DD.md`)
 
-## Run via Telegram Gateway
+## Run via Gateway
 
 ```bash
 openpocket gateway start
 ```
 
-Gateway startup verifies the selected target device is online before task processing.
+Gateway startup verifies the selected target device is online before task processing, starts the integrated agent dashboard, and acquires per-agent/per-target runtime locks.
 
-Then chat with your bot:
+Then use your configured channel:
 
 - `/start` (will trigger chat onboarding if workspace profile is incomplete)
 - plain text requests for auto route (`task` or `chat`)
@@ -167,9 +170,27 @@ Useful debug command:
 
 - `/context [list|detail|json]`
 
+## Add More Agents (Optional)
+
+Create another isolated agent bound to a different target:
+
+```bash
+openpocket create agent review-bot --type physical-phone --device R5CX123456A
+openpocket agents list
+openpocket --agent review-bot gateway start
+```
+
+For the full workflow, see [Multi-Agent Setup](./multi-agent.md).
+
 ## Human-in-the-Loop
 
-When task emits `request_human_auth`, gateway can send one-time approval link and `/auth` fallback commands.
+When task emits `request_human_auth`, gateway can send one-time approval links and `/auth` fallback commands.
+
+If you want one relay/ngrok entry for all managed agents:
+
+```bash
+openpocket human-auth-relay start
+```
 
 For architecture and end-to-end validation:
 
@@ -178,5 +199,5 @@ For architecture and end-to-end validation:
 PermissionLab E2E command:
 
 ```bash
-openpocket test permission-app run --case camera --chat <telegram_chat_id>
+openpocket test permission-app run --case camera --chat <channel_chat_id>
 ```
