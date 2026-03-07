@@ -34,8 +34,11 @@ class FakePrompter {
   }
 
   async confirm(message) {
-    // macOS adds an extra iMessage channel confirmation; tests are scripted for Linux CI flow.
-    if (typeof message === "string" && message.startsWith("Enable iMessage?")) {
+    // Optional channel prompts can grow over time; keep legacy scripted flows stable unless a test opts in.
+    if (
+      typeof message === "string" &&
+      (message.startsWith("Enable Slack?") || message.startsWith("Enable iMessage?"))
+    ) {
       return false;
     }
     if (this.script.confirms.length === 0) {

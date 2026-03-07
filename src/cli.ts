@@ -2566,7 +2566,7 @@ async function runPairingCommand(
     printRaw("  openpocket pairing reject <channel> <code>  Reject a pairing request");
     printRaw("  openpocket pairing add <channel> <senderId> Manually add sender to allowlist");
     printRaw("");
-    printInfo("Channels: telegram, whatsapp, discord");
+    printInfo("Channels: telegram, whatsapp, discord, slack");
     return 0;
   }
 
@@ -2598,7 +2598,7 @@ async function runPairingCommand(
   if (sub === "approved") {
     const channels: import("./channel/types.js").ChannelType[] = args[1]?.trim()
       ? [args[1].trim() as import("./channel/types.js").ChannelType]
-      : ["telegram", "discord", "whatsapp"];
+      : ["telegram", "discord", "whatsapp", "slack"];
     let total = 0;
     for (const ch of channels) {
       const approved = pairingStore.listApproved(ch);
@@ -2832,6 +2832,87 @@ async function runIMessageWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Pro
 }
 
 // ---------------------------------------------------------------------------
+// Slack whoami
+// ---------------------------------------------------------------------------
+
+async function runSlackWhoamiCommand(cfg: ReturnType<typeof loadConfig>): Promise<number> {
+  const sl = cfg.channels?.slack;
+  const dmPolicy = sl?.dmPolicy ?? "pairing";
+  const groupPolicy = sl?.groupPolicy ?? "open";
+  const allowFrom = sl?.allowFrom ?? [];
+
+  printRaw(cliTheme.section("Slack Identity"));
+  printKeyValue("Enabled", sl?.enabled !== false && !!sl ? "yes" : "no");
+  printKeyValue("DM policy", dmPolicy);
+  printKeyValue("Group policy", groupPolicy);
+  printKeyValue(
+    "Allow from",
+    allowFrom.length > 0 ? allowFrom.join(", ") : "empty (owner claim on first message)",
+  );
+
+  const botTokenEnv = sl?.botTokenEnv || "SLACK_BOT_TOKEN";
+  const hasBotToken = Boolean(
+    sl?.botToken?.trim() || process.env[botTokenEnv]?.trim(),
+  );
+  printKeyValue("Bot token", hasBotToken ? "configured" : "missing", hasBotToken ? "success" : "warn");
+
+  const appTokenEnv = sl?.appTokenEnv || "SLACK_APP_TOKEN";
+  const hasAppToken = Boolean(
+    sl?.appToken?.trim() || process.env[appTokenEnv]?.trim(),
+  );
+  printKeyValue("App token", hasAppToken ? "configured" : "missing", hasAppToken ? "success" : "warn");
+
+  printKeyValue("Ack reaction", sl?.ackReaction ?? "(disabled)");
+  printKeyValue("Slash commands", sl?.slashCommands !== false ? "enabled" : "disabled");
+
+  const allowChannels = sl?.allowChannels ?? [];
+  printKeyValue("Allow channels", allowChannels.length > 0 ? allowChannels.join(", ") : "(all)");
+  const proxyUrl = sl?.proxyUrl || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || null;
+  if (proxyUrl) {
+    printKeyValue("Proxy", proxyUrl);
+  }
+
+  if (hasBotToken) {
+    try {
+      const { WebClient } = await import("@slack/web-api");
+      const botToken = sl?.botToken?.trim() || process.env[botTokenEnv]?.trim() || "";
+      const client = new WebClient(botToken);
+      const authResult = await client.auth.test();
+      printKeyValue("Bot user", String(authResult.user ?? "unknown"), "success");
+      printKeyValue("Team", String(authResult.team ?? "unknown"), "success");
+    } catch (error) {
+      printWarn(`Bot token verification failed: ${(error as Error).message}`);
+    }
+  }
+
+  const slackPairingDir = cfg.pairing?.stateDir ?? path.join(cfg.stateDir, "pairing");
+  const slackAllowFile = path.join(slackPairingDir, "slack-allowFrom.json");
+  if (fs.existsSync(slackAllowFile)) {
+    try {
+      const raw = fs.readFileSync(slackAllowFile, "utf-8").trim();
+      const entries = JSON.parse(raw);
+      if (Array.isArray(entries) && entries.length > 0) {
+        printRaw(cliTheme.section("Approved Senders (via pairing)"));
+        for (const e of entries) {
+          const id = typeof e === "string" ? e : e.senderId;
+          const at = typeof e === "object" && e.approvedAt ? ` (${e.approvedAt})` : "";
+          printRaw(`  - ${id}${at}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (!hasBotToken) {
+    printInfo("Set bot token: channels.slack.botToken in config, or env SLACK_BOT_TOKEN");
+  }
+  if (!hasAppToken) {
+    printInfo("Set app token: channels.slack.appToken in config, or env SLACK_APP_TOKEN");
+  }
+
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Unified `channels` command (OpenClaw-aligned)
 // ---------------------------------------------------------------------------
 
@@ -2847,10 +2928,11 @@ async function runChannelsCommand(
       printRaw(cliTheme.section("Channels Login"));
       printRaw("Usage: openpocket channels login --channel <name>");
       printRaw("");
-      printInfo("Available channels: whatsapp, telegram, imessage");
+      printInfo("Available channels: whatsapp, telegram, imessage, slack");
       printRaw("  --channel whatsapp    Scan QR code to link WhatsApp");
       printRaw("  --channel telegram    Verify Telegram bot token");
       printRaw("  --channel imessage    Verify iMessage (macOS) setup");
+      printRaw("  --channel slack       Verify Slack bot & app tokens");
       return 0;
     }
     if (channel === "whatsapp") {
@@ -2868,7 +2950,11 @@ async function runChannelsCommand(
       const cfg = loadConfig(configPath);
       return runDiscordWhoamiCommand(cfg);
     }
-    throw new Error(`Unsupported channel for login: ${channel}. Available: whatsapp, telegram, imessage, discord`);
+    if (channel === "slack") {
+      const cfg = loadConfig(configPath);
+      return runSlackWhoamiCommand(cfg);
+    }
+    throw new Error(`Unsupported channel for login: ${channel}. Available: whatsapp, telegram, imessage, discord, slack`);
   }
 
   if (sub === "whoami") {
@@ -2895,6 +2981,11 @@ async function runChannelsCommand(
         await runIMessageWhoamiCommand(cfg);
         printed = true;
       }
+      if (cfg.channels?.slack) {
+        if (printed) printRaw("");
+        await runSlackWhoamiCommand(cfg);
+        printed = true;
+      }
       if (!printed) {
         printWarn("No channels configured. Run `openpocket onboard` first.");
       }
@@ -2912,7 +3003,10 @@ async function runChannelsCommand(
     if (channel === "discord") {
       return runDiscordWhoamiCommand(cfg);
     }
-    throw new Error(`Unsupported channel for whoami: ${channel}. Available: whatsapp, telegram, imessage, discord`);
+    if (channel === "slack") {
+      return runSlackWhoamiCommand(cfg);
+    }
+    throw new Error(`Unsupported channel for whoami: ${channel}. Available: whatsapp, telegram, imessage, discord, slack`);
   }
 
   if (sub === "list") {
@@ -2937,7 +3031,11 @@ async function runChannelsCommand(
       const chatDbExists = fs.existsSync(im.chatDbPath ?? path.join(os.homedir(), "Library", "Messages", "chat.db"));
       printKeyValue("imessage", `dmPolicy=${im.dmPolicy ?? "pairing"} chatDb=${chatDbExists ? "found" : "not found"}`, chatDbExists ? "success" : "warn");
     }
-    if (!tg && !wa && !dc && !im) {
+    const sl = cfg.channels?.slack;
+    if (sl && sl.enabled !== false) {
+      printKeyValue("slack", `dmPolicy=${sl.dmPolicy ?? "pairing"}`, "success");
+    }
+    if (!tg && !wa && !dc && !im && !sl) {
       printWarn("No channels configured.");
     }
     return 0;
@@ -2948,7 +3046,7 @@ async function runChannelsCommand(
   printRaw("  openpocket channels whoami [--channel <name>]  Show channel identity & config");
   printRaw("  openpocket channels list                       List configured channels");
   printRaw("");
-  printInfo("Available channels: telegram, whatsapp, discord, imessage");
+  printInfo("Available channels: telegram, whatsapp, discord, imessage, slack");
   return 0;
 }
 

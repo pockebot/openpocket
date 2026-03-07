@@ -63,7 +63,7 @@ function inferModule(line: string): keyof GatewayLogModulesConfig {
     return normalizeModuleToken(tagged[1]);
   }
 
-  if (/\[(?:telegram|discord|whatsapp|imessage)-adapter\]/i.test(line)) {
+  if (/\[(?:telegram|discord|whatsapp|imessage|slack)-adapter\]/i.test(line)) {
     return "channel";
   }
   if (/\[channel-router\]/i.test(line)) {

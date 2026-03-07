@@ -376,12 +376,40 @@ export interface IMessageChannelConfig {
   chatDbPath?: string;
 }
 
+export interface SlackChannelConfig {
+  enabled?: boolean;
+  /** Bot User OAuth Token (xoxb-...). */
+  botToken?: string;
+  /** Env var name for bot token. Default: SLACK_BOT_TOKEN */
+  botTokenEnv?: string;
+  /** App-Level Token for Socket Mode (xapp-...). */
+  appToken?: string;
+  /** Env var name for app token. Default: SLACK_APP_TOKEN */
+  appTokenEnv?: string;
+  /** Signing Secret for HTTP verification (only used if not using socket mode). */
+  signingSecret?: string;
+  /** Env var name for signing secret. Default: SLACK_SIGNING_SECRET */
+  signingSecretEnv?: string;
+  dmPolicy?: DmPolicy;
+  groupPolicy?: GroupPolicy;
+  allowFrom?: string[];
+  /** Allowed channel IDs. When empty + groupPolicy is "open", all channels are allowed. */
+  allowChannels?: string[];
+  /** Emoji sent as ack when a message is received (e.g. "eyes"). Empty string disables. */
+  ackReaction?: string;
+  /** Register slash commands on startup. Default: true */
+  slashCommands?: boolean;
+  /** HTTP/SOCKS proxy URL for Slack WebSocket connection (e.g. "http://127.0.0.1:7897") */
+  proxyUrl?: string;
+}
+
 export interface ChannelsConfig {
   defaults?: ChannelDefaults;
   telegram?: TelegramChannelConfig;
   discord?: DiscordChannelConfig;
   whatsapp?: WhatsAppChannelConfig;
   imessage?: IMessageChannelConfig;
+  slack?: SlackChannelConfig;
 }
 
 export interface PairingConfig {
