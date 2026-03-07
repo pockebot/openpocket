@@ -12,15 +12,15 @@ You can then create more agents with their own isolated storage and targets.
 
 ## Why Multi-Agent Exists
 
-Multi-agent support is not just a convenience feature. It changes what OpenPocket can be used for in practice.
+Multi-agent support is not just a convenience feature. It changes what OpenPocket can support in practical day-to-day setups.
 
-Many real deployments do not want:
+Many real setups do not want:
 
 - one agent
 - one phone
 - one linear workflow
 
-They want a **local phone squad**:
+They want a local, manageable set of isolated agents:
 
 - one computer at home or in a small office
 - multiple Android phones or emulators connected to it
@@ -29,11 +29,23 @@ They want a **local phone squad**:
 
 This is the practical reason OpenPocket supports multi-agent instances instead of forcing one agent to juggle many targets.
 
+## Usage Boundary
+
+OpenPocket is a neutral open-source framework.
+
+Its role is to help developers and advanced users build lawful, policy-compliant tools and workflows on hardware they control.
+
+When using multi-agent setups, make sure your deployment follows:
+
+- local laws and regulations
+- platform and account terms of service
+- your own security, privacy, and consent requirements
+
 ## Practical Use Cases
 
 ### 1) Home lab: many Android phones on one computer
 
-You can set up several Android phones at home, connect them to one Mac or PC, and create one agent per phone:
+You can set up several Android phones at home, connect them to one Mac or PC, and create one agent per phone or emulator:
 
 ```bash
 openpocket onboard
@@ -43,39 +55,39 @@ openpocket create agent ops-bot --type emulator
 openpocket agents list
 ```
 
-This gives you one control plane for many isolated phone workers without needing a hosted cloud phone service.
+This gives you one control plane for several isolated agents without needing a hosted device service.
 
-### 2) Build your own Agent Phone squad
+### 2) Run several independent agents at the same time
 
 Multiple agents can run at the same time, each controlling its own phone:
 
-- one agent handles social posting
+- one agent handles content publishing
 - one agent handles customer replies
-- one agent monitors leads, shops, or account state
+- one agent monitors app state or operational checklists
 - one agent stays on an emulator for testing or recovery flows
 
-Instead of one overloaded assistant, you get a small **squad** of isolated phone operators.
+Instead of one overloaded assistant, you get a set of isolated agents with clear device ownership.
 
 ### 3) Real-world operations
 
 Examples of realistic workloads:
 
 - social media operations across separate accounts or regions
-- lead intake and response workflows
-- commerce or marketplace workflows
-- utility/payment/account maintenance flows
+- customer support and inbox handling
+- marketplace or listing maintenance workflows
+- device QA, regression checks, and approval-driven testing
 - repeated “phone-native” work that would otherwise need manual tapping every day
 
-The important point is not the specific niche. The important point is that many consumer and small-business workflows are still trapped inside phone apps, and multi-agent OpenPocket lets users build their own local execution layer for those apps.
+The important point is not any one niche. The important point is that many personal, developer, and small-business workflows still live inside mobile apps, and multi-agent OpenPocket lets users build their own local execution layer for those apps.
 
 ## Why This Matters as Open Source
 
-A lot of startups are effectively packaging some version of:
+A lot of teams are effectively packaging some version of:
 
 - managed phone fleets
 - task automation on mobile apps
 - human-in-the-loop approval
-- operations dashboards around those phone workers
+- operations dashboards around those devices and workflows
 
 OpenPocket takes the same underlying idea and makes it locally deployable.
 
@@ -83,12 +95,12 @@ That matters because it lowers the barrier for:
 
 - individual builders
 - small teams
-- home operators
-- researchers and hackers
+- developers
+- researchers
 
-With multi-agent support, users can assemble a local “phone airport” or “phone farm” on their own hardware, with their own targets, their own data boundary, and their own operational rules.
+With multi-agent support, users can assemble a local multi-device setup on their own hardware, with their own targets, their own data boundary, and their own operational rules.
 
-That is the deeper reason for this feature: not just running one clever phone agent, but giving people the ability to build their own programmable phone workforce.
+That is the deeper reason for this feature: not just running one phone agent, but giving people the ability to build their own local, developer-controlled mobile automation environment.
 
 ## What Isolation Means
 
@@ -143,6 +155,12 @@ Example:
 
 ```bash
 openpocket create agent review-bot --type physical-phone --device R5CX123456A
+```
+
+Physical-phone agents can also use Wi-Fi ADB:
+
+```bash
+openpocket create agent review-bot --type physical-phone --adb-endpoint 192.168.1.25:5555
 ```
 
 This command:
@@ -205,6 +223,7 @@ Rules:
 - `--config <path>` and `--agent <id>` are mutually exclusive
 - omitting both means `default`
 - every agent keeps its own target, channels, and workspace
+- physical-phone targets can be configured with either USB-backed ADB device ids or Wi-Fi ADB endpoints
 
 ## One Target Per Agent
 

@@ -2,7 +2,9 @@
 
 This page focuses on **practical deployment patterns** for OpenPocket multi-agent installs.
 
-The goal is not to describe abstract architecture. The goal is to help you assemble a stable, useful **Agent Phone squad** on real hardware.
+The goal is not to describe abstract architecture. The goal is to help you assemble a stable, useful multi-agent setup on real hardware.
+
+OpenPocket is a neutral open-source framework. Use these patterns for lawful, policy-compliant development, testing, operations, and personal productivity workflows.
 
 ## First Principle
 
@@ -21,7 +23,7 @@ This means the recommended operating style is:
 - assign each agent its own channel or tightly scoped audience when possible
 - think in terms of **parallel independent workers**, not one giant orchestrator
 
-## Pattern 1: Solo Home Lab Starter Squad
+## Pattern 1: Solo Home Lab Starter Setup
 
 Best for:
 
@@ -35,8 +37,8 @@ Suggested layout:
 | Agent | Target | Role |
 | --- | --- | --- |
 | `default` | emulator | sandbox, prompt iteration, dry runs |
-| `social-bot` | real phone A | social posting / content workflows |
-| `ops-bot` | real phone B | account checks, utility/payment flows, daily operations |
+| `social-bot` | real phone A | content publishing / communication workflows |
+| `ops-bot` | real phone B | account checks, app maintenance, daily operations |
 
 Suggested commands:
 
@@ -82,22 +84,22 @@ Guidance:
 
 This is the easiest way to reduce accidental account damage.
 
-## Pattern 3: Role-Based Squad
+## Pattern 3: Role-Based Agents
 
 Best for:
 
-- social operations
-- lead handling
+- content operations
+- customer support
 - repeated operational work
-- small business owner workflows
+- small business workflows
 
-A good squad often looks like this:
+A good setup often looks like this:
 
 | Agent | Role |
 | --- | --- |
-| `growth-bot` | publishing, posting, outbound content tasks |
+| `growth-bot` | publishing, scheduling, content tasks |
 | `inbox-bot` | replies, inbox triage, customer follow-up |
-| `ops-bot` | payments, app maintenance, account state checks |
+| `ops-bot` | account maintenance, app checks, daily operations |
 | `lab-bot` | experiments, regression checks, recovery drills |
 
 This pattern is stronger than “one smart generalist agent” because:
@@ -166,7 +168,7 @@ Best for:
 
 - many managed agents
 - one free ngrok tunnel
-- one operator phone approving actions across the whole squad
+- one operator phone approving actions across the whole setup
 
 Recommended setup:
 
@@ -182,27 +184,27 @@ Why this matters:
 - artifacts and request state still remain isolated per agent
 - the operator only needs one approval surface instead of one public relay per agent
 
-This is the cleanest way to run a phone squad from home when public relay resources are limited.
+This is the cleanest way to run a multi-agent setup from home when public relay resources are limited.
 
-## Pattern 7: Revenue-Oriented Operator Stack
+## Pattern 7: Business and Operations Stack
 
 Best for:
 
-- users trying to turn repeated phone work into leverage
-- builders who want multiple app-native workflows running in parallel
+- small teams with repeated app-native workflows
+- builders who want multiple app-based workflows running in parallel
 
 Typical categories:
 
 - social media operations
-- marketplace or commerce workflows
-- lead handling and customer response loops
-- repetitive account maintenance work
+- customer support and response loops
+- listing or account maintenance workflows
+- repetitive approval or check workflows
 - region/account-separated app operations
 
 The point is not “one magic app.”
 The point is that many valuable workflows still live inside mobile apps, and OpenPocket lets users build their own local execution layer around those apps.
 
-This is why multi-agent matters strategically: it turns OpenPocket from a single assistant into a small, programmable workforce.
+This is why multi-agent matters strategically: it turns OpenPocket from a single assistant into a more practical local platform for several isolated workflows.
 
 ## Channel Topology Recommendations
 
@@ -339,7 +341,7 @@ A strong small-scale setup often looks like this:
 - one naming convention for agents, targets, and channels
 - one habit of testing on emulator before touching production phones
 
-That is enough to build a real local Agent Phone squad.
+That is enough to build a real local multi-agent environment.
 
 ## Related Pages
 
