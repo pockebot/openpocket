@@ -8,6 +8,7 @@ import type {
   CronJob,
   HumanAuthCapability,
   OpenPocketConfig,
+  ScheduleIntent,
   TaskExecutionPlan,
   UserDecisionRequest,
   UserDecisionResponse,
@@ -31,6 +32,7 @@ import { HumanAuthBridge } from "../human-auth/bridge.js";
 import { LocalHumanAuthStack } from "../human-auth/local-stack.js";
 import { readLatestTaskJournalSnapshot } from "../agent/journal/task-journal-store.js";
 import { ChatAssistant } from "./chat-assistant.js";
+import { CronRegistry } from "./cron-registry.js";
 import { CronService, type CronRunResult } from "./cron-service.js";
 import { HeartbeatRunner } from "./heartbeat-runner.js";
 import { evaluateDmPolicy } from "../channel/dm-policy.js";
@@ -71,6 +73,11 @@ type QueuedTask = {
   task: string;
   sessionKey: string;
   onDone?: (result: CronRunResult) => void | Promise<void>;
+};
+
+type PendingScheduleConfirmation = {
+  intent: ScheduleIntent;
+  createdAtMs: number;
 };
 
 export interface GatewayCoreOptions {
@@ -116,6 +123,7 @@ export class GatewayCore {
 
   private readonly chatContextStore = new Map<string, Map<string, ChatContextItem>>();
   private readonly pendingTasks: QueuedTask[] = [];
+  private readonly pendingScheduleConfirmations = new Map<string, PendingScheduleConfirmation>();
   private drainingTaskQueue = false;
   private running = false;
 
@@ -545,6 +553,9 @@ export class GatewayCore {
   private async handlePlainMessage(envelope: InboundEnvelope): Promise<void> {
     const text = envelope.text.trim();
     if (!text) return;
+    if (await this.handlePendingScheduleConfirmation(envelope, text)) {
+      return;
+    }
 
     const chatId = this.peerIdNum(envelope);
     const decision = await this.chat.decide(chatId, text);
@@ -563,8 +574,122 @@ export class GatewayCore {
       return;
     }
 
+    if (decision.mode === "schedule_intent" && decision.scheduleIntent) {
+      this.pendingScheduleConfirmations.set(this.scheduleConfirmationKey(envelope), {
+        intent: decision.scheduleIntent,
+        createdAtMs: Date.now(),
+      });
+      await this.router.replyText(envelope, this.sanitizeForChat(decision.reply, 1800));
+      return;
+    }
+
     const reply = decision.reply || (await this.chat.reply(chatId, text));
     await this.router.replyText(envelope, this.sanitizeForChat(reply, 1800));
+  }
+
+  private scheduleConfirmationKey(envelope: InboundEnvelope): string {
+    return `${envelope.channelType}:${envelope.peerId}`;
+  }
+
+  private readScheduleConfirmationAction(text: string): "confirm" | "cancel" | null {
+    const normalized = text.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+    if (["确认", "确认创建", "confirm", "yes", "y"].includes(normalized)) {
+      return "confirm";
+    }
+    if (["取消", "cancel", "no", "n"].includes(normalized)) {
+      return "cancel";
+    }
+    return null;
+  }
+
+  private slugifyScheduleTask(task: string): string {
+    const slug = task
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32);
+    return slug || "scheduled-task";
+  }
+
+  private buildScheduledJobName(intent: ScheduleIntent, locale: OnboardingLocale): string {
+    const base = intent.normalizedTask.trim();
+    if (!base) {
+      return locale === "zh" ? "定时任务" : "Scheduled task";
+    }
+    return base.slice(0, 80);
+  }
+
+  private createStructuredJobFromIntent(envelope: InboundEnvelope, intent: ScheduleIntent): string {
+    const registry = new CronRegistry(this.config);
+    const locale = this.inferLocale(envelope);
+    const created = registry.add({
+      id: `schedule-${Date.now()}-${this.slugifyScheduleTask(intent.normalizedTask)}`,
+      name: this.buildScheduledJobName(intent, locale),
+      enabled: true,
+      schedule: intent.schedule,
+      payload: {
+        kind: "agent_turn",
+        task: intent.normalizedTask,
+      },
+      delivery: {
+        mode: "announce",
+        channel: envelope.channelType,
+        to: envelope.peerId,
+      },
+      model: null,
+      promptMode: "minimal",
+      createdBy: `${envelope.channelType}:${envelope.senderId}`,
+      sourceChannel: envelope.channelType,
+      sourcePeerId: envelope.peerId,
+      runOnStartup: false,
+    });
+    return created.id;
+  }
+
+  private async handlePendingScheduleConfirmation(envelope: InboundEnvelope, text: string): Promise<boolean> {
+    const key = this.scheduleConfirmationKey(envelope);
+    const pending = this.pendingScheduleConfirmations.get(key);
+    if (!pending) {
+      return false;
+    }
+    if (Date.now() - pending.createdAtMs > 15 * 60 * 1000) {
+      this.pendingScheduleConfirmations.delete(key);
+      return false;
+    }
+    const action = this.readScheduleConfirmationAction(text);
+    const locale = this.inferLocale(envelope);
+    if (!action) {
+      const reminder = locale === "zh"
+        ? "你有一个待确认的定时任务。请先回复“确认”或“取消”。"
+        : 'You have a pending scheduled job. Reply with "confirm" or "cancel" first.';
+      await this.router.replyText(envelope, reminder);
+      return true;
+    }
+    this.pendingScheduleConfirmations.delete(key);
+    if (action === "cancel") {
+      const cancelled = locale === "zh"
+        ? "已取消这个待确认的定时任务。"
+        : "Cancelled the pending scheduled job.";
+      await this.router.replyText(envelope, cancelled);
+      return true;
+    }
+
+    try {
+      const jobId = this.createStructuredJobFromIntent(envelope, pending.intent);
+      const created = locale === "zh"
+        ? `定时任务已创建：${jobId}`
+        : `Scheduled job created: ${jobId}`;
+      await this.router.replyText(envelope, created);
+    } catch (error) {
+      const message = locale === "zh"
+        ? `创建定时任务失败：${(error as Error).message}`
+        : `Failed to create scheduled job: ${(error as Error).message}`;
+      await this.router.replyText(envelope, message);
+    }
+    return true;
   }
 
   // -----------------------------------------------------------------------
