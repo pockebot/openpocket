@@ -8,6 +8,13 @@ const {
   defaultConfigPath,
   defaultWorkspaceDir,
   defaultStateDir,
+  managerDir,
+  managerRegistryPath,
+  managerModelTemplatePath,
+  agentsRootDir,
+  agentConfigPath,
+  agentWorkspaceDir,
+  agentStateDir,
   resolvePath,
   nowForFilename,
 } = await import("../dist/utils/paths.js");
@@ -20,6 +27,16 @@ test("path helpers respect OPENPOCKET_HOME", () => {
     assert.equal(defaultConfigPath(), path.resolve("/tmp/openpocket-custom-home/config.json"));
     assert.equal(defaultWorkspaceDir(), path.resolve("/tmp/openpocket-custom-home/workspace"));
     assert.equal(defaultStateDir(), path.resolve("/tmp/openpocket-custom-home/state"));
+    assert.equal(managerDir(), path.resolve("/tmp/openpocket-custom-home/manager"));
+    assert.equal(managerRegistryPath(), path.resolve("/tmp/openpocket-custom-home/manager/registry.json"));
+    assert.equal(
+      managerModelTemplatePath(),
+      path.resolve("/tmp/openpocket-custom-home/manager/model-template.json"),
+    );
+    assert.equal(agentsRootDir(), path.resolve("/tmp/openpocket-custom-home/agents"));
+    assert.equal(agentConfigPath("review-bot"), path.resolve("/tmp/openpocket-custom-home/agents/review-bot/config.json"));
+    assert.equal(agentWorkspaceDir("review-bot"), path.resolve("/tmp/openpocket-custom-home/agents/review-bot/workspace"));
+    assert.equal(agentStateDir("review-bot"), path.resolve("/tmp/openpocket-custom-home/agents/review-bot/state"));
   } finally {
     if (prev === undefined) {
       delete process.env.OPENPOCKET_HOME;

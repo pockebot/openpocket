@@ -22,6 +22,42 @@ export function defaultStateDir(): string {
   return path.join(openpocketHome(), "state");
 }
 
+export function managerDir(): string {
+  return path.join(openpocketHome(), "manager");
+}
+
+export function managerRegistryPath(): string {
+  return path.join(managerDir(), "registry.json");
+}
+
+export function managerModelTemplatePath(): string {
+  return path.join(managerDir(), "model-template.json");
+}
+
+export function managerPortsPath(): string {
+  return path.join(managerDir(), "ports.json");
+}
+
+export function agentsRootDir(): string {
+  return path.join(openpocketHome(), "agents");
+}
+
+export function agentRootDir(agentId: string): string {
+  return path.join(agentsRootDir(), agentId);
+}
+
+export function agentConfigPath(agentId: string): string {
+  return path.join(agentRootDir(agentId), "config.json");
+}
+
+export function agentWorkspaceDir(agentId: string): string {
+  return path.join(agentRootDir(agentId), "workspace");
+}
+
+export function agentStateDir(agentId: string): string {
+  return path.join(agentRootDir(agentId), "state");
+}
+
 export function ensureDir(dirPath: string): string {
   fs.mkdirSync(dirPath, { recursive: true });
   return dirPath;
