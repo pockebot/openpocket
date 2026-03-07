@@ -3829,6 +3829,7 @@ export class DashboardServer {
       if (ch === "whatsapp") return '<i class="fa-brands fa-whatsapp" style="color:#25D366;font-size:20px;vertical-align:middle;"></i>';
       if (ch === "discord") return '<i class="fa-brands fa-discord" style="color:#5865F2;font-size:20px;vertical-align:middle;"></i>';
       if (ch === "imessage") return '<i class="fa-brands fa-apple" style="color:#555;font-size:20px;vertical-align:middle;"></i>';
+      if (ch === "slack") return '<i class="fa-brands fa-slack" style="color:#4A154B;font-size:20px;vertical-align:middle;"></i>';
       return '<i class="fa-solid fa-globe" style="color:#888;font-size:20px;vertical-align:middle;"></i>';
     }
 
@@ -3848,6 +3849,11 @@ export class DashboardServer {
           ? '<span class="badge ok" style="font-size:11px;">Token OK</span>'
           : '<span class="badge" style="font-size:11px;">No Token</span>';
       }
+      if (ch === "slack") {
+        return status === "tokens_configured"
+          ? '<span class="badge ok" style="font-size:11px;">Tokens OK</span>'
+          : '<span class="badge" style="font-size:11px;">Missing Tokens</span>';
+      }
       return "";
     }
 
@@ -3858,7 +3864,7 @@ export class DashboardServer {
         return;
       }
 
-      const order = ["telegram", "whatsapp", "discord", "imessage"];
+      const order = ["telegram", "whatsapp", "discord", "imessage", "slack"];
       const sorted = order.filter((k) => channels[k]);
 
       container.innerHTML = sorted.map((ch) => {
@@ -5208,7 +5214,7 @@ export class DashboardServer {
           expiresAfterSec: this.config.pairing?.expiresAfterSec,
         });
 
-        const channelTypes: ChannelType[] = ["telegram", "whatsapp", "discord", "imessage"];
+        const channelTypes: ChannelType[] = ["telegram", "whatsapp", "discord", "imessage", "slack"];
         const channels: Record<string, unknown> = {};
 
         for (const ch of channelTypes) {
@@ -5216,6 +5222,7 @@ export class DashboardServer {
             : ch === "whatsapp" ? this.config.channels?.whatsapp
             : ch === "discord" ? this.config.channels?.discord
             : ch === "imessage" ? this.config.channels?.imessage
+            : ch === "slack" ? this.config.channels?.slack
             : undefined;
           if (!cfg) continue;
 
@@ -5238,6 +5245,14 @@ export class DashboardServer {
               ?? path.join(os.homedir(), "Library", "Messages", "chat.db");
             const hasChatDb = process.platform === "darwin" && fs.existsSync(chatDbPath);
             sessionStatus = hasChatDb ? "chat_db_found" : (process.platform === "darwin" ? "chat_db_missing" : "unsupported_platform");
+          }
+          if (ch === "slack") {
+            const slCfg = this.config.channels?.slack;
+            const botEnv = slCfg?.botTokenEnv?.trim() || "SLACK_BOT_TOKEN";
+            const hasBotToken = Boolean((slCfg?.botToken ?? "").trim() || process.env[botEnv]?.trim());
+            const appEnv = slCfg?.appTokenEnv?.trim() || "SLACK_APP_TOKEN";
+            const hasAppToken = Boolean((slCfg?.appToken ?? "").trim() || process.env[appEnv]?.trim());
+            sessionStatus = hasBotToken && hasAppToken ? "tokens_configured" : "missing_tokens";
           }
 
           channels[ch] = {

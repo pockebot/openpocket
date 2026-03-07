@@ -8,6 +8,7 @@ import { TelegramAdapter } from "../channel/telegram/adapter.js";
 import { DiscordAdapter } from "../channel/discord/adapter.js";
 import { WhatsAppAdapter } from "../channel/whatsapp/adapter.js";
 import { IMessageAdapter } from "../channel/imessage/adapter.js";
+import { SlackAdapter } from "../channel/slack/adapter.js";
 import { GatewayCore } from "./gateway-core.js";
 import { createGatewayLogEmitter } from "./logging.js";
 
@@ -80,6 +81,14 @@ export function createGateway(
     router.register(imAdapter);
   }
 
+  if (isSlackConfigured(config)) {
+    const slackConfig = config.channels!.slack!;
+    const slackAdapter = new SlackAdapter(config, slackConfig, {
+      logger: log,
+    });
+    router.register(slackAdapter);
+  }
+
   const core = new GatewayCore(config, router, sessionKeyResolver, pairingStore, {
     logger: log,
   });
@@ -121,4 +130,18 @@ function isIMessageConfigured(config: OpenPocketConfig): boolean {
   if (!im) return false;
   if (im.enabled === false) return false;
   return process.platform === "darwin";
+}
+
+function isSlackConfigured(config: OpenPocketConfig): boolean {
+  const slack = config.channels?.slack;
+  if (!slack) return false;
+  if (slack.enabled === false) return false;
+
+  const botTokenEnv = slack.botTokenEnv || "SLACK_BOT_TOKEN";
+  const botToken = (slack.botToken ?? "").trim() || (process.env[botTokenEnv]?.trim()) || "";
+  if (!botToken) return false;
+
+  const appTokenEnv = slack.appTokenEnv || "SLACK_APP_TOKEN";
+  const appToken = (slack.appToken ?? "").trim() || (process.env[appTokenEnv]?.trim()) || "";
+  return appToken.length > 0;
 }

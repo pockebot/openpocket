@@ -44,6 +44,8 @@
     "@mariozechner/pi-coding-agent": "^0.54.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@sinclair/typebox": "^0.34.48",
+    "@slack/bolt": "^4.6.0",
+    "@slack/web-api": "^7.14.1",
     "@types/qrcode": "^1.5.6",
     "baileys": "^6.7.21",
     "discord.js": "^14.25.1",

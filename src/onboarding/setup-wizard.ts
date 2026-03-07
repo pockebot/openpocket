@@ -77,6 +77,9 @@ interface SetupState {
   discordConfiguredAt?: string;
   discordTokenSource?: "env" | "config" | "skip";
   whatsappConfiguredAt?: string;
+  slackConfiguredAt?: string;
+  slackBotTokenSource?: "env" | "config" | "skip";
+  slackAppTokenSource?: "env" | "config" | "skip";
   humanAuthEnabledAt?: string;
   humanAuthMode?: "disabled" | "lan" | "ngrok";
   ngrokConfiguredAt?: string;
@@ -2213,6 +2216,166 @@ async function testProxyConnectivity(proxyUrl: string): Promise<boolean> {
   }
 }
 
+async function runSlackStep(
+  config: OpenPocketConfig,
+  prompter: SetupPrompter,
+  state: SetupState,
+): Promise<void> {
+  if (!config.channels) config.channels = {};
+  if (!config.channels.slack) config.channels.slack = {};
+  const sl = config.channels.slack;
+
+  const botFallbackEnv = "SLACK_BOT_TOKEN";
+  const appFallbackEnv = "SLACK_APP_TOKEN";
+
+  const configuredBotEnv = sl.botTokenEnv || botFallbackEnv;
+  const envBotToken = process.env[configuredBotEnv]?.trim() ?? "";
+  const hasConfigBotToken = Boolean(sl.botToken?.trim());
+
+  const configuredAppEnv = sl.appTokenEnv || appFallbackEnv;
+  const envAppToken = process.env[configuredAppEnv]?.trim() ?? "";
+  const hasConfigAppToken = Boolean(sl.appToken?.trim());
+
+  await prompter.note(
+    "Slack Bot Setup",
+    [
+      "OpenPocket can receive commands from Slack DMs or channels via Socket Mode.",
+      "Create a Slack App at https://api.slack.com/apps:",
+      "  1. Enable Socket Mode and generate an App-Level Token (xapp-...)",
+      "  2. Add Bot Token Scopes: chat:write, files:write, channels:read, im:read, im:history, app_mentions:read, reactions:write, users:read",
+      "  3. Subscribe to events: message.im, app_mention",
+      "  4. Install to your workspace and copy the Bot User OAuth Token (xoxb-...)",
+      "",
+      `Bot token env: ${configuredBotEnv}`,
+      `App token env: ${configuredAppEnv}`,
+    ].join("\n"),
+  );
+
+  const botTokenOptions: SelectOption<TokenChoice>[] = [
+    {
+      value: "env",
+      label: `Use environment variable ${configuredBotEnv}`,
+      hint: envBotToken ? `Detected (length ${envBotToken.length})` : "Not detected",
+    },
+    { value: "config", label: "Paste bot token and save to local config.json" },
+    { value: "skip", label: "Skip bot token setup for now" },
+  ];
+  if (hasConfigBotToken) {
+    botTokenOptions.splice(1, 0, {
+      value: "config-existing",
+      label: "Use existing bot token from local config.json",
+      hint: `Detected (length ${sl.botToken!.trim().length})`,
+    });
+  }
+
+  const botTokenChoice = await prompter.select<TokenChoice>(
+    "Slack bot token source (xoxb-...)",
+    botTokenOptions,
+    hasConfigBotToken ? "config-existing" : envBotToken ? "env" : "config",
+  );
+
+  if (botTokenChoice === "env") {
+    sl.botTokenEnv = configuredBotEnv;
+    sl.botToken = "";
+    state.slackBotTokenSource = "env";
+    if (!envBotToken) {
+      await prompter.note(
+        "Slack Setup",
+        `${configuredBotEnv} is not set in the current shell. Slack channel will not start until it is exported.`,
+      );
+    }
+  } else if (botTokenChoice === "config-existing") {
+    state.slackBotTokenSource = "config";
+  } else if (botTokenChoice === "config") {
+    const token = await promptSecretWithRetryOrSkip(prompter, "Enter Slack bot token (xoxb-...)", "Slack bot token");
+    if (!token) {
+      state.slackBotTokenSource = "skip";
+    } else {
+      const confirmed = await prompter.confirm(
+        "Confirm writing Slack bot token to local config.json?",
+        true,
+      );
+      if (confirmed) {
+        sl.botToken = token;
+        state.slackBotTokenSource = "config";
+      } else {
+        state.slackBotTokenSource = "skip";
+      }
+    }
+  } else {
+    state.slackBotTokenSource = "skip";
+  }
+
+  const appTokenOptions: SelectOption<TokenChoice>[] = [
+    {
+      value: "env",
+      label: `Use environment variable ${configuredAppEnv}`,
+      hint: envAppToken ? `Detected (length ${envAppToken.length})` : "Not detected",
+    },
+    { value: "config", label: "Paste app token and save to local config.json" },
+    { value: "skip", label: "Skip app token setup for now" },
+  ];
+  if (hasConfigAppToken) {
+    appTokenOptions.splice(1, 0, {
+      value: "config-existing",
+      label: "Use existing app token from local config.json",
+      hint: `Detected (length ${sl.appToken!.trim().length})`,
+    });
+  }
+
+  const appTokenChoice = await prompter.select<TokenChoice>(
+    "Slack app-level token source (xapp-...)",
+    appTokenOptions,
+    hasConfigAppToken ? "config-existing" : envAppToken ? "env" : "config",
+  );
+
+  if (appTokenChoice === "env") {
+    sl.appTokenEnv = configuredAppEnv;
+    sl.appToken = "";
+    state.slackAppTokenSource = "env";
+    if (!envAppToken) {
+      await prompter.note(
+        "Slack Setup",
+        `${configuredAppEnv} is not set in the current shell. Slack channel will not start until it is exported.`,
+      );
+    }
+  } else if (appTokenChoice === "config-existing") {
+    state.slackAppTokenSource = "config";
+  } else if (appTokenChoice === "config") {
+    const token = await promptSecretWithRetryOrSkip(prompter, "Enter Slack app-level token (xapp-...)", "Slack app token");
+    if (!token) {
+      state.slackAppTokenSource = "skip";
+    } else {
+      const confirmed = await prompter.confirm(
+        "Confirm writing Slack app token to local config.json?",
+        true,
+      );
+      if (confirmed) {
+        sl.appToken = token;
+        state.slackAppTokenSource = "config";
+      } else {
+        state.slackAppTokenSource = "skip";
+      }
+    }
+  } else {
+    state.slackAppTokenSource = "skip";
+  }
+
+  const dmPolicy = await prompter.select(
+    "Slack DM access policy",
+    [
+      { value: "pairing", label: "Pairing (unknown senders get a code, owner approves)" },
+      { value: "allowlist", label: "Allowlist (only pre-configured user IDs)" },
+      { value: "open", label: "Open (all DMs allowed)" },
+    ],
+    (sl.dmPolicy as string) || "pairing",
+  );
+  sl.dmPolicy = dmPolicy as import("../channel/types.js").DmPolicy;
+
+  state.slackConfiguredAt = nowIso();
+  saveConfig(config);
+}
+
 async function runIMessageStep(
   config: OpenPocketConfig,
   prompter: SetupPrompter,
@@ -2272,6 +2435,7 @@ async function runChannelSetupStep(
     { value: "telegram", label: "Telegram", hint: "Bot API polling" },
     { value: "discord", label: "Discord", hint: "Bot with DMs and guild support" },
     { value: "whatsapp", label: "WhatsApp", hint: "Via Baileys (WhatsApp Web)" },
+    { value: "slack", label: "Slack", hint: "Bot via Socket Mode" },
     ...(process.platform === "darwin"
       ? [{ value: "imessage", label: "iMessage", hint: "macOS only, via imsg CLI" }]
       : []),
@@ -2307,6 +2471,10 @@ async function runChannelSetupStep(
 
   if (selectedChannels.includes("whatsapp")) {
     await runWhatsAppStep(config, prompter, state);
+  }
+
+  if (selectedChannels.includes("slack")) {
+    await runSlackStep(config, prompter, state);
   }
 
   if (selectedChannels.includes("imessage")) {
