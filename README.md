@@ -19,11 +19,24 @@
 
 ## Simple Introduction
 
-OpenPocket runs an AI agent against your configurable **Agent Phone** target (emulator or physical Android phone), while keeping runtime state and sensitive data in your local environment.
+OpenPocket runs AI agents against configurable Android targets through `adb`, while keeping runtime state, session logs, and human-auth artifacts on your own machine.
+
+Each onboarded install starts with one **default agent**. You can later create additional **isolated agent instances** with their own:
+
+- `config.json`
+- `workspace/`
+- `state/`
+- bound target
+- channels
+- gateway process
+- dashboard
+
+Agents do **not** share workspace data or targets. They can, however, share one management dashboard and one relay/ngrok entry for human-auth flows.
 
 For product overview and docs map:
 - Documentation hub: [https://www.openpocket.ai/hubs#doc-hubs](https://www.openpocket.ai/hubs#doc-hubs)
 - Project blueprint: [https://www.openpocket.ai/concepts/project-blueprint](https://www.openpocket.ai/concepts/project-blueprint)
+- Multi-agent setup: [https://www.openpocket.ai/get-started/multi-agent](https://www.openpocket.ai/get-started/multi-agent)
 
 ## Install
 
@@ -46,11 +59,13 @@ npm run build
 
 Setup reference:
 - Quickstart: [https://www.openpocket.ai/get-started/quickstart](https://www.openpocket.ai/get-started/quickstart)
+- Device targets: [https://www.openpocket.ai/get-started/device-targets](https://www.openpocket.ai/get-started/device-targets)
 - Configuration: [https://www.openpocket.ai/get-started/configuration](https://www.openpocket.ai/get-started/configuration)
+- Multi-agent setup: [https://www.openpocket.ai/get-started/multi-agent](https://www.openpocket.ai/get-started/multi-agent)
 
 ## Run
 
-### Start gateway runtime
+### Start the default agent gateway
 
 ```bash
 openpocket gateway start
@@ -62,6 +77,33 @@ openpocket gateway start
 openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
 ```
 
+### Create more isolated agents
+
+```bash
+openpocket create agent review-bot --type physical-phone --device R5CX123456A
+openpocket create agent ops-bot --type emulator
+openpocket agents list
+```
+
+Then target a specific agent with `--agent`:
+
+```bash
+openpocket --agent review-bot config-show
+openpocket --agent review-bot gateway start
+openpocket --agent review-bot target show
+openpocket --agent review-bot channels login --channel discord
+```
+
+### Manager dashboard and shared relay hub
+
+```bash
+openpocket dashboard manager
+openpocket human-auth-relay start
+```
+
+- `openpocket dashboard manager` shows every registered agent, its target binding, configured channels, dashboard URL, and gateway status.
+- `openpocket human-auth-relay start` starts one shared relay hub for all managed agents, with one optional ngrok public URL.
+
 ### Optional target setup examples
 
 ```bash
@@ -69,19 +111,23 @@ openpocket target show
 openpocket target set --type emulator
 openpocket target set --type physical-phone
 openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairing-code> --type physical-phone
+openpocket --agent review-bot target set --type physical-phone --device R5CX123456A
 ```
 
 Runtime and target references:
 - Device targets: [https://www.openpocket.ai/get-started/device-targets](https://www.openpocket.ai/get-started/device-targets)
 - CLI and gateway reference: [https://www.openpocket.ai/reference/cli-and-gateway](https://www.openpocket.ai/reference/cli-and-gateway)
+- Filesystem layout: [https://www.openpocket.ai/reference/filesystem-layout](https://www.openpocket.ai/reference/filesystem-layout)
 
 ### Manage model profiles
+
+Model config is per agent. `create agent` seeds new agents from the initial onboard model template, then each agent can diverge.
 
 ```bash
 openpocket model show
 openpocket model list
 openpocket model set --name gpt-5.4
-openpocket model set --provider google --model gemini-3.1-pro-preview
+openpocket --agent review-bot model set --provider google --model gemini-3.1-pro-preview
 ```
 
 ### Control gateway log noise
@@ -111,47 +157,46 @@ Set `gatewayLogging` in config to tune level, payload redaction, and module-leve
 ## Detailed Architecture
 
 ```mermaid
-flowchart TD
-    A[User / Channel Input] --> B[Channel Router & Session Key Resolver]
-    B --> C[Gateway Core]
-    C --> D[Chat Assistant Intent Routing]
-    D --> E[Agent Runtime]
-    E --> F[Model Client + Prompt Builder]
-    E --> G[Tool Layer]
+flowchart LR
+    U["User Surfaces\nCLI / Telegram / Dashboard"] --> M["Manager Layer\nagent registry + ports + target locks"]
+    M --> D0["Default Agent\nconfig + workspace + state"]
+    M --> D1["Managed Agent A\nconfig + workspace + state"]
+    M --> D2["Managed Agent B\nconfig + workspace + state"]
 
-    G --> G1[Android Actions via ADB]
-    G --> G2[Coding Tools]
-    G --> G3[Memory Tools]
-    G --> G4[Skills + Script Runtime]
+    D0 --> G0["Gateway + Dashboard"]
+    D1 --> G1["Gateway + Dashboard"]
+    D2 --> G2["Gateway + Dashboard"]
 
-    E --> H[Capability Probe]
-    H --> I{Sensitive Capability?}
-    I -->|No| G1
-    I -->|Yes| J[Human Auth Bridge]
-    J --> K[Human Phone Approval / Artifact]
-    K --> E
+    G0 --> A0["Agent Runtime"]
+    G1 --> A1["Agent Runtime"]
+    G2 --> A2["Agent Runtime"]
 
-    E --> L[Workspace Persistence]
-    L --> L1[Sessions]
-    L --> L2[Memory]
-    L --> L3[Screenshots]
-    L --> L4[Artifacts]
+    A0 --> T0["Target A"]
+    A1 --> T1["Target B"]
+    A2 --> T2["Target C"]
 
-    C --> M[Dashboard + Ops]
+    A0 --> H0["Private Local Relay"]
+    A1 --> H1["Private Local Relay"]
+    A2 --> H2["Private Local Relay"]
+
+    H0 --> RH["Shared Relay Hub\noptional ngrok"]
+    H1 --> RH
+    H2 --> RH
 ```
 
 ### Mechanisms and Components
 
-1. Channel ingress and routing
-   - Multi-channel adapters, normalized inbound envelopes, and stable session keys per peer.
-   - Docs: [https://www.openpocket.ai/hubs#doc-hubs](https://www.openpocket.ai/hubs#doc-hubs), [https://www.openpocket.ai/reference/cli-and-gateway](https://www.openpocket.ai/reference/cli-and-gateway)
+1. Multi-agent manager layer
+   - One onboarded install can host one default agent plus many managed agents.
+   - Each managed agent gets isolated config/workspace/state, while target locks and port allocation are coordinated centrally.
+   - Docs: [https://www.openpocket.ai/get-started/multi-agent](https://www.openpocket.ai/get-started/multi-agent), [https://www.openpocket.ai/reference/filesystem-layout](https://www.openpocket.ai/reference/filesystem-layout)
 
 2. Gateway orchestration
-   - Command handling, task lifecycle, queueing, progress narration, and channel replies.
-   - Docs: [https://www.openpocket.ai/ops/runbook](https://www.openpocket.ai/ops/runbook), [https://www.openpocket.ai/concepts/project-blueprint](https://www.openpocket.ai/concepts/project-blueprint)
+   - Each agent runs its own gateway, dashboard, session store, channel credentials, and task queue.
+   - Docs: [https://www.openpocket.ai/reference/cli-and-gateway](https://www.openpocket.ai/reference/cli-and-gateway), [https://www.openpocket.ai/ops/runbook](https://www.openpocket.ai/ops/runbook)
 
 3. Prompting and model loop
-   - System/user prompt composition, context budgeting, and model-driven step execution.
+   - System/user prompt composition, context budgeting, and model-driven step execution remain local to one agent workspace.
    - Docs: [https://www.openpocket.ai/concepts/prompting](https://www.openpocket.ai/concepts/prompting), [https://www.openpocket.ai/reference/prompt-templates](https://www.openpocket.ai/reference/prompt-templates)
 
 4. Tool execution layer
@@ -160,18 +205,20 @@ flowchart TD
 
 5. Capability probe and human authorization
    - Sensitive actions (camera/payment/location/etc.) can be escalated to Human Auth approval with delegated artifacts.
+   - In multi-agent installs, agents can share one relay hub and one ngrok URL while still storing request state per agent.
    - Docs: [https://www.openpocket.ai/concepts/remote-human-authorization](https://www.openpocket.ai/concepts/remote-human-authorization)
 
 6. Device target abstraction
-   - Emulator and physical phone targets with explicit target switching and pairing flow.
+   - Every agent binds to exactly one target at a time.
+   - Targets cannot be shared across agents.
    - Docs: [https://www.openpocket.ai/get-started/device-targets](https://www.openpocket.ai/get-started/device-targets)
 
 7. Persistence and auditability
-   - Sessions, memory, screenshots, relay state, and generated artifacts persisted in workspace/home paths.
+   - Sessions, memory, screenshots, relay state, and generated artifacts are stored inside each agent's workspace/state.
    - Docs: [https://www.openpocket.ai/reference/filesystem-layout](https://www.openpocket.ai/reference/filesystem-layout), [https://www.openpocket.ai/reference/session-memory-formats](https://www.openpocket.ai/reference/session-memory-formats)
 
 8. Runtime operations and troubleshooting
-   - Day-2 operations, keep-awake heartbeat, and troubleshooting playbooks.
+   - Manager dashboard, per-agent dashboards, keep-awake heartbeat, and troubleshooting playbooks.
    - Docs: [https://www.openpocket.ai/ops/runbook](https://www.openpocket.ai/ops/runbook), [https://www.openpocket.ai/ops/troubleshooting](https://www.openpocket.ai/ops/troubleshooting), [https://www.openpocket.ai/ops/screen-awake-heartbeat](https://www.openpocket.ai/ops/screen-awake-heartbeat)
 
 ## Contribute
@@ -187,6 +234,7 @@ npm install
 npm run check
 npm run test
 npm run smoke:dual-side
+npm run docs:build
 ```
 
 4. Submit a PR with context, scope, and verification notes.

@@ -3,34 +3,44 @@
 ## CLI Commands
 
 ```text
-openpocket [--config <path>] install-cli
-openpocket [--config <path>] onboard
-openpocket [--config <path>] config-show
-openpocket [--config <path>] model show|list|set [--name <profile>|<profile>] [--provider <provider> --model <model-id>]
-openpocket [--config <path>] target show
-openpocket [--config <path>] target set --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--cloud-provider <name>] [--pin <4-digit>] [--wakeup-interval <sec>] [--clear-device] [--clear-adb-endpoint] [--clear-pin] [--clear-wakeup-interval]
-openpocket [--config <path>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
-openpocket [--config <path>] emulator status|start|stop|hide|show|list-avds|screenshot [--out <path>] [--device <id>]
-openpocket [--config <path>] emulator tap --x <int> --y <int> [--device <id>]
-openpocket [--config <path>] emulator type --text <text> [--device <id>]
-openpocket [--config <path>] agent [--model <name>] <task>
-openpocket [--config <path>] skills list
-openpocket [--config <path>] script run [--file <path> | --text <script>] [--timeout <sec>]
-openpocket [--config <path>] channels login --channel <name>
-openpocket [--config <path>] channels whoami [--channel <name>]
-openpocket [--config <path>] channels list
-openpocket [--config <path>] telegram setup|whoami
-openpocket [--config <path>] gateway [start|telegram]
-openpocket [--config <path>] dashboard start [--host <host>] [--port <port>]
-openpocket [--config <path>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
-openpocket [--config <path>] human-auth-relay start [--host <host>] [--port <port>] [--public-base-url <url>] [--api-key <key>] [--state-file <path>]
+openpocket [--config <path> | --agent <id>] install-cli
+openpocket [--config <path> | --agent <id>] onboard [--force] [--target <type>]
+openpocket [--config <path> | --agent <id>] config-show
+openpocket [--config <path> | --agent <id>] model show|list|set [--name <profile>|<profile>] [--provider <provider> --model <model-id>]
+openpocket [--config <path> | --agent <id>] target show
+openpocket [--config <path> | --agent <id>] target set|set-target|config --type <emulator|physical-phone|android-tv|cloud> [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
+openpocket [--config <path> | --agent <id>] target pair [--host <ip>] [--pair-port <port>] [--connect-port <port>] [--code <pairing-code>] [--type <physical-phone|android-tv>] [--device <id|auto>] [--dry-run]
+openpocket [--config <path> | --agent <id>] emulator status
+openpocket [--config <path> | --agent <id>] emulator start
+openpocket [--config <path> | --agent <id>] emulator stop
+openpocket [--config <path> | --agent <id>] emulator hide
+openpocket [--config <path> | --agent <id>] emulator show
+openpocket [--config <path> | --agent <id>] emulator list-avds
+openpocket [--config <path> | --agent <id>] emulator screenshot [--out <path>]
+openpocket [--config <path> | --agent <id>] emulator tap --x <int> --y <int> [--device <id>]
+openpocket [--config <path> | --agent <id>] emulator type --text <text> [--device <id>]
+openpocket [--config <path> | --agent <id>] agent [--model <name>] <task>
+openpocket [--config <path> | --agent <id>] skills list|load [--all]|validate [--strict]
+openpocket [--config <path> | --agent <id>] script run [--file <path> | --text <script>] [--timeout <sec>]
+openpocket [--config <path> | --agent <id>] channels login --channel <name>
+openpocket [--config <path> | --agent <id>] channels whoami [--channel <name>]
+openpocket [--config <path> | --agent <id>] channels list
+openpocket [--config <path> | --agent <id>] gateway [start|telegram]
+openpocket [--config <path> | --agent <id>] dashboard start [--host <host>] [--port <port>]
+openpocket dashboard manager [--host <host>] [--port <port>]
+openpocket [--config <path> | --agent <id>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
+openpocket [--config <path> | --agent <id>] human-auth-relay start [--host <host>] [--port <port>] [--public-base-url <url>]
+openpocket create agent <id> [--type <target-type>] [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
+openpocket agents list
+openpocket agents show [<id>]
+openpocket agents delete <id>
 ```
 
 Deprecated aliases:
 
 ```text
-openpocket [--config <path>] init
-openpocket [--config <path>] setup
+openpocket [--config <path> | --agent <id>] init
+openpocket [--config <path> | --agent <id>] setup
 ```
 
 Local clone launcher:
@@ -38,6 +48,12 @@ Local clone launcher:
 ```text
 ./openpocket <command>
 ```
+
+## Global Selection Rules
+
+- `--config <path>` and `--agent <id>` are mutually exclusive
+- omitting both selects the onboarded `default` agent
+- manager-level commands (`create agent`, `agents ...`, `dashboard manager`) do not require `--agent`
 
 ## `onboard`
 
@@ -49,14 +65,52 @@ Local clone launcher:
 - asks for deployment target (`emulator` / `physical-phone` / `android-tv` / `cloud`)
 - reuses existing local AVD when available
 - installs CLI launcher on first onboard (`~/.local/bin/openpocket`)
-- runs interactive setup wizard (consent/model/API key/Telegram/human-auth mode)
+- runs interactive setup wizard (consent/model/API key/channel/human-auth mode)
 - when target is `emulator`, includes emulator startup + Play Store/Gmail check
 - when target is non-emulator, skips emulator onboarding and asks to verify adb connectivity
 - for physical phone / Android TV, supports later Wi-Fi pairing via `target pair`
+- captures the initial manager model template used later by `create agent`
 
 Wizard persistence:
 
 - `state/onboarding.json`
+
+## `create agent`
+
+Example:
+
+```bash
+openpocket create agent review-bot --type physical-phone --device R5CX123456A
+```
+
+Behavior:
+
+- validates agent id and reserves `default`
+- clones the selected source config into a new managed agent directory
+- rewrites workspace/state/config/runtime paths
+- seeds the new config from the captured manager model template
+- clears channel credentials and target runtime identity
+- allocates a unique dashboard port
+- rejects duplicate target bindings
+- registers the agent in `manager/registry.json`
+
+The new agent is isolated from the source agent's workspace data, session history, and channel state.
+
+## `agents list|show|delete`
+
+Examples:
+
+```bash
+openpocket agents list
+openpocket agents show review-bot
+openpocket agents delete review-bot
+```
+
+Notes:
+
+- `agents show` defaults to `default`
+- `agents delete` cannot remove `default`
+- `agents delete` requires the target agent gateway to be stopped
 
 ## `target set`
 
@@ -66,6 +120,8 @@ Wizard persistence:
   - otherwise opens an arrow-key selector with connection labels (`USB ADB` / `WiFi ADB`)
 - setting `--pin` updates target auto-unlock PIN (`target.pin`)
 - setting `--wakeup-interval` updates keep-awake heartbeat interval (`target.wakeupIntervalSec`)
+- rejects target fingerprints already registered to another agent
+- requires the selected agent gateway to be stopped first
 
 ## `target pair`
 
@@ -86,6 +142,7 @@ Behavior:
 - runs `adb pair <host:pair-port> <code>`
 - runs `adb connect <host:connect-port>` (default connect port: `5555`)
 - updates config target endpoint and preferred device id
+- re-checks target exclusivity before saving
 - supports `--dry-run` for command preview without changing device state
 
 ## `install-cli`
@@ -95,33 +152,64 @@ Behavior:
 
 ## `dashboard start`
 
-- starts local Web dashboard server
+- starts the selected agent's local Web dashboard server
 - host/port defaults from `config.dashboard`
 - optional `--host` and `--port` override
 - optional browser auto-open when `dashboard.autoOpenBrowser=true`
+
+## `dashboard manager`
+
+- starts the install-level manager dashboard
+- host/port default from `manager/ports.json`
+- shows all registered agents, target fingerprints, model profiles, channel types, dashboard URLs, and gateway status
+- updates `manager/ports.json` if a fallback port is needed
 
 ## `gateway start`
 
 Startup sequence:
 
-1. load config
-2. validate configured channel credentials
-3. ensure selected target device is online
-4. ensure dashboard is running
-5. initialize gateway runtime
-6. start polling + heartbeat + cron
+1. load selected agent config
+2. acquire per-agent gateway lock
+3. acquire per-target runtime lock
+4. validate configured channel credentials
+5. ensure selected target device is online
+6. ensure selected agent dashboard is running
+7. initialize gateway runtime
+8. start polling + heartbeat + cron
 
-Step 3 behavior:
+Target behavior:
 
 - if target is `emulator`: boot emulator when needed and wait for boot-complete
 - if target is non-emulator: verify at least one adb device is online (USB or configured adb endpoint)
 
-When human auth is enabled, gateway can auto-start:
+Gateway startup also:
 
-- local relay stack (`humanAuth.useLocalRelay=true`)
-- ngrok tunnel (`humanAuth.tunnel.provider=ngrok` and `humanAuth.tunnel.ngrok.enabled=true`)
+- attempts Telegram bot display-name sync from `workspace/IDENTITY.md` (`- Name:`)
+- starts the integrated per-agent dashboard when enabled
+- records dashboard address in the agent runtime lock
 
-Gateway startup also attempts Telegram bot display-name sync from `workspace/IDENTITY.md` (`- Name:`).
+When human auth is enabled, a managed agent can use:
+
+- a private local relay stack registered to the shared relay hub
+- the shared relay hub started by `openpocket human-auth-relay start`
+- an optional shared ngrok public URL owned by that hub
+
+## `human-auth-relay start`
+
+This command starts the **shared relay hub**, not a per-agent relay server.
+
+Behavior:
+
+- listens on a manager-level local port
+- optionally starts one ngrok tunnel for the entire install
+- allows managed agents to register their private local relay endpoints
+- proxies requests by `/a/<agentId>/...`
+- updates `manager/ports.json` when a fallback port is needed
+
+Notes:
+
+- request state and uploaded artifacts still remain in each agent's own `state/`
+- if the relay hub is unavailable, managed agents fall back to direct local relay URLs
 
 ## Model Profile Management
 
@@ -131,18 +219,34 @@ Examples:
 openpocket model show
 openpocket model list
 openpocket model set --name gpt-5.4
-openpocket model set --provider google --model gemini-3.1-pro-preview
+openpocket --agent review-bot model set --provider google --model gemini-3.1-pro-preview
 ```
 
 Notes:
 
-- `model set --name <profile>` switches to an existing profile key.
-- `model set --provider <provider> --model <model-id>` creates/updates a profile from provider presets and switches default model to it.
-- provider/model selection is also available during `openpocket onboard`.
+- `model set --name <profile>` switches to an existing profile key
+- `model set --provider <provider> --model <model-id>` creates/updates a profile from provider presets and switches the selected agent's default model
+- model config is per agent after creation
+
+## Channel Commands
+
+Examples:
+
+```bash
+openpocket channels list
+openpocket channels whoami --channel telegram
+openpocket --agent review-bot channels login --channel discord
+```
+
+Managed-agent behavior:
+
+- channels are configured per agent
+- auth/state files live under that agent's `state/`
+- credentials are not copied from the source agent during `create agent`
 
 ## Telegram Commands
 
-Supported commands:
+Supported gateway commands:
 
 - `/start`
 - `/help`
@@ -185,6 +289,8 @@ Task mode:
 Chat mode:
 
 - conversational response via model endpoint fallback (`responses` -> `chat` -> `completions`)
+
+All of this happens inside the selected agent workspace and selected target context.
 
 ## Bootstrap and Session Reset Behavior
 
@@ -231,58 +337,19 @@ Additional suppression logic avoids noisy updates:
 - suppress highly similar messages sent too recently
 - strip step counters unless user explicitly asked for telemetry
 
-This keeps task chat updates natural and sparse.
-
-## Telegram Display Name Sync
-
-When onboarding/profile update changes assistant name:
-
-- `ChatAssistant` sets pending profile update payload
-- gateway calls Telegram `setMyName`
-- local sync state is cached in `state/telegram-bot-name-sync.json`
-- if Telegram rate-limits name changes, gateway defers retry and informs user
-
 ## Human Auth in Gateway
 
 When task emits `request_human_auth`:
 
-- gateway creates pending request through `HumanAuthBridge`
-- sends Telegram message with auth link and fallback commands
+- gateway creates a pending request through `HumanAuthBridge`
+- sends channel message with auth link and fallback commands
 - if URL is available, includes one-tap web button
 - supports inline OTP resolution for `sms`/`2fa` (plain 4-10 digits)
 - for `oauth`, web page provides dedicated username/password inputs plus optional remote takeover
-- approval artifacts are stored locally under `state/human-auth-artifacts/`
+- approval artifacts are stored locally under that agent's `state/human-auth-artifacts/`
 
 Manual fallback commands remain available:
 
 - `/auth pending`
 - `/auth approve <request-id> [note]`
 - `/auth reject <request-id> [note]`
-
-## Telegram Output Sanitization
-
-Before sending model/task content back to chat:
-
-- remove internal lines (`Session:`, `Auto skill:`, `Auto script:`)
-- redact local screenshot and run-directory paths
-- compact and length-limit output
-
-This keeps user-facing messages concise and avoids local path leakage.
-
-## Gateway Logging Controls
-
-`gatewayLogging` config controls runtime log volume and sensitivity:
-
-- `level`: `error|warn|info|debug`
-- `modules`: independently enable/disable `core/access/task/channel/cron/heartbeat/humanAuth/chat`
-- `includePayloads`: when `false`, payload-like fields are hidden
-- `maxPayloadChars`: payload preview truncation bound (`40..1000`)
-
-This replaces hardcoded heartbeat suppression with explicit config policy.
-
-## Related Specs
-
-- [Remote Human Authorization](../concepts/remote-human-authorization.md)
-- [Prompt Templates](./prompt-templates.md)
-- [Action and Output Schema](./action-schema.md)
-- [Session and Memory Formats](./session-memory-formats.md)

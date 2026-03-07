@@ -2,6 +2,9 @@
 
 This page is the source-of-truth for current default config values and normalization behavior.
 
+The JSON below describes the **default agent** created under `OPENPOCKET_HOME` during onboarding.
+Managed agents created later with `openpocket create agent <id>` start from the manager model template and then rewrite the path-bearing fields to their own `agents/<id>/...` directories.
+
 ## Default Config JSON
 
 ```json
@@ -296,6 +299,27 @@ This page is the source-of-truth for current default config values and normaliza
   }
 }
 ```
+
+## Managed Agent Overrides
+
+When you run `openpocket create agent <id>`, OpenPocket clones a new agent config and rewrites these defaults:
+
+- `workspaceDir` -> `<absolute OPENPOCKET_HOME>/agents/<id>/workspace`
+- `stateDir` -> `<absolute OPENPOCKET_HOME>/agents/<id>/state`
+- `sessionStorage.storePath` -> `<absolute OPENPOCKET_HOME>/agents/<id>/workspace/sessions/sessions.json`
+- `screenshots.directory` -> `<absolute OPENPOCKET_HOME>/agents/<id>/state/screenshots`
+- `cron.jobsFile` -> `<absolute OPENPOCKET_HOME>/agents/<id>/workspace/cron/jobs.json`
+- `humanAuth.localRelayStateFile` -> `<absolute OPENPOCKET_HOME>/agents/<id>/state/human-auth-relay/requests.json`
+- `dashboard.port` -> next available manager-assigned port (`>= 51889` by default)
+- `agent.deviceId` -> `null`
+- `target.adbEndpoint` -> `\"\"`
+- `humanAuth.relayBaseUrl` / `humanAuth.publicBaseUrl` -> `\"\"`
+- `channels` -> reset to `channels.defaults` only
+
+Model behavior for managed agents:
+
+- `defaultModel` and `models` are copied from `manager/model-template.json`
+- after creation, each agent can change its own model config independently
 
 Notes:
 

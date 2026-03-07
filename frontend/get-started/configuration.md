@@ -2,27 +2,96 @@
 
 OpenPocket loads config from JSON, merges defaults, normalizes compatibility keys, and writes resolved runtime structure.
 
-## File Location
+In multi-agent mode, each agent instance still has its own full `config.json`.
+
+## File Resolution
 
 Resolution order:
 
 1. CLI `--config <path>` if provided
-2. default `OPENPOCKET_HOME/config.json`
-3. if missing, default config is auto-created
+2. CLI `--agent <id>` if provided
+3. default root config at `OPENPOCKET_HOME/config.json`
+4. if missing, default config is auto-created
 
 `OPENPOCKET_HOME` defaults to `~/.openpocket`.
+
+Rules:
+
+- `--config` and `--agent` are mutually exclusive
+- omitting both selects the onboarded `default` agent
+- `openpocket create agent <id>` registers a managed agent under `OPENPOCKET_HOME/agents/<id>/config.json`
+
+## Config Scope Levels
+
+### Default agent
+
+The onboarded root agent uses:
+
+- `OPENPOCKET_HOME/config.json`
+- `OPENPOCKET_HOME/workspace/`
+- `OPENPOCKET_HOME/state/`
+
+### Managed agents
+
+Managed agents use:
+
+- `OPENPOCKET_HOME/agents/<agentId>/config.json`
+- `OPENPOCKET_HOME/agents/<agentId>/workspace/`
+- `OPENPOCKET_HOME/agents/<agentId>/state/`
+
+### Manager metadata
+
+Install-level metadata lives under:
+
+- `OPENPOCKET_HOME/manager/registry.json`
+- `OPENPOCKET_HOME/manager/model-template.json`
+- `OPENPOCKET_HOME/manager/ports.json`
+
+These manager files are not agent configs. They coordinate agent discovery, the initial model template, and shared port allocation.
 
 ## Load Order
 
 At startup, config handling does:
 
-1. parse JSON from config path
+1. parse JSON from the selected config path
 2. convert compatibility `snake_case` keys to `camelCase`
-3. deep-merge with default config object
+3. deep-merge with the default config object
 4. normalize model profiles and typed fields
 5. resolve paths (`~` and relative paths -> absolute)
 6. ensure required directories
 7. bootstrap workspace files when missing
+
+This happens independently for each selected agent config.
+
+## Create-Agent Cloning Rules
+
+`openpocket create agent <id>` clones from the source config, but it does **not** copy the entire runtime state.
+
+What is rewritten for the new agent:
+
+- `workspaceDir`
+- `stateDir`
+- `sessionStorage.storePath`
+- `screenshots.directory`
+- `cron.jobsFile`
+- `dashboard.port`
+- `humanAuth.localRelayStateFile`
+- `configPath`
+
+What is reset/cleared:
+
+- `agent.deviceId`
+- `target.adbEndpoint`
+- `humanAuth.relayBaseUrl`
+- `humanAuth.publicBaseUrl`
+- all channel credentials/config except `channels.defaults`
+
+What is copied from the manager template rather than from the current source config:
+
+- `defaultModel`
+- `models`
+
+This means managed agents start from the **initial onboard model template**, then become independent afterwards.
 
 ## API Keys
 
@@ -35,9 +104,9 @@ Per model profile:
 
 For human-auth relay:
 
-- `humanAuth.apiKey` if non-empty
-- else env from `humanAuth.apiKeyEnv` (default `OPENPOCKET_HUMAN_AUTH_KEY`)
-- if both empty, relay still works in no-auth mode (recommended only for trusted local setups)
+- standalone/local relay uses `humanAuth.apiKey` or `humanAuth.apiKeyEnv`
+- shared relay hub launched by `openpocket human-auth-relay start` does not use separate per-agent relay state or per-agent hub API keys
+- in managed mode, agent-local request state still stays under the agent's own `state/`
 
 ## Backward Compatibility Keys
 
@@ -83,6 +152,13 @@ Normalization enforces:
 
 If `defaultModel` does not exist in `models`, startup throws.
 
+## Related Runtime Constraints
+
+- one agent binds one selected target at a time
+- targets cannot be shared between agents
+- each running gateway acquires a per-agent gateway lock and a per-target runtime lock
+- manager dashboard and shared relay hub ports are allocated centrally via `manager/ports.json`
+
 ## Defaults
 
-See [Config Defaults](../reference/config-defaults.md) for exact default JSON and field-by-field reference.
+See [Config Defaults](../reference/config-defaults.md) for the exact default JSON and managed-agent path overrides.
