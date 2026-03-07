@@ -41,22 +41,57 @@ function toCronJob(value: unknown): CronJob | null {
     return null;
   }
   const id = String(value.id ?? "").trim();
-  const task = String(value.task ?? "").trim();
-  if (!id || !task) {
+  if (!id) {
     return null;
   }
-  const chatIdRaw = value.chatId;
-  const chatId =
-    chatIdRaw === null || chatIdRaw === undefined || chatIdRaw === ""
-      ? null
-      : Number.isFinite(Number(chatIdRaw))
-        ? Number(chatIdRaw)
-        : null;
+  const legacyTask = String(value.task ?? "").trim();
+
+  if (legacyTask) {
+    const chatIdRaw = value.chatId;
+    const chatId =
+      chatIdRaw === null || chatIdRaw === undefined || chatIdRaw === ""
+        ? null
+        : Number.isFinite(Number(chatIdRaw))
+          ? Number(chatIdRaw)
+          : null;
+    return {
+      id,
+      name: String(value.name ?? id),
+      enabled: value.enabled !== false,
+      everySec: Math.max(5, Number(value.everySec ?? 60)),
+      task: legacyTask,
+      chatId,
+      model: value.model ? String(value.model) : null,
+      runOnStartup: Boolean(value.runOnStartup ?? false),
+    };
+  }
+
+  const schedule = isObject(value.schedule) ? value.schedule : null;
+  const payload = isObject(value.payload) ? value.payload : null;
+  if (!schedule || !payload || payload.kind !== "agent_turn") {
+    return null;
+  }
+  if (schedule.kind !== "every") {
+    return null;
+  }
+  const everyMs = Number(schedule.everyMs ?? 0);
+  if (!Number.isFinite(everyMs) || everyMs <= 0) {
+    return null;
+  }
+  const task = String(payload.task ?? "").trim();
+  if (!task) {
+    return null;
+  }
+  const delivery = isObject(value.delivery) ? value.delivery : null;
+  const deliveryTarget = delivery ? String(delivery.to ?? "").trim() : "";
+  const chatId = deliveryTarget && Number.isFinite(Number(deliveryTarget))
+    ? Number(deliveryTarget)
+    : null;
   return {
     id,
     name: String(value.name ?? id),
     enabled: value.enabled !== false,
-    everySec: Math.max(5, Number(value.everySec ?? 60)),
+    everySec: Math.max(5, Math.round(everyMs / 1000)),
     task,
     chatId,
     model: value.model ? String(value.model) : null,

@@ -48,6 +48,7 @@
     "@slack/web-api": "^7.14.1",
     "@types/qrcode": "^1.5.6",
     "baileys": "^6.7.21",
+    "cron-parser": "^5.5.0",
     "discord.js": "^14.25.1",
     "node-telegram-bot-api": "^0.66.0",
     "openai": "^6.10.0",

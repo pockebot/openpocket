@@ -670,6 +670,33 @@ export interface ScheduleIntent {
   confirmationPrompt: string;
 }
 
+export interface CronJobPayload {
+  kind: "agent_turn";
+  task: string;
+}
+
+export interface StoredCronJob {
+  id: string;
+  name: string;
+  enabled: boolean;
+  schedule: CronScheduleSpec;
+  payload: CronJobPayload;
+  delivery?: CronDeliveryTarget | null;
+  model: string | null;
+  promptMode?: "full" | "minimal" | "none" | null;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string | null;
+  sourceChannel?: string | null;
+  sourcePeerId?: string | null;
+  runOnStartup?: boolean;
+}
+
+export interface StoredCronJobsFile {
+  version: 2;
+  jobs: StoredCronJob[];
+}
+
 export interface CronJob {
   id: string;
   name: string;

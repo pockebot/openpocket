@@ -237,16 +237,25 @@ export function ensureWorkspaceBootstrap(workspaceDir: string): void {
       [
         "# Cron Jobs",
         "",
-        "Edit `jobs.json` to configure scheduled tasks.",
+        "OpenPocket manages `jobs.json` as the source of truth for persisted scheduled jobs.",
+        "Prefer `openpocket cron ...` commands or gateway tools instead of editing this file while the gateway is running.",
         "",
         "Schema:",
         "- id: unique job id",
         "- name: display name",
         "- enabled: true/false",
-        "- everySec: interval in seconds",
-        "- task: natural-language task text",
-        "- chatId: Telegram chat id (optional, nullable)",
+        "- schedule.kind: cron | at | every",
+        "- schedule.expr: cron expression for recurring wall-clock schedules",
+        "- schedule.at: one-shot schedule payload (reserved for runtime-managed values)",
+        "- schedule.everyMs: interval schedule in milliseconds",
+        "- schedule.tz: timezone name",
+        "- payload.kind: currently `agent_turn`",
+        "- payload.task: natural-language task text for the agent",
+        "- delivery.channel / delivery.to: where execution updates should be sent",
         "- model: model profile id (optional, nullable)",
+        "- promptMode: prompt mode override (optional, nullable)",
+        "- createdAt / updatedAt: ISO timestamps",
+        "- createdBy / sourceChannel / sourcePeerId: audit metadata",
         "- runOnStartup: run immediately when gateway starts",
       ].join("\n"),
       "utf-8",
@@ -255,19 +264,37 @@ export function ensureWorkspaceBootstrap(workspaceDir: string): void {
 
   const cronJobs = path.join(workspaceDir, "cron", "jobs.json");
   if (!fs.existsSync(cronJobs)) {
+    const seededAt = nowIso();
     fs.writeFileSync(
       cronJobs,
       `${JSON.stringify(
         {
+          version: 2,
           jobs: [
             {
               id: "heartbeat-status",
               name: "Hourly Status Check",
               enabled: false,
-              everySec: 3600,
-              task: "Open Settings and verify network connectivity status.",
-              chatId: null,
+              schedule: {
+                kind: "every",
+                expr: null,
+                at: null,
+                everyMs: 3_600_000,
+                tz: "UTC",
+                summaryText: "Every 3600 seconds",
+              },
+              payload: {
+                kind: "agent_turn",
+                task: "Open Settings and verify network connectivity status.",
+              },
+              delivery: null,
               model: null,
+              promptMode: "minimal",
+              createdAt: seededAt,
+              updatedAt: seededAt,
+              createdBy: "workspace_seed",
+              sourceChannel: null,
+              sourcePeerId: null,
               runOnStartup: false,
             },
           ],

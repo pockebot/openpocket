@@ -106,3 +106,89 @@ test("CronService executes due jobs and persists state", async () => {
     assert.equal(state.jobs["job-a"].lastStatus, "ok");
   });
 });
+
+test("CronService still executes V2 every-schedule jobs via compatibility shim", async () => {
+  await withTempHome("openpocket-cron-v2-", async () => {
+    const cfg = loadConfig();
+    cfg.cron.enabled = true;
+    cfg.cron.tickSec = 1;
+
+    const jobsFile = path.join(cfg.workspaceDir, "cron", "jobs.json");
+    fs.mkdirSync(path.dirname(jobsFile), { recursive: true });
+    fs.writeFileSync(
+      jobsFile,
+      `${JSON.stringify(
+        {
+          version: 2,
+          jobs: [
+            {
+              id: "job-v2",
+              name: "Job V2",
+              enabled: true,
+              schedule: {
+                kind: "every",
+                expr: null,
+                at: null,
+                everyMs: 10_000,
+                tz: "UTC",
+                summaryText: "Every 10 seconds",
+              },
+              payload: {
+                kind: "agent_turn",
+                task: "Open settings app and check Wi-Fi",
+              },
+              delivery: {
+                mode: "announce",
+                channel: "telegram",
+                to: "12345",
+              },
+              model: null,
+              promptMode: "minimal",
+              createdAt: "2026-03-07T00:00:00.000Z",
+              updatedAt: "2026-03-07T00:00:00.000Z",
+              createdBy: "test",
+              sourceChannel: "telegram",
+              sourcePeerId: "12345",
+              runOnStartup: false,
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    cfg.cron.jobsFile = jobsFile;
+
+    let nowMs = 0;
+    let tick = () => {};
+    const runs = [];
+
+    const service = new CronService(cfg, {
+      nowMs: () => nowMs,
+      setIntervalFn: (handler) => {
+        tick = handler;
+        return {};
+      },
+      clearIntervalFn: () => {},
+      runTask: async (job) => {
+        runs.push({ id: job.id, task: job.task, chatId: job.chatId });
+        return {
+          accepted: true,
+          ok: true,
+          message: "ok",
+        };
+      },
+      log: () => {},
+    });
+
+    service.start();
+    await waitMicrotask();
+    assert.deepEqual(runs, []);
+
+    nowMs = 11_000;
+    tick();
+    await waitMicrotask();
+    assert.deepEqual(runs, [{ id: "job-v2", task: "Open settings app and check Wi-Fi", chatId: 12345 }]);
+  });
+});
