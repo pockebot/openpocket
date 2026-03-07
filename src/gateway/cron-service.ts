@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { CronExpressionParser } from "cron-parser";
 
-import type { CronJob, OpenPocketConfig } from "../types.js";
+import type { OpenPocketConfig, StoredCronJob } from "../types.js";
 import { ensureDir, nowIso } from "../utils/paths.js";
+import { CronRegistry } from "./cron-registry.js";
 
 type IntervalLike = ReturnType<typeof setInterval>;
 
@@ -11,6 +13,7 @@ type CronJobState = {
   lastRunAtMs?: number;
   lastStatus?: "ok" | "fail" | "skipped";
   lastMessage?: string;
+  nextRunAtMs?: number;
 };
 
 type CronStateFile = {
@@ -28,7 +31,7 @@ export type CronServiceDeps = {
   nowMs?: () => number;
   setIntervalFn?: (handler: () => void, ms: number) => IntervalLike;
   clearIntervalFn?: (timer: IntervalLike) => void;
-  runTask: (job: CronJob) => Promise<CronRunResult>;
+  runTask: (job: StoredCronJob) => Promise<CronRunResult>;
   log?: (line: string) => void;
 };
 
@@ -41,73 +44,11 @@ function toFiniteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function toCronJob(value: unknown): CronJob | null {
-  if (!isObject(value)) {
-    return null;
-  }
-  const id = String(value.id ?? "").trim();
-  if (!id) {
-    return null;
-  }
-  const legacyTask = String(value.task ?? "").trim();
-
-  if (legacyTask) {
-    const chatIdRaw = value.chatId;
-    const chatId =
-      chatIdRaw === null || chatIdRaw === undefined || chatIdRaw === ""
-        ? null
-        : Number.isFinite(Number(chatIdRaw))
-          ? Number(chatIdRaw)
-          : null;
-    return {
-      id,
-      name: String(value.name ?? id),
-      enabled: value.enabled !== false,
-      everySec: Math.max(5, toFiniteNumber(value.everySec ?? 60) ?? 60),
-      task: legacyTask,
-      chatId,
-      model: value.model ? String(value.model) : null,
-      runOnStartup: Boolean(value.runOnStartup ?? false),
-    };
-  }
-
-  const schedule = isObject(value.schedule) ? value.schedule : null;
-  const payload = isObject(value.payload) ? value.payload : null;
-  if (!schedule || !payload || payload.kind !== "agent_turn") {
-    return null;
-  }
-  if (schedule.kind !== "every") {
-    return null;
-  }
-  const everyMs = Number(schedule.everyMs ?? 0);
-  if (!Number.isFinite(everyMs) || everyMs <= 0) {
-    return null;
-  }
-  const task = String(payload.task ?? "").trim();
-  if (!task) {
-    return null;
-  }
-  const delivery = isObject(value.delivery) ? value.delivery : null;
-  const deliveryTarget = delivery ? String(delivery.to ?? "").trim() : "";
-  const chatId = deliveryTarget && Number.isFinite(Number(deliveryTarget))
-    ? Number(deliveryTarget)
-    : null;
-  return {
-    id,
-    name: String(value.name ?? id),
-    enabled: value.enabled !== false,
-    everySec: Math.max(5, Math.round(everyMs / 1000)),
-    task,
-    chatId,
-    model: value.model ? String(value.model) : null,
-    runOnStartup: Boolean(value.runOnStartup ?? false),
-  };
-}
-
 export class CronService {
   private readonly config: OpenPocketConfig;
   private readonly deps: Required<Omit<CronServiceDeps, "runTask">> & Pick<CronServiceDeps, "runTask">;
   private readonly statePath: string;
+  private readonly registry: CronRegistry;
   private timer: IntervalLike | null = null;
   private startedAtMs = 0;
   private inFlightJobs = new Set<string>();
@@ -125,6 +66,7 @@ export class CronService {
       }),
     };
     this.statePath = path.join(this.config.stateDir, "cron-state.json");
+    this.registry = new CronRegistry(config);
   }
 
   start(): void {
@@ -151,8 +93,7 @@ export class CronService {
   }
 
   runNow(jobId: string): Promise<boolean> {
-    const jobs = this.loadJobs();
-    const job = jobs.find((item) => item.id === jobId);
+    const job = this.loadJobs().find((item) => item.id === jobId);
     if (!job) {
       return Promise.resolve(false);
     }
@@ -173,18 +114,21 @@ export class CronService {
         continue;
       }
       const jobState = state.jobs[job.id] ?? {};
-      const lastRef = jobState.lastAttemptAtMs ?? jobState.lastRunAtMs ?? 0;
       const firstRun = !jobState.lastAttemptAtMs && !jobState.lastRunAtMs;
       const dueByStartup = firstRun && job.runOnStartup && nowMs - this.startedAtMs < 30_000;
-      const dueByInterval = nowMs - lastRef >= job.everySec * 1000;
+      const nextRunAtMs = this.computeNextRunAtMs(job, jobState, nowMs);
+      jobState.nextRunAtMs = nextRunAtMs ?? undefined;
+      state.jobs[job.id] = jobState;
+      const dueBySchedule = nextRunAtMs !== null && nowMs >= nextRunAtMs;
 
-      if (dueByStartup || dueByInterval) {
+      if (dueByStartup || dueBySchedule) {
         void this.executeJob(job);
       }
     }
+    this.saveState(state);
   }
 
-  private async executeJob(job: CronJob): Promise<void> {
+  private async executeJob(job: StoredCronJob): Promise<void> {
     if (this.inFlightJobs.has(job.id)) {
       return;
     }
@@ -195,14 +139,15 @@ export class CronService {
     jobState.lastAttemptAtMs = nowMs;
     jobState.lastStatus = "skipped";
     jobState.lastMessage = "scheduled";
+    jobState.nextRunAtMs = undefined;
     state.jobs[job.id] = jobState;
     this.saveState(state);
 
     const taskPart = this.config.gatewayLogging.includePayloads
-      ? ` task=${JSON.stringify(this.previewPayload(job.task, 120))}`
+      ? ` task=${JSON.stringify(this.previewPayload(job.payload.task, 120))}`
       : "";
     this.deps.log(
-      `[OpenPocket][cron][debug] ${new Date().toISOString()} run job=${job.id} everySec=${job.everySec}${taskPart}`,
+      `[OpenPocket][cron][debug] ${new Date().toISOString()} run job=${job.id} schedule=${job.schedule.kind}${taskPart}`,
     );
 
     try {
@@ -217,6 +162,7 @@ export class CronService {
         updated.lastStatus = "skipped";
       }
       updated.lastMessage = result.message.slice(0, 500);
+      updated.nextRunAtMs = this.computeNextRunAtMs(job, updated, this.deps.nowMs()) ?? undefined;
       nextState.jobs[job.id] = updated;
       this.saveState(nextState);
       const messagePart = this.config.gatewayLogging.includePayloads
@@ -232,6 +178,7 @@ export class CronService {
       updated.lastAttemptAtMs = nowMs;
       updated.lastStatus = "fail";
       updated.lastMessage = `error: ${(error as Error).message}`.slice(0, 500);
+      updated.nextRunAtMs = this.computeNextRunAtMs(job, updated, this.deps.nowMs()) ?? undefined;
       nextState.jobs[job.id] = updated;
       this.saveState(nextState);
       this.deps.log(
@@ -242,26 +189,52 @@ export class CronService {
     }
   }
 
-  private loadJobs(): CronJob[] {
-    ensureDir(path.dirname(this.config.cron.jobsFile));
-    if (!fs.existsSync(this.config.cron.jobsFile)) {
-      fs.writeFileSync(this.config.cron.jobsFile, `${JSON.stringify({ jobs: [] }, null, 2)}\n`, "utf-8");
-    }
-
+  private loadJobs(): StoredCronJob[] {
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.config.cron.jobsFile, "utf-8")) as {
-        jobs?: unknown;
-      };
-      const jobsRaw = Array.isArray(parsed.jobs) ? parsed.jobs : [];
-      const jobs = jobsRaw
-        .map((item) => toCronJob(item))
-        .filter((item): item is CronJob => Boolean(item));
-      return jobs;
+      return this.registry.list();
     } catch (error) {
       this.deps.log(
         `[OpenPocket][cron][error] ${new Date().toISOString()} invalid jobs file error=${(error as Error).message}`,
       );
       return [];
+    }
+  }
+
+  private computeNextRunAtMs(job: StoredCronJob, state: CronJobState, nowMs: number): number | null {
+    if (!job.enabled) {
+      return null;
+    }
+    if (job.schedule.kind === "every") {
+      const everyMs = toFiniteNumber(job.schedule.everyMs);
+      if (everyMs === null || everyMs <= 0) {
+        return null;
+      }
+      const lastRef = state.lastAttemptAtMs ?? state.lastRunAtMs ?? this.startedAtMs;
+      return lastRef + everyMs;
+    }
+    if (job.schedule.kind === "at") {
+      const atMs = Date.parse(job.schedule.at ?? "");
+      if (!Number.isFinite(atMs)) {
+        return null;
+      }
+      if (state.lastAttemptAtMs || state.lastRunAtMs) {
+        return null;
+      }
+      return atMs;
+    }
+    const expr = String(job.schedule.expr ?? "").trim();
+    if (!expr) {
+      return null;
+    }
+    try {
+      const baseMs = state.lastAttemptAtMs ?? state.lastRunAtMs ?? Math.max(0, nowMs - 1000);
+      const parsed = CronExpressionParser.parse(expr, {
+        currentDate: new Date(baseMs),
+        tz: job.schedule.tz || "UTC",
+      });
+      return parsed.next().getTime();
+    } catch {
+      return null;
     }
   }
 

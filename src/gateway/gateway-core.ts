@@ -5,10 +5,10 @@ import type {
   AgentProgressUpdate,
   ChannelMediaDeliveryResult,
   ChannelMediaRequest,
-  CronJob,
   HumanAuthCapability,
   OpenPocketConfig,
   ScheduleIntent,
+  StoredCronJob,
   TaskExecutionPlan,
   UserDecisionRequest,
   UserDecisionResponse,
@@ -929,35 +929,38 @@ export class GatewayCore {
   // Cron
   // -----------------------------------------------------------------------
 
-  private async runScheduledJob(job: CronJob): Promise<CronRunResult> {
+  private async runScheduledJob(job: StoredCronJob): Promise<CronRunResult> {
     if (this.agent.isBusy()) {
       return { accepted: false, ok: false, message: "Agent is busy." };
     }
 
     const adapters = this.router.getAllAdapters();
-    const firstAdapter = adapters[0];
-    if (!firstAdapter) {
+    const preferredAdapter = job.delivery?.channel
+      ? this.router.getAdapter(job.delivery.channel as import("../channel/types.js").ChannelType)
+      : null;
+    const adapter = preferredAdapter ?? adapters[0];
+    if (!adapter) {
       return { accepted: false, ok: false, message: "No channel adapter available." };
     }
 
     const envelope: InboundEnvelope = {
-      channelType: firstAdapter.channelType,
+      channelType: adapter.channelType,
       senderId: "cron",
       senderName: "Cron",
       senderLanguageCode: null,
-      peerId: job.chatId !== null ? String(job.chatId) : "cron",
+      peerId: job.delivery?.to ? String(job.delivery.to) : "cron",
       peerKind: "dm",
-      text: job.task,
+      text: job.payload.task,
       attachments: [],
       rawEvent: job,
       receivedAt: new Date().toISOString(),
     };
 
-    if (job.chatId !== null) {
-      await this.router.replyText(envelope, `Scheduled task started (${job.name}): ${job.task}`);
+    if (job.delivery?.to) {
+      await this.router.replyText(envelope, `Scheduled task started (${job.name}): ${job.payload.task}`);
     }
 
-    return this.runTaskAndReport(envelope, job.task, `cron:${job.id}`);
+    return this.runTaskAndReport(envelope, job.payload.task, `cron:${job.id}`);
   }
 
   // -----------------------------------------------------------------------

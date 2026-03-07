@@ -4,8 +4,8 @@ import path from "node:path";
 
 import type {
   AgentProgressUpdate,
-  CronJob,
   OpenPocketConfig,
+  StoredCronJob,
   TaskExecutionPlan,
   UserDecisionRequest,
   UserDecisionResponse,
@@ -2374,7 +2374,7 @@ export class TelegramGateway {
     return true;
   }
 
-  private async runScheduledJob(job: CronJob): Promise<CronRunResult> {
+  private async runScheduledJob(job: StoredCronJob): Promise<CronRunResult> {
     if (this.agent.isBusy()) {
       return {
         accepted: false,
@@ -2383,16 +2383,19 @@ export class TelegramGateway {
       };
     }
 
-    if (job.chatId !== null) {
-      await this.bot.sendMessage(job.chatId, `Scheduled task started (${job.name}): ${job.task}`);
+    const chatIdRaw = job.delivery?.to ? Number(job.delivery.to) : NaN;
+    const chatId = Number.isFinite(chatIdRaw) ? chatIdRaw : null;
+
+    if (chatId !== null) {
+      await this.bot.sendMessage(chatId, `Scheduled task started (${job.name}): ${job.payload.task}`);
     }
 
     return this.runTaskAndReport({
-      chatId: job.chatId,
-      task: job.task,
+      chatId,
+      task: job.payload.task,
       source: "cron",
       modelName: job.model,
-      sessionKey: job.chatId !== null ? this.resolveChatSessionKey(job.chatId) : `telegram:cron:${job.id}`,
+      sessionKey: chatId !== null ? this.resolveChatSessionKey(chatId) : `telegram:cron:${job.id}`,
     });
   }
 

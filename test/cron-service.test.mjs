@@ -172,7 +172,7 @@ test("CronService still executes V2 every-schedule jobs via compatibility shim",
       },
       clearIntervalFn: () => {},
       runTask: async (job) => {
-        runs.push({ id: job.id, task: job.task, chatId: job.chatId });
+        runs.push({ id: job.id, task: job.payload.task, deliveryTo: job.delivery?.to });
         return {
           accepted: true,
           ok: true,
@@ -189,7 +189,7 @@ test("CronService still executes V2 every-schedule jobs via compatibility shim",
     nowMs = 11_000;
     tick();
     await waitMicrotask();
-    assert.deepEqual(runs, [{ id: "job-v2", task: "Open settings app and check Wi-Fi", chatId: 12345 }]);
+    assert.deepEqual(runs, [{ id: "job-v2", task: "Open settings app and check Wi-Fi", deliveryTo: "12345" }]);
   });
 });
 
@@ -255,5 +255,184 @@ test("CronService falls back to a safe interval when legacy everySec is invalid"
     tick();
     await waitMicrotask();
     assert.deepEqual(runs, ["job-invalid"]);
+  });
+});
+
+test("CronService executes cron-expression jobs on wall-clock schedule", async () => {
+  await withTempHome("openpocket-cron-cronexpr-", async () => {
+    const cfg = loadConfig();
+    cfg.cron.enabled = true;
+    cfg.cron.tickSec = 1;
+
+    const jobsFile = path.join(cfg.workspaceDir, "cron", "jobs.json");
+    fs.mkdirSync(path.dirname(jobsFile), { recursive: true });
+    fs.writeFileSync(
+      jobsFile,
+      `${JSON.stringify(
+        {
+          version: 2,
+          jobs: [
+            {
+              id: "job-cron",
+              name: "Job Cron",
+              enabled: true,
+              schedule: {
+                kind: "cron",
+                expr: "0 8 * * *",
+                at: null,
+                everyMs: null,
+                tz: "UTC",
+                summaryText: "Every day at 08:00 UTC",
+              },
+              payload: {
+                kind: "agent_turn",
+                task: "Open settings app and check Wi-Fi",
+              },
+              delivery: null,
+              model: null,
+              promptMode: "minimal",
+              createdAt: "2026-03-07T00:00:00.000Z",
+              updatedAt: "2026-03-07T00:00:00.000Z",
+              createdBy: "test",
+              sourceChannel: "telegram",
+              sourcePeerId: "12345",
+              runOnStartup: false,
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    cfg.cron.jobsFile = jobsFile;
+
+    let nowMs = Date.parse("2026-03-07T07:59:00.000Z");
+    let tick = () => {};
+    const runs = [];
+
+    const service = new CronService(cfg, {
+      nowMs: () => nowMs,
+      setIntervalFn: (handler) => {
+        tick = handler;
+        return {};
+      },
+      clearIntervalFn: () => {},
+      runTask: async (job) => {
+        runs.push(job.id);
+        return {
+          accepted: true,
+          ok: true,
+          message: "ok",
+        };
+      },
+      log: () => {},
+    });
+
+    service.start();
+    await waitMicrotask();
+    assert.deepEqual(runs, []);
+
+    nowMs = Date.parse("2026-03-07T08:00:00.000Z");
+    tick();
+    await waitMicrotask();
+    assert.deepEqual(runs, ["job-cron"]);
+
+    nowMs = Date.parse("2026-03-07T08:01:00.000Z");
+    tick();
+    await waitMicrotask();
+    assert.deepEqual(runs, ["job-cron"]);
+
+    nowMs = Date.parse("2026-03-08T08:00:00.000Z");
+    tick();
+    await waitMicrotask();
+    assert.deepEqual(runs, ["job-cron", "job-cron"]);
+  });
+});
+
+test("CronService executes one-shot at jobs only once", async () => {
+  await withTempHome("openpocket-cron-at-", async () => {
+    const cfg = loadConfig();
+    cfg.cron.enabled = true;
+    cfg.cron.tickSec = 1;
+
+    const jobsFile = path.join(cfg.workspaceDir, "cron", "jobs.json");
+    fs.mkdirSync(path.dirname(jobsFile), { recursive: true });
+    fs.writeFileSync(
+      jobsFile,
+      `${JSON.stringify(
+        {
+          version: 2,
+          jobs: [
+            {
+              id: "job-at",
+              name: "Job At",
+              enabled: true,
+              schedule: {
+                kind: "at",
+                expr: null,
+                at: "2026-03-07T08:00:00.000Z",
+                everyMs: null,
+                tz: "UTC",
+                summaryText: "2026-03-07 08:00 UTC",
+              },
+              payload: {
+                kind: "agent_turn",
+                task: "Open settings app and check Wi-Fi",
+              },
+              delivery: null,
+              model: null,
+              promptMode: "minimal",
+              createdAt: "2026-03-07T00:00:00.000Z",
+              updatedAt: "2026-03-07T00:00:00.000Z",
+              createdBy: "test",
+              sourceChannel: "telegram",
+              sourcePeerId: "12345",
+              runOnStartup: false,
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    cfg.cron.jobsFile = jobsFile;
+
+    let nowMs = Date.parse("2026-03-07T07:59:00.000Z");
+    let tick = () => {};
+    const runs = [];
+
+    const service = new CronService(cfg, {
+      nowMs: () => nowMs,
+      setIntervalFn: (handler) => {
+        tick = handler;
+        return {};
+      },
+      clearIntervalFn: () => {},
+      runTask: async (job) => {
+        runs.push(job.id);
+        return {
+          accepted: true,
+          ok: true,
+          message: "ok",
+        };
+      },
+      log: () => {},
+    });
+
+    service.start();
+    await waitMicrotask();
+    assert.deepEqual(runs, []);
+
+    nowMs = Date.parse("2026-03-07T08:00:00.000Z");
+    tick();
+    await waitMicrotask();
+    assert.deepEqual(runs, ["job-at"]);
+
+    nowMs = Date.parse("2026-03-07T09:00:00.000Z");
+    tick();
+    await waitMicrotask();
+    assert.deepEqual(runs, ["job-at"]);
   });
 });
