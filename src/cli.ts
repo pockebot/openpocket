@@ -20,8 +20,6 @@ import { runGatewayLoop } from "./gateway/run-loop.js";
 import { DashboardServer, type DashboardGatewayStatus } from "./dashboard/server.js";
 import { HumanAuthBridge } from "./human-auth/bridge.js";
 import { LocalHumanAuthStack } from "./human-auth/local-stack.js";
-import { HumanAuthRelayServer } from "./human-auth/relay-server.js";
-import { LocalHumanAuthTakeoverRuntime } from "./human-auth/takeover-runtime.js";
 import { SkillLoader, type LoadedSkill } from "./skills/skill-loader.js";
 import { validateSkillPath } from "./skills/spec-validator.js";
 import { ScriptExecutor } from "./tools/script-executor.js";
@@ -55,6 +53,7 @@ import {
 } from "./manager/runtime-locks.js";
 import { ManagerDashboardServer } from "./manager/dashboard-server.js";
 import { loadManagerPorts, saveManagerPorts } from "./manager/ports.js";
+import { RelayHubServer } from "./manager/relay-hub.js";
 import {
   buildModelProfileFromPreset,
   deriveModelProfileKey,
@@ -136,7 +135,7 @@ Usage:
   openpocket [--config <path> | --agent <id>] dashboard start [--host <host>] [--port <port>]
   openpocket dashboard manager [--host <host>] [--port <port>]
   openpocket [--config <path> | --agent <id>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
-  openpocket [--config <path> | --agent <id>] human-auth-relay start [--host <host>] [--port <port>] [--public-base-url <url>] [--api-key <key>] [--state-file <path>]
+  openpocket [--config <path> | --agent <id>] human-auth-relay start [--host <host>] [--port <port>] [--public-base-url <url>]
   openpocket create agent <id> [--type <target-type>] [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
   openpocket agents list
   openpocket agents show [<id>]
@@ -3252,40 +3251,56 @@ async function runHumanAuthRelayCommand(
   }
 
   const cfg = loadConfig(configPath);
-  const parsedPort = Number(portRaw ?? String(cfg.humanAuth.localRelayPort));
-  const defaultPort = cfg.humanAuth.localRelayPort;
-  const port = Number.isFinite(parsedPort)
-    ? Math.max(1, Math.min(65535, Math.round(parsedPort)))
-    : defaultPort;
+  const ports = loadManagerPorts();
+  const preferredPort = portRaw ? normalizePort(portRaw, "--port") : ports.relayHubPort;
+  if (apiKey?.trim()) {
+    printWarn("`--api-key` is ignored in shared relay-hub mode.");
+  }
+  if (stateFile?.trim()) {
+    printWarn("`--state-file` is ignored in shared relay-hub mode.");
+  }
 
-  const relay = new HumanAuthRelayServer({
-    host: (host ?? cfg.humanAuth.localRelayHost ?? "0.0.0.0").trim(),
-    port,
+  const ngrokConfig =
+    cfg.humanAuth.tunnel.provider === "ngrok" && cfg.humanAuth.tunnel.ngrok.enabled
+      ? cfg.humanAuth.tunnel.ngrok
+      : null;
+
+  let relay = new RelayHubServer({
+    host: (host ?? "127.0.0.1").trim(),
+    port: preferredPort,
     publicBaseUrl: (publicBaseUrl ?? cfg.humanAuth.publicBaseUrl ?? "").trim(),
-    apiKey: (apiKey ?? cfg.humanAuth.apiKey ?? "").trim(),
-    apiKeyEnv: cfg.humanAuth.apiKeyEnv,
-    stateFile:
-      stateFile?.trim() ||
-      cfg.humanAuth.localRelayStateFile,
-    takeoverRuntime: new LocalHumanAuthTakeoverRuntime(cfg),
+    ngrok: ngrokConfig,
   });
 
-  await relay.start();
-  const relayAddress = relay.address || `http://${host ?? "0.0.0.0"}:${port}`;
-  printRaw(cliTheme.section("Human Auth Relay"));
+  try {
+    await relay.start();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EADDRINUSE" || portRaw) {
+      throw error;
+    }
+    relay = new RelayHubServer({
+      host: (host ?? "127.0.0.1").trim(),
+      port: 0,
+      publicBaseUrl: (publicBaseUrl ?? cfg.humanAuth.publicBaseUrl ?? "").trim(),
+      ngrok: ngrokConfig,
+    });
+    await relay.start();
+  }
+
+  const relayAddress = relay.address;
+  const actualPort = Number(new URL(relayAddress).port || String(preferredPort));
+  saveManagerPorts({
+    ...ports,
+    relayHubPort: actualPort,
+  });
+
+  printRaw(cliTheme.section("Human Auth Relay Hub"));
   printSuccess(`[OpenPocket][human-auth-relay] started at ${relayAddress}`);
   printInfo("[OpenPocket][human-auth-relay] press Ctrl+C to stop");
   printKeyValue("Relay URL", relayAddress, "success");
-  if (relayAddress.startsWith("http://")) {
-    const parsed = new URL(relayAddress);
-    const relayPort = parsed.port || "80";
-    printKeyValue("Relay port", relayPort, "accent");
-  }
-  if (relayAddress.startsWith("https://")) {
-    const parsed = new URL(relayAddress);
-    const relayPort = parsed.port || "443";
-    printKeyValue("Relay port", relayPort, "accent");
-  }
+  printKeyValue("Public URL", relay.publicBaseUrl, /^https:\/\//i.test(relay.publicBaseUrl) ? "success" : "accent");
+  printKeyValue("Relay port", String(actualPort), "accent");
 
   await new Promise<void>((resolve) => {
     const onSignal = (): void => {
