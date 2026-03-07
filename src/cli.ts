@@ -53,6 +53,8 @@ import {
   releaseTargetRuntimeLock,
   updateGatewayRuntimeLock,
 } from "./manager/runtime-locks.js";
+import { ManagerDashboardServer } from "./manager/dashboard-server.js";
+import { loadManagerPorts, saveManagerPorts } from "./manager/ports.js";
 import {
   buildModelProfileFromPreset,
   deriveModelProfileKey,
@@ -132,6 +134,7 @@ Usage:
   openpocket [--config <path> | --agent <id>] channels list
   openpocket [--config <path> | --agent <id>] gateway [start|telegram]
   openpocket [--config <path> | --agent <id>] dashboard start [--host <host>] [--port <port>]
+  openpocket dashboard manager [--host <host>] [--port <port>]
   openpocket [--config <path> | --agent <id>] test permission-app [deploy|install|launch|reset|uninstall|task|run|cases] [--device <id>] [--clean] [--case <id>] [--send] [--chat <id>] [--model <name>]
   openpocket [--config <path> | --agent <id>] human-auth-relay start [--host <host>] [--port <port>] [--public-base-url <url>] [--api-key <key>] [--state-file <path>]
   openpocket create agent <id> [--type <target-type>] [--device <id>] [--adb-endpoint <host[:port]>] [--pin <4-digit>] [--wakeup-interval <sec>]
@@ -175,6 +178,7 @@ Examples:
   openpocket --agent review-bot gateway start
   openpocket gateway start
   openpocket dashboard start
+  openpocket dashboard manager
   openpocket test permission-app deploy
   openpocket test permission-app task
   openpocket test permission-app cases
@@ -3133,8 +3137,50 @@ async function runTelegramCommand(
 
 async function runDashboardCommand(configPath: string | undefined, args: string[]): Promise<number> {
   const sub = (args[0] ?? "start").trim();
-  if (sub !== "start") {
-    throw new Error(`Unknown dashboard subcommand: ${sub}. Use: dashboard start`);
+  if (sub !== "start" && sub !== "manager") {
+    throw new Error(`Unknown dashboard subcommand: ${sub}. Use: dashboard start|manager`);
+  }
+
+  if (sub === "manager") {
+    const { value: hostOption, rest: afterHost } = takeOption(args.slice(1), "--host");
+    const { value: portOption, rest } = takeOption(afterHost, "--port");
+    if (rest.length > 0) {
+      throw new Error(`Unexpected dashboard manager arguments: ${rest.join(" ")}`);
+    }
+    const ports = loadManagerPorts();
+    const preferredPort = portOption ? normalizePort(portOption, "--port") : ports.managerDashboardPort;
+    const host = hostOption?.trim() || "127.0.0.1";
+    let server = new ManagerDashboardServer({ host, port: preferredPort });
+    try {
+      await server.start();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EADDRINUSE" || portOption) {
+        throw error;
+      }
+      server = new ManagerDashboardServer({ host, port: 0 });
+      await server.start();
+    }
+    const actualPort = Number(new URL(server.address).port || String(preferredPort));
+    saveManagerPorts({
+      ...ports,
+      managerDashboardPort: actualPort,
+    });
+    printRaw(cliTheme.section("Manager Dashboard"));
+    printSuccess(`[OpenPocket][manager-dashboard] started at ${server.address}`);
+    printInfo("[OpenPocket][manager-dashboard] press Ctrl+C to stop");
+    await new Promise<void>((resolve) => {
+      const onSignal = (): void => {
+        process.removeListener("SIGINT", onSignal);
+        process.removeListener("SIGTERM", onSignal);
+        resolve();
+      };
+      process.on("SIGINT", onSignal);
+      process.on("SIGTERM", onSignal);
+    });
+    await server.stop();
+    printSuccess("[OpenPocket][manager-dashboard] stopped");
+    return 0;
   }
 
   const { value: hostOption, rest: afterHost } = takeOption(args.slice(1), "--host");
