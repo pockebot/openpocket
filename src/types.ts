@@ -646,6 +646,30 @@ export interface SkillInfo {
   path: string;
 }
 
+export interface CronScheduleSpec {
+  kind: "cron" | "at" | "every";
+  expr?: string | null;
+  at?: string | null;
+  everyMs?: number | null;
+  tz: string;
+  summaryText: string;
+}
+
+export interface CronDeliveryTarget {
+  mode: "announce";
+  channel: string;
+  to: string;
+}
+
+export interface ScheduleIntent {
+  sourceText: string;
+  normalizedTask: string;
+  schedule: CronScheduleSpec;
+  delivery?: CronDeliveryTarget | null;
+  requiresConfirmation: boolean;
+  confirmationPrompt: string;
+}
+
 export interface CronJob {
   id: string;
   name: string;
