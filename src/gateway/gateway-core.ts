@@ -649,6 +649,56 @@ export class GatewayCore {
     return created.id;
   }
 
+  private buildCronSetupTask(envelope: InboundEnvelope, intent: ScheduleIntent): string {
+    return [
+      "Create exactly one cron job from this confirmed schedule intent.",
+      "Use cron_add once, then finish.",
+      "Do not execute any phone actions.",
+      "Confirmed intent JSON:",
+      JSON.stringify({
+        id: `schedule-${Date.now()}-${this.slugifyScheduleTask(intent.normalizedTask)}`,
+        name: this.buildScheduledJobName(intent, this.inferLocale(envelope)),
+        schedule: intent.schedule,
+        task: intent.normalizedTask,
+        channel: envelope.channelType,
+        to: envelope.peerId,
+        promptMode: "minimal",
+        runOnStartup: false,
+        createdBy: `${envelope.channelType}:${envelope.senderId}`,
+        sourceChannel: envelope.channelType,
+        sourcePeerId: envelope.peerId,
+      }, null, 2),
+    ].join("\n");
+  }
+
+  private async runCronSetupTask(envelope: InboundEnvelope, intent: ScheduleIntent): Promise<string | null> {
+    const registry = new CronRegistry(this.config);
+    const beforeIds = new Set(registry.list().map((job) => job.id));
+    const task = this.buildCronSetupTask(envelope, intent);
+    const result = await this.agent.runTask(
+      task,
+      undefined,
+      undefined,
+      undefined,
+      "minimal",
+      undefined,
+      `cron-setup:${this.scheduleConfirmationKey(envelope)}`,
+      undefined,
+      undefined,
+      null,
+      ["cron_add", "finish"],
+    );
+    if (!result.ok) {
+      throw new Error(result.message || "Cron setup run failed.");
+    }
+    const created = registry.list().find((job) =>
+      !beforeIds.has(job.id)
+      && job.payload.task === intent.normalizedTask
+      && job.delivery?.to === envelope.peerId,
+    );
+    return created?.id ?? null;
+  }
+
   private async handlePendingScheduleConfirmation(envelope: InboundEnvelope, text: string): Promise<boolean> {
     const key = this.scheduleConfirmationKey(envelope);
     const pending = this.pendingScheduleConfirmations.get(key);
@@ -678,16 +728,27 @@ export class GatewayCore {
     }
 
     try {
-      const jobId = this.createStructuredJobFromIntent(envelope, pending.intent);
+      let jobId = await this.runCronSetupTask(envelope, pending.intent);
+      if (!jobId) {
+        jobId = this.createStructuredJobFromIntent(envelope, pending.intent);
+      }
       const created = locale === "zh"
         ? `定时任务已创建：${jobId}`
         : `Scheduled job created: ${jobId}`;
       await this.router.replyText(envelope, created);
     } catch (error) {
-      const message = locale === "zh"
-        ? `创建定时任务失败：${(error as Error).message}`
-        : `Failed to create scheduled job: ${(error as Error).message}`;
-      await this.router.replyText(envelope, message);
+      try {
+        const jobId = this.createStructuredJobFromIntent(envelope, pending.intent);
+        const fallback = locale === "zh"
+          ? `定时任务已创建：${jobId}`
+          : `Scheduled job created: ${jobId}`;
+        await this.router.replyText(envelope, fallback);
+      } catch (fallbackError) {
+        const message = locale === "zh"
+          ? `创建定时任务失败：${(fallbackError as Error).message}`
+          : `Failed to create scheduled job: ${(fallbackError as Error).message}`;
+        await this.router.replyText(envelope, message);
+      }
     }
     return true;
   }

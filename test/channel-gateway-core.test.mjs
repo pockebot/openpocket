@@ -558,14 +558,49 @@ test("GatewayCore creates a structured cron job after confirmation", async () =>
       },
     });
     core.runTaskAndReport = async () => {
-      runCalls += 1;
       return { accepted: true, ok: true, message: "should-not-run" };
+    };
+    core.agent.runTask = async () => {
+      runCalls += 1;
+      const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+      const registry = new CronRegistry(config);
+      registry.add({
+        id: "daily-slack-checkin",
+        name: "Daily Slack Check-in",
+        enabled: true,
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        payload: {
+          kind: "agent_turn",
+          task: "Open Slack and complete check-in",
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        },
+        model: null,
+        promptMode: "minimal",
+      });
+      return {
+        ok: true,
+        message: "created",
+        sessionPath: "/tmp/cron-setup.jsonl",
+        skillPath: null,
+        scriptPath: null,
+      };
     };
 
     await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
     await core.handleInbound(makeEnvelope({ text: "确认" }));
 
-    assert.equal(runCalls, 0);
+    assert.equal(runCalls, 1);
     assert.match(adapter.sent[1].text, /created|已创建/i);
 
     const jobsFile = path.join(config.workspaceDir, "cron", "jobs.json");
@@ -575,6 +610,94 @@ test("GatewayCore creates a structured cron job after confirmation", async () =>
     assert.equal(created.schedule.kind, "cron");
     assert.equal(created.delivery.channel, "telegram");
     assert.equal(created.delivery.to, "user-1");
+  });
+});
+
+test("GatewayCore uses a restricted cron setup run after confirmation", async () => {
+  await withTempHome("gwcore-schedule-setup-run-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+    let capturedTask = "";
+    let capturedToolNames = null;
+
+    core.chat.decide = async () => ({
+      mode: "schedule_intent",
+      task: "Open Slack and complete check-in",
+      reply: "请确认创建这个定时任务。",
+      confidence: 0.99,
+      reason: "schedule_intent:cron",
+      scheduleIntent: {
+        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        normalizedTask: "Open Slack and complete check-in",
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        delivery: null,
+        requiresConfirmation: true,
+        confirmationPrompt: "请确认创建这个定时任务。",
+      },
+    });
+
+    core.agent.runTask = async (
+      task,
+      _modelName,
+      _onProgress,
+      _onHumanAuth,
+      _promptMode,
+      _onUserDecision,
+      _sessionKey,
+      _onUserInput,
+      _onChannelMedia,
+      _taskExecutionPlan,
+      availableToolNamesOverride,
+    ) => {
+      capturedTask = task;
+      capturedToolNames = availableToolNamesOverride;
+      const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+      const registry = new CronRegistry(config);
+      registry.add({
+        id: "daily-slack-checkin",
+        name: "Daily Slack Check-in",
+        enabled: true,
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        payload: {
+          kind: "agent_turn",
+          task: "Open Slack and complete check-in",
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        },
+        model: null,
+        promptMode: "minimal",
+      });
+      return {
+        ok: true,
+        message: "created",
+        sessionPath: "/tmp/cron-setup.jsonl",
+        skillPath: null,
+        scriptPath: null,
+      };
+    };
+
+    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
+    await core.handleInbound(makeEnvelope({ text: "确认" }));
+
+    assert.match(capturedTask, /Create exactly one cron job/i);
+    assert.deepEqual(capturedToolNames, ["cron_add", "finish"]);
+    assert.match(adapter.sent[1].text, /created|已创建/i);
   });
 });
 

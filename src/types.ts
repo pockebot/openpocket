@@ -494,6 +494,38 @@ export type AgentAction =
       reason?: string;
     }
   | { type: "run_script"; script: string; timeoutSec?: number; reason?: string }
+  | {
+      type: "cron_add";
+      id: string;
+      name: string;
+      schedule: CronScheduleSpec;
+      task: string;
+      channel?: string;
+      to?: string;
+      model?: string;
+      promptMode?: "full" | "minimal" | "none";
+      runOnStartup?: boolean;
+      createdBy?: string;
+      sourceChannel?: string;
+      sourcePeerId?: string;
+      reason?: string;
+    }
+  | { type: "cron_list"; reason?: string }
+  | { type: "cron_remove"; id: string; reason?: string }
+  | {
+      type: "cron_update";
+      id: string;
+      name?: string;
+      enabled?: boolean;
+      task?: string;
+      schedule?: CronScheduleSpec;
+      channel?: string;
+      to?: string;
+      model?: string;
+      promptMode?: "full" | "minimal" | "none";
+      runOnStartup?: boolean;
+      reason?: string;
+    }
   | { type: "runtime_info"; reason?: string }
   | { type: "read"; path: string; from?: number; lines?: number; reason?: string }
   | { type: "write"; path: string; content: string; append?: boolean; reason?: string }

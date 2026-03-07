@@ -37,6 +37,7 @@ import { ScriptExecutor } from "../tools/script-executor.js";
 import { CodingExecutor, LEGACY_CODING_EXECUTOR_DEPRECATION } from "../tools/coding-executor.js";
 import { MemoryExecutor } from "../tools/memory-executor.js";
 import { PiCodingToolsExecutor } from "./pi-coding-tools.js";
+import { CronRegistry } from "../gateway/cron-registry.js";
 import { Agent, type AgentMessage, type AgentTool, type AgentEvent, type AgentOptions } from "@mariozechner/pi-agent-core";
 import {
   type AssistantMessage as PiAssistantMessage,
@@ -2402,6 +2403,10 @@ export class AgentRuntime {
     let stateDeltaLine = "";
     try {
       if (
+        action.type === "cron_add" ||
+        action.type === "cron_list" ||
+        action.type === "cron_remove" ||
+        action.type === "cron_update" ||
         action.type === "runtime_info" ||
         action.type === "todo_write" ||
         action.type === "evidence_add" ||
@@ -2409,7 +2414,14 @@ export class AgentRuntime {
         action.type === "journal_read" ||
         action.type === "journal_checkpoint"
       ) {
-        if (action.type === "runtime_info") {
+        if (
+          action.type === "cron_add" ||
+          action.type === "cron_list" ||
+          action.type === "cron_remove" ||
+          action.type === "cron_update"
+        ) {
+          executionResult = this.executeCronAction(action);
+        } else if (action.type === "runtime_info") {
           executionResult = this.buildRuntimeInfoActionResult(ctx);
         } else {
           executionResult = this.executeJournalAction(action, ctx);
@@ -2572,6 +2584,79 @@ export class AgentRuntime {
       generatedAt: nowIso(),
     };
     return JSON.stringify(payload, null, 2);
+  }
+
+  private executeCronAction(
+    action: Extract<AgentAction, {
+      type: "cron_add" | "cron_list" | "cron_remove" | "cron_update";
+    }>,
+  ): string {
+    const registry = new CronRegistry(this.config);
+
+    if (action.type === "cron_list") {
+      return JSON.stringify({ jobs: registry.list() }, null, 2);
+    }
+
+    if (action.type === "cron_remove") {
+      const removed = registry.remove(action.id);
+      return removed
+        ? `cron_remove ok id=${action.id}`
+        : `cron_remove missing id=${action.id}`;
+    }
+
+    if (action.type === "cron_update") {
+      const updated = registry.update(action.id, {
+        name: action.name,
+        enabled: action.enabled,
+        payload: action.task
+          ? {
+            kind: "agent_turn",
+            task: action.task,
+          }
+          : undefined,
+        schedule: action.schedule,
+        delivery:
+          action.channel && action.to
+            ? {
+              mode: "announce",
+              channel: action.channel,
+              to: action.to,
+            }
+            : undefined,
+        model: action.model,
+        promptMode: action.promptMode,
+        runOnStartup: action.runOnStartup,
+      });
+      return updated
+        ? `cron_update ok id=${updated.id}`
+        : `cron_update missing id=${action.id}`;
+    }
+
+    const created = registry.add({
+      id: action.id,
+      name: action.name,
+      enabled: true,
+      schedule: action.schedule,
+      payload: {
+        kind: "agent_turn",
+        task: action.task,
+      },
+      delivery:
+        action.channel && action.to
+          ? {
+            mode: "announce",
+            channel: action.channel,
+            to: action.to,
+          }
+          : null,
+      model: action.model ?? null,
+      promptMode: action.promptMode ?? "minimal",
+      runOnStartup: action.runOnStartup,
+      createdBy: action.createdBy,
+      sourceChannel: action.sourceChannel,
+      sourcePeerId: action.sourcePeerId,
+    });
+    return `cron_add ok id=${created.id}`;
   }
 
   private executeJournalAction(
@@ -3654,8 +3739,11 @@ export class AgentRuntime {
     onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse,
     onChannelMedia?: (request: ChannelMediaRequest) => Promise<ChannelMediaDeliveryResult> | ChannelMediaDeliveryResult,
     taskExecutionPlan?: TaskExecutionPlan | null,
+    availableToolNamesOverride?: string[],
   ): Promise<AgentRunResult> {
-    const activeToolNames = this.resolveToolMetasForTask(task).map((item) => item.name);
+    const activeToolNames = Array.isArray(availableToolNamesOverride) && availableToolNamesOverride.length > 0
+      ? availableToolNamesOverride
+      : this.resolveToolMetasForTask(task).map((item) => item.name);
     const request: RunTaskRequest = {
       task,
       modelName,

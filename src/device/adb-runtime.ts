@@ -1537,7 +1537,11 @@ export class AdbRuntime {
       case "evidence_add":
       case "artifact_add":
       case "journal_read":
-      case "journal_checkpoint": {
+      case "journal_checkpoint":
+      case "cron_add":
+      case "cron_list":
+      case "cron_remove":
+      case "cron_update": {
         return `${action.type} is handled by AgentRuntime.`;
       }
       case "wait": {
