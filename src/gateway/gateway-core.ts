@@ -1158,10 +1158,8 @@ export class GatewayCore {
   }
 
   private async resolveTaskAcceptedAck(task: string, locale: OnboardingLocale): Promise<string> {
-    const fallback = this.chat.taskAcceptedFallbackReply(
-      this.previewPayload(task, 160),
-      locale,
-    );
+    void locale;
+    const fallback = this.chat.taskAcceptedFallbackReply(this.previewPayload(task, 160));
 
     const timeoutMs = 1200;
     const timeoutPromise = new Promise<string>((resolve) => {

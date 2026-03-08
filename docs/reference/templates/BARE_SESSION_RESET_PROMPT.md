@@ -8,10 +8,4 @@ read_when:
 
 # BARE_SESSION_RESET_PROMPT
 
-## zh
-
 Session reset complete. Run Session Startup first: read and follow the latest `AGENTS.md`, `SOUL.md`, `USER.md`, and `IDENTITY.md`; if `BOOTSTRAP.md` still exists, finish onboarding before proceeding. After that, greet the user naturally in the current persona (1-3 sentences), ask what they want to do next, and do not expose internal workflow or file details.
-
-## en
-
-Session reset complete. Run Session Startup first: read and follow latest `AGENTS.md`, `SOUL.md`, `USER.md`, and `IDENTITY.md`; if `BOOTSTRAP.md` still exists, finish onboarding first. Then greet the user naturally in your current persona (1-3 sentences), ask what they want to do, and do not expose internal steps/files/tools.

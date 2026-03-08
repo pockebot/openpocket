@@ -5,29 +5,11 @@ export type ScheduleIntentLocale = "zh" | "en";
 interface NormalizeScheduleIntentOptions {
   timezone?: string;
   resolveTimezone?: () => string;
-  locale?: ScheduleIntentLocale | null;
-}
-
-interface ScheduleIntentLocalePack {
-  confirmationPrompt(summaryText: string, taskText: string): string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-const SCHEDULE_INTENT_LOCALE_PACKS: Record<ScheduleIntentLocale, ScheduleIntentLocalePack> = {
-  zh: {
-    confirmationPrompt(summaryText, taskText) {
-      return `I understand this as a scheduled job: ${summaryText}, task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`;
-    },
-  },
-  en: {
-    confirmationPrompt(summaryText, taskText) {
-      return `I understand this as a scheduled job: ${summaryText}, task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`;
-    },
-  },
-};
 
 export function inferScheduleIntentLocale(input: string): ScheduleIntentLocale {
   return /[\u3400-\u9fff]/u.test(input) ? "zh" : "en";
@@ -49,8 +31,6 @@ export function normalizeScheduleIntentCandidate(
   }
 
   const normalizedSourceText = normalizeOneLine(sourceText);
-  const locale = options.locale ?? inferScheduleIntentLocale(normalizedSourceText || normalizedTask);
-  const localePack = SCHEDULE_INTENT_LOCALE_PACKS[locale];
 
   return {
     sourceText: normalizedSourceText,
@@ -58,8 +38,12 @@ export function normalizeScheduleIntentCandidate(
     schedule,
     delivery: null,
     requiresConfirmation: true,
-    confirmationPrompt: localePack.confirmationPrompt(schedule.summaryText, normalizedTask),
+    confirmationPrompt: buildScheduleIntentConfirmationPrompt(schedule.summaryText, normalizedTask),
   };
+}
+
+function buildScheduleIntentConfirmationPrompt(summaryText: string, taskText: string): string {
+  return `I understand this as a scheduled job: ${summaryText}, task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`;
 }
 
 function normalizeSchedule(

@@ -665,21 +665,17 @@ test("ChatAssistant onboarding reads question copy and presets from PROFILE_ONBO
     path.join(cfg.workspaceDir, "PROFILE_ONBOARDING.json"),
     `${JSON.stringify({
       version: 1,
-      locales: {
-        en: {
-          questions: {
-            step1: "[Custom Q1] Tell me how to address you",
-            step2: "[Custom Q2] What name should I use for myself",
-            step3: "[Custom Q3] Choose a tone preset number",
-          },
-          personaPresets: [
-            {
-              value: "calm execution: give only conclusions and next steps",
-              aliases: ["9"],
-            },
-          ],
-        },
+      questions: {
+        step1: "[Custom Q1] Tell me how to address you",
+        step2: "[Custom Q2] What name should I use for myself",
+        step3: "[Custom Q3] Choose a tone preset number",
       },
+      personaPresets: [
+        {
+          value: "calm execution: give only conclusions and next steps",
+          aliases: ["9"],
+        },
+      ],
     }, null, 2)}\n`,
     "utf-8",
   );
@@ -694,6 +690,28 @@ test("ChatAssistant onboarding reads question copy and presets from PROFILE_ONBO
 
   const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
   assert.match(identityBody, /Persona: calm execution: give only conclusions and next steps/);
+});
+
+test("ChatAssistant onboarding still accepts legacy locale-based template structure", async () => {
+  const { assistant, cfg } = createAssistant({ keepProfileEmpty: true });
+
+  fs.writeFileSync(
+    path.join(cfg.workspaceDir, "PROFILE_ONBOARDING.json"),
+    `${JSON.stringify({
+      version: 1,
+      locales: {
+        en: {
+          questions: {
+            step1: "[Legacy Q1] Tell me how to address you",
+          },
+        },
+      },
+    }, null, 2)}\n`,
+    "utf-8",
+  );
+
+  const first = await assistant.decide(17, "hello");
+  assert.match(first.reply, /Legacy Q1/);
 });
 
 test("ChatAssistant onboarding triggers on default scaffold with blank profile fields", async () => {
