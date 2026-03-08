@@ -316,7 +316,7 @@ test("ChatAssistant decide treats one-shot tomorrow phrasing as schedule intent"
       schedule: {
         kind: "at",
         expr: null,
-        at: null,
+        at: "2026-03-08T08:00:00+08:00",
         everyMs: null,
         tz: "Asia/Shanghai",
         summaryText: "明天 08:00",
@@ -336,9 +336,66 @@ test("ChatAssistant decide treats one-shot tomorrow phrasing as schedule intent"
   assert.equal(out.mode, "schedule_intent");
   assert.equal(out.task, "打开 Slack 去打卡");
   assert.equal(out.scheduleIntent?.schedule.kind, "at");
-  assert.equal(out.scheduleIntent?.schedule.at ?? null, null);
+  assert.equal(out.scheduleIntent?.schedule.at, "2026-03-08T08:00:00+08:00");
   assert.match(out.scheduleIntent?.schedule.summaryText ?? "", /明天 08:00/);
   assert.match(out.reply, /确认/);
+});
+
+test("ChatAssistant decide ignores low-confidence schedule extraction and falls back to normal routing", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.extractScheduleIntentWithModel = async () => ({
+    intent: {
+      sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+      normalizedTask: "打开 Slack 去打卡",
+      schedule: {
+        kind: "cron",
+        expr: "0 8 * * *",
+        at: null,
+        everyMs: null,
+        tz: "Asia/Shanghai",
+        summaryText: "每天 08:00",
+      },
+      delivery: null,
+      requiresConfirmation: true,
+      confirmationPrompt: "confirm",
+    },
+    confidence: 0.31,
+    reason: "schedule_model_low_confidence",
+  });
+  assistant.classifyWithModel = async () => ({
+    mode: "task",
+    task: "每天早上 8 点帮我打开 Slack 去打卡",
+    reply: "",
+    confidence: 0.95,
+    reason: "model_task",
+  });
+
+  const out = await assistant.decide(35, "每天早上 8 点帮我打开 Slack 去打卡");
+  assert.equal(out.mode, "task");
+  assert.equal(out.reason, "model_task");
+});
+
+test("ChatAssistant decide logs a warning when schedule extraction fails before falling back", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  const logs = [];
+  assistant.logChat = (level, message) => {
+    logs.push({ level, message });
+  };
+  assistant.extractScheduleIntentWithModel = async () => {
+    throw new Error("schedule endpoint unavailable");
+  };
+  assistant.classifyWithModel = async () => ({
+    mode: "task",
+    task: "open Slack",
+    reply: "",
+    confidence: 0.95,
+    reason: "model_task",
+  });
+
+  const out = await assistant.decide(36, "open Slack");
+  assert.equal(out.mode, "task");
+  assert.equal(out.reason, "model_task");
+  assert.equal(logs.some((entry) => entry.level === "warn" && /schedule extraction failed/i.test(entry.message)), true);
 });
 
 test("ChatAssistant decide does not misroute schedule-shaped translation request", async () => {

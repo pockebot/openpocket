@@ -350,6 +350,86 @@ test("CronService executes cron-expression jobs on wall-clock schedule", async (
   });
 });
 
+test("CronService computes next cron occurrence correctly across DST start", async () => {
+  await withTempHome("openpocket-cron-dst-start-", async () => {
+    const cfg = loadConfig();
+    cfg.cron.enabled = true;
+    cfg.cron.tickSec = 1;
+
+    const jobsFile = path.join(cfg.workspaceDir, "cron", "jobs.json");
+    fs.mkdirSync(path.dirname(jobsFile), { recursive: true });
+    fs.writeFileSync(
+      jobsFile,
+      `${JSON.stringify(
+        {
+          version: 2,
+          jobs: [
+            {
+              id: "job-dst",
+              name: "Job DST",
+              enabled: true,
+              schedule: {
+                kind: "cron",
+                expr: "5 18 * * *",
+                at: null,
+                everyMs: null,
+                tz: "America/Los_Angeles",
+                summaryText: "Every day at 18:05 Los Angeles time",
+              },
+              payload: {
+                kind: "agent_turn",
+                task: "Open settings app and check Wi-Fi",
+              },
+              delivery: null,
+              model: null,
+              promptMode: "minimal",
+              createdAt: "2026-03-07T23:19:57.705Z",
+              updatedAt: "2026-03-07T23:19:57.705Z",
+              createdBy: "test",
+              sourceChannel: "telegram",
+              sourcePeerId: "12345",
+              runOnStartup: false,
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    cfg.cron.jobsFile = jobsFile;
+
+    let nowMs = Date.parse("2026-03-08T04:59:07.577Z");
+    let tick = () => {};
+
+    const service = new CronService(cfg, {
+      nowMs: () => nowMs,
+      setIntervalFn: (handler) => {
+        tick = handler;
+        return {};
+      },
+      clearIntervalFn: () => {},
+      runTask: async () => ({
+        accepted: true,
+        ok: true,
+        message: "ok",
+      }),
+      log: () => {},
+    });
+
+    service.start();
+    await waitMicrotask();
+
+    const statePath = path.join(cfg.stateDir, "cron-state.json");
+    const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    assert.equal(state.jobs["job-dst"].nextRunAtMs, Date.parse("2026-03-09T01:05:00.000Z"));
+
+    nowMs = Date.parse("2026-03-09T01:05:00.000Z");
+    tick();
+    await waitMicrotask();
+  });
+});
+
 test("CronService executes one-shot at jobs only once", async () => {
   await withTempHome("openpocket-cron-at-", async () => {
     const cfg = loadConfig();

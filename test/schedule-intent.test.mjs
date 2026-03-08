@@ -30,6 +30,35 @@ test("schedule intent normalization builds confirmation from model output", () =
   assert.match(intent?.confirmationPrompt ?? "", /确认/);
 });
 
+test("schedule intent normalization requires RFC3339 at value for one-shot schedules", () => {
+  const invalid = normalizeScheduleIntentCandidate("Open Slack tomorrow at 8am", {
+    isScheduleIntent: true,
+    task: "Open Slack",
+    schedule: {
+      kind: "at",
+      summaryText: "tomorrow at 08:00",
+    },
+  }, {
+    timezone: "America/Los_Angeles",
+  });
+  assert.equal(invalid, null);
+
+  const valid = normalizeScheduleIntentCandidate("Open Slack tomorrow at 8am", {
+    isScheduleIntent: true,
+    task: "Open Slack",
+    schedule: {
+      kind: "at",
+      at: "2026-03-08T08:00:00-08:00",
+      summaryText: "tomorrow at 08:00",
+    },
+  }, {
+    timezone: "America/Los_Angeles",
+  });
+  assert.ok(valid);
+  assert.equal(valid?.schedule.kind, "at");
+  assert.equal(valid?.schedule.at, "2026-03-08T08:00:00-08:00");
+});
+
 test("schedule intent module no longer embeds local keyword parsing tables", () => {
   const source = fs.readFileSync(path.join(process.cwd(), "src", "gateway", "schedule-intent.ts"), "utf-8");
 

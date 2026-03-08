@@ -299,6 +299,8 @@ interface ScheduleIntentExtractionDecision {
   reason: string;
 }
 
+const MIN_SCHEDULE_INTENT_CONFIDENCE = 0.7;
+
 function readResponseOutputText(response: unknown): string {
   if (typeof response !== "object" || response === null) {
     return "";
@@ -3557,10 +3559,11 @@ export class ChatAssistant {
           profile.maxTokens,
           normalizedInput,
         );
-      } catch {
+      } catch (error) {
+        this.logChat("warn", `schedule extraction failed error=${stringifyError(error)}`);
         extractedSchedule = null;
       }
-      if (extractedSchedule) {
+      if (extractedSchedule && extractedSchedule.confidence >= MIN_SCHEDULE_INTENT_CONFIDENCE) {
         return {
           mode: "schedule_intent",
           task: extractedSchedule.intent.normalizedTask,

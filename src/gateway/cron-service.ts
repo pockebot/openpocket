@@ -44,6 +44,11 @@ function toFiniteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function ceilToNextMinute(ms: number): number {
+  const remainder = ms % 60_000;
+  return remainder === 0 ? ms : (ms - remainder + 60_000);
+}
+
 export class CronService {
   private readonly config: OpenPocketConfig;
   private readonly deps: Required<Omit<CronServiceDeps, "runTask">> & Pick<CronServiceDeps, "runTask">;
@@ -227,15 +232,52 @@ export class CronService {
       return null;
     }
     try {
+      const tz = job.schedule.tz || "UTC";
       const baseMs = state.lastAttemptAtMs ?? state.lastRunAtMs ?? Math.max(0, nowMs - 1000);
       const parsed = CronExpressionParser.parse(expr, {
         currentDate: new Date(baseMs),
-        tz: job.schedule.tz || "UTC",
+        tz,
       });
-      return parsed.next().getTime();
+      const nextRunAtMs = parsed.next().getTime();
+      const dstFallbackMatchMs = this.findEarlierDstFallbackMatch(parsed, tz, baseMs, nextRunAtMs);
+      return dstFallbackMatchMs ?? nextRunAtMs;
     } catch {
       return null;
     }
+  }
+
+  private findEarlierDstFallbackMatch(
+    parsed: ReturnType<typeof CronExpressionParser.parse>,
+    tz: string,
+    baseMs: number,
+    nextRunAtMs: number,
+  ): number | null {
+    if (nextRunAtMs <= baseMs) {
+      return null;
+    }
+    const offsetNow = this.timezoneOffsetLabel(baseMs, tz);
+    const offsetLater = this.timezoneOffsetLabel(baseMs + 48 * 60 * 60 * 1000, tz);
+    if (!offsetNow || !offsetLater || offsetNow === offsetLater) {
+      return null;
+    }
+
+    const searchStartMs = ceilToNextMinute(baseMs + 1);
+    const searchEndMs = Math.min(nextRunAtMs - 60_000, baseMs + 48 * 60 * 60 * 1000);
+    for (let probeMs = searchStartMs; probeMs <= searchEndMs; probeMs += 60_000) {
+      if (parsed.includesDate(new Date(probeMs))) {
+        return probeMs;
+      }
+    }
+    return null;
+  }
+
+  private timezoneOffsetLabel(ms: number, tz: string): string {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      timeZoneName: "shortOffset",
+    });
+    const part = formatter.formatToParts(new Date(ms)).find((item) => item.type === "timeZoneName")?.value ?? "";
+    return part.trim();
   }
 
   private previewPayload(value: string, maxChars: number): string {
