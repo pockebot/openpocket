@@ -124,6 +124,8 @@ test("GatewayCore: /help command returns command list", async () => {
     assert.ok(adapter.sent[0].text.includes("/start"));
     assert.ok(adapter.sent[0].text.includes("/run"));
     assert.ok(adapter.sent[0].text.includes("/pairing"));
+    assert.match(adapter.sent[0].text, /confirm/i);
+    assert.match(adapter.sent[0].text, /openpocket cron list/i);
   });
 });
 
@@ -483,6 +485,309 @@ test("GatewayCore handlePlainMessage reuses task ack from routing decision witho
     assert.equal(adapter.sent.length, 1);
     assert.equal(adapter.sent[0].text, "Starting now: open camera.");
     assert.equal(taskAcceptedReplyCalls, 0);
+  });
+});
+
+test("GatewayCore handlePlainMessage replies with confirmation for schedule intent without executing phone task", async () => {
+  await withTempHome("gwcore-schedule-confirm-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+    let runCalls = 0;
+
+    core.chat.decide = async () => ({
+      mode: "schedule_intent",
+      task: "Open Slack and complete check-in",
+      reply: "请确认创建这个定时任务。",
+      confidence: 0.99,
+      reason: "schedule_intent:cron",
+      scheduleIntent: {
+        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        normalizedTask: "Open Slack and complete check-in",
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        delivery: null,
+        requiresConfirmation: true,
+        confirmationPrompt: "请确认创建这个定时任务。",
+      },
+    });
+    core.runTaskAndReport = async () => {
+      runCalls += 1;
+      return { accepted: true, ok: true, message: "should-not-run" };
+    };
+
+    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
+
+    assert.equal(adapter.sent.length, 1);
+    assert.match(adapter.sent[0].text, /确认/);
+    assert.equal(runCalls, 0);
+
+    const jobsFile = path.join(config.workspaceDir, "cron", "jobs.json");
+    const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+    assert.equal(saved.jobs.length, 1, "job should not be created before confirmation");
+  });
+});
+
+test("GatewayCore creates a structured cron job after confirmation", async () => {
+  await withTempHome("gwcore-schedule-create-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+    let runCalls = 0;
+
+    core.chat.decide = async () => ({
+      mode: "schedule_intent",
+      task: "Open Slack and complete check-in",
+      reply: "请确认创建这个定时任务。",
+      confidence: 0.99,
+      reason: "schedule_intent:cron",
+      scheduleIntent: {
+        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        normalizedTask: "Open Slack and complete check-in",
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        delivery: null,
+        requiresConfirmation: true,
+        confirmationPrompt: "请确认创建这个定时任务。",
+      },
+    });
+    core.runTaskAndReport = async () => {
+      return { accepted: true, ok: true, message: "should-not-run" };
+    };
+    core.agent.runTask = async () => {
+      runCalls += 1;
+      const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+      const registry = new CronRegistry(config);
+      registry.add({
+        id: "daily-slack-checkin",
+        name: "Daily Slack Check-in",
+        enabled: true,
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        payload: {
+          kind: "agent_turn",
+          task: "Open Slack and complete check-in",
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        },
+        model: null,
+        promptMode: "minimal",
+      });
+      return {
+        ok: true,
+        message: "created",
+        sessionPath: "/tmp/cron-setup.jsonl",
+        skillPath: null,
+        scriptPath: null,
+      };
+    };
+
+    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
+    await core.handleInbound(makeEnvelope({ text: "确认" }));
+
+    assert.equal(runCalls, 1);
+    assert.match(adapter.sent[1].text, /created|已创建/i);
+
+    const jobsFile = path.join(config.workspaceDir, "cron", "jobs.json");
+    const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+    const created = saved.jobs.find((job) => job.payload?.task === "Open Slack and complete check-in");
+    assert.equal(Boolean(created), true);
+    assert.equal(created.schedule.kind, "cron");
+    assert.equal(created.delivery.channel, "telegram");
+    assert.equal(created.delivery.to, "user-1");
+  });
+});
+
+test("GatewayCore uses a restricted cron setup run after confirmation", async () => {
+  await withTempHome("gwcore-schedule-setup-run-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+    let capturedTask = "";
+    let capturedToolNames = null;
+
+    core.chat.decide = async () => ({
+      mode: "schedule_intent",
+      task: "Open Slack and complete check-in",
+      reply: "请确认创建这个定时任务。",
+      confidence: 0.99,
+      reason: "schedule_intent:cron",
+      scheduleIntent: {
+        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        normalizedTask: "Open Slack and complete check-in",
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        delivery: null,
+        requiresConfirmation: true,
+        confirmationPrompt: "请确认创建这个定时任务。",
+      },
+    });
+
+    core.agent.runTask = async (
+      task,
+      _modelName,
+      _onProgress,
+      _onHumanAuth,
+      _promptMode,
+      _onUserDecision,
+      _sessionKey,
+      _onUserInput,
+      _onChannelMedia,
+      _taskExecutionPlan,
+      availableToolNamesOverride,
+    ) => {
+      capturedTask = task;
+      capturedToolNames = availableToolNamesOverride;
+      const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+      const registry = new CronRegistry(config);
+      registry.add({
+        id: "daily-slack-checkin",
+        name: "Daily Slack Check-in",
+        enabled: true,
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        payload: {
+          kind: "agent_turn",
+          task: "Open Slack and complete check-in",
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        },
+        model: null,
+        promptMode: "minimal",
+      });
+      return {
+        ok: true,
+        message: "created",
+        sessionPath: "/tmp/cron-setup.jsonl",
+        skillPath: null,
+        scriptPath: null,
+      };
+    };
+
+    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
+    await core.handleInbound(makeEnvelope({ text: "确认" }));
+
+    assert.match(capturedTask, /Create exactly one cron job/i);
+    assert.deepEqual(capturedToolNames, ["cron_add", "finish"]);
+    assert.match(adapter.sent[1].text, /created|已创建/i);
+  });
+});
+
+test("GatewayCore cancels pending schedule confirmation without creating a job", async () => {
+  await withTempHome("gwcore-schedule-cancel-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    core.chat.decide = async () => ({
+      mode: "schedule_intent",
+      task: "Open Slack and complete check-in",
+      reply: "请确认创建这个定时任务。",
+      confidence: 0.99,
+      reason: "schedule_intent:cron",
+      scheduleIntent: {
+        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        normalizedTask: "Open Slack and complete check-in",
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "Asia/Shanghai",
+          summaryText: "每天 08:00",
+        },
+        delivery: null,
+        requiresConfirmation: true,
+        confirmationPrompt: "请确认创建这个定时任务。",
+      },
+    });
+
+    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
+    await core.handleInbound(makeEnvelope({ text: "取消" }));
+
+    assert.match(adapter.sent[1].text, /取消|cancel/i);
+
+    const jobsFile = path.join(config.workspaceDir, "cron", "jobs.json");
+    const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+    const created = saved.jobs.find((job) => job.payload?.task === "Open Slack and complete check-in");
+    assert.equal(created, undefined);
+  });
+});
+
+test("GatewayCore blocks unrelated messages while schedule confirmation is pending", async () => {
+  await withTempHome("gwcore-schedule-pending-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+    let decideCalls = 0;
+
+    core.chat.decide = async (chatId, text) => {
+      void chatId;
+      decideCalls += 1;
+      if (text === "每天早上 8 点帮我打开 Slack 去打卡") {
+        return {
+          mode: "schedule_intent",
+          task: "Open Slack and complete check-in",
+          reply: "请确认创建这个定时任务。",
+          confidence: 0.99,
+          reason: "schedule_intent:cron",
+          scheduleIntent: {
+            sourceText: text,
+            normalizedTask: "Open Slack and complete check-in",
+            schedule: {
+              kind: "cron",
+              expr: "0 8 * * *",
+              at: null,
+              everyMs: null,
+              tz: "Asia/Shanghai",
+              summaryText: "每天 08:00",
+            },
+            delivery: null,
+            requiresConfirmation: true,
+            confirmationPrompt: "请确认创建这个定时任务。",
+          },
+        };
+      }
+      return {
+        mode: "task",
+        task: text,
+        reply: "",
+        confidence: 0.9,
+        reason: "model_task",
+      };
+    };
+
+    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
+    await core.handleInbound(makeEnvelope({ text: "顺便打开相机" }));
+
+    assert.equal(decideCalls, 1, "pending confirmation should intercept unrelated follow-up text");
+    assert.match(adapter.sent[1].text, /确认|取消|confirm|cancel/i);
   });
 });
 

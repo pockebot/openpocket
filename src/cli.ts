@@ -128,6 +128,7 @@ Usage:
   openpocket [--config <path> | --agent <id>] agent [--model <name>] <task>
   openpocket [--config <path> | --agent <id>] skills list|load [--all]|validate [--strict]
   openpocket [--config <path> | --agent <id>] script run [--file <path> | --text <script>] [--timeout <sec>]
+  openpocket [--config <path> | --agent <id>] cron list|add|remove|enable|disable [options]
   openpocket [--config <path> | --agent <id>] channels login --channel <name>
   openpocket [--config <path> | --agent <id>] channels whoami [--channel <name>]
   openpocket [--config <path> | --agent <id>] channels list
@@ -140,6 +141,16 @@ Usage:
   openpocket agents list
   openpocket agents show [<id>]
   openpocket agents delete <id>
+
+Scheduling:
+  Create scheduled jobs from chat after confirmation.
+  Chat example: "Every day at 8am open Slack and complete check-in"
+  CLI management: openpocket cron list|add|remove|enable|disable
+
+Scheduling:
+  Create scheduled jobs from chat after confirmation.
+  Chat example: "Every day at 8am open Slack and complete check-in"
+  CLI management: openpocket cron list|add|remove|enable|disable
 
 Legacy aliases (deprecated):
   openpocket [--config <path> | --agent <id>] init
@@ -169,6 +180,8 @@ Examples:
   openpocket skills load --all
   openpocket skills validate --strict
   openpocket script run --text "echo hello"
+  openpocket cron list
+  openpocket cron add --id daily-slack-checkin --name "Daily Slack Check-in" --cron "0 8 * * *" --tz Asia/Shanghai --task "Open Slack and complete check-in" --channel telegram --to 12345
   openpocket channels login --channel whatsapp
   openpocket channels whoami --channel telegram
   openpocket channels list
@@ -1895,6 +1908,170 @@ function copyBundledSkillToWorkspace(
     fs.copyFileSync(sourceEntry, destinationEntry);
   }
   return destinationEntry;
+}
+
+async function runCronCommand(configPath: string | undefined, args: string[]): Promise<number> {
+  const sub = (args[0] ?? "").trim().toLowerCase();
+  if (!sub || !["list", "add", "remove", "enable", "disable"].includes(sub)) {
+    printRaw(cliTheme.section("Cron Commands"));
+    printRaw("  openpocket cron list");
+    printRaw("  openpocket cron add --id <id> --name <name> (--cron <expr> | --every-sec <sec> | --every-ms <ms>) --task <task> [--tz <iana-tz>] [--channel <name> --to <peer>]");
+    printRaw("  openpocket cron remove --id <id>");
+    printRaw("  openpocket cron enable --id <id>");
+    printRaw("  openpocket cron disable --id <id>");
+    return 0;
+  }
+
+  const cfg = loadConfig(configPath);
+  const { CronRegistry } = await import("./gateway/cron-registry.js");
+  const registry = new CronRegistry(cfg);
+
+  if (sub === "list") {
+    const jobs = registry.list();
+    printRaw(cliTheme.section("Cron Jobs"));
+    if (jobs.length === 0) {
+      printInfo("No cron jobs configured.");
+      return 0;
+    }
+    for (const job of jobs) {
+      const enabledLabel = job.enabled ? "enabled" : "disabled";
+      const target = job.delivery ? ` -> ${job.delivery.channel}:${job.delivery.to}` : "";
+      printRaw(`- ${job.id} | ${enabledLabel} | ${job.schedule.summaryText || job.schedule.kind}${target}`);
+      printRaw(`  ${job.payload.task}`);
+    }
+    return 0;
+  }
+
+  const { value: id, rest: afterId } = takeOption(args.slice(1), "--id");
+  if (!id) {
+    printWarn(`Usage: openpocket cron ${sub} --id <id>`);
+    return 1;
+  }
+
+  if (sub === "remove") {
+    if (afterId.length > 0) {
+      throw new Error(`Unexpected cron remove arguments: ${afterId.join(" ")}`);
+    }
+    const removed = registry.remove(id);
+    if (!removed) {
+      printWarn(`Cron job not found: ${id}`);
+      return 1;
+    }
+    printSuccess(`Cron job removed: ${id}`);
+    return 0;
+  }
+
+  if (sub === "enable" || sub === "disable") {
+    if (afterId.length > 0) {
+      throw new Error(`Unexpected cron ${sub} arguments: ${afterId.join(" ")}`);
+    }
+    const updated = registry.update(id, { enabled: sub === "enable" });
+    if (!updated) {
+      printWarn(`Cron job not found: ${id}`);
+      return 1;
+    }
+    printSuccess(`Cron job ${sub}d: ${id}`);
+    return 0;
+  }
+
+  const { value: name, rest: afterName } = takeOption(afterId, "--name");
+  const { value: cronExpr, rest: afterCron } = takeOption(afterName, "--cron");
+  const { value: everySec, rest: afterEverySec } = takeOption(afterCron, "--every-sec");
+  const { value: everyMs, rest: afterEveryMs } = takeOption(afterEverySec, "--every-ms");
+  const { value: tz, rest: afterTz } = takeOption(afterEveryMs, "--tz");
+  const { value: task, rest: afterTask } = takeOption(afterTz, "--task");
+  const { value: channel, rest: afterChannel } = takeOption(afterTask, "--channel");
+  const { value: to, rest: afterTo } = takeOption(afterChannel, "--to");
+  const { value: model, rest: afterModel } = takeOption(afterTo, "--model");
+  const { value: promptMode, rest } = takeOption(afterModel, "--prompt-mode");
+
+  if (rest.length > 0) {
+    throw new Error(`Unexpected cron add arguments: ${rest.join(" ")}`);
+  }
+  if (!name || !task) {
+    throw new Error("Usage: openpocket cron add --id <id> --name <name> (--cron <expr> | --every-sec <sec> | --every-ms <ms>) --task <task> [--tz <iana-tz>] [--channel <name> --to <peer>]");
+  }
+  if (Boolean(channel) !== Boolean(to)) {
+    throw new Error("Options --channel and --to must be provided together.");
+  }
+
+  const timezone = tz?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const scheduleOptionCount = [cronExpr?.trim(), everySec?.trim(), everyMs?.trim()].filter(Boolean).length;
+  if (scheduleOptionCount !== 1) {
+    throw new Error("Exactly one schedule option is required: --cron, --every-sec, or --every-ms");
+  }
+  const schedule = (() => {
+    if (cronExpr?.trim()) {
+      return {
+        kind: "cron" as const,
+        expr: cronExpr.trim(),
+        at: null,
+        everyMs: null,
+        tz: timezone,
+        summaryText: `${cronExpr.trim()} (${timezone})`,
+      };
+    }
+    if (everySec?.trim()) {
+      const seconds = Number(everySec);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new Error(`Invalid --every-sec value: ${everySec}`);
+      }
+      return {
+        kind: "every" as const,
+        expr: null,
+        at: null,
+        everyMs: Math.round(seconds * 1000),
+        tz: timezone,
+        summaryText: `Every ${Math.round(seconds)} seconds`,
+      };
+    }
+    if (everyMs?.trim()) {
+      const intervalMs = Number(everyMs);
+      if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+        throw new Error(`Invalid --every-ms value: ${everyMs}`);
+      }
+      return {
+        kind: "every" as const,
+        expr: null,
+        at: null,
+        everyMs: Math.round(intervalMs),
+        tz: timezone,
+        summaryText: `Every ${Math.round(intervalMs)} ms`,
+      };
+    }
+    throw new Error("Exactly one schedule option is required: --cron, --every-sec, or --every-ms");
+  })();
+
+  const created = registry.add({
+    id,
+    name,
+    enabled: true,
+    schedule,
+    payload: {
+      kind: "agent_turn",
+      task,
+    },
+    delivery: channel && to
+      ? {
+        mode: "announce",
+        channel,
+        to,
+      }
+      : null,
+    model: model?.trim() || null,
+    promptMode:
+      promptMode === "full" || promptMode === "minimal" || promptMode === "none"
+        ? promptMode
+        : null,
+  });
+  printRaw(cliTheme.section("Cron Job Added"));
+  printKeyValue("ID", created.id, "accent");
+  printKeyValue("Schedule", created.schedule.summaryText);
+  printKeyValue("Task", created.payload.task);
+  if (created.delivery) {
+    printKeyValue("Delivery", `${created.delivery.channel}:${created.delivery.to}`);
+  }
+  return 0;
 }
 
 async function runScriptCommand(configPath: string | undefined, args: string[]): Promise<number> {
@@ -3791,6 +3968,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (command === "skills") {
     return runSkillsCommand(selectedConfigPath, rest.slice(1));
+  }
+
+  if (command === "cron") {
+    return runCronCommand(configPath ?? undefined, rest.slice(1));
   }
 
   if (command === "script") {

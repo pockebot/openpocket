@@ -272,6 +272,94 @@ export function normalizeAction(input: unknown): AgentAction {
     };
   }
 
+  if (type === "cron_add") {
+    return {
+      type,
+      id: String(input.id ?? ""),
+      name: String(input.name ?? ""),
+      schedule: {
+        kind:
+          input.schedule && isObject(input.schedule) && typeof input.schedule.kind === "string"
+            ? (input.schedule.kind === "cron" || input.schedule.kind === "at" || input.schedule.kind === "every"
+              ? input.schedule.kind
+              : "cron")
+            : "cron",
+        expr: input.schedule && isObject(input.schedule) ? toOptionalTrimmedString(input.schedule.expr) ?? null : null,
+        at: input.schedule && isObject(input.schedule) ? toOptionalTrimmedString(input.schedule.at) ?? null : null,
+        everyMs: input.schedule && isObject(input.schedule) && input.schedule.everyMs != null
+          ? toNumber(input.schedule.everyMs, 0)
+          : null,
+        tz: input.schedule && isObject(input.schedule)
+          ? String(input.schedule.tz ?? "UTC")
+          : "UTC",
+        summaryText: input.schedule && isObject(input.schedule)
+          ? String(input.schedule.summaryText ?? "")
+          : "",
+      },
+      task: String(input.task ?? ""),
+      channel: toOptionalTrimmedString(input.channel),
+      to: toOptionalTrimmedString(input.to),
+      model: toOptionalTrimmedString(input.model),
+      promptMode:
+        input.promptMode === "full" || input.promptMode === "minimal" || input.promptMode === "none"
+          ? input.promptMode
+          : undefined,
+      runOnStartup: input.runOnStartup === true,
+      createdBy: toOptionalTrimmedString(input.createdBy),
+      sourceChannel: toOptionalTrimmedString(input.sourceChannel),
+      sourcePeerId: toOptionalTrimmedString(input.sourcePeerId),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "cron_list") {
+    return {
+      type,
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "cron_remove") {
+    return {
+      type,
+      id: String(input.id ?? ""),
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
+  if (type === "cron_update") {
+    return {
+      type,
+      id: String(input.id ?? ""),
+      name: toOptionalTrimmedString(input.name),
+      enabled: typeof input.enabled === "boolean" ? input.enabled : undefined,
+      task: toOptionalTrimmedString(input.task),
+      schedule: input.schedule && isObject(input.schedule)
+        ? {
+          kind:
+            typeof input.schedule.kind === "string" &&
+              (input.schedule.kind === "cron" || input.schedule.kind === "at" || input.schedule.kind === "every")
+              ? input.schedule.kind
+              : "cron",
+          expr: toOptionalTrimmedString(input.schedule.expr) ?? null,
+          at: toOptionalTrimmedString(input.schedule.at) ?? null,
+          everyMs: input.schedule.everyMs != null ? toNumber(input.schedule.everyMs, 0) : null,
+          tz: String(input.schedule.tz ?? "UTC"),
+          summaryText: String(input.schedule.summaryText ?? ""),
+        }
+        : undefined,
+      channel: toOptionalTrimmedString(input.channel),
+      to: toOptionalTrimmedString(input.to),
+      model: toOptionalTrimmedString(input.model),
+      promptMode:
+        input.promptMode === "full" || input.promptMode === "minimal" || input.promptMode === "none"
+          ? input.promptMode
+          : undefined,
+      runOnStartup: typeof input.runOnStartup === "boolean" ? input.runOnStartup : undefined,
+      reason: input.reason ? String(input.reason) : undefined,
+    };
+  }
+
   if (type === "runtime_info") {
     return {
       type,

@@ -166,6 +166,58 @@ export const runScriptSchema = Type.Object({
   reason: ReasonParam,
 });
 
+const cronScheduleSchema = Type.Object({
+  kind: Type.Union([Type.Literal("cron"), Type.Literal("at"), Type.Literal("every")]),
+  expr: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  at: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  everyMs: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+  tz: Type.String({ description: "IANA timezone for wall-clock schedules." }),
+  summaryText: Type.String({ description: "Human-readable schedule summary." }),
+});
+
+export const cronAddSchema = Type.Object({
+  thought: ThoughtParam,
+  id: Type.String({ description: "Unique cron job id." }),
+  name: Type.String({ description: "Display name for the cron job." }),
+  schedule: cronScheduleSchema,
+  task: Type.String({ description: "Natural-language task to run when the job fires." }),
+  channel: Type.Optional(Type.String({ description: "Optional delivery channel." })),
+  to: Type.Optional(Type.String({ description: "Optional delivery target/peer id." })),
+  model: Type.Optional(Type.String({ description: "Optional model profile override." })),
+  promptMode: Type.Optional(Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")])),
+  runOnStartup: Type.Optional(Type.Boolean({ description: "Run once immediately when scheduler starts." })),
+  createdBy: Type.Optional(Type.String({ description: "Audit metadata for the creator." })),
+  sourceChannel: Type.Optional(Type.String({ description: "Originating channel type." })),
+  sourcePeerId: Type.Optional(Type.String({ description: "Originating peer id." })),
+  reason: ReasonParam,
+});
+
+export const cronListSchema = Type.Object({
+  thought: ThoughtParam,
+  reason: ReasonParam,
+});
+
+export const cronRemoveSchema = Type.Object({
+  thought: ThoughtParam,
+  id: Type.String({ description: "Cron job id to remove." }),
+  reason: ReasonParam,
+});
+
+export const cronUpdateSchema = Type.Object({
+  thought: ThoughtParam,
+  id: Type.String({ description: "Cron job id to update." }),
+  name: Type.Optional(Type.String({ description: "Updated display name." })),
+  enabled: Type.Optional(Type.Boolean({ description: "Enable or disable the job." })),
+  task: Type.Optional(Type.String({ description: "Updated task text." })),
+  schedule: Type.Optional(cronScheduleSchema),
+  channel: Type.Optional(Type.String({ description: "Updated delivery channel." })),
+  to: Type.Optional(Type.String({ description: "Updated delivery target." })),
+  model: Type.Optional(Type.String({ description: "Updated model override." })),
+  promptMode: Type.Optional(Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")])),
+  runOnStartup: Type.Optional(Type.Boolean({ description: "Updated runOnStartup flag." })),
+  reason: ReasonParam,
+});
+
 export const runtimeInfoSchema = Type.Object({
   thought: ThoughtParam,
   reason: ReasonParam,
@@ -377,6 +429,10 @@ export type LaunchAppParams = Static<typeof launchAppSchema>;
 export type ShellParams = Static<typeof shellSchema>;
 export type BatchActionsParams = Static<typeof batchActionsSchema>;
 export type RunScriptParams = Static<typeof runScriptSchema>;
+export type CronAddParams = Static<typeof cronAddSchema>;
+export type CronListParams = Static<typeof cronListSchema>;
+export type CronRemoveParams = Static<typeof cronRemoveSchema>;
+export type CronUpdateParams = Static<typeof cronUpdateSchema>;
 export type RuntimeInfoParams = Static<typeof runtimeInfoSchema>;
 export type ReadParams = Static<typeof readSchema>;
 export type WriteParams = Static<typeof writeSchema>;
@@ -420,6 +476,10 @@ export const TOOL_METAS: ToolMeta[] = [
   { name: "shell", description: "Execute an adb shell command (optionally wrapped with sh -lc).", parameters: shellSchema },
   { name: "batch_actions", description: "Execute a short batch of low-risk UI actions on the current screen without re-planning between each action.", parameters: batchActionsSchema },
   { name: "run_script", description: "Run a short deterministic script as a fallback action.", parameters: runScriptSchema },
+  { name: "cron_add", description: "Create a structured cron job in the workspace registry.", parameters: cronAddSchema },
+  { name: "cron_list", description: "List structured cron jobs from the workspace registry.", parameters: cronListSchema },
+  { name: "cron_remove", description: "Remove a cron job from the workspace registry.", parameters: cronRemoveSchema },
+  { name: "cron_update", description: "Update a structured cron job in the workspace registry.", parameters: cronUpdateSchema },
   { name: "runtime_info", description: "Return authoritative runtime metadata for the current attempt (active model/api/provider/session/auth source).", parameters: runtimeInfoSchema },
   { name: "read", description: "Read a workspace file (optionally with line range).", parameters: readSchema },
   { name: "write", description: "Create or overwrite a workspace file. Supports append mode.", parameters: writeSchema },

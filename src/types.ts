@@ -494,6 +494,38 @@ export type AgentAction =
       reason?: string;
     }
   | { type: "run_script"; script: string; timeoutSec?: number; reason?: string }
+  | {
+      type: "cron_add";
+      id: string;
+      name: string;
+      schedule: CronScheduleSpec;
+      task: string;
+      channel?: string;
+      to?: string;
+      model?: string;
+      promptMode?: "full" | "minimal" | "none";
+      runOnStartup?: boolean;
+      createdBy?: string;
+      sourceChannel?: string;
+      sourcePeerId?: string;
+      reason?: string;
+    }
+  | { type: "cron_list"; reason?: string }
+  | { type: "cron_remove"; id: string; reason?: string }
+  | {
+      type: "cron_update";
+      id: string;
+      name?: string;
+      enabled?: boolean;
+      task?: string;
+      schedule?: CronScheduleSpec;
+      channel?: string;
+      to?: string;
+      model?: string;
+      promptMode?: "full" | "minimal" | "none";
+      runOnStartup?: boolean;
+      reason?: string;
+    }
   | { type: "runtime_info"; reason?: string }
   | { type: "read"; path: string; from?: number; lines?: number; reason?: string }
   | { type: "write"; path: string; content: string; append?: boolean; reason?: string }
@@ -644,6 +676,57 @@ export interface SkillInfo {
   description: string;
   source: "workspace" | "local" | "bundled";
   path: string;
+}
+
+export interface CronScheduleSpec {
+  kind: "cron" | "at" | "every";
+  expr?: string | null;
+  at?: string | null;
+  everyMs?: number | null;
+  tz: string;
+  summaryText: string;
+}
+
+export interface CronDeliveryTarget {
+  mode: "announce";
+  channel: string;
+  to: string;
+}
+
+export interface ScheduleIntent {
+  sourceText: string;
+  normalizedTask: string;
+  schedule: CronScheduleSpec;
+  delivery?: CronDeliveryTarget | null;
+  requiresConfirmation: boolean;
+  confirmationPrompt: string;
+}
+
+export interface CronJobPayload {
+  kind: "agent_turn";
+  task: string;
+}
+
+export interface StoredCronJob {
+  id: string;
+  name: string;
+  enabled: boolean;
+  schedule: CronScheduleSpec;
+  payload: CronJobPayload;
+  delivery?: CronDeliveryTarget | null;
+  model: string | null;
+  promptMode?: "full" | "minimal" | "none" | null;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string | null;
+  sourceChannel?: string | null;
+  sourcePeerId?: string | null;
+  runOnStartup?: boolean;
+}
+
+export interface StoredCronJobsFile {
+  version: 2;
+  jobs: StoredCronJob[];
 }
 
 export interface CronJob {

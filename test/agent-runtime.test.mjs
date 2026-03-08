@@ -477,6 +477,99 @@ test("AgentRuntime keeps workspace tools available for phone-style tasks", async
   assert.equal(capturedToolNames.includes("finish"), true);
 });
 
+test("AgentRuntime runTask accepts explicit availableToolNames override", async () => {
+  let capturedToolNames = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedToolNames = (options.initialState?.tools ?? []).map((tool) => tool.name);
+      },
+    },
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask(
+    "create a cron job",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    ["cron_add", "finish"],
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(capturedToolNames, ["cron_add", "finish"]);
+});
+
+test("AgentRuntime cron_add tool creates a structured cron job", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "create cron job",
+        action: {
+          type: "cron_add",
+          id: "daily-slack-checkin",
+          name: "Daily Slack Check-in",
+          schedule: {
+            kind: "cron",
+            expr: "0 8 * * *",
+            at: null,
+            everyMs: null,
+            tz: "Asia/Shanghai",
+            summaryText: "每天 08:00",
+          },
+          task: "Open Slack and complete check-in",
+          channel: "telegram",
+          to: "12345",
+          promptMode: "minimal",
+        },
+      },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask(
+    "create cron job via tool",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    ["cron_add", "finish"],
+  );
+  assert.equal(result.ok, true);
+
+  const jobsFile = path.join(runtime.config.workspaceDir, "cron", "jobs.json");
+  const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  const created = saved.jobs.find((job) => job.id === "daily-slack-checkin");
+  assert.equal(Boolean(created), true);
+  assert.equal(created.payload.task, "Open Slack and complete check-in");
+  assert.equal(created.delivery.channel, "telegram");
+  assert.equal(created.delivery.to, "12345");
+});
+
 test("AgentRuntime system prompt includes task journal guidance", async () => {
   let capturedSystemPrompt = "";
   const runtime = setupRuntime({

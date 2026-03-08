@@ -24,3 +24,6 @@ debug_screen_*.png
 docs/plan/
 docs/plans/
 opensrc/
+
+# local workspace instructions
+AGENTS.md

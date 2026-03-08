@@ -215,3 +215,41 @@ test("normalizeAction supports task journal tools", () => {
   assert.equal(checkpoint.name, "search_started");
   assert.equal(checkpoint.notes, "Uber Eats");
 });
+
+test("normalizeAction supports cron management tools", () => {
+  const add = normalizeAction({
+    type: "cron_add",
+    id: "daily-slack-checkin",
+    name: "Daily Slack Check-in",
+    schedule: {
+      kind: "cron",
+      expr: "0 8 * * *",
+      at: null,
+      everyMs: null,
+      tz: "Asia/Shanghai",
+      summaryText: "每天 08:00",
+    },
+    task: "Open Slack and complete check-in",
+    channel: "telegram",
+    to: "12345",
+    promptMode: "minimal",
+  });
+  assert.equal(add.type, "cron_add");
+  assert.equal(add.id, "daily-slack-checkin");
+  assert.equal(add.schedule.kind, "cron");
+  assert.equal(add.task, "Open Slack and complete check-in");
+  assert.equal(add.channel, "telegram");
+  assert.equal(add.to, "12345");
+
+  const list = normalizeAction({ type: "cron_list" });
+  assert.equal(list.type, "cron_list");
+
+  const remove = normalizeAction({ type: "cron_remove", id: "daily-slack-checkin" });
+  assert.equal(remove.type, "cron_remove");
+  assert.equal(remove.id, "daily-slack-checkin");
+
+  const update = normalizeAction({ type: "cron_update", id: "daily-slack-checkin", enabled: false });
+  assert.equal(update.type, "cron_update");
+  assert.equal(update.id, "daily-slack-checkin");
+  assert.equal(update.enabled, false);
+});
