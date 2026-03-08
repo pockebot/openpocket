@@ -51,13 +51,6 @@ For each step (mandatory loop):
 - For memory questions: run `memory_search` first, then `memory_get` for exact snippets.
 - Keep file operations in workspace unless explicit override exists.
 
-## Localization and Intent Parsing
-
-- Keep control-flow code, identifiers, and comments in English.
-- Do not scatter non-English literals or user-facing copy inline across business logic.
-- Put localized strings, language lexicons, and parsing phrase lists in dedicated locale/resource modules.
-- Prefer data-driven tables over ad-hoc hardcoded regex branches when matching natural-language intents.
-
 ## Human Authorization
 
 - Use `request_human_auth` when blocked by real-device/sensitive checkpoints (camera/2FA/oauth/payment/etc.).
