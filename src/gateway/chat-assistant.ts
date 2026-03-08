@@ -155,11 +155,11 @@ const CHAT_LOG_LEVEL_RANK: Record<GatewayLogLevel, number> = {
 
 const DEFAULT_SESSION_RESET_PROMPT: Record<OnboardingLocale, string> = {
   zh: [
-    "会话已重置。请先完成 Session Startup：",
-    "1) 确认当前任务目标与约束",
-    "2) 读取 AGENTS.md / SOUL.md / USER.md / IDENTITY.md",
-    "3) 如果 BOOTSTRAP.md 存在，先完成初始化",
-    "4) 然后再进入任务执行",
+    "Session reset complete. Run Session Startup first:",
+    "1) Reconfirm goal and constraints",
+    "2) Read AGENTS.md / SOUL.md / USER.md / IDENTITY.md",
+    "3) If BOOTSTRAP.md exists, finish onboarding first",
+    "4) Then continue task execution",
   ].join("\n"),
   en: [
     "Session reset complete. Run Session Startup first:",
@@ -175,50 +175,50 @@ const DEFAULT_ONBOARDING_TEMPLATE: OnboardingTemplate = {
   locales: {
     zh: {
       questions: {
-        1: "先做个简短初始化：我该怎么称呼你？如果你愿意，也可以一次告诉我你希望我叫什么和什么人设。",
-        2: "收到。那你希望我叫什么名字？",
+        1: "Quick setup before we continue: how would you like me to address you? You can also tell me my name and persona in one message.",
+        2: "Great. What name would you like to call me?",
         3: [
-          "最后一步：设定我的人设/语气。",
-          "你可以直接描述，也可以选编号：",
-          "1) 专业可靠：清晰、稳健、少废话",
-          "2) 高效直给：结果导向、节奏快",
-          "3) 温和陪伴：耐心解释、语气柔和",
-          "4) 幽默轻松：轻松自然，但不影响执行",
-          "回复示例：`2` 或 `专业可靠，简洁，必要时幽默`",
+          "Final step: choose my persona/tone.",
+          "You can describe it freely, or pick one preset:",
+          "1) Professional & reliable: clear, stable, minimal fluff",
+          "2) Fast & direct: action-oriented, concise, high tempo",
+          "3) Warm & supportive: patient guidance, softer tone",
+          "4) Light & humorous: relaxed tone while staying task-focused",
+          "Reply example: `2` or `professional, concise, lightly humorous`",
         ].join("\n"),
       },
-      emptyAnswer: "请用一句话回答，我会帮你写入 profile。",
+      emptyAnswer: "Please answer in one short sentence so I can save your profile.",
       onboardingSaved:
-        "好，我已经写入 USER.md 和 IDENTITY.md。后续我会称呼你为“{userPreferredAddress}”，我的名字是“{assistantName}”，人设是“{assistantPersona}”。",
-      noChange: "这些设定已经是当前值了，不需要改动。",
-      updated: "已更新。{changes}。",
-      changeJoiner: "；",
+        "Done. I saved your profile to USER.md and IDENTITY.md. I will address you as \"{userPreferredAddress}\", and use \"{assistantName}\" with persona \"{assistantPersona}\".",
+      noChange: "These profile settings are already up to date.",
+      updated: "Updated. {changes}.",
+      changeJoiner: "; ",
       changeTemplates: {
-        userPreferredAddress: "我会称呼你为“{value}”",
-        assistantName: "我的名字改为“{value}”",
-        assistantPersona: "人设改为“{value}”",
+        userPreferredAddress: "I will address you as \"{value}\"",
+        assistantName: "my name is now \"{value}\"",
+        assistantPersona: "persona updated to \"{value}\"",
       },
       fallbacks: {
-        user: "用户",
+        user: "User",
         assistant: "OpenPocket",
-        persona: "务实、冷静、可靠",
+        persona: "pragmatic, calm, and reliable",
       },
       personaPresets: [
         {
-          value: "专业可靠：清晰、稳健、少废话",
-          aliases: ["1", "a", "选1", "方案1"],
+          value: "professional and reliable: clear, stable, minimal fluff",
+          aliases: ["1", "a", "option1"],
         },
         {
-          value: "高效直给：结果导向、节奏快",
-          aliases: ["2", "b", "选2", "方案2"],
+          value: "fast and direct: action-oriented, concise, high tempo",
+          aliases: ["2", "b", "option2"],
         },
         {
-          value: "温和陪伴：耐心解释、语气柔和",
-          aliases: ["3", "c", "选3", "方案3"],
+          value: "warm and supportive: patient guidance, softer tone",
+          aliases: ["3", "c", "option3"],
         },
         {
-          value: "幽默轻松：轻松自然，但不影响执行",
-          aliases: ["4", "d", "选4", "方案4"],
+          value: "light and humorous: relaxed tone while staying task-focused",
+          aliases: ["4", "d", "option4"],
         },
       ],
     },
@@ -934,7 +934,7 @@ export class ChatAssistant {
   private normalizeAssistantName(input: string): string {
     return this.normalizeOneLine(input)
       .replace(/[。！？.!?]+$/g, "")
-      .replace(/\s*(吧|呀|呢|啦|喔|哦|好吗|可以吗)\s*$/i, "")
+      .replace(/\s*(\u5427|\u5440|\u5462|\u5566|\u55d4|\u54e6|\u597d\u5417|\u53ef\u4ee5\u5417)\s*$/i, "")
       .trim();
   }
 
@@ -1280,17 +1280,17 @@ export class ChatAssistant {
     }
 
     const userPreferredAddress = this.extractByPatterns(normalized, [
-      /(?:叫我|称呼我|你可以叫我|喊我)\s*[:：]?\s*([^,，。;；\n]+)/i,
+      /(?:\u53eb\u6211|\u79f0\u547c\u6211|\u4f60\u53ef\u4ee5\u53eb\u6211|\u558a\u6211)\s*[:：]?\s*([^,，。;；\n]+)/i,
       /(?:call me|address me as|you can call me)\s+([^,.;\n]+)/i,
     ]);
     const assistantName = this.extractByPatterns(normalized, [
-      /(?:你叫|你就叫|称呼你为|我叫你|我希望你叫)\s*[:：]?\s*([^,，。;；\n]+)/i,
-      /(?:你(?:把)?(?:你(?:的)?)?名字(?:改成|改为|设为|设置为|叫做?)|你以后叫)\s*[:：]?\s*([^,，。;；\n]+)/i,
+      /(?:\u4f60\u53eb|\u4f60\u5c31\u53eb|\u79f0\u547c\u4f60\u4e3a|\u6211\u53eb\u4f60|\u6211\u5e0c\u671b\u4f60\u53eb)\s*[:：]?\s*([^,，。;；\n]+)/i,
+      /(?:\u4f60(?:\u628a)?(?:\u4f60(?:\u7684)?)?\u540d\u5b57(?:\u6539\u6210|\u6539\u4e3a|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u53eb\u505a?)|\u4f60\u4ee5\u540e\u53eb)\s*[:：]?\s*([^,，。;；\n]+)/i,
       /(?:call you|your name is|i want to call you)\s+([^,.;\n]+)/i,
       /(?:rename yourself to|change your name to|set your name to|call yourself)\s+([^,.;\n]+)/i,
     ]);
     const assistantPersona = this.extractByPatterns(normalized, [
-      /(?:人设|风格|语气|设定)\s*[:：]?\s*([^。;；\n]+)/i,
+      /(?:\u4eba\u8bbe|\u98ce\u683c|\u8bed\u6c14|\u8bbe\u5b9a)\s*[:：]?\s*([^。;；\n]+)/i,
       /(?:\bpersona\b|\btone\b|\bstyle\b)\s*(?:is|:)?\s*([^.;\n]+)/i,
     ]);
 
@@ -1313,7 +1313,7 @@ export class ChatAssistant {
       return false;
     }
     return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start|check|query|look up|find)\b/.test(t)
-      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用|查询|查下|看看|帮我)/.test(t);
+      || /(\u6253\u5f00|\u542f\u52a8|\u5b89\u88c5|\u4e0b\u8f7d|\u641c\u7d22|\u6ed1\u52a8|\u70b9\u51fb|\u8f93\u5165|\u767b\u5f55|\u4f7f\u7528|\u67e5\u8be2|\u67e5\u4e0b|\u770b\u770b|\u5e2e\u6211)/.test(t);
   }
 
   private hasConcreteExecutableTarget(input: string): boolean {
@@ -1327,7 +1327,7 @@ export class ChatAssistant {
 
   private hasExplicitExecutionOutputConstraint(input: string): boolean {
     const normalized = this.normalizeOneLine(input);
-    return /(内容为|内容是|写入|保存到|输出|打印|生成.*文件|创建.*文件|并开始实现|with content|write.*file|print|output|install.*emulator|build.*apk)/i
+    return /(\u5185\u5bb9\u4e3a|\u5185\u5bb9\u662f|\u5199\u5165|\u4fdd\u5b58\u5230|\u8f93\u51fa|\u6253\u5370|\u751f\u6210.*\u6587\u4ef6|\u521b\u5efa.*\u6587\u4ef6|\u5e76\u5f00\u59cb\u5b9e\u73b0|with content|write.*file|print|output|install.*emulator|build.*apk)/i
       .test(normalized);
   }
 
@@ -1337,17 +1337,17 @@ export class ChatAssistant {
       return false;
     }
     const lower = normalized.toLowerCase();
-    const startsWithCapabilityLead = /^(?:你|你能|你可以|你会|你可不可以|你能不能|你会不会|can you|could you|would you|are you able to|do you know how to)\s*/i
+    const startsWithCapabilityLead = /^(?:\u4f60|\u4f60\u80fd|\u4f60\u53ef\u4ee5|\u4f60\u4f1a|\u4f60\u53ef\u4e0d\u53ef\u4ee5|\u4f60\u80fd\u4e0d\u80fd|\u4f60\u4f1a\u4e0d\u4f1a|can you|could you|would you|are you able to|do you know how to)\s*/i
       .test(normalized);
     if (!startsWithCapabilityLead) {
       return false;
     }
     const hasQuestionTone = /[?？]$/.test(normalized)
-      || /(可以吗|能吗|会吗|行吗|可不可以|能不能|会不会|can you|could you|would you|possible)/i.test(lower);
+      || /(\u53ef\u4ee5\u5417|\u80fd\u5417|\u4f1a\u5417|\u884c\u5417|\u53ef\u4e0d\u53ef\u4ee5|\u80fd\u4e0d\u80fd|\u4f1a\u4e0d\u4f1a|can you|could you|would you|possible)/i.test(lower);
     if (!hasQuestionTone) {
       return false;
     }
-    const hasImmediateCue = /(帮我|请你|请|马上|立即|直接|for me|go ahead|please)/i.test(normalized);
+    const hasImmediateCue = /(\u5e2e\u6211|\u8bf7\u4f60|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u76f4\u63a5|for me|go ahead|please)/i.test(normalized);
     return !hasImmediateCue
       && !this.hasConcreteExecutableTarget(normalized)
       && !this.hasExplicitExecutionOutputConstraint(normalized);
@@ -1361,13 +1361,13 @@ export class ChatAssistant {
     const lower = normalized.toLowerCase();
     const hasExecutionVerb = /\b(create|write|edit|modify|build|compile|run|execute|install|open|launch|start|fix|implement|generate|code|script|deploy)\b/i
       .test(lower)
-      || /(创建|新建|写|修改|编辑|实现|生成|构建|编译|运行|执行|安装|打开|启动|修复|开发|部署|做一个|做个|帮我做)/.test(normalized);
+      || /(\u521b\u5efa|\u65b0\u5efa|\u5199|\u4fee\u6539|\u7f16\u8f91|\u5b9e\u73b0|\u751f\u6210|\u6784\u5efa|\u7f16\u8bd1|\u8fd0\u884c|\u6267\u884c|\u5b89\u88c5|\u6253\u5f00|\u542f\u52a8|\u4fee\u590d|\u5f00\u53d1|\u90e8\u7f72|\u505a\u4e00\u4e2a|\u505a\u4e2a|\u5e2e\u6211\u505a)/.test(normalized);
     if (!hasExecutionVerb) {
       return false;
     }
-    const hasImperativeCue = /^(?:please|pls|open|launch|start|run|create|write|build|install|execute|帮我|请你|请|打开|启动|运行|创建|写|安装|执行|去|前往|给我)/i
+    const hasImperativeCue = /^(?:please|pls|open|launch|start|run|create|write|build|install|execute|\u5e2e\u6211|\u8bf7\u4f60|\u8bf7|\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u521b\u5efa|\u5199|\u5b89\u88c5|\u6267\u884c|\u53bb|\u524d\u5f80|\u7ed9\u6211)/i
       .test(normalized)
-      || /(帮我|请你|请|马上|立即|直接|for me|go ahead)/i.test(normalized);
+      || /(\u5e2e\u6211|\u8bf7\u4f60|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u76f4\u63a5|for me|go ahead)/i.test(normalized);
     const hasConcreteTarget = this.hasConcreteExecutableTarget(normalized);
     const hasOutputConstraint = this.hasExplicitExecutionOutputConstraint(normalized);
     if (this.looksLikeCapabilityQuestionOnly(normalized) && !hasImperativeCue && !hasConcreteTarget && !hasOutputConstraint) {
@@ -1455,9 +1455,7 @@ export class ChatAssistant {
   private bootstrapFallbackQuestion(locale: OnboardingLocale, snapshot: ProfileSnapshot): string {
     const step = this.firstMissingSnapshotStep(snapshot, locale);
     if (step === null) {
-      return locale === "zh"
-        ? "初始化信息我已经拿到了。你可以直接告诉我要做什么。"
-        : "I already have your onboarding profile. Tell me what you want to do next.";
+      return "I already have your onboarding profile. Tell me what you want to do next.";
     }
     return this.questionForStep(step, locale);
   }
@@ -1732,23 +1730,7 @@ export class ChatAssistant {
   private capabilityLabel(capability: string | null | undefined, locale: OnboardingLocale): string {
     const normalized = String(capability || "").trim().toLowerCase();
     if (!normalized) {
-      return locale === "zh" ? "授权" : "authorization";
-    }
-    const zhMap: Record<string, string> = {
-      oauth: "登录授权",
-      permission: "权限授权",
-      camera: "相机授权",
-      microphone: "麦克风授权",
-      location: "定位授权",
-      contacts: "通讯录授权",
-      nfc: "NFC 授权",
-      sms: "短信/验证码授权",
-      "2fa": "二步验证授权",
-      otp: "一次性验证码授权",
-      email: "邮箱验证码授权",
-      files: "文件访问授权",
-      payment: "支付确认授权",
-      unknown: "授权",
+      return "authorization";
     };
     const enMap: Record<string, string> = {
       oauth: "login authorization",
@@ -1766,7 +1748,8 @@ export class ChatAssistant {
       payment: "payment authorization",
       unknown: "authorization",
     };
-    return locale === "zh" ? (zhMap[normalized] || "授权") : (enMap[normalized] || "authorization");
+    void locale;
+    return enMap[normalized] || "authorization";
   }
 
   private buildEscalationNarrationPrompt(input: EscalationNarrationInput): string {
@@ -2544,7 +2527,7 @@ export class ChatAssistant {
       "1) mode=task when user wants the assistant to operate phone/apps.",
       "1.1) Treat operation as happening on phone by default.",
       "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
-      "1.3) Question-like phrasing (e.g., 'can you ...? / 可以...吗？') must still be mode=task when it asks for executable outputs (create/write/build/run/install/open).",
+      "1.3) Question-like phrasing (for example, 'can you ...?') must still be mode=task when it asks for executable outputs (create/write/build/run/install/open).",
       "2) requiresExternalObservation=true when correctness depends on current real-world/device/runtime/tool state.",
       "2.1) This includes requests about what is currently running, which device/environment/version/status is active, what is installed/connected/open right now, or any runtime fact that must be verified.",
       "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and stable general knowledge alone.",
@@ -2889,9 +2872,7 @@ export class ChatAssistant {
         280,
       )
       : "";
-    const messageText = input.locale === "zh"
-      ? `小更新：我还在 ${app}。正在继续处理${summary ? `，当前遇到：${summary}` : "，确认后会马上给你结果"}。`
-      : `Quick update: still on ${app}. I am continuing${summary ? `, current blocker: ${summary}` : " and will share the verified result shortly"}.`;
+    const messageText = `Quick update: still on ${app}. I am continuing${summary ? `, current blocker: ${summary}` : " and will share the verified result shortly"}.`;
 
     return {
       notify: true,
@@ -2904,13 +2885,13 @@ export class ChatAssistant {
     return String(raw || "")
       .replace(/^task completed[.!:\s-]*/i, "")
       .replace(/^completed[.!:\s-]*/i, "")
-      .replace(/^完成(了|。|!|！)?\s*/i, "")
+      .replace(/^\u5b8c\u6210(\u4e86|\u3002|!|\uff01)?\s*/i, "")
       .trim();
   }
 
   private looksLikeShoppingTask(task: string): boolean {
     const text = String(task || "");
-    return /(where\s+to\s+buy|where\s+can\s+i\s+buy|buy\s+\w|purchase\s+\w|shop\s+for|shopping\s+for|for\s+sale|哪里买|购买\w|去哪买)/i
+    return /(where\s+to\s+buy|where\s+can\s+i\s+buy|buy\s+\w|purchase\s+\w|shop\s+for|shopping\s+for|for\s+sale|\u54ea\u91cc\u4e70|\u8d2d\u4e70\w|\u53bb\u54ea\u4e70)/i
       .test(text);
   }
 
@@ -2996,7 +2977,7 @@ export class ChatAssistant {
       let next = line;
       if (idx === 0) {
         if (locale === "zh") {
-          next = next.replace(/^可购买(?:渠道)?/i, "已发现相关商品列表");
+          next = next.replace(/^\u53ef\u8d2d\u4e70(?:\u6e20\u9053)?/i, "Observed listings for this item");
         } else {
           next = next
             .replace(/^available to buy now for\b/i, "Observed listings for")
@@ -3006,8 +2987,8 @@ export class ChatAssistant {
       }
       if (locale === "zh") {
         next = next
-          .replace(/有货/gi, "页面显示有货（未验证）")
-          .replace(/现货/gi, "页面显示现货（未验证）");
+          .replace(/\u6709\u8d27/gi, "listed as in stock (unverified)")
+          .replace(/\u73b0\u8d27/gi, "listed as available now (unverified)");
       } else {
         next = next
           .replace(/\bin stock online\b/gi, "listed as in stock (unverified)")
@@ -3015,9 +2996,7 @@ export class ChatAssistant {
       }
       return next;
     });
-    const disclaimer = locale === "zh"
-      ? "说明：本次未抓到可验证的商品直达链接；价格/库存来自页面摘要，可能变化。"
-      : "Note: No verifiable direct product URLs were captured; price/stock come from listing snippets and may change.";
+    const disclaimer = "Note: No verifiable direct product URLs were captured; price/stock come from listing snippets and may change.";
     return `${transformed.join("\n")}\n${disclaimer}`.trim();
   }
 
@@ -3092,7 +3071,7 @@ export class ChatAssistant {
         linkLines.push(`- ${store.label}: ${directFromContext}`);
         continue;
       }
-      const unavailable = input.locale === "zh" ? "暂无可验证直达链接" : "link unavailable";
+      const unavailable = "link unavailable";
       linkLines.push(`- ${store.label}: ${unavailable}`);
       missingStores.push(store.label);
     }
@@ -3106,13 +3085,9 @@ export class ChatAssistant {
       ? this.downgradeShoppingClaimsWhenUnverified(base, input.locale)
       : base;
 
-    const title = allMissingDirectLinks
-      ? (input.locale === "zh" ? "商店链接：" : "Store links:")
-      : (input.locale === "zh" ? "购买链接（已验证）：" : "Store links (verified):");
+    const title = allMissingDirectLinks ? "Store links:" : "Store links (verified):";
     const query = this.deriveShoppingQuery(input.task, base, context);
-    const searchTitle = input.locale === "zh"
-      ? "快捷搜索链接（非商品直达页）："
-      : "Quick search links (not direct product pages):";
+    const searchTitle = "Quick search links (not direct product pages):";
     const searchLines = missingStores
       .map((store) => `- ${store}: ${this.buildStoreSearchLink(store, query)}`);
     const searchSection = searchLines.length > 0
@@ -3124,14 +3099,12 @@ export class ChatAssistant {
   private fallbackTaskOutcomeNarration(input: TaskOutcomeNarrationInput): string {
     const cleaned = this.sanitizeOutcomeBoilerplate(input.rawResult);
     const base = cleaned || (input.ok
-      ? (input.locale === "zh" ? "结果已获取，但可用细节较少。" : "I got the result, but details are limited.")
+      ? "I got the result, but details are limited."
       : this.trimForPrompt(input.rawResult, 400));
     const enrichedBase = this.appendShoppingLinksIfNeeded(input, base);
     const reuseNote =
       input.ok && (input.skillPath || input.scriptPath)
-        ? (input.locale === "zh"
-          ? "另外，我已把这次流程沉淀成可复用的自动化资产，下次可以更快复用。"
-          : "Also, I saved this workflow as reusable automation assets for faster reuse next time.")
+        ? "Also, I saved this workflow as reusable automation assets for faster reuse next time."
         : "";
     return reuseNote ? `${enrichedBase}\n${reuseNote}` : enrichedBase;
   }
@@ -3141,57 +3114,41 @@ export class ChatAssistant {
     const capabilityLabel = this.capabilityLabel(input.capability, locale);
     const appToken = String(input.currentApp || "").trim();
     const appLine = appToken && appToken.toLowerCase() !== "unknown"
-      ? (locale === "zh" ? `当前停在 ${appToken}。` : `Current app: ${appToken}.`)
+      ? `Current app: ${appToken}.`
       : "";
     const securityLine = input.includeLocalSecurityAssurance
-      ? (locale === "zh"
-        ? "安全提示：授权页连接的是你本机上的 OpenPocket Relay；凭据仅走当前私有加密通道，不会进入中心化服务器。"
-        : "Security note: this auth page connects to your local OpenPocket relay; credentials stay in a private encrypted channel and are not stored in a centralized relay.")
+      ? "Security note: this auth page connects to your local OpenPocket relay; credentials stay in a private encrypted channel and are not stored in a centralized relay."
       : "";
 
     if (input.event === "human_auth") {
-      const actionLine = locale === "zh"
-        ? (input.hasWebLink
-          ? "请点开下面链接并完成同意或拒绝。"
-          : "当前没有可用授权链接，请在 Telegram 里直接回复我是否同意。")
-        : (input.hasWebLink
-          ? "Open the link below and approve or reject."
-          : "Web link is unavailable; reply in Telegram with your decision.");
+      const actionLine = input.hasWebLink
+        ? "Open the link below and approve or reject."
+        : "Web link is unavailable; reply in Telegram with your decision.";
       const codeLine = input.isCodeFlow
-        ? (locale === "zh"
-          ? "这是验证码流程，你也可以直接回复 4-10 位验证码。"
-          : "This is a code flow: you can also reply with the 4-10 digit code directly.")
+        ? "This is a code flow: you can also reply with the 4-10 digit code directly."
         : "";
-      const intro = locale === "zh"
-        ? `我需要你完成一次${capabilityLabel}，我这边已暂停。`
-        : `I need your help for ${capabilityLabel}; automation is paused.`;
+      const intro = `I need your help for ${capabilityLabel}; automation is paused.`;
       return [intro, actionLine, codeLine, appLine, securityLine].filter(Boolean).join(" ");
     }
 
     const optionsLine = Array.isArray(input.options) && input.options.length > 0
-      ? (locale === "zh"
-        ? `可选项：${input.options.slice(0, 6).join(" / ")}。`
-        : `Options: ${input.options.slice(0, 6).join(" / ")}.`)
+      ? `Options: ${input.options.slice(0, 6).join(" / ")}.`
       : "";
     const questionLine = input.question
-      ? (locale === "zh" ? `问题：${input.question}` : `Question: ${input.question}`)
+      ? `Question: ${input.question}`
       : "";
-    const actionLine = locale === "zh"
-      ? "请直接回复选项编号或文本，我收到后会继续。"
-      : "Reply with the option number or text, and I will continue.";
+    const actionLine = "Reply with the option number or text, and I will continue.";
     return [questionLine, optionsLine, actionLine].filter(Boolean).join(" ");
   }
 
   private fallbackStartReadyReply(locale: OnboardingLocale): string {
-    return locale === "zh"
-      ? "我已就绪，直接告诉我你想在手机上完成什么任务；需要命令时发送 /help。"
-      : "I am ready. Send what you want done on the phone directly, or use /help for commands.";
+    void locale;
+    return "I am ready. Send what you want done on the phone directly, or use /help for commands.";
   }
 
   private fallbackSessionResetUserReply(locale: OnboardingLocale): string {
-    return locale === "zh"
-      ? "已开启新会话。直接告诉我你现在要完成什么任务，或发送 /help 查看命令。"
-      : "Started a fresh session. Tell me what you want to do now, or use /help for commands.";
+    void locale;
+    return "Started a fresh session. Tell me what you want to do now, or use /help for commands.";
   }
 
   private stableHash(input: string): number {

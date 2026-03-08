@@ -35,7 +35,7 @@ test("Telegram coding smoke contract: explicit file-create message routes to tas
     const taskCalls = [];
     gateway.chat.decide = async (_chatId, text) => ({
       mode: "task",
-      task: `创建文件 smoke_out/main.js，并写入 JavaScript 代码以打印 "dual-side-smoke-ok"。 source=${text.length}`,
+      task: `Create file smoke_out/main.js and write JavaScript that prints "dual-side-smoke-ok". source=${text.length}`,
       reply: "",
       confidence: 0.99,
       reason: "contract_test_forced_task_mode",
@@ -44,7 +44,7 @@ test("Telegram coding smoke contract: explicit file-create message routes to tas
       taskCalls.push({ chatId, task });
     };
 
-    const text = "请创建一个 JavaScript 文件 smoke_out/main.js，内容为打印 dual-side-smoke-ok";
+    const text = "Please create a JavaScript file smoke_out/main.js that prints dual-side-smoke-ok";
     await gateway.consumeMessage({ chat: { id: 980088419 }, text });
 
     assert.equal(taskCalls.length, 1);
@@ -83,12 +83,12 @@ test("Telegram coding smoke contract: /run forces task mode even with question-l
 
     await gateway.consumeMessage({
       chat: { id: 980088419 },
-      text: "/run 你再写一个程序，能够稳定地在现在的 ADK 当中，以及在 Emulator 里面运行的一个贪吃蛇游戏的 APP，可以吗？",
+      text: "/run Please write a Snake game app that can run reliably in the current ADK and in the emulator.",
     });
 
     assert.equal(decideCalled, 0, "/run should bypass chat.decide and force task path");
     assert.equal(taskCalls.length, 1);
     assert.equal(taskCalls[0].chatId, 980088419);
-    assert.match(taskCalls[0].task, /贪吃蛇游戏/);
+    assert.match(taskCalls[0].task, /Snake game app/i);
   });
 });

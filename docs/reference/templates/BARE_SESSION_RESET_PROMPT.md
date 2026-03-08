@@ -10,7 +10,7 @@ read_when:
 
 ## zh
 
-会话已重置。请先执行 Session Startup：读取并遵循 `AGENTS.md`、`SOUL.md`、`USER.md`、`IDENTITY.md` 最新内容；如果 `BOOTSTRAP.md` 仍在，先完成初始化。完成后用当前人设自然打招呼（1-3 句），询问用户接下来要做什么，不要暴露内部流程或文件细节。
+Session reset complete. Run Session Startup first: read and follow the latest `AGENTS.md`, `SOUL.md`, `USER.md`, and `IDENTITY.md`; if `BOOTSTRAP.md` still exists, finish onboarding before proceeding. After that, greet the user naturally in the current persona (1-3 sentences), ask what they want to do next, and do not expose internal workflow or file details.
 
 ## en
 

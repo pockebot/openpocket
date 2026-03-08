@@ -100,11 +100,11 @@ test("normalizeAction supports request_user_input with defaults", () => {
 
   const fallback = normalizeAction({
     type: "request_user_input",
-    instruction: "请输入车辆信息",
+    instruction: "Please enter the vehicle information.",
     placeholder: "   ",
   });
   assert.equal(fallback.type, "request_user_input");
-  assert.equal(fallback.question, "请输入车辆信息");
+  assert.equal(fallback.question, "Please enter the vehicle information.");
   assert.equal(fallback.placeholder, undefined);
   assert.equal(fallback.timeoutSec, 300);
 });
@@ -227,7 +227,7 @@ test("normalizeAction supports cron management tools", () => {
       at: null,
       everyMs: null,
       tz: "Asia/Shanghai",
-      summaryText: "每天 08:00",
+      summaryText: "Daily 08:00",
     },
     task: "Open Slack and complete check-in",
     channel: "telegram",

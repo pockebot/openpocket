@@ -1,7 +1,7 @@
 ---
 name: device-file-search
 description: Locate and verify files on Android storage before upload/share, especially latest edited photos or videos.
-metadata: {"openclaw":{"triggers":{"any":["find file","search file","locate file","latest photo","edited photo","saved photo","send photo","send image","upload photo","upload image","share photo","latest video","dcim","camera","download","capcut","发给我","找文件","找图片","找照片","最新照片","编辑后照片","美化后照片","上传图片","发送照片"]}}}
+metadata: {"openclaw":{"triggers":{"any":["find file","search file","locate file","latest photo","edited photo","saved photo","send photo","send image","upload photo","upload image","share photo","latest video","dcim","camera","download","capcut","\u53d1\u7ed9\u6211","\u627e\u6587\u4ef6","\u627e\u56fe\u7247","\u627e\u7167\u7247","\u6700\u65b0\u7167\u7247","\u7f16\u8f91\u540e\u7167\u7247","\u7f8e\u5316\u540e\u7167\u7247","\u4e0a\u4f20\u56fe\u7247","\u53d1\u9001\u7167\u7247"]}}}
 ---
 
 # Device File Search

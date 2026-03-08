@@ -502,11 +502,11 @@ When both `telegram` (legacy) and `channels.telegram` exist, `channels.telegram`
 
 ---
 
-#### WeChat (微信) — Feasibility Report
+#### WeChat (consumer app) — Feasibility Report
 
 There are **3 distinct routes**, each targeting a different WeChat surface:
 
-##### Route A: Personal WeChat via Wechaty + PadLocal (推荐起步方案)
+##### Route A: Personal WeChat via Wechaty + PadLocal (recommended starting point)
 
 | Item | Detail |
 |------|--------|
@@ -533,11 +533,11 @@ await bot.start()
 
 **Verdict**: Viable for MVP / personal use. Not suitable for production guarantees. The paid token dependency and protocol ban risk make this the most fragile option.
 
-##### Route B: Enterprise WeChat (企业微信/WeCom) via Official API
+##### Route B: Enterprise WeChat (WeCom) via Official API
 
 | Item | Detail |
 |------|--------|
-| API | [企业微信开发者中心](https://developer.work.weixin.qq.com/) — official, stable |
+| API | [WeCom Developer Center](https://developer.work.weixin.qq.com/) — official, stable |
 | Auth | CorpID + AgentID + SECRET; message callback requires public webhook URL |
 | Capabilities | Text, markdown, card messages, image, file; receive messages via encrypted callback (AES); supports group chats within the enterprise |
 | Limitations | **Enterprise-only** — requires a registered enterprise account; users must be in the same enterprise or be external contacts; not usable for personal WeChat contacts |
@@ -547,7 +547,7 @@ await bot.start()
 
 **Verdict**: Most stable WeChat option, but audience is limited to enterprise users. Good fit if OpenPocket targets corporate/team deployment. Not suitable for personal consumer use.
 
-##### Route C: WeChat Work Webhook (企业微信群机器人)
+##### Route C: WeChat Work Webhook (enterprise group bot)
 
 | Item | Detail |
 |------|--------|
@@ -574,23 +574,23 @@ Start with Route A for broadest reach, plan Route B as stable enterprise alterna
 
 There are **2 distinct routes**:
 
-##### Route A: QQ Official Bot API (QQ 官方机器人) — 受限但安全
+##### Route A: QQ Official Bot API (official bot) — limited but safe
 
 | Item | Detail |
 |------|--------|
-| API | [QQ 机器人官方文档](https://bot.q.qq.com/wiki/) |
+| API | [QQ Bot official docs](https://bot.q.qq.com/wiki/) |
 | SDK | [`qq-official-bot`](https://www.npmjs.com/package/qq-official-bot) (TypeScript) or official Node SDK |
 | Registration | Free at [QQ Open Platform](https://q.qq.com/) — individuals can register |
 | Capabilities | C2C private chat, guild channel messages, guild DMs |
 | Modes | WebSocket (deprecated) or Webhook (recommended) |
 | Rate limits | **Severe**: 200 active messages/day total; 2 active messages/user/day; passive replies must be within 5 minutes |
-| Group support | **No QQ group (QQ 群) support** — only guild channels (QQ 频道) and private chat via "message list" config |
+| Group support | **No traditional QQ group support** — only guild channels and private chat via "message list" config |
 | Sandbox | Can be used without publishing (sandbox debugging mode) |
 | Risk | **None** — officially supported |
 
-**Critical limitation**: The official API does NOT support traditional QQ groups (QQ 群). It only supports QQ guilds (频道), which have much smaller adoption. The rate limits also make it unsuitable for anything beyond light personal use.
+**Critical limitation**: The official API does NOT support traditional QQ groups. It only supports QQ guilds/channels, which have much smaller adoption. The rate limits also make it unsuitable for anything beyond light personal use.
 
-##### Route B: NapCat + OneBot v11 (非官方, 全功能) — 推荐
+##### Route B: NapCat + OneBot v11 (unofficial, full-featured) — recommended
 
 | Item | Detail |
 |------|--------|

@@ -1,7 +1,7 @@
 ---
 name: uber-eats-order
 description: Order food or groceries end-to-end in the Uber Eats consumer app. Use when the user asks to open Uber Eats, browse merchants, add items, customize options, apply promos, choose delivery or pickup, place an order, or track order progress.
-metadata: {"openclaw":{"triggers":{"any":["uber eats","ubereats","uber eats app","order food","food delivery","takeout","delivery order","com.ubercab.eats","点外卖","叫外卖"]}}}
+metadata: {"openclaw":{"triggers":{"any":["uber eats","ubereats","uber eats app","order food","food delivery","takeout","delivery order","com.ubercab.eats","\u70b9\u5916\u5356","\u53eb\u5916\u5356"]}}}
 ---
 
 # Uber Eats Order

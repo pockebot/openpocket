@@ -91,7 +91,7 @@ test("routing hardening: question-like executable request is forced to task mode
     canAnswerDirectly: true,
   });
 
-  const input = "你可以帮我创建一个 JavaScript 文件 smoke_out/main.js，内容为打印 dual-side-smoke-ok 吗？";
+  const input = "Can you create a JavaScript file smoke_out/main.js that prints dual-side-smoke-ok?";
   const out = await assistant.decide(401, input);
   assert.equal(out.mode, "task");
   assert.equal(out.task, input);
@@ -103,14 +103,14 @@ test("routing hardening: capability-only question stays in chat mode", async () 
   assistant.classifyWithModel = async () => ({
     mode: "chat",
     task: "",
-    reply: "可以，我能做。",
+    reply: "Yes, I can do that.",
     confidence: 0.92,
     reason: "model_chat",
     requiresExternalObservation: false,
     canAnswerDirectly: true,
   });
 
-  const input = "你会不会写一个在 emulator 里运行的贪吃蛇 app？";
+  const input = "Can you write a Snake app that runs in the emulator?";
   const out = await assistant.decide(402, input);
   assert.equal(out.mode, "chat");
   assert.equal(out.task, "");
@@ -148,7 +148,7 @@ test("routing hardening: /run command still forces task mode in gateway", async 
 
     await gateway.consumeMessage({
       chat: { id: 980088419 },
-      text: "/run 你再写一个程序，能够稳定地在 emulator 中运行，可以吗？",
+      text: "/run Please write another program that can run reliably in the emulator.",
     });
 
     assert.equal(decideCalled, 0);

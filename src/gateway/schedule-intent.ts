@@ -19,7 +19,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 const SCHEDULE_INTENT_LOCALE_PACKS: Record<ScheduleIntentLocale, ScheduleIntentLocalePack> = {
   zh: {
     confirmationPrompt(summaryText, taskText) {
-      return `我理解为：创建一个${summaryText}执行的定时任务，内容是“${taskText}”。回复“确认”创建，回复“取消”放弃。`;
+      return `I understand this as a scheduled job: ${summaryText}, task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`;
     },
   },
   en: {

@@ -84,7 +84,7 @@ test("CronRegistry add update remove and duplicate id enforcement work with the 
         at: null,
         everyMs: null,
         tz: "Asia/Shanghai",
-        summaryText: "每天 08:00",
+        summaryText: "Daily 08:00",
       },
       payload: {
         kind: "agent_turn",
@@ -118,7 +118,7 @@ test("CronRegistry add update remove and duplicate id enforcement work with the 
           at: null,
           everyMs: null,
           tz: "Asia/Shanghai",
-          summaryText: "每天 09:00",
+          summaryText: "Daily 09:00",
         },
         payload: { kind: "agent_turn", task: "Duplicate" },
         delivery: null,
@@ -200,7 +200,7 @@ test("CronRegistry fails fast on invalid jobs file contents", async () => {
           at: null,
           everyMs: null,
           tz: "Asia/Shanghai",
-          summaryText: "每天 08:00",
+          summaryText: "Daily 08:00",
         },
         payload: {
           kind: "agent_turn",
@@ -233,7 +233,7 @@ test("CronRegistry fails fast when any individual stored job is invalid", async 
                 at: null,
                 everyMs: null,
                 tz: "Asia/Shanghai",
-                summaryText: "每天 08:00",
+                summaryText: "Daily 08:00",
               },
               payload: {
                 kind: "agent_turn",
