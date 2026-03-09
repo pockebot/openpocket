@@ -16,7 +16,7 @@ const SOURCE_PRIORITY: Record<SkillInfo["source"], number> = {
   workspace: 2,
 };
 
-const DEFAULT_SUMMARY_ITEMS = 20;
+const DEFAULT_SUMMARY_ITEMS = Number.MAX_SAFE_INTEGER;
 const DEFAULT_SUMMARY_CHARS = 12_000;
 const DEFAULT_TRIGGER_HINTS = 8;
 

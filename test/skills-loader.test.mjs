@@ -230,7 +230,7 @@ test("SkillLoader keeps bundled device-file-search discoverable for file handoff
   assert.equal(context.activePromptText, "");
 });
 
-test("SkillLoader limits prompt discovery index to the default summary budget", () => {
+test("SkillLoader includes all skills in discovery index when still under the default char budget", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-budget-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -238,7 +238,7 @@ test("SkillLoader limits prompt discovery index to the default summary budget", 
   const skillsDir = path.join(cfg.workspaceDir, "skills");
   fs.mkdirSync(skillsDir, { recursive: true });
 
-  for (let index = 1; index <= 25; index += 1) {
+  for (let index = 1; index <= 10; index += 1) {
     fs.writeFileSync(
       path.join(skillsDir, `skill-${String(index).padStart(2, "0")}.md`),
       `# Skill ${index}\n\nDescription for skill ${index}.`,
@@ -248,8 +248,9 @@ test("SkillLoader limits prompt discovery index to the default summary budget", 
 
   const loader = new SkillLoader(cfg);
   const context = loader.buildPromptContextForTask("List available skills.");
+  const discoveredCount = loader.loadAll().length;
   const skillBlockCount = (context.summaryText.match(/<skill>/g) || []).length;
 
-  assert.equal(skillBlockCount, 20);
-  assert.doesNotMatch(context.summaryText, /<name>Skill 25<\/name>/);
+  assert.equal(skillBlockCount, discoveredCount);
+  assert.match(context.summaryText, /<name>Skill 10<\/name>/);
 });
