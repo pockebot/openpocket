@@ -865,6 +865,22 @@ test("ChatAssistant updates profile from regular rename message", async () => {
   assert.equal(payload?.locale, "en");
 });
 
+test("ChatAssistant trims trailing Chinese discourse particles from assistant rename", async () => {
+  const { assistant, cfg } = createAssistant();
+
+  const out = await assistant.decide(32, "你以后叫 Jarvis 喔");
+  assert.equal(out.mode, "chat");
+  assert.equal(out.reason, "profile_update");
+  assert.match(out.reply, /my name is now "Jarvis"/i);
+
+  const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
+  assert.match(identityBody, /Name: Jarvis/);
+
+  const payload = assistant.consumePendingProfileUpdate(32);
+  assert.equal(payload?.assistantName, "Jarvis");
+  assert.equal(payload?.locale, "zh");
+});
+
 test("ChatAssistant taskAcceptedReply fallback uses natural non-fixed wording in English", async () => {
   const { assistant } = createAssistant();
   const out = await assistant.taskAcceptedReply("Read the latest picture and beautify it", "en");

@@ -868,7 +868,7 @@ export class ChatAssistant {
   private normalizeAssistantName(input: string): string {
     return this.normalizeOneLine(input)
       .replace(/[。！？.!?]+$/g, "")
-      .replace(/\s*(吧|呀|呢|啦|嗔|哦|好吗|可以吗)\s*$/i, "")
+      .replace(/\s*(吧|呀|呢|啦|喔|哦|好吗|可以吗)\s*$/i, "")
       .trim();
   }
 
