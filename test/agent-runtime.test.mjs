@@ -1313,7 +1313,7 @@ test("AgentRuntime reuses approved capability probe auth within one task", async
   assert.match(sessionText, /human_auth_probe skipped=reused capability=camera pkg=com\.Slack/i);
 });
 
-test("AgentRuntime escalates permission dialog capability via activity dump fallback", async () => {
+test("AgentRuntime does not escalate permission dialog capability via activity dump fallback", async () => {
   const authRequests = [];
   const actions = [];
   const uiDumpXml = [
@@ -1381,22 +1381,13 @@ test("AgentRuntime escalates permission dialog capability via activity dump fall
   );
 
   assert.equal(result.ok, true);
-  assert.equal(authRequests.length, 1);
-  assert.equal(authRequests[0].capability, "camera");
-  assert.equal(
-    actions.some(
-      (action) =>
-        action.type === "tap"
-        && action.reason === "human_auth_permission_reject"
-        && action.x > 0
-        && action.y > 0,
-    ),
-    true,
-  );
+  assert.equal(authRequests.length, 0);
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0]?.type, "tap");
 
   const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
   assert.match(sessionText, /src=permission_dialog/i);
-  assert.match(sessionText, /human_auth_probe capability=camera status=approved/i);
+  assert.doesNotMatch(sessionText, /human_auth_probe capability=camera status=approved/i);
 });
 
 test("AgentRuntime fails when request_human_auth is rejected", async () => {
@@ -1698,7 +1689,7 @@ test("AgentRuntime auto-approves permission dialog even when model asks permissi
   );
 });
 
-test("AgentRuntime still requests human auth for camera capability while local VM dialog is rejected", async () => {
+test("AgentRuntime redirects camera human auth requests back to local permission dialog handling", async () => {
   const actions = [];
   const authRequests = [];
   const uiDumpXml = [
@@ -1760,16 +1751,19 @@ test("AgentRuntime still requests human auth for camera capability while local V
   );
 
   assert.equal(result.ok, true);
-  assert.equal(authRequests.length, 1);
-  assert.equal(authRequests[0].capability, "camera");
+  assert.equal(authRequests.length, 0);
   assert.equal(
     actions.some(
       (action) =>
         action.type === "tap"
         && String(action.reason || "").includes("permission_reject"),
     ),
-    true,
+    false,
   );
+
+  const sessionText = fs.readFileSync(result.sessionPath, "utf-8");
+  assert.match(sessionText, /Android permission dialog detected \(camera\)/i);
+  assert.match(sessionText, /Handle it locally: tap Allow if this permission is needed/i);
 });
 
 test("AgentRuntime returns approval message to agent when no artifact is provided (agentic delegation)", async () => {
