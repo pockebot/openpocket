@@ -56,7 +56,7 @@ Skills that fail gating are excluded from the discovery index.
 
 Runtime injects one discovery block by default:
 
-1. **Skill summary index** (compact list with `name`, `description`, and `location`)
+1. **Skill summary index** (OpenClaw-style `<skill>` blocks with `<name>`, `<description>`, and `<location>`)
 
 At execution time, the model must choose whether a skill is relevant. If one clearly applies,
 it should call `read(location)` to load that `SKILL.md` before following it.
@@ -67,6 +67,11 @@ Default model-driven selection rules:
 - read only one candidate skill up front
 - prefer the most specific matching skill when multiple could apply
 - skip skills entirely when none clearly fit the task
+- omit the skill index entirely when `read` is not in the active tool surface
+
+To keep prompt size bounded, the runtime injects only a capped prefix of eligible skills.
+Each `<description>` may also include a short set of trigger hints (aliases, package names, Chinese phrases, etc.)
+so the model can still discover skills without runtime-side lexical scoring.
 
 Runtime requirement gating still applies before any skill appears in the index:
 

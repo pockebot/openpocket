@@ -4,7 +4,18 @@ import test from "node:test";
 const { buildSystemPrompt, buildUserPrompt } = await import("../dist/agent/prompts.js");
 
 test("buildSystemPrompt includes planning rules and skills", () => {
-  const prompt = buildSystemPrompt("- skill-a\n- skill-b");
+  const prompt = buildSystemPrompt([
+    "  <skill>",
+    "    <name>skill-a</name>",
+    "    <description>demo skill a</description>",
+    "    <location>/skills/skill-a/SKILL.md</location>",
+    "  </skill>",
+    "  <skill>",
+    "    <name>skill-b</name>",
+    "    <description>demo skill b</description>",
+    "    <location>/skills/skill-b/SKILL.md</location>",
+    "  </skill>",
+  ].join("\n"));
   assert.match(prompt, /You are OpenPocket, an Android phone-use agent/);
   assert.match(prompt, /Planning Loop/);
   assert.match(prompt, /deterministic action/);
@@ -15,10 +26,10 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /Capability must be chosen by the agent/i);
   assert.match(prompt, /Do not apply fixed capability priority/i);
   assert.match(prompt, /Never emit meta labels\/tags in thought/i);
-  assert.match(prompt, /Available Skills/);
+  assert.match(prompt, /## Skills/);
   assert.match(prompt, /<available_skills>/);
-  assert.match(prompt, /Skill Selection Protocol/);
-  assert.match(prompt, /If exactly one skill clearly applies, call read\(location\)/);
+  assert.match(prompt, /scan <available_skills> <description> entries/i);
+  assert.match(prompt, /If exactly one skill clearly applies: read its SKILL\.md at <location> with `read`/);
   assert.match(prompt, /Memory Recall Protocol/);
   assert.match(prompt, /memory_search/);
   assert.match(prompt, /memory_get/);
@@ -38,7 +49,7 @@ test("buildSystemPrompt includes planning rules and skills", () => {
 });
 
 test("buildSystemPrompt data-source check doesn't require auth before app launch for login/payment tasks", () => {
-  const prompt = buildSystemPrompt("- skill-a", "", { mode: "full" });
+  const prompt = buildSystemPrompt("  <skill>\n    <name>skill-a</name>\n    <description>demo</description>\n    <location>/skills/skill-a/SKILL.md</location>\n  </skill>", "", { mode: "full" });
   const dataSourceLine = prompt
     .split("\n")
     .find((line) => line.startsWith("0) DATA SOURCE CHECK")) || "";
@@ -56,24 +67,24 @@ test("buildSystemPrompt data-source check doesn't require auth before app launch
 });
 
 test("buildSystemPrompt includes workspace context when provided", () => {
-  const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A");
+  const prompt = buildSystemPrompt("  <skill>\n    <name>skill-a</name>\n    <description>demo</description>\n    <location>/skills/skill-a/SKILL.md</location>\n  </skill>", "### AGENTS.md\nrule A");
   assert.match(prompt, /Workspace Prompt Context/);
   assert.match(prompt, /AGENTS\.md/);
 });
 
 test("buildSystemPrompt supports explicitly preloaded skill blocks when provided", () => {
-  const prompt = buildSystemPrompt("- skill-a", "", {
+  const prompt = buildSystemPrompt("  <skill>\n    <name>skill-a</name>\n    <description>demo</description>\n    <location>/skills/skill-a/SKILL.md</location>\n  </skill>", "", {
     mode: "full",
     activeSkillsText: "<active_skill name=\"Skill A\" source=\"workspace\" score=\"120\" reason=\"explicit id match\">\n# SKILL BODY\n</active_skill>",
   });
   assert.match(prompt, /<available_skills>/);
   assert.match(prompt, /Preloaded Skills/);
   assert.match(prompt, /SKILL BODY/);
-  assert.match(prompt, /does not need read\(\)/i);
+  assert.match(prompt, /without calling read\(\)/i);
 });
 
 test("buildSystemPrompt supports minimal mode", () => {
-  const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A", { mode: "minimal" });
+  const prompt = buildSystemPrompt("  <skill>\n    <name>skill-a</name>\n    <description>demo</description>\n    <location>/skills/skill-a/SKILL.md</location>\n  </skill>", "### AGENTS.md\nrule A", { mode: "minimal" });
   assert.match(prompt, /Core Rules/);
   assert.match(prompt, /Call exactly one tool per step/);
   assert.match(prompt, /tap Allow locally/i);
@@ -93,7 +104,7 @@ test("buildSystemPrompt supports minimal mode", () => {
 });
 
 test("buildSystemPrompt filters tool catalog when availableToolNames is provided", () => {
-  const prompt = buildSystemPrompt("- skill-a", "", {
+  const prompt = buildSystemPrompt("  <skill>\n    <name>skill-a</name>\n    <description>demo</description>\n    <location>/skills/skill-a/SKILL.md</location>\n  </skill>", "", {
     mode: "full",
     availableToolNames: ["tap", "launch_app", "finish"],
   });
@@ -102,10 +113,12 @@ test("buildSystemPrompt filters tool catalog when availableToolNames is provided
   assert.match(prompt, /finish: finish/);
   assert.doesNotMatch(prompt, /read: read/);
   assert.doesNotMatch(prompt, /memory_search: memory_search/);
+  assert.doesNotMatch(prompt, /## Skills/);
+  assert.doesNotMatch(prompt, /<available_skills>/);
 });
 
 test("buildSystemPrompt supports none mode", () => {
-  const prompt = buildSystemPrompt("- skill-a", "### AGENTS.md\nrule A", { mode: "none" });
+  const prompt = buildSystemPrompt("  <skill>\n    <name>skill-a</name>\n    <description>demo</description>\n    <location>/skills/skill-a/SKILL.md</location>\n  </skill>", "### AGENTS.md\nrule A", { mode: "none" });
   assert.match(prompt, /Call exactly one tool step at a time/);
   assert.match(prompt, /Agent Phone.*clean.*shared/i);
   assert.match(prompt, /Do not rely on fixed capability priority/i);

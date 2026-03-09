@@ -88,19 +88,55 @@ function buildToolCatalog(availableToolNames?: string[]): string {
 
 export type SystemPromptMode = "full" | "minimal" | "none";
 
-function buildSkillSelectionProtocol(options?: { hasPreloadedSkills?: boolean }): string[] {
-  return [
-    "## Skill Selection Protocol (mandatory)",
-    "- Before applying a skill, scan <available_skills> descriptions and locations.",
-    "- If exactly one skill clearly applies, call read(location) for that skill, then follow it.",
-    "- If multiple skills could apply, choose the most specific one and read only that skill first.",
-    "- If no skill clearly applies, do not read any skill.",
-    "- Never read more than one skill up front; only read another skill if the first one proves insufficient.",
-    ...(options?.hasPreloadedSkills
-      ? ["- If a preloaded skill block appears later in this prompt, it is already available in full and does not need read()."]
-      : []),
-    "",
-  ];
+function hasTool(availableToolNames: string[] | undefined, name: string): boolean {
+  if (!Array.isArray(availableToolNames) || availableToolNames.length === 0) {
+    return true;
+  }
+  return availableToolNames.includes(name);
+}
+
+function buildSkillsSection(params: {
+  skillsSummary: string;
+  availableToolNames?: string[];
+  activeSkillsText?: string;
+}): string[] {
+  const trimmedSkills = params.skillsSummary.trim();
+  const trimmedPreloaded = params.activeSkillsText?.trim() || "";
+  const canReadSkills = hasTool(params.availableToolNames, "read");
+  const hasSkillsIndex = canReadSkills
+    && trimmedSkills.length > 0
+    && trimmedSkills !== "(no skills loaded)";
+
+  if (!hasSkillsIndex && !trimmedPreloaded) {
+    return [];
+  }
+
+  const lines: string[] = ["## Skills"];
+
+  if (hasSkillsIndex) {
+    lines.push(
+      "Before replying: scan <available_skills> <description> entries.",
+      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
+      "- If multiple could apply: choose the most specific one, then read/follow it.",
+      "- If none clearly apply: do not read any SKILL.md.",
+      "Constraints: never read more than one skill up front; only read after selecting.",
+      "<available_skills>",
+      trimmedSkills,
+      "</available_skills>",
+    );
+  }
+
+  if (trimmedPreloaded) {
+    lines.push(
+      "",
+      "## Preloaded Skills",
+      "These skill bodies were explicitly injected by the runtime. Use them directly without calling read().",
+      trimmedPreloaded,
+    );
+  }
+
+  lines.push("");
+  return lines;
 }
 
 function trailingStreak(values: string[]): { value: string; count: number } {
@@ -195,20 +231,11 @@ export function buildSystemPrompt(
       "- Never use request_user_input to collect credentials/OTP/payment or personal identity data.",
       "- If done, call finish with key outputs.",
       "",
-      ...buildSkillSelectionProtocol({
-        hasPreloadedSkills: Boolean(options?.activeSkillsText?.trim()),
+      ...buildSkillsSection({
+        skillsSummary: trimmedSkills,
+        availableToolNames: options?.availableToolNames,
+        activeSkillsText: options?.activeSkillsText,
       }),
-      "## Available Skills Index",
-      "Skill list contains metadata only. Use read(location) to load full SKILL.md before applying a skill.",
-      "<available_skills>",
-      trimmedSkills,
-      "</available_skills>",
-      ...(options?.activeSkillsText?.trim() ? [
-        "",
-        "## Preloaded Skills",
-        "These skill bodies were explicitly injected by the runtime. Use them directly without calling read().",
-        options.activeSkillsText.trim(),
-      ] : []),
       trimmedWorkspaceContext
         ? [
           "",
@@ -324,10 +351,11 @@ export function buildSystemPrompt(
     "- Never emit meta labels/tags in thought: Sub-goal, Goal, Screen, Next, Intent, Plan, Observation, or bracketed variants.",
     "- Write thought and all text fields in English.",
     "",
-    ...buildSkillSelectionProtocol({
-      hasPreloadedSkills: Boolean(options?.activeSkillsText?.trim()),
+    ...buildSkillsSection({
+      skillsSummary: trimmedSkills,
+      availableToolNames: options?.availableToolNames,
+      activeSkillsText: options?.activeSkillsText,
     }),
-    "",
     "## Experience Replay (when a loaded skill has ui_target data)",
     "- If a loaded skill's Procedure contains `ui_target` entries with resourceId/text/class, match them against the current UI candidates list.",
     "- When a ui_target matches a visible UI element, you can use tap_element directly without needing visual analysis of the screenshot.",
@@ -352,18 +380,6 @@ export function buildSystemPrompt(
     "- When a successful workflow is reusable, keep actions deterministic and reusable for later automation.",
     "- Capture stable interaction patterns and avoid one-off noisy steps.",
     "- If a reusable flow was formed, include compact reuse-friendly notes in finish.message.",
-    "",
-    "## Available Skills Index",
-    "Skill list contains metadata only. Use read(location) to load full SKILL.md before applying a skill.",
-    "<available_skills>",
-    trimmedSkills,
-    "</available_skills>",
-    ...(options?.activeSkillsText?.trim() ? [
-      "",
-      "## Preloaded Skills",
-      "These skill bodies were explicitly injected by the runtime. Use them directly without calling read().",
-      options.activeSkillsText.trim(),
-    ] : []),
     trimmedWorkspaceContext
       ? [
         "",

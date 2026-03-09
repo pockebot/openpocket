@@ -24,8 +24,8 @@ test("SkillLoader loads workspace skills", () => {
   const skills = loader.loadAll();
   assert.equal(skills.some((s) => s.id === "search-app"), true);
   const summary = loader.summaryText(200);
-  assert.match(summary, /Search App/);
-  assert.match(summary, /location="/);
+  assert.match(summary, /<name>Search App<\/name>/);
+  assert.match(summary, /<location>/);
 });
 
 test("SkillLoader prefers bundled skills over workspace/local when skill IDs collide", () => {
@@ -82,6 +82,7 @@ test("SkillLoader keeps matching skills in the discovery index without preloadin
   const loader = new SkillLoader(cfg);
   const context = loader.buildPromptContextForTask(
     "Open PayByPhone and continue nearest location flow, use location auth if empty.",
+    { maxSummaryItems: 200 },
   );
 
   assert.match(context.summaryText, /PayByPhone Nearest Flow/);
@@ -124,9 +125,11 @@ test("SkillLoader parses explicit metadata trigger phrases without preloading bo
   const loader = new SkillLoader(cfg);
   const context = loader.buildPromptContextForTask(
     `Please run ${triggerPhrase} flow for Skill <A&B> "quote" 'apos' now.`,
+    { maxSummaryItems: 200 },
   );
 
-  assert.match(context.summaryText, /Skill <A&B>/);
+  assert.match(context.summaryText, /Skill &lt;A&amp;B&gt; &quot;quote&quot; 'apos'/);
+  assert.match(context.summaryText, /Trigger hints: token&lt;&amp;&gt;&quot;'/);
   assert.equal(context.activeEntries.length, 0);
   assert.equal(context.activePromptText, "");
 });
@@ -202,10 +205,12 @@ test("SkillLoader lists all discovered skills in summary regardless task text", 
   const loader = new SkillLoader(cfg);
   const context = loader.buildPromptContextForTask(
     "Open X app, login, and fix LoginError.AttestationDenied before posting a tweet.",
+    { maxSummaryItems: 200 },
   );
 
   assert.match(context.summaryText, /X Twitter Login Recovery/);
   assert.match(context.summaryText, /Generic Login/);
+  assert.match(context.summaryText, /attestation denied/);
   assert.equal(context.activeEntries.length, 0);
   assert.equal(context.activePromptText, "");
 });
@@ -223,4 +228,28 @@ test("SkillLoader keeps bundled device-file-search discoverable for file handoff
   assert.match(context.summaryText, /device-file-search/);
   assert.equal(context.activeEntries.length, 0);
   assert.equal(context.activePromptText, "");
+});
+
+test("SkillLoader limits prompt discovery index to the default summary budget", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-budget-"));
+  process.env.OPENPOCKET_HOME = home;
+  const cfg = loadConfig();
+
+  const skillsDir = path.join(cfg.workspaceDir, "skills");
+  fs.mkdirSync(skillsDir, { recursive: true });
+
+  for (let index = 1; index <= 25; index += 1) {
+    fs.writeFileSync(
+      path.join(skillsDir, `skill-${String(index).padStart(2, "0")}.md`),
+      `# Skill ${index}\n\nDescription for skill ${index}.`,
+      "utf-8",
+    );
+  }
+
+  const loader = new SkillLoader(cfg);
+  const context = loader.buildPromptContextForTask("List available skills.");
+  const skillBlockCount = (context.summaryText.match(/<skill>/g) || []).length;
+
+  assert.equal(skillBlockCount, 20);
+  assert.doesNotMatch(context.summaryText, /<name>Skill 25<\/name>/);
 });
