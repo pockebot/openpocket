@@ -36,7 +36,8 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /Write thought and all text fields in English/);
   assert.match(prompt, /Input-focus anti-loop/);
   assert.match(prompt, /Never type internal logs\/history\/JSON/);
-  assert.match(prompt, /in-emulator permission dialogs/i);
+  assert.match(prompt, /Android permission dialogs/i);
+  assert.match(prompt, /Evaluate task relevance: tap Allow if the permission is needed for the current task/i);
   assert.match(prompt, /request_user_decision must not be used to collect credentials/i);
   assert.match(prompt, /request_user_input must not be used to collect credentials/i);
   assert.match(prompt, /For sensitive values, call request_human_auth/i);
@@ -87,7 +88,8 @@ test("buildSystemPrompt supports minimal mode", () => {
   const prompt = buildSystemPrompt("  <skill>\n    <name>skill-a</name>\n    <description>demo</description>\n    <location>/skills/skill-a/SKILL.md</location>\n  </skill>", "### AGENTS.md\nrule A", { mode: "minimal" });
   assert.match(prompt, /Core Rules/);
   assert.match(prompt, /Call exactly one tool per step/);
-  assert.match(prompt, /tap Allow locally/i);
+  assert.match(prompt, /Android permission dialogs/i);
+  assert.match(prompt, /tap Allow if the permission is relevant to the current task/i);
   assert.match(prompt, /Use request_user_decision only for non-sensitive preference\/choice disambiguation/i);
   assert.match(prompt, /Use request_user_input for non-sensitive short text values/i);
   assert.match(prompt, /Never use request_user_decision to collect credentials\/OTP\/payment/i);
