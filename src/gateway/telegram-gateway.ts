@@ -334,8 +334,7 @@ export class TelegramGateway {
       .trim();
   }
 
-  private humanAuthSecurityNote(locale: "zh" | "en"): string {
-    void locale;
+  private humanAuthSecurityNote(): string {
     return "This auth page connects to your local OpenPocket relay. Credentials are transmitted only through a private encrypted channel and are never stored in a centralized OpenPocket relay.";
   }
 
@@ -359,7 +358,7 @@ export class TelegramGateway {
     }
     const securityTitle = "Security note";
     payloadLines.push("");
-    payloadLines.push(`<b>${securityTitle}:</b> ${this.escapeTelegramHtml(this.humanAuthSecurityNote(locale))}`);
+    payloadLines.push(`<b>${securityTitle}:</b> ${this.escapeTelegramHtml(this.humanAuthSecurityNote())}`);
     return payloadLines.join("\n");
   }
 
@@ -559,8 +558,7 @@ export class TelegramGateway {
     }
   }
 
-  private playStoreRemoteLoginTask(locale: "zh" | "en"): string {
-    void locale;
+  private playStoreRemoteLoginTask(): string {
     return [
       "Check whether Android system Google account is signed in (entry can be through Play Store).",
       "If not signed in, complete the system-level Google account sign-in flow.",
@@ -633,7 +631,7 @@ export class TelegramGateway {
     this.playStorePreflightTriggered = true;
     const accepted = await this.runTaskAsync(
       chatId,
-      this.playStoreRemoteLoginTask(locale),
+      this.playStoreRemoteLoginTask(),
       {
         sessionKey: `telegram:playstore-preflight:${chatId}`,
         skipAcceptedMessage: true,
@@ -1075,13 +1073,11 @@ export class TelegramGateway {
     return /^(?:\/run\b|open\b|start\b|launch\b|go\b|use\b|run\b|please\b|\u6253\u5f00|\u5f00\u59cb|\u542f\u52a8|\u8bf7|\u5e2e\u6211|\u53bb|\u524d\u5f80)/i.test(normalized);
   }
 
-  private buildChatContextSavedMessage(locale: "zh" | "en", items: ChatContextItem[]): string {
+  private buildChatContextSavedMessage(items: ChatContextItem[]): string {
     const keys = Array.from(new Set(items.map((item) => item.key))).slice(0, 6);
     if (keys.length === 0) {
-      void locale;
       return "Saved non-sensitive context for reuse in upcoming tasks.";
     }
-    void locale;
     return `Saved context fields: ${keys.join(", ")}. I will reuse these non-sensitive values in upcoming tasks.`;
   }
 
@@ -1218,8 +1214,7 @@ export class TelegramGateway {
     return false;
   }
 
-  private renderTaskQueuedMessage(position: number, locale: "zh" | "en"): string {
-    void locale;
+  private renderTaskQueuedMessage(position: number): string {
     if (position <= 1) {
       return "A previous task is still running. Your new task is queued and will run next.";
     }
@@ -2249,7 +2244,7 @@ export class TelegramGateway {
           const locale = this.inferLocale(message);
           await this.bot.sendMessage(
             chatId,
-            this.sanitizeForChat(this.buildChatContextSavedMessage(locale, savedItems), 1800),
+            this.sanitizeForChat(this.buildChatContextSavedMessage(savedItems), 1800),
           );
           return;
         }
@@ -2318,7 +2313,7 @@ export class TelegramGateway {
     if (!options?.skipAcceptedMessage) {
       if (!isIdle) {
         const locale = this.inferTaskLocale(task);
-        const queuedMessage = this.renderTaskQueuedMessage(queuePosition, locale);
+        const queuedMessage = this.renderTaskQueuedMessage(queuePosition);
         await this.bot.sendMessage(chatId, queuedMessage);
         this.chat.appendExternalTurn(chatId, "assistant", queuedMessage);
         this.log(`task queued busy chat=${chatId} position=${queuePosition} task=${JSON.stringify(task)}`);

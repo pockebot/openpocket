@@ -1,7 +1,7 @@
 ---
 name: capcut-edit
 description: Edit videos and beautify photos in CapCut on mobile. Use when the user asks to open CapCut, create/edit/export videos, add text/effects/music/captions, use templates, or retouch and enhance photos.
-metadata: {"openclaw":{"triggers":{"any":["capcut","cap cut","com.lemon.lvoverseas","video edit","edit video","photo edit","beautify photo","retouch photo","\u526a\u6620","\u526a\u8f91\u89c6\u9891","\u7f8e\u5316\u7167\u7247","\u7f16\u8f91\u7167\u7247"]}}}
+metadata: {"openclaw":{"triggers":{"any":["capcut","cap cut","com.lemon.lvoverseas","video edit","edit video","photo edit","beautify photo","retouch photo","剪映","剪辑视频","美化照片","编辑照片"]}}}
 ---
 
 # CapCut Edit

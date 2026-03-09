@@ -616,10 +616,9 @@ export class GatewayCore {
     return slug || "scheduled-task";
   }
 
-  private buildScheduledJobName(intent: ScheduleIntent, locale: OnboardingLocale): string {
+  private buildScheduledJobName(intent: ScheduleIntent): string {
     const base = intent.normalizedTask.trim();
     if (!base) {
-      void locale;
       return "Scheduled task";
     }
     return base.slice(0, 80);
@@ -630,7 +629,7 @@ export class GatewayCore {
     const locale = this.inferLocale(envelope);
     const created = registry.add({
       id: `schedule-${Date.now()}-${this.slugifyScheduleTask(intent.normalizedTask)}`,
-      name: this.buildScheduledJobName(intent, locale),
+      name: this.buildScheduledJobName(intent),
       enabled: true,
       schedule: intent.schedule,
       payload: {
@@ -660,7 +659,7 @@ export class GatewayCore {
       "Confirmed intent JSON:",
       JSON.stringify({
         id: `schedule-${Date.now()}-${this.slugifyScheduleTask(intent.normalizedTask)}`,
-        name: this.buildScheduledJobName(intent, this.inferLocale(envelope)),
+        name: this.buildScheduledJobName(intent),
         schedule: intent.schedule,
         task: intent.normalizedTask,
         channel: envelope.channelType,
@@ -1158,7 +1157,6 @@ export class GatewayCore {
   }
 
   private async resolveTaskAcceptedAck(task: string, locale: OnboardingLocale): Promise<string> {
-    void locale;
     const fallback = this.chat.taskAcceptedFallbackReply(this.previewPayload(task, 160));
 
     const timeoutMs = 1200;
