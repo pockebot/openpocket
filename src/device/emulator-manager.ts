@@ -11,6 +11,7 @@ import {
   normalizeDeviceTargetType,
   shouldIncludeDeviceForTarget,
 } from "./target-types.js";
+import { normalizeOptionalAdbEndpoint } from "./adb-endpoint.js";
 
 const STANDARD_SCREEN_WIDTH = 1080;
 const STANDARD_SCREEN_HEIGHT = 2400;
@@ -238,14 +239,7 @@ export class EmulatorManager {
   }
 
   private targetAdbEndpoint(): string | null {
-    const raw = String(this.config.target?.adbEndpoint ?? "").trim();
-    if (!raw) {
-      return null;
-    }
-    if (raw.includes(":")) {
-      return raw;
-    }
-    return `${raw}:5555`;
+    return normalizeOptionalAdbEndpoint(this.config.target?.adbEndpoint);
   }
 
   private ensureTargetEndpointConnectedIfNeeded(): void {

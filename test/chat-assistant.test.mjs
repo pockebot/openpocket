@@ -216,19 +216,19 @@ test("ChatAssistant decide detects implicit Chinese schedule intent and prepares
   const { assistant } = createAssistant({ withApiKey: true });
   assistant.extractScheduleIntentWithModel = async () => ({
     intent: {
-      sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
-      normalizedTask: "打开 Slack 去打卡",
+      sourceText: "Every morning at 8, open Slack and complete check-in",
+      normalizedTask: "Open Slack and complete check-in",
       schedule: {
         kind: "cron",
         expr: "0 8 * * *",
         at: null,
         everyMs: null,
         tz: "Asia/Shanghai",
-        summaryText: "每天 08:00",
+        summaryText: "Every day at 08:00",
       },
       delivery: null,
       requiresConfirmation: true,
-      confirmationPrompt: "我理解为：创建一个每天 08:00执行的定时任务，内容是“打开 Slack 去打卡”。回复“确认”创建，回复“取消”放弃。",
+      confirmationPrompt: "I understand this as a scheduled job: Every day at 08:00, task \"Open Slack and complete check-in\". Reply \"confirm\" to create it or \"cancel\" to discard it.",
     },
     confidence: 0.98,
     reason: "schedule_model",
@@ -237,18 +237,18 @@ test("ChatAssistant decide detects implicit Chinese schedule intent and prepares
     throw new Error("classifyWithModel should not run after schedule extraction");
   };
 
-  const out = await assistant.decide(28, "每天早上 8 点帮我打开 Slack 去打卡");
+  const out = await assistant.decide(28, "Every morning at 8, open Slack and complete check-in");
   assert.equal(out.mode, "schedule_intent");
-  assert.equal(out.task, "打开 Slack 去打卡");
+  assert.equal(out.task, "Open Slack and complete check-in");
   assert.equal(out.reply.length > 0, true);
   assert.equal(out.scheduleIntent?.requiresConfirmation, true);
-  assert.equal(out.scheduleIntent?.normalizedTask, "打开 Slack 去打卡");
+  assert.equal(out.scheduleIntent?.normalizedTask, "Open Slack and complete check-in");
   assert.equal(out.scheduleIntent?.schedule.kind, "cron");
   assert.equal(out.scheduleIntent?.schedule.expr, "0 8 * * *");
   assert.equal(typeof out.scheduleIntent?.schedule.tz, "string");
   assert.equal(Boolean(out.scheduleIntent?.schedule.tz), true);
-  assert.match(out.scheduleIntent?.schedule.summaryText ?? "", /每天 08:00/);
-  assert.match(out.reply, /确认/);
+  assert.match(out.scheduleIntent?.schedule.summaryText ?? "", /Every day at 08:00/);
+  assert.match(out.reply, /confirm/i);
 });
 
 test("ChatAssistant decide keeps time-related capability question in chat mode", async () => {
@@ -263,7 +263,7 @@ test("ChatAssistant decide keeps time-related capability question in chat mode",
     canAnswerDirectly: true,
   });
 
-  const out = await assistant.decide(29, "你能告诉我“每天早上 8 点”用英语怎么说吗？");
+  const out = await assistant.decide(29, "Can you help phrase 'open Slack every morning at 8' more naturally in English?");
   assert.equal(out.mode, "chat");
   assert.equal(out.task, "");
   assert.equal(out.reply, "This is just a phrasing question.");
@@ -275,15 +275,15 @@ test("ChatAssistant decide does not misroute troubleshooting text into schedule 
   assistant.extractScheduleIntentWithModel = async () => null;
   assistant.classifyWithModel = async () => ({
     mode: "task",
-    task: "每天早上8点都打不开 Slack，帮我看下原因",
+    task: "Slack fails to open every morning at 8, help me investigate",
     reply: "",
     confidence: 0.95,
     reason: "model_task",
   });
 
-  const out = await assistant.decide(30, "每天早上8点都打不开 Slack，帮我看下原因");
+  const out = await assistant.decide(30, "Slack fails to open every morning at 8, help me investigate");
   assert.equal(out.mode, "task");
-  assert.equal(out.task, "每天早上8点都打不开 Slack，帮我看下原因");
+  assert.equal(out.task, "Slack fails to open every morning at 8, help me investigate");
   assert.equal(out.reason, "model_task");
 });
 
@@ -295,15 +295,15 @@ test("ChatAssistant decide skips profile timezone reads for non-schedule executa
   };
   assistant.classifyWithModel = async () => ({
     mode: "task",
-    task: "打开 Slack",
+    task: "Open Slack",
     reply: "",
     confidence: 0.97,
     reason: "model_task",
   });
 
-  const out = await assistant.decide(31, "打开 Slack");
+  const out = await assistant.decide(31, "Open Slack");
   assert.equal(out.mode, "task");
-  assert.equal(out.task, "打开 Slack");
+  assert.equal(out.task, "Open Slack");
   assert.equal(out.reason, "model_task");
 });
 
@@ -311,19 +311,19 @@ test("ChatAssistant decide treats one-shot tomorrow phrasing as schedule intent"
   const { assistant } = createAssistant({ withApiKey: true });
   assistant.extractScheduleIntentWithModel = async () => ({
     intent: {
-      sourceText: "明天早上 8 点帮我打开 Slack 去打卡",
-      normalizedTask: "打开 Slack 去打卡",
+      sourceText: "Tomorrow at 8 in the morning, open Slack and complete check-in",
+      normalizedTask: "Open Slack and complete check-in",
       schedule: {
         kind: "at",
         expr: null,
         at: "2026-03-08T08:00:00+08:00",
         everyMs: null,
         tz: "Asia/Shanghai",
-        summaryText: "明天 08:00",
+        summaryText: "Tomorrow at 08:00",
       },
       delivery: null,
       requiresConfirmation: true,
-      confirmationPrompt: "我理解为：创建一个明天 08:00执行的定时任务，内容是“打开 Slack 去打卡”。回复“确认”创建，回复“取消”放弃。",
+      confirmationPrompt: "I understand this as a scheduled job: Tomorrow at 08:00, task \"Open Slack and complete check-in\". Reply \"confirm\" to create it or \"cancel\" to discard it.",
     },
     confidence: 0.98,
     reason: "schedule_model",
@@ -332,13 +332,13 @@ test("ChatAssistant decide treats one-shot tomorrow phrasing as schedule intent"
     throw new Error("classifyWithModel should not run after schedule extraction");
   };
 
-  const out = await assistant.decide(32, "明天早上 8 点帮我打开 Slack 去打卡");
+  const out = await assistant.decide(32, "Tomorrow at 8 in the morning, open Slack and complete check-in");
   assert.equal(out.mode, "schedule_intent");
-  assert.equal(out.task, "打开 Slack 去打卡");
+  assert.equal(out.task, "Open Slack and complete check-in");
   assert.equal(out.scheduleIntent?.schedule.kind, "at");
   assert.equal(out.scheduleIntent?.schedule.at, "2026-03-08T08:00:00+08:00");
-  assert.match(out.scheduleIntent?.schedule.summaryText ?? "", /明天 08:00/);
-  assert.match(out.reply, /确认/);
+  assert.match(out.scheduleIntent?.schedule.summaryText ?? "", /Tomorrow at 08:00/);
+  assert.match(out.reply, /confirm/i);
 });
 
 test("ChatAssistant decide routes cron management requests to task mode instead of schedule intent", async () => {
@@ -394,15 +394,15 @@ test("ChatAssistant decide ignores low-confidence schedule extraction and falls 
   const { assistant } = createAssistant({ withApiKey: true });
   assistant.extractScheduleIntentWithModel = async () => ({
     intent: {
-      sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
-      normalizedTask: "打开 Slack 去打卡",
+      sourceText: "Every morning at 8, open Slack and complete check-in",
+      normalizedTask: "Open Slack and complete check-in",
       schedule: {
         kind: "cron",
         expr: "0 8 * * *",
         at: null,
         everyMs: null,
         tz: "Asia/Shanghai",
-        summaryText: "每天 08:00",
+        summaryText: "Every day at 08:00",
       },
       delivery: null,
       requiresConfirmation: true,
@@ -413,13 +413,13 @@ test("ChatAssistant decide ignores low-confidence schedule extraction and falls 
   });
   assistant.classifyWithModel = async () => ({
     mode: "task",
-    task: "每天早上 8 点帮我打开 Slack 去打卡",
+    task: "Every morning at 8, open Slack and complete check-in",
     reply: "",
     confidence: 0.95,
     reason: "model_task",
   });
 
-  const out = await assistant.decide(35, "每天早上 8 点帮我打开 Slack 去打卡");
+  const out = await assistant.decide(35, "Every morning at 8, open Slack and complete check-in");
   assert.equal(out.mode, "task");
   assert.equal(out.reason, "model_task");
 });
@@ -460,7 +460,7 @@ test("ChatAssistant decide does not misroute schedule-shaped translation request
     canAnswerDirectly: true,
   });
 
-  const out = await assistant.decide(33, "每天早上8点打开 Slack 这句话怎么翻译成英文？");
+  const out = await assistant.decide(33, "How would you translate 'Open Slack every morning at 8' into English?");
   assert.equal(out.mode, "chat");
   assert.equal(out.task, "");
   assert.equal(out.reply, "This is a translation question.");
@@ -470,7 +470,7 @@ test("ChatAssistant decide does not misroute schedule-shaped translation request
 test("ChatAssistant decide does not infer schedule intent without model access", async () => {
   const { assistant } = createAssistant();
 
-  const out = await assistant.decide(34, "每天早上 8 点帮我打开 Slack 去打卡");
+  const out = await assistant.decide(34, "Every morning at 8, open Slack and complete check-in");
   assert.equal(out.mode, "chat");
   assert.equal(out.reason, "no_api_key");
 });
@@ -604,27 +604,27 @@ test("ChatAssistant runs profile onboarding when identity and user are empty", a
   assert.match(userBody, /Preferred assistant name: Pocket/);
 });
 
-test("ChatAssistant onboarding follows Chinese and supports one-shot multi-field answer", async () => {
+test("ChatAssistant onboarding supports one-shot multi-field answer", async () => {
   const { assistant, cfg } = createAssistant({ keepProfileEmpty: true });
 
-  const first = await assistant.decide(9, "你好");
+  const first = await assistant.decide(9, "hello");
   assert.equal(first.mode, "chat");
   assert.equal(first.reason, "profile_onboarding");
-  assert.match(first.reply, /我该怎么称呼你/);
+  assert.match(first.reply, /how would you like me to address you/i);
 
   const done = await assistant.decide(
     9,
-    "你可以叫我小陈，你就叫Pocket，人设：冷静务实",
+    "Call me Xiao Chen, your name is Pocket, persona: calm and pragmatic",
   );
   assert.equal(done.mode, "chat");
   assert.equal(done.reason, "profile_onboarding");
-  assert.match(done.reply, /已经写入 USER\.md 和 IDENTITY\.md/);
+  assert.match(done.reply, /saved your profile/i);
 
   const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
   const userBody = fs.readFileSync(path.join(cfg.workspaceDir, "USER.md"), "utf-8");
   assert.match(identityBody, /Name: Pocket/);
-  assert.match(identityBody, /Persona: 冷静务实/);
-  assert.match(userBody, /Preferred form of address: 小陈/);
+  assert.match(identityBody, /Persona: calm and pragmatic/);
+  assert.match(userBody, /Preferred form of address: Xiao Chen/);
   assert.match(userBody, /Preferred assistant name: Pocket/);
 });
 
@@ -653,13 +653,13 @@ test("ChatAssistant auto-completes onboarding defaults when a task request arriv
   };
   assistant.classifyWithModel = async () => ({
     mode: "task",
-    task: "查询旧金山天气",
+    task: "Check the weather in San Francisco",
     reply: "",
     confidence: 0.9,
     reason: "model_task",
   });
 
-  const out = await assistant.decide(25, "你可以帮我查询一下旧金山的天气吗");
+  const out = await assistant.decide(25, "Can you check the weather in San Francisco?");
   assert.equal(out.mode, "task");
   assert.equal(out.reason, "model_task");
   assert.equal(bootstrapCalls, 0);
@@ -667,13 +667,13 @@ test("ChatAssistant auto-completes onboarding defaults when a task request arriv
   const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
   const userBody = fs.readFileSync(path.join(cfg.workspaceDir, "USER.md"), "utf-8");
   assert.match(identityBody, /Name: OpenPocket/);
-  assert.match(identityBody, /Persona: 务实、冷静、可靠/);
-  assert.match(userBody, /Preferred form of address: 用户/);
+  assert.match(identityBody, /Persona: pragmatic, calm, and reliable/);
+  assert.match(userBody, /Preferred form of address: User/);
   assert.equal(isWorkspaceOnboardingCompleted(cfg.workspaceDir), true);
 
   const payload = assistant.consumePendingProfileUpdate(25);
   assert.equal(payload?.assistantName, "OpenPocket");
-  assert.equal(payload?.locale, "zh");
+  assert.equal(payload?.locale, "en");
 });
 
 test("ChatAssistant completes remaining onboarding fields when user switches to task mid-flow", async () => {
@@ -682,29 +682,29 @@ test("ChatAssistant completes remaining onboarding fields when user switches to 
   assistant.requestBootstrapOnboardingDecision = async () => {
     bootstrapCalls += 1;
     return {
-      reply: "最后一步：请告诉我希望的语气风格。",
+      reply: "Final step: tell me your preferred tone.",
       onboardingComplete: false,
     };
   };
   assistant.classifyWithModel = async () => ({
     mode: "task",
-    task: "下载 X",
+    task: "Download X",
     reply: "",
     confidence: 0.88,
     reason: "model_task",
   });
 
-  const first = await assistant.decide(26, "我叫 Yuheng，你叫 Jarvis");
+  const first = await assistant.decide(26, "My name is Yuheng, your name is Jarvis");
   assert.equal(first.reason, "profile_onboarding");
 
-  const second = await assistant.decide(26, "你能下载一下 X 然后帮我刷推吗");
+  const second = await assistant.decide(26, "Can you download X and help me browse X?");
   assert.equal(second.mode, "task");
   assert.equal(second.reason, "model_task");
   assert.equal(bootstrapCalls, 1);
 
   const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
   assert.match(identityBody, /Name: Jarvis/);
-  assert.match(identityBody, /Persona: 务实、冷静、可靠/);
+  assert.match(identityBody, /Persona: pragmatic, calm, and reliable/);
 });
 
 test("ChatAssistant onboarding reads question copy and presets from PROFILE_ONBOARDING.json", async () => {
@@ -714,41 +714,59 @@ test("ChatAssistant onboarding reads question copy and presets from PROFILE_ONBO
     path.join(cfg.workspaceDir, "PROFILE_ONBOARDING.json"),
     `${JSON.stringify({
       version: 1,
+      questions: {
+        step1: "[Custom Q1] Tell me how to address you",
+        step2: "[Custom Q2] What name should I use for myself",
+        step3: "[Custom Q3] Choose a tone preset number",
+      },
+      personaPresets: [
+        {
+          value: "calm execution: give only conclusions and next steps",
+          aliases: ["9"],
+        },
+      ],
+    }, null, 2)}\n`,
+    "utf-8",
+  );
+
+  const first = await assistant.decide(16, "hello");
+  assert.match(first.reply, /Custom Q1/);
+  const second = await assistant.decide(16, "Sergio");
+  assert.match(second.reply, /Custom Q2/);
+  const third = await assistant.decide(16, "Jarvis");
+  assert.match(third.reply, /Custom Q3/);
+  await assistant.decide(16, "9");
+
+  const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
+  assert.match(identityBody, /Persona: calm execution: give only conclusions and next steps/);
+});
+
+test("ChatAssistant onboarding still accepts legacy locale-based template structure", async () => {
+  const { assistant, cfg } = createAssistant({ keepProfileEmpty: true });
+
+  fs.writeFileSync(
+    path.join(cfg.workspaceDir, "PROFILE_ONBOARDING.json"),
+    `${JSON.stringify({
+      version: 1,
       locales: {
-        zh: {
+        en: {
           questions: {
-            step1: "【自定义Q1】先告诉我怎么称呼你",
-            step2: "【自定义Q2】你希望我叫什么",
-            step3: "【自定义Q3】选一个语气编号",
+            step1: "[Legacy Q1] Tell me how to address you",
           },
-          personaPresets: [
-            {
-              value: "冷静执行：只给结论和下一步",
-              aliases: ["9"],
-            },
-          ],
         },
       },
     }, null, 2)}\n`,
     "utf-8",
   );
 
-  const first = await assistant.decide(16, "你好");
-  assert.match(first.reply, /自定义Q1/);
-  const second = await assistant.decide(16, "Sergio");
-  assert.match(second.reply, /自定义Q2/);
-  const third = await assistant.decide(16, "Jarvis");
-  assert.match(third.reply, /自定义Q3/);
-  await assistant.decide(16, "9");
-
-  const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
-  assert.match(identityBody, /Persona: 冷静执行：只给结论和下一步/);
+  const first = await assistant.decide(17, "hello");
+  assert.match(first.reply, /Legacy Q1/);
 });
 
 test("ChatAssistant onboarding triggers on default scaffold with blank profile fields", async () => {
   const { assistant, cfg } = createAssistant({ withApiKey: true });
   assistant.requestBootstrapOnboardingDecision = async () => ({
-    reply: "先做个简短初始化：我该怎么称呼你？",
+    reply: "Quick setup before we continue: how would you like me to address you?",
     writeProfile: false,
     onboardingComplete: false,
   });
@@ -787,10 +805,10 @@ test("ChatAssistant onboarding triggers on default scaffold with blank profile f
     "utf-8",
   );
 
-  const out = await assistant.decide(11, "你好");
+  const out = await assistant.decide(11, "hello");
   assert.equal(out.mode, "chat");
   assert.equal(out.reason, "profile_onboarding");
-  assert.match(out.reply, /我该怎么称呼你/);
+  assert.match(out.reply, /how would you like me to address you/i);
 });
 
 test("ChatAssistant model-driven onboarding completes and removes bootstrap file", async () => {
@@ -800,13 +818,13 @@ test("ChatAssistant model-driven onboarding completes and removes bootstrap file
     step += 1;
     if (step === 1) {
       return {
-        reply: "你好，我先确认下：我该怎么称呼你？",
+        reply: "Hello, let me confirm one detail first: how would you like me to address you?",
         writeProfile: false,
         onboardingComplete: false,
       };
     }
     return {
-      reply: "好的，初始化完成。我会按你的设定继续。",
+      reply: "Okay, onboarding is complete. I will continue with your settings.",
       profile: {
         userPreferredAddress: "Sergio",
         assistantName: "Jarvis-Phone",
@@ -820,13 +838,13 @@ test("ChatAssistant model-driven onboarding completes and removes bootstrap file
     };
   };
 
-  const first = await assistant.decide(41, "你好");
+  const first = await assistant.decide(41, "hello");
   assert.equal(first.reason, "profile_onboarding");
-  assert.match(first.reply, /我该怎么称呼你/);
+  assert.match(first.reply, /how would you like me to address you/i);
 
-  const second = await assistant.decide(41, "你叫 Jarvis-Phone，人设专业可靠，叫我 Sergio");
+  const second = await assistant.decide(41, "Your name is Jarvis-Phone, persona professional and reliable, call me Sergio");
   assert.equal(second.reason, "profile_onboarding");
-  assert.match(second.reply, /初始化完成/);
+  assert.match(second.reply, /onboarding is complete/i);
 
   const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
   const userBody = fs.readFileSync(path.join(cfg.workspaceDir, "USER.md"), "utf-8");
@@ -856,10 +874,10 @@ test("ChatAssistant does not accept model completion wording when required onboa
     onboardingComplete: true,
   });
 
-  const out = await assistant.decide(42, "叫我 sergio");
+  const out = await assistant.decide(42, "Call me sergio");
   assert.equal(out.mode, "chat");
   assert.equal(out.reason, "profile_onboarding");
-  assert.match(out.reply, /希望我叫什么名字|what name would you like to call me/i);
+  assert.match(out.reply, /what name would you like to call me/i);
   assert.doesNotMatch(out.reply, /all set/i);
 });
 
@@ -881,10 +899,10 @@ test("ChatAssistant exposes pending profile update after onboarding completion",
 test("ChatAssistant updates profile from regular rename message", async () => {
   const { assistant, cfg } = createAssistant();
 
-  const out = await assistant.decide(31, "你把名字改成 Jarvis-Phone 吧");
+  const out = await assistant.decide(31, "Rename yourself to Jarvis-Phone");
   assert.equal(out.mode, "chat");
   assert.equal(out.reason, "profile_update");
-  assert.match(out.reply, /我的名字改为“Jarvis-Phone”/);
+  assert.match(out.reply, /my name is now "Jarvis-Phone"/i);
 
   const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
   const userBody = fs.readFileSync(path.join(cfg.workspaceDir, "USER.md"), "utf-8");
@@ -893,6 +911,22 @@ test("ChatAssistant updates profile from regular rename message", async () => {
 
   const payload = assistant.consumePendingProfileUpdate(31);
   assert.equal(payload?.assistantName, "Jarvis-Phone");
+  assert.equal(payload?.locale, "en");
+});
+
+test("ChatAssistant trims trailing Chinese discourse particles from assistant rename", async () => {
+  const { assistant, cfg } = createAssistant();
+
+  const out = await assistant.decide(32, "你以后叫 Jarvis 喔");
+  assert.equal(out.mode, "chat");
+  assert.equal(out.reason, "profile_update");
+  assert.match(out.reply, /my name is now "Jarvis"/i);
+
+  const identityBody = fs.readFileSync(path.join(cfg.workspaceDir, "IDENTITY.md"), "utf-8");
+  assert.match(identityBody, /Name: Jarvis/);
+
+  const payload = assistant.consumePendingProfileUpdate(32);
+  assert.equal(payload?.assistantName, "Jarvis");
   assert.equal(payload?.locale, "zh");
 });
 
@@ -909,8 +943,9 @@ test("ChatAssistant taskAcceptedReply fallback uses natural non-fixed wording in
 
 test("ChatAssistant taskAcceptedReply fallback keeps English template even for Chinese locale", async () => {
   const { assistant } = createAssistant();
-  const out = await assistant.taskAcceptedReply("读取手机上最新的照片并进行美化编辑", "zh");
+  const out = await assistant.taskAcceptedReply("Read the latest picture on the phone and beautify it", "zh");
 
+  // The fallback receipt copy is intentionally locale-agnostic here.
   assert.match(
     out,
     /^(Starting now|Task received\. Beginning now|I am starting this now|Working on it now):/i,
@@ -925,14 +960,14 @@ test("ChatAssistant narrateTaskProgress uses model decision output", async () =>
     capturedPrompt = prompt;
     return {
       notify: true,
-      message: "进度 4/20：已进入 Gmail 收件箱。",
+      message: "Progress 4/20: entered the Gmail inbox.",
       reason: "checkpoint",
     };
   };
 
   const out = await assistant.narrateTaskProgress({
-    task: "打开 Gmail 并进入收件箱",
-    locale: "zh",
+    task: "Open Gmail and enter the inbox",
+    locale: "en",
     progress: {
       step: 4,
       maxSteps: 20,
@@ -966,7 +1001,7 @@ test("ChatAssistant narrateTaskProgress uses model decision output", async () =>
   });
 
   assert.equal(out.notify, true);
-  assert.match(out.message, /进度 4\/20/);
+  assert.match(out.message, /Progress 4\/20/);
   assert.match(capturedPrompt, /TASK_PROGRESS_REPORTER\.md/);
   assert.match(capturedPrompt, /Progress context JSON/);
 });
@@ -1001,12 +1036,12 @@ test("ChatAssistant narrateTaskOutcome rewrites final output with model decision
   let capturedPrompt = "";
   assistant.requestTaskOutcomeNarration = async (_client, _model, _maxTokens, prompt) => {
     capturedPrompt = prompt;
-    return "旧金山当前 51°F，晴到多云，体感 46°F。每小时和未来几天预报都已显示。";
+    return "San Francisco is currently 51°F with mostly clear skies and a feels-like temperature of 46°F. Hourly and multi-day forecasts are visible.";
   };
 
   const out = await assistant.narrateTaskOutcome({
-    task: "搜索旧金山天气",
-    locale: "zh",
+    task: "Search San Francisco weather",
+    locale: "en",
     ok: true,
     rawResult: "Task completed. Search results for San Francisco weather are displayed.",
     recentProgress: [],
@@ -1073,7 +1108,7 @@ test("ChatAssistant narrateEscalation fallback generates concise local-security 
   const out = await assistant.narrateEscalation({
     event: "human_auth",
     locale: "zh",
-    task: "登录 Duolingo",
+    task: "Log in to Duolingo",
     capability: "oauth",
     currentApp: "unknown",
     instruction: "Please enter username and password.",
@@ -1083,8 +1118,9 @@ test("ChatAssistant narrateEscalation fallback generates concise local-security 
     includeLocalSecurityAssurance: true,
   });
 
-  assert.match(out, /登录授权/);
-  assert.match(out, /本机上的 OpenPocket Relay/);
+  // This path stays English even when locale is zh.
+  assert.match(out, /login authorization/i);
+  assert.match(out, /local OpenPocket relay/i);
   assert.doesNotMatch(out, /Instruction:/i);
   assert.doesNotMatch(out, /Reason:/i);
   assert.doesNotMatch(out, /Request ID/i);
@@ -1095,13 +1131,13 @@ test("ChatAssistant narrateEscalation uses model output when available", async (
   let capturedPrompt = "";
   assistant.requestEscalationNarration = async (_client, _model, _maxTokens, prompt) => {
     capturedPrompt = prompt;
-    return "我这边卡在登录确认，请打开授权链接完成后告诉我，我会继续。";
+    return "I am blocked on sign-in confirmation. Open the authorization link, then tell me when it is done so I can continue.";
   };
 
   const out = await assistant.narrateEscalation({
     event: "human_auth",
     locale: "zh",
-    task: "登录 Duolingo",
+    task: "Log in to Duolingo",
     capability: "oauth",
     currentApp: "com.duolingo",
     instruction: "Take over and sign in.",
@@ -1111,7 +1147,8 @@ test("ChatAssistant narrateEscalation uses model output when available", async (
     includeLocalSecurityAssurance: true,
   });
 
-  assert.match(out, /打开授权链接/);
+  // Locale is passed as context only; it does not force Chinese output.
+  assert.match(out, /open the authorization link/i);
   assert.match(capturedPrompt, /Escalation context JSON/);
   assert.match(capturedPrompt, /includeLocalSecurityAssurance/);
   assert.match(capturedPrompt, /event/);

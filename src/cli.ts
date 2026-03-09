@@ -73,6 +73,7 @@ import {
   type AdbConnectionType,
   parseAdbDevicesLongOutput,
 } from "./device/adb-device-discovery.js";
+import { normalizeAdbEndpoint } from "./device/adb-endpoint.js";
 
 const cliTheme = createCliTheme(output);
 const DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB = 24;
@@ -537,17 +538,6 @@ async function runEmulatorCommand(configPath: string | undefined, args: string[]
   }
 
   throw new Error(`Unknown emulator subcommand: ${sub}`);
-}
-
-function normalizeAdbEndpoint(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.includes(":")) {
-    return trimmed;
-  }
-  return `${trimmed}:5555`;
 }
 
 function normalizeFourDigitPin(raw: string, optionName: string): string {

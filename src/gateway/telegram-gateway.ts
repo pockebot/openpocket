@@ -334,13 +334,11 @@ export class TelegramGateway {
       .trim();
   }
 
-  private humanAuthSecurityNote(locale: "zh" | "en"): string {
-    return locale === "zh"
-      ? "该授权页连接你本机上的 OpenPocket Relay；凭据仅通过当前私有加密通道传输，不会存入中心化 OpenPocket Relay。"
-      : "This auth page connects to your local OpenPocket relay. Credentials are transmitted only through a private encrypted channel and are never stored in a centralized OpenPocket relay.";
+  private humanAuthSecurityNote(): string {
+    return "This auth page connects to your local OpenPocket relay. Credentials are transmitted only through a private encrypted channel and are never stored in a centralized OpenPocket relay.";
   }
 
-  private buildHumanAuthHtmlMessage(narration: string, locale: "zh" | "en", extraLines?: string[]): string {
+  private buildHumanAuthHtmlMessage(narration: string, extraLines?: string[]): string {
     const cleanedNarration = this.stripHumanAuthNarrationNoise(this.sanitizeForChat(narration, 1500));
     const payloadLines: string[] = [];
     if (cleanedNarration) {
@@ -358,9 +356,9 @@ export class TelegramGateway {
         payloadLines.push(...formatted);
       }
     }
-    const securityTitle = locale === "zh" ? "安全提示" : "Security note";
+    const securityTitle = "Security note";
     payloadLines.push("");
-    payloadLines.push(`<b>${securityTitle}:</b> ${this.escapeTelegramHtml(this.humanAuthSecurityNote(locale))}`);
+    payloadLines.push(`<b>${securityTitle}:</b> ${this.escapeTelegramHtml(this.humanAuthSecurityNote())}`);
     return payloadLines.join("\n");
   }
 
@@ -560,16 +558,7 @@ export class TelegramGateway {
     }
   }
 
-  private playStoreRemoteLoginTask(locale: "zh" | "en"): string {
-    if (locale === "zh") {
-      return [
-        "检查 Android 系统 Google 账号是否已登录（可从 Play Store 入口进入）。",
-        "如果未登录，完成系统级 Google 账号登录流程。",
-        "首次需要凭据时，发起 request_human_auth(oauth)，一次性让用户提供邮箱和密码。",
-        "Google 登录是分步页面：先邮箱 Next，再密码。后续步骤优先复用已获得凭据；仅在缺失或失败时再请求用户补充。",
-        "登录完成后，确认系统 Google 账号已登录，并验证 Play Store 可搜索/安装应用，然后结束任务。",
-      ].join(" ");
-    }
+  private playStoreRemoteLoginTask(): string {
     return [
       "Check whether Android system Google account is signed in (entry can be through Play Store).",
       "If not signed in, complete the system-level Google account sign-in flow.",
@@ -597,9 +586,7 @@ export class TelegramGateway {
         this.playStorePreflightDeferredNotified = true;
         await this.bot.sendMessage(
           chatId,
-          locale === "zh"
-            ? "Play Store 检查已排队：当前还没有检测到已启动的模拟器。等模拟器启动后我会自动重试。"
-            : "Play Store preflight is queued: no booted emulator detected yet. I will retry automatically after the emulator boots.",
+          "Play Store preflight is queued: no booted emulator detected yet. I will retry automatically after the emulator boots.",
         );
       }
       return false;
@@ -611,9 +598,7 @@ export class TelegramGateway {
       this.persistOnboardingStatePatch({ playStoreDetected: false });
       await this.bot.sendMessage(
         chatId,
-        locale === "zh"
-          ? "当前模拟器未检测到 Play Store（com.android.vending）。请使用带 Google Play 的系统镜像。"
-          : "Play Store (com.android.vending) is not detected on this emulator. Use a Google Play system image.",
+        "Play Store (com.android.vending) is not detected on this emulator. Use a Google Play system image.",
       );
       return false;
     }
@@ -634,23 +619,19 @@ export class TelegramGateway {
     if (!this.config.humanAuth.enabled) {
       await this.bot.sendMessage(
         chatId,
-        locale === "zh"
-          ? "检测到系统 Google 账号未登录，但 humanAuth 未启用。请先在模拟器手动登录，随后我会自动重检。"
-          : "System Google account is not signed in, but humanAuth is disabled. Please sign in manually in emulator and I will re-check automatically.",
+        "System Google account is not signed in, but humanAuth is disabled. Please sign in manually in emulator and I will re-check automatically.",
       );
       return true;
     }
 
     await this.bot.sendMessage(
       chatId,
-      locale === "zh"
-        ? "正在检查系统 Google 账号登录状态，需要你授权时我会提示。"
-        : "Checking system Google account sign-in now. I will prompt you only when authorization is needed.",
+      "Checking system Google account sign-in now. I will prompt you only when authorization is needed.",
     );
     this.playStorePreflightTriggered = true;
     const accepted = await this.runTaskAsync(
       chatId,
-      this.playStoreRemoteLoginTask(locale),
+      this.playStoreRemoteLoginTask(),
       {
         sessionKey: `telegram:playstore-preflight:${chatId}`,
         skipAcceptedMessage: true,
@@ -737,13 +718,9 @@ export class TelegramGateway {
     if (!this.chat.isOnboardingPending()) {
       return false;
     }
-    const onboardingSeed = locale === "zh" ? "你好" : "hello";
+    const onboardingSeed = "hello";
     const decision = await this.chat.decide(chatId, onboardingSeed);
-    const reply = decision.reply || (
-      locale === "zh"
-        ? "我们先做一个简短初始化。"
-        : "Let's do a quick onboarding first."
-    );
+    const reply = decision.reply || "Let's do a quick onboarding first.";
     await this.bot.sendMessage(chatId, this.sanitizeForChat(reply, 1800));
     const profileUpdate = this.chat.consumePendingProfileUpdate(chatId);
     if (profileUpdate) {
@@ -882,11 +859,11 @@ export class TelegramGateway {
       return "zh";
     }
     const text = message.text ?? "";
-    return /[\u4e00-\u9fff]/.test(text) ? "zh" : "en";
+    return /[一-鿿]/u.test(text) ? "zh" : "en";
   }
 
   private inferTaskLocale(task: string): "zh" | "en" {
-    return /[\u4e00-\u9fff]/.test(task) ? "zh" : "en";
+    return /[一-鿿]/u.test(task) ? "zh" : "en";
   }
 
   private buildChatContextExtractors(): ChatContextExtractor[] {
@@ -1096,15 +1073,10 @@ export class TelegramGateway {
     return /^(?:\/run\b|open\b|start\b|launch\b|go\b|use\b|run\b|please\b|打开|开始|启动|请|帮我|去|前往)/i.test(normalized);
   }
 
-  private buildChatContextSavedMessage(locale: "zh" | "en", items: ChatContextItem[]): string {
+  private buildChatContextSavedMessage(items: ChatContextItem[]): string {
     const keys = Array.from(new Set(items.map((item) => item.key))).slice(0, 6);
     if (keys.length === 0) {
-      return locale === "zh"
-        ? "已记录非敏感上下文信息，后续任务可复用。"
-        : "Saved non-sensitive context for reuse in upcoming tasks.";
-    }
-    if (locale === "zh") {
-      return `已记录上下文字段：${keys.join("、")}。后续任务可复用这些非敏感信息。`;
+      return "Saved non-sensitive context for reuse in upcoming tasks.";
     }
     return `Saved context fields: ${keys.join(", ")}. I will reuse these non-sensitive values in upcoming tasks.`;
   }
@@ -1157,7 +1129,7 @@ export class TelegramGateway {
       .replace(/https?:\/\/\S+/g, " ")
       .replace(/[0-9]+\/[0-9]+/g, " ")
       .replace(/[0-9]+/g, " ")
-      .replace(/[^a-z0-9\u4e00-\u9fff\s]/g, " ")
+      .replace(/[^a-z0-9一-鿿\s]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
     if (!normalized) {
@@ -1242,13 +1214,7 @@ export class TelegramGateway {
     return false;
   }
 
-  private renderTaskQueuedMessage(position: number, locale: "zh" | "en"): string {
-    if (locale === "zh") {
-      if (position <= 1) {
-        return "当前有任务在执行。你的新任务已加入队列，将在下一条执行。";
-      }
-      return `当前有任务在执行。你的新任务已加入队列（当前排队第 ${position} 位）。`;
-    }
+  private renderTaskQueuedMessage(position: number): string {
     if (position <= 1) {
       return "A previous task is still running. Your new task is queued and will run next.";
     }
@@ -1348,9 +1314,7 @@ export class TelegramGateway {
       );
       await this.bot.sendMessage(
         chatId,
-        locale === "zh"
-          ? `Telegram 限流中，显示名暂时无法修改。请约 ${Math.ceil(retryAfterSec / 60)} 分钟后再试。`
-          : `Telegram is rate-limiting display name updates. Please retry in about ${Math.ceil(retryAfterSec / 60)} minute(s).`,
+        `Telegram is rate-limiting display name updates. Please retry in about ${Math.ceil(retryAfterSec / 60)} minute(s).`,
       );
       return;
     }
@@ -1363,9 +1327,7 @@ export class TelegramGateway {
       this.log(`telegram bot display name updated chat=${chatId} name=${JSON.stringify(nextName)}`);
       await this.bot.sendMessage(
         chatId,
-        locale === "zh"
-          ? `已同步 Telegram Bot 显示名：${nextName}`
-          : `Telegram bot display name updated: ${nextName}`,
+        `Telegram bot display name updated: ${nextName}`,
       );
     } catch (error) {
       const retry = this.parseTelegramRetryAfterSec(error);
@@ -1376,9 +1338,7 @@ export class TelegramGateway {
         );
         await this.bot.sendMessage(
           chatId,
-          locale === "zh"
-            ? `Telegram 限流中，显示名暂时无法修改。请约 ${Math.ceil(retry / 60)} 分钟后再试。`
-            : `Telegram is rate-limiting display name updates. Please retry in about ${Math.ceil(retry / 60)} minute(s).`,
+          `Telegram is rate-limiting display name updates. Please retry in about ${Math.ceil(retry / 60)} minute(s).`,
         );
         return;
       }
@@ -1387,9 +1347,7 @@ export class TelegramGateway {
       );
       await this.bot.sendMessage(
         chatId,
-        locale === "zh"
-          ? `我已保存名字“${nextName}”，但同步 Telegram Bot 显示名失败：${(error as Error).message}`
-          : `I saved name "${nextName}", but failed to sync Telegram bot display name: ${(error as Error).message}`,
+        `I saved name "${nextName}", but failed to sync Telegram bot display name: ${(error as Error).message}`,
       );
     }
   }
@@ -1839,11 +1797,11 @@ export class TelegramGateway {
         }),
         1000,
       );
-      const optionsTitle = decisionLocale === "zh" ? "选项：" : "Options:";
-      const replyHint = decisionLocale === "zh" ? "请回复选项编号或文本。" : "Reply with option number or text.";
+      const optionsTitle = "Options:";
+      const replyHint = "Reply with option number or text.";
       const options = request.options.length > 0
         ? request.options.map((item, index) => `${index + 1}. ${item}`).join("\n")
-        : (decisionLocale === "zh" ? "（没有可用选项）" : "(no options provided)");
+        : "(no options provided)";
       const prompt = [
         escalationIntro,
         "",
@@ -1905,13 +1863,11 @@ export class TelegramGateway {
         }),
         1000,
       );
-      const questionTitle = locale === "zh" ? "需要的信息：" : "Requested value:";
+      const questionTitle = "Requested value:";
       const placeholderLine = request.placeholder
-        ? (locale === "zh"
-          ? `格式提示：${request.placeholder}`
-          : `Format hint: ${request.placeholder}`)
+        ? `Format hint: ${request.placeholder}`
         : "";
-      const replyHint = locale === "zh" ? "请直接回复文本内容。" : "Reply with the text value.";
+      const replyHint = "Reply with the text value.";
       const prompt = [
         escalationIntro,
         "",
@@ -2285,10 +2241,9 @@ export class TelegramGateway {
       const savedItems = this.upsertChatContextItems(chatId, contextItems);
       if (savedItems.length > 0) {
         if (!this.isLikelyTaskInstruction(text)) {
-          const locale = this.inferLocale(message);
           await this.bot.sendMessage(
             chatId,
-            this.sanitizeForChat(this.buildChatContextSavedMessage(locale, savedItems), 1800),
+            this.sanitizeForChat(this.buildChatContextSavedMessage(savedItems), 1800),
           );
           return;
         }
@@ -2357,7 +2312,7 @@ export class TelegramGateway {
     if (!options?.skipAcceptedMessage) {
       if (!isIdle) {
         const locale = this.inferTaskLocale(task);
-        const queuedMessage = this.renderTaskQueuedMessage(queuePosition, locale);
+        const queuedMessage = this.renderTaskQueuedMessage(queuePosition);
         await this.bot.sendMessage(chatId, queuedMessage);
         this.chat.appendExternalTurn(chatId, "assistant", queuedMessage);
         this.log(`task queued busy chat=${chatId} position=${queuePosition} task=${JSON.stringify(task)}`);
@@ -2560,18 +2515,12 @@ export class TelegramGateway {
                     );
 
                     if (isCodeFlow) {
-                      const codeLines = progressLocale === "zh"
-                        ? [
-                          "你也可以直接在 Telegram 回复验证码（4-10位数字，例如 123456）。",
-                          `多个验证码请求时可发送：${opened.manualApproveCommand} 123456`,
-                          `拒绝可发送：${opened.manualRejectCommand}`,
-                        ]
-                        : [
-                          "You can also reply directly in Telegram with the 4-10 digit code (for example: 123456).",
-                          `If multiple code requests are pending, use: ${opened.manualApproveCommand} 123456`,
-                          `Reject with: ${opened.manualRejectCommand}`,
-                        ];
-                      const codeBody = this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale, codeLines);
+                      const codeLines = [
+                        "You can also reply directly in Telegram with the 4-10 digit code (for example: 123456).",
+                        `If multiple code requests are pending, use: ${opened.manualApproveCommand} 123456`,
+                        `Reject with: ${opened.manualRejectCommand}`,
+                      ];
+                      const codeBody = this.buildHumanAuthHtmlMessage(escalationMessage, codeLines);
                       await this.bot.sendMessage(
                         chatId,
                         codeBody,
@@ -2595,7 +2544,7 @@ export class TelegramGateway {
                     }
 
                     if (opened.openUrl) {
-                      await this.bot.sendMessage(chatId, this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale), {
+                      await this.bot.sendMessage(chatId, this.buildHumanAuthHtmlMessage(escalationMessage), {
                         parse_mode: "HTML",
                         reply_markup: {
                           inline_keyboard: [
@@ -2611,12 +2560,10 @@ export class TelegramGateway {
                       return;
                     }
 
-                    const noLinkHint = progressLocale === "zh"
-                      ? "当前授权链接不可用，请直接用命令处理："
-                      : "Web link is unavailable. Use manual commands:";
+                    const noLinkHint = "Web link is unavailable. Use manual commands:";
                     await this.bot.sendMessage(
                       chatId,
-                      this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale, [
+                      this.buildHumanAuthHtmlMessage(escalationMessage, [
                         noLinkHint,
                         opened.manualApproveCommand,
                         opened.manualRejectCommand,

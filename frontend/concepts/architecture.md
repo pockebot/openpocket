@@ -149,8 +149,8 @@ On successful runs, `AutoArtifactBuilder` can produce:
 
 At inference time, `SkillLoader` injects:
 
-- summarized skill catalog
-- active skill blocks selected by task/app/trace relevance with metadata gating
+- summarized skill catalog with names, descriptions, and file locations
+- requirement-gated skill discovery only; the model must `read(location)` to load a skill body on demand
 
 This remains scoped to one agent workspace. Auto-generated experience is not shared across agents.
 

@@ -29,6 +29,7 @@ import {
   type AdbConnectionType,
   parseAdbDevicesLongOutput,
 } from "../device/adb-device-discovery.js";
+import { normalizeAdbEndpoint } from "../device/adb-endpoint.js";
 
 const require = createRequire(import.meta.url);
 const pkgJson = require("../../package.json") as { version: string; license: string };
@@ -1082,17 +1083,6 @@ async function runConsentStep(prompter: SetupPrompter, state: SetupState): Promi
     throw new Error("User consent not accepted. Setup aborted.");
   }
   state.consentAcceptedAt = nowIso();
-}
-
-function normalizeAdbEndpoint(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.includes(":")) {
-    return trimmed;
-  }
-  return `${trimmed}:5555`;
 }
 
 type SetupConnectedTargetDevice = {

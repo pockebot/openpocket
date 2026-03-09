@@ -446,7 +446,7 @@ test("GatewayCore enqueueTask sends model-driven start ack when idle", async () 
 
     assert.equal(adapter.sent.length, 1);
     assert.equal(adapter.sent[0].text, "model-start-ack");
-    assert.equal(adapter.sent.some((item) => /收到，我先处理这个任务|On it:/i.test(item.text)), false);
+    assert.equal(adapter.sent.some((item) => /(\u6536\u5230\uff0c\u6211\u5148\u5904\u7406\u8fd9\u4e2a\u4efb\u52a1|On it:)/i.test(item.text)), false);
   });
 });
 
@@ -496,11 +496,11 @@ test("GatewayCore handlePlainMessage replies with confirmation for schedule inte
     core.chat.decide = async () => ({
       mode: "schedule_intent",
       task: "Open Slack and complete check-in",
-      reply: "请确认创建这个定时任务。",
+      reply: "Please confirm creating this scheduled job.",
       confidence: 0.99,
       reason: "schedule_intent:cron",
       scheduleIntent: {
-        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        sourceText: "Every morning at 8, open Slack and complete check-in",
         normalizedTask: "Open Slack and complete check-in",
         schedule: {
           kind: "cron",
@@ -508,11 +508,11 @@ test("GatewayCore handlePlainMessage replies with confirmation for schedule inte
           at: null,
           everyMs: null,
           tz: "Asia/Shanghai",
-          summaryText: "每天 08:00",
+          summaryText: "Daily 08:00",
         },
         delivery: null,
         requiresConfirmation: true,
-        confirmationPrompt: "请确认创建这个定时任务。",
+        confirmationPrompt: "Please confirm creating this scheduled job.",
       },
     });
     core.runTaskAndReport = async () => {
@@ -520,10 +520,10 @@ test("GatewayCore handlePlainMessage replies with confirmation for schedule inte
       return { accepted: true, ok: true, message: "should-not-run" };
     };
 
-    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
+    await core.handleInbound(makeEnvelope({ text: "Every morning at 8, open Slack and complete check-in" }));
 
     assert.equal(adapter.sent.length, 1);
-    assert.match(adapter.sent[0].text, /确认/);
+    assert.match(adapter.sent[0].text, /confirm/i);
     assert.equal(runCalls, 0);
 
     const jobsFile = path.join(config.workspaceDir, "cron", "jobs.json");
@@ -540,11 +540,11 @@ test("GatewayCore creates a structured cron job after confirmation", async () =>
     core.chat.decide = async () => ({
       mode: "schedule_intent",
       task: "Open Slack and complete check-in",
-      reply: "请确认创建这个定时任务。",
+      reply: "Please confirm creating this scheduled job.",
       confidence: 0.99,
       reason: "schedule_intent:cron",
       scheduleIntent: {
-        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        sourceText: "Every morning at 8, open Slack and complete check-in",
         normalizedTask: "Open Slack and complete check-in",
         schedule: {
           kind: "cron",
@@ -552,11 +552,11 @@ test("GatewayCore creates a structured cron job after confirmation", async () =>
           at: null,
           everyMs: null,
           tz: "Asia/Shanghai",
-          summaryText: "每天 08:00",
+          summaryText: "Daily 08:00",
         },
         delivery: null,
         requiresConfirmation: true,
-        confirmationPrompt: "请确认创建这个定时任务。",
+        confirmationPrompt: "Please confirm creating this scheduled job.",
       },
     });
     core.runTaskAndReport = async () => {
@@ -576,7 +576,7 @@ test("GatewayCore creates a structured cron job after confirmation", async () =>
           at: null,
           everyMs: null,
           tz: "Asia/Shanghai",
-          summaryText: "每天 08:00",
+          summaryText: "Daily 08:00",
         },
         payload: {
           kind: "agent_turn",
@@ -599,11 +599,11 @@ test("GatewayCore creates a structured cron job after confirmation", async () =>
       };
     };
 
-    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
-    await core.handleInbound(makeEnvelope({ text: "确认" }));
+    await core.handleInbound(makeEnvelope({ text: "Every morning at 8, open Slack and complete check-in" }));
+    await core.handleInbound(makeEnvelope({ text: "confirm" }));
 
     assert.equal(runCalls, 1);
-    assert.match(adapter.sent[1].text, /created|已创建/i);
+    assert.match(adapter.sent[1].text, /created/i);
 
     const jobsFile = path.join(config.workspaceDir, "cron", "jobs.json");
     const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
@@ -624,11 +624,11 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
     core.chat.decide = async () => ({
       mode: "schedule_intent",
       task: "Open Slack and complete check-in",
-      reply: "请确认创建这个定时任务。",
+      reply: "Please confirm creating this scheduled job.",
       confidence: 0.99,
       reason: "schedule_intent:cron",
       scheduleIntent: {
-        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        sourceText: "Every morning at 8, open Slack and complete check-in",
         normalizedTask: "Open Slack and complete check-in",
         schedule: {
           kind: "cron",
@@ -636,11 +636,11 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
           at: null,
           everyMs: null,
           tz: "Asia/Shanghai",
-          summaryText: "每天 08:00",
+          summaryText: "Daily 08:00",
         },
         delivery: null,
         requiresConfirmation: true,
-        confirmationPrompt: "请确认创建这个定时任务。",
+        confirmationPrompt: "Please confirm creating this scheduled job.",
       },
     });
 
@@ -671,7 +671,7 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
           at: null,
           everyMs: null,
           tz: "Asia/Shanghai",
-          summaryText: "每天 08:00",
+          summaryText: "Daily 08:00",
         },
         payload: {
           kind: "agent_turn",
@@ -694,12 +694,12 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
       };
     };
 
-    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
-    await core.handleInbound(makeEnvelope({ text: "确认" }));
+    await core.handleInbound(makeEnvelope({ text: "Every morning at 8, open Slack and complete check-in" }));
+    await core.handleInbound(makeEnvelope({ text: "confirm" }));
 
     assert.match(capturedTask, /Create exactly one cron job/i);
     assert.deepEqual(capturedToolNames, ["cron_add", "finish"]);
-    assert.match(adapter.sent[1].text, /created|已创建/i);
+    assert.match(adapter.sent[1].text, /created/i);
   });
 });
 
@@ -1329,11 +1329,11 @@ test("GatewayCore cancels pending schedule confirmation without creating a job",
     core.chat.decide = async () => ({
       mode: "schedule_intent",
       task: "Open Slack and complete check-in",
-      reply: "请确认创建这个定时任务。",
+      reply: "Please confirm creating this scheduled job.",
       confidence: 0.99,
       reason: "schedule_intent:cron",
       scheduleIntent: {
-        sourceText: "每天早上 8 点帮我打开 Slack 去打卡",
+        sourceText: "Every morning at 8, open Slack and complete check-in",
         normalizedTask: "Open Slack and complete check-in",
         schedule: {
           kind: "cron",
@@ -1341,18 +1341,18 @@ test("GatewayCore cancels pending schedule confirmation without creating a job",
           at: null,
           everyMs: null,
           tz: "Asia/Shanghai",
-          summaryText: "每天 08:00",
+          summaryText: "Daily 08:00",
         },
         delivery: null,
         requiresConfirmation: true,
-        confirmationPrompt: "请确认创建这个定时任务。",
+        confirmationPrompt: "Please confirm creating this scheduled job.",
       },
     });
 
-    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
-    await core.handleInbound(makeEnvelope({ text: "取消" }));
+    await core.handleInbound(makeEnvelope({ text: "Every morning at 8, open Slack and complete check-in" }));
+    await core.handleInbound(makeEnvelope({ text: "cancel" }));
 
-    assert.match(adapter.sent[1].text, /取消|cancel/i);
+    assert.match(adapter.sent[1].text, /cancel/i);
 
     const jobsFile = path.join(config.workspaceDir, "cron", "jobs.json");
     const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
@@ -1369,11 +1369,11 @@ test("GatewayCore blocks unrelated messages while schedule confirmation is pendi
     core.chat.decide = async (chatId, text) => {
       void chatId;
       decideCalls += 1;
-      if (text === "每天早上 8 点帮我打开 Slack 去打卡") {
+      if (text === "Every morning at 8, open Slack and complete check-in") {
         return {
           mode: "schedule_intent",
           task: "Open Slack and complete check-in",
-          reply: "请确认创建这个定时任务。",
+          reply: "Please confirm creating this scheduled job.",
           confidence: 0.99,
           reason: "schedule_intent:cron",
           scheduleIntent: {
@@ -1385,11 +1385,11 @@ test("GatewayCore blocks unrelated messages while schedule confirmation is pendi
               at: null,
               everyMs: null,
               tz: "Asia/Shanghai",
-              summaryText: "每天 08:00",
+              summaryText: "Daily 08:00",
             },
             delivery: null,
             requiresConfirmation: true,
-            confirmationPrompt: "请确认创建这个定时任务。",
+            confirmationPrompt: "Please confirm creating this scheduled job.",
           },
         };
       }
@@ -1402,11 +1402,11 @@ test("GatewayCore blocks unrelated messages while schedule confirmation is pendi
       };
     };
 
-    await core.handleInbound(makeEnvelope({ text: "每天早上 8 点帮我打开 Slack 去打卡" }));
-    await core.handleInbound(makeEnvelope({ text: "顺便打开相机" }));
+    await core.handleInbound(makeEnvelope({ text: "Every morning at 8, open Slack and complete check-in" }));
+    await core.handleInbound(makeEnvelope({ text: "Also open the camera" }));
 
     assert.equal(decideCalls, 1, "pending confirmation should intercept unrelated follow-up text");
-    assert.match(adapter.sent[1].text, /确认|取消|confirm|cancel/i);
+    assert.match(adapter.sent[1].text, /confirm|cancel/i);
   });
 });
 
@@ -1418,7 +1418,7 @@ test("GatewayCore enqueueTask keeps queued ack when another task is running", as
     await core.enqueueTask(makeEnvelope({ text: "run task" }), "run task");
 
     assert.equal(adapter.sent.length, 1);
-    assert.match(adapter.sent[0].text, /queued|排队/i);
+    assert.match(adapter.sent[0].text, /queued/i);
   });
 });
 
@@ -1532,7 +1532,7 @@ test("GatewayCore: DM messages DO trigger owner claim", async () => {
     }));
 
     const ownerClaimMsg = adapter.sent.find((m) =>
-      m.text.includes("owner") || m.text.includes("auto-registered") || m.text.includes("第一个用户"),
+      m.text.includes("owner") || m.text.includes("auto-registered") || m.text.includes("\u7b2c\u4e00\u4e2a\u7528\u6237"),
     );
     assert.ok(ownerClaimMsg, "DM should trigger owner claim");
   });
@@ -1594,7 +1594,7 @@ test("GatewayCore: group messages with groupPolicy=allowlist, unknown sender blo
       text: "hello",
     }));
 
-    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("\u914d\u5bf9"));
     assert.equal(pairingMsg, undefined, "Group messages must NOT issue pairing codes");
     assert.equal(adapter.sent.length, 0, "Unknown sender in group should be silently blocked");
   });
@@ -1614,7 +1614,7 @@ test("GatewayCore: DM pairing code issued for unknown sender", async () => {
       text: "hello",
     }));
 
-    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("\u914d\u5bf9"));
     assert.ok(pairingMsg, "DM from unknown sender should issue pairing code");
   });
 });
@@ -1683,7 +1683,7 @@ test("GatewayCore: iMessage DM owner claim on first message", async () => {
     }));
 
     const ownerMsg = adapter.sent.find((m) =>
-      m.text.includes("owner") || m.text.includes("auto-registered") || m.text.includes("第一个用户"),
+      m.text.includes("owner") || m.text.includes("auto-registered") || m.text.includes("\u7b2c\u4e00\u4e2a\u7528\u6237"),
     );
     assert.ok(ownerMsg, "iMessage DM should trigger owner claim");
   });
@@ -1703,7 +1703,7 @@ test("GatewayCore: iMessage DM pairing code for unknown sender", async () => {
       text: "hi there",
     }));
 
-    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("配对"));
+    const pairingMsg = adapter.sent.find((m) => m.text.includes("pairing") || m.text.includes("\u914d\u5bf9"));
     assert.ok(pairingMsg, "Unknown iMessage sender should get pairing code");
   });
 });

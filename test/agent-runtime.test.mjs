@@ -468,7 +468,7 @@ test("AgentRuntime keeps workspace tools available for phone-style tasks", async
     executeAction: async () => "ok",
   };
 
-  const result = await runtime.runTask("查询旧金山的天气");
+  const result = await runtime.runTask("Check the weather in San Francisco");
   assert.equal(result.ok, true);
   assert.equal(capturedToolNames.includes("read"), true);
   assert.equal(capturedToolNames.includes("exec"), true);
@@ -528,7 +528,7 @@ test("AgentRuntime cron_add tool creates a structured cron job", async () => {
             at: null,
             everyMs: null,
             tz: "Asia/Shanghai",
-            summaryText: "每天 08:00",
+            summaryText: "Daily 08:00",
           },
           task: "Open Slack and complete check-in",
           channel: "telegram",

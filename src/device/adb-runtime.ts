@@ -14,6 +14,7 @@ import { nowIso } from "../utils/paths.js";
 import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
 import { sleep } from "../utils/time.js";
 import { EmulatorManager } from "./emulator-manager.js";
+import { normalizeOptionalAdbEndpoint } from "./adb-endpoint.js";
 import { normalizeDeviceTargetType } from "./target-types.js";
 
 export function extractPackageName(input: string): string {
@@ -509,14 +510,7 @@ export class AdbRuntime {
   }
 
   private normalizeTargetAdbEndpoint(): string | null {
-    const raw = String(this.config.target?.adbEndpoint ?? "").trim();
-    if (!raw) {
-      return null;
-    }
-    if (raw.includes(":")) {
-      return raw;
-    }
-    return `${raw}:5555`;
+    return normalizeOptionalAdbEndpoint(this.config.target?.adbEndpoint);
   }
 
   private buildScreenAwakeWorkerParams(

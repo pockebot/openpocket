@@ -17,7 +17,7 @@ Actively help the user complete lessons. Do not ask the user what the answer is 
 
 - Tap the correct word tiles from the bank to form the translation.
 - **Prefer batch action**: read the full sentence first, plan the complete answer, then tap all words in order — **include the Check button as the final tap in the same batch**. Do not tap one word, screenshot, tap another — this is slow and error-prone.
-- Example: for a 5-word answer, issue a single batch of 6 taps — word1, word2, word3, word4, word5, then Check (検査) button at the bottom.
+- Example: for a 5-word answer, issue a single batch of 6 taps — word1, word2, word3, word4, word5, then the `Check` button at the bottom.
 - If a word tile is wrong or out of order, **tap it from the top (the answer area) to remove it**, then tap the correct word from the bank.
 
 ### Matching Pairs

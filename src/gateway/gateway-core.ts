@@ -438,9 +438,9 @@ export class GatewayCore {
     this.registerCommand("start", async (env) => {
       const locale = this.inferLocale(env);
       if (this.chat.isOnboardingPending()) {
-        const seed = locale === "zh" ? "你好" : "hello";
+        const seed = "hello";
         const decision = await this.chat.decide(this.peerIdNum(env), seed);
-        const reply = decision.reply || (locale === "zh" ? "我们先做一个简短初始化。" : "Let's do a quick onboarding first.");
+        const reply = decision.reply || "Let's do a quick onboarding first.";
         await this.router.replyText(env, this.sanitizeForChat(reply, 1800));
         return;
       }
@@ -510,9 +510,7 @@ export class GatewayCore {
       this.pairingStore.addToAllowlist(envelope.channelType, envelope.senderId);
       this.log(`owner claim channel=${envelope.channelType} sender=${envelope.senderId} first_sender_auto_approved=true`, "info", "access");
       const locale = this.inferLocale(envelope);
-      const msg = locale === "zh"
-        ? "你是此频道的第一个用户，已自动注册为 owner。"
-        : "You are the first user on this channel — auto-registered as owner.";
+      const msg = "You are the first user on this channel — auto-registered as owner.";
       await this.router.replyText(envelope, msg);
       return true;
     }
@@ -527,9 +525,7 @@ export class GatewayCore {
     if (!result.allowed) {
       if (result.pairingCode) {
         const locale = this.inferLocale(envelope);
-        const msg = locale === "zh"
-          ? `请将此配对码发给管理员审批：${result.pairingCode}\n（有效期 1 小时）`
-          : `Please send this pairing code to the owner for approval: ${result.pairingCode}\n(Valid for 1 hour)`;
+        const msg = `Please send this pairing code to the owner for approval: ${result.pairingCode}\n(Valid for 1 hour)`;
         await this.router.replyText(envelope, msg);
       }
       this.log(`access denied channel=${envelope.channelType} sender=${envelope.senderId} policy=${dmPolicy} reason=${result.reason}`, "warn", "access");
@@ -648,16 +644,16 @@ export class GatewayCore {
   private slugifyScheduleTask(task: string): string {
     const slug = task
       .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+      .replace(/[^a-z0-9一-鿿]+/gu, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 32);
     return slug || "scheduled-task";
   }
 
-  private buildScheduledJobName(intent: ScheduleIntent, locale: OnboardingLocale): string {
+  private buildScheduledJobName(intent: ScheduleIntent): string {
     const base = intent.normalizedTask.trim();
     if (!base) {
-      return locale === "zh" ? "定时任务" : "Scheduled task";
+      return "Scheduled task";
     }
     return base.slice(0, 80);
   }
@@ -667,7 +663,7 @@ export class GatewayCore {
     const locale = this.inferLocale(envelope);
     const created = registry.add({
       id: `schedule-${Date.now()}-${this.slugifyScheduleTask(intent.normalizedTask)}`,
-      name: this.buildScheduledJobName(intent, locale),
+      name: this.buildScheduledJobName(intent),
       enabled: true,
       schedule: intent.schedule,
       payload: {
@@ -697,7 +693,7 @@ export class GatewayCore {
       "Confirmed intent JSON:",
       JSON.stringify({
         id: `schedule-${Date.now()}-${this.slugifyScheduleTask(intent.normalizedTask)}`,
-        name: this.buildScheduledJobName(intent, this.inferLocale(envelope)),
+        name: this.buildScheduledJobName(intent),
         schedule: intent.schedule,
         task: intent.normalizedTask,
         channel: envelope.channelType,
@@ -1069,17 +1065,13 @@ export class GatewayCore {
     const action = this.readScheduleConfirmationAction(text);
     const locale = this.inferLocale(envelope);
     if (!action) {
-      const reminder = locale === "zh"
-        ? "你有一个待确认的定时任务。请先回复“确认”或“取消”。"
-        : 'You have a pending scheduled job. Reply with "confirm" or "cancel" first.';
+      const reminder = 'You have a pending scheduled job. Reply with "confirm" or "cancel" first.';
       await this.router.replyText(envelope, reminder);
       return true;
     }
     this.pendingScheduleConfirmations.delete(key);
     if (action === "cancel") {
-      const cancelled = locale === "zh"
-        ? "已取消这个待确认的定时任务。"
-        : "Cancelled the pending scheduled job.";
+      const cancelled = "Cancelled the pending scheduled job.";
       await this.router.replyText(envelope, cancelled);
       return true;
     }
@@ -1089,21 +1081,15 @@ export class GatewayCore {
       if (!jobId) {
         jobId = this.createStructuredJobFromIntent(envelope, pending.intent);
       }
-      const created = locale === "zh"
-        ? `定时任务已创建：${jobId}`
-        : `Scheduled job created: ${jobId}`;
+      const created = `Scheduled job created: ${jobId}`;
       await this.router.replyText(envelope, created);
     } catch (error) {
       try {
         const jobId = this.createStructuredJobFromIntent(envelope, pending.intent);
-        const fallback = locale === "zh"
-          ? `定时任务已创建：${jobId}`
-          : `Scheduled job created: ${jobId}`;
+        const fallback = `Scheduled job created: ${jobId}`;
         await this.router.replyText(envelope, fallback);
       } catch (fallbackError) {
-        const message = locale === "zh"
-          ? `创建定时任务失败：${(fallbackError as Error).message}`
-          : `Failed to create scheduled job: ${(fallbackError as Error).message}`;
+        const message = `Failed to create scheduled job: ${(fallbackError as Error).message}`;
         await this.router.replyText(envelope, message);
       }
     }
@@ -1127,9 +1113,7 @@ export class GatewayCore {
       const providedAck = String(options?.acceptedAck ?? "").trim();
       const ack = isIdle
         ? (providedAck || await this.resolveTaskAcceptedAck(task, locale))
-        : (locale === "zh"
-          ? `当前有任务在执行。你的新任务已加入队列（第 ${position} 位）。`
-          : `A previous task is still running. Your new task is queued (position ${position}).`);
+        : `A previous task is still running. Your new task is queued (position ${position}).`;
       const sanitizedAck = this.sanitizeForChat(ack, 1800);
       await this.router.replyText(envelope, sanitizedAck);
       this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", sanitizedAck);
@@ -1531,10 +1515,7 @@ export class GatewayCore {
   }
 
   private async resolveTaskAcceptedAck(task: string, locale: OnboardingLocale): Promise<string> {
-    const fallback = this.chat.taskAcceptedFallbackReply(
-      this.previewPayload(task, 160),
-      locale,
-    );
+    const fallback = this.chat.taskAcceptedFallbackReply(this.previewPayload(task, 160));
 
     const timeoutMs = 1200;
     const timeoutPromise = new Promise<string>((resolve) => {
@@ -1707,11 +1688,11 @@ export class GatewayCore {
   private inferLocale(envelope: InboundEnvelope): OnboardingLocale {
     const lang = envelope.senderLanguageCode ?? "";
     if (lang.startsWith("zh")) return "zh";
-    return /[\u4e00-\u9fff]/.test(envelope.text) ? "zh" : "en";
+    return /[一-鿿]/u.test(envelope.text) ? "zh" : "en";
   }
 
   private inferTaskLocale(task: string): OnboardingLocale {
-    return /[\u4e00-\u9fff]/.test(task) ? "zh" : "en";
+    return /[一-鿿]/u.test(task) ? "zh" : "en";
   }
 
   /**
