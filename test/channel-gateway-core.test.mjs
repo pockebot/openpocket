@@ -1322,6 +1322,120 @@ test("GatewayCore updates an EarnApp job when the selector uses Earn App wording
   });
 });
 
+test("GatewayCore updates a contextual Earn App schedule to Google Opinion Rewards using prior job-list context", async () => {
+  await withTempHome("gwcore-schedule-manage-contextual-update-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+    config.models[config.defaultModel].apiKey = "test-key";
+    core.chat.auditGroundingNeed = async () => ({
+      requiresExternalObservation: false,
+      canAnswerDirectly: true,
+      confidence: 0.95,
+      reason: "test_default_grounding_audit",
+    });
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    registry.add({
+      id: "schedule-1773027487704-check-earnapp-do-a-quick-rewards",
+      name: "Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 21 * * *",
+        at: null,
+        everyMs: null,
+        tz: "America/Los_Angeles",
+        summaryText: "Daily at 9 PM",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "1",
+      },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    core.chat.appendExternalTurn(
+      1,
+      "assistant",
+      [
+        "Scheduled jobs (1):",
+        "- schedule-1773027487704-check-earnapp-do-a-quick-rewards | enabled | Daily at 9 PM -> telegram:1",
+        "  Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+      ].join("\n"),
+    );
+
+    const input =
+      "Is the scheduled task for this not clear to you? You need to use Google Opinion Rewards instead of this Earn App. In it, you should check whether you can do a quick win to earn some rewards daily that can accumulate. So, can you improve your schedule task for it? Also, you need to change the daily schedule time to 8 a.m.";
+
+    core.chat.callModelRaw = async (_client, _model, _maxTokens, prompt, purpose) => {
+      if (purpose !== "schedule classify") {
+        throw new Error(`unexpected model call: ${purpose}`);
+      }
+      assert.match(prompt, /Scheduled jobs \(1\):/);
+      assert.match(prompt, /schedule-1773027487704-check-earnapp-do-a-quick-rewards/);
+      assert.match(prompt, /Check EarnApp; do a quick rewards check; check if more rewards can be claimed/);
+      return JSON.stringify({
+        route: "manage_schedule",
+        task: input,
+        manageIntent: {
+          action: "update",
+          selector: {
+            all: false,
+            ids: [],
+            nameContains: ["Earn App"],
+            taskContains: [],
+            scheduleContains: ["Daily at 9 PM"],
+            enabled: "any",
+          },
+          patch: {
+            name: null,
+            task: "Check Google Opinion Rewards; do a quick daily rewards check; see whether more rewards can be claimed",
+            enabled: null,
+            schedule: {
+              kind: "cron",
+              expr: "0 8 * * *",
+              at: null,
+              everyMs: null,
+              tz: "America/Los_Angeles",
+              summaryText: "Daily at 8 AM",
+            },
+          },
+        },
+        confidence: 0.98,
+        reason: "contextual_schedule_manage",
+      });
+    };
+    core.chat.classifyWithModel = async () => {
+      throw new Error("classifyWithModel should not run after contextual schedule extraction");
+    };
+
+    await core.handleInbound(makeEnvelope({
+      peerId: "1",
+      text: input,
+    }));
+
+    const updated = registry.get("schedule-1773027487704-check-earnapp-do-a-quick-rewards");
+    assert.equal(
+      updated?.payload.task,
+      "Check Google Opinion Rewards; do a quick daily rewards check; see whether more rewards can be claimed",
+    );
+    assert.equal(updated?.schedule.expr, "0 8 * * *");
+    assert.equal(updated?.schedule.summaryText, "Daily at 8 AM");
+    assert.match(
+      adapter.sent[0].text,
+      /Updated scheduled job schedule-1773027487704-check-earnapp-do-a-quick-rewards/i,
+    );
+    assert.match(adapter.sent[0].text, /task updated/i);
+    assert.match(adapter.sent[0].text, /Daily at 8 AM/i);
+  });
+});
+
 test("GatewayCore cancels pending schedule confirmation without creating a job", async () => {
   await withTempHome("gwcore-schedule-cancel-", async (home) => {
     const { adapter, core, config } = createGatewayCore(home);
