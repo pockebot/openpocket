@@ -19,8 +19,15 @@ import {
   markWorkspaceOnboardingCompleted,
 } from "../memory/workspace.js";
 import {
+  emptyCronManagementPatch,
+  emptyCronManagementSelector,
+  normalizeCronManagementIntent,
+  type CronManagementAction,
+  type CronManagementIntent,
+} from "./cron-management-intent.js";
+import {
   inferScheduleIntentLocale,
-  normalizeScheduleIntentCandidate,
+  normalizeScheduleIntentDecision,
 } from "./schedule-intent.js";
 
 type MsgRole = "user" | "assistant";
@@ -283,6 +290,9 @@ export interface ChatDecision {
   reason: string;
   requiresExternalObservation?: boolean;
   canAnswerDirectly?: boolean;
+  scheduleManagement?: boolean;
+  scheduleManagementAction?: CronManagementAction;
+  cronManagementIntent?: CronManagementIntent | null;
   scheduleIntent?: ScheduleIntent | null;
 }
 
@@ -294,7 +304,11 @@ interface GroundingAuditDecision {
 }
 
 interface ScheduleIntentExtractionDecision {
-  intent: ScheduleIntent;
+  route: "create_schedule" | "manage_schedule";
+  task?: string;
+  intent?: ScheduleIntent;
+  manageAction?: CronManagementAction;
+  cronManagementIntent?: CronManagementIntent;
   confidence: number;
   reason: string;
 }
@@ -2471,18 +2485,25 @@ export class ChatAssistant {
   ): Promise<ScheduleIntentExtractionDecision | null> {
     const locale: OnboardingLocale = inferScheduleIntentLocale(inputText);
     const prompt = [
-      "Determine whether the user message asks to create or update a scheduled job.",
+      "Determine whether the user message asks to create a scheduled job, manage an existing scheduled job, or neither.",
       "Output strict JSON only:",
-      '{"isScheduleIntent":true|false,"task":"<executable task without schedule phrasing>","schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","summaryText":"<concise schedule summary in the user language>"},"confidence":0-1,"reason":"..."}',
+      '{"route":"create_schedule|manage_schedule|none","task":"<task or empty>","manageIntent":{"action":"list|update|remove|enable|disable|unknown","selector":{"all":true|false,"ids":["<job id>"],"nameContains":["<name fragment>"],"taskContains":["<task fragment>"],"scheduleContains":["<schedule fragment>"],"enabled":"any|enabled|disabled"},"patch":{"name":"<new name or empty>","task":"<new task or empty>","enabled":true|false|null,"schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","summaryText":"<short schedule summary>"}}},"schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","summaryText":"<concise schedule summary in the user language>"},"confidence":0-1,"reason":"..."}',
       "Rules:",
-      "1) Return isScheduleIntent=true for explicit or implicit schedule requests such as recurring daily/weekly jobs or one-shot future reminders/tasks.",
-      "2) Return isScheduleIntent=false for translation, explanation, troubleshooting, capability, or meta questions about schedule-shaped text.",
-      "3) task must contain only the executable action, not the time phrase.",
-      "4) Use kind=cron for recurring calendar schedules when you can express them with a standard 5-field cron expression.",
-      "5) Use kind=every only for fixed interval schedules and set everyMs.",
-      "6) Use kind=at only for one-shot future schedules when you can provide an RFC3339 datetime.",
-      "7) summaryText must be short and in the user's language.",
-      "8) If the schedule is ambiguous or any required field is missing, return isScheduleIntent=false instead of guessing.",
+      "1) Return route=create_schedule for explicit or implicit requests to create a new recurring or one-shot scheduled task/reminder.",
+      "2) Return route=manage_schedule for requests to inspect, list, modify, rename, enable, disable, delete, or otherwise manage an existing cron job or scheduled task.",
+      "3) Return route=none for translation, explanation, troubleshooting, capability, or meta questions about schedule-shaped text.",
+      "4) For route=create_schedule, task must contain only the executable action, not the time phrase.",
+      "5) For route=manage_schedule, task should contain the management instruction itself.",
+      "6) For route=manage_schedule, populate manageIntent.action as list, update, remove, enable, disable, or unknown.",
+      "7) For route=manage_schedule, populate selector.all=true only when the user clearly targets every matching job (for example, all scheduled jobs or all disabled jobs).",
+      "8) For route=manage_schedule, populate selector.ids when the user names specific job IDs, and populate nameContains/taskContains/scheduleContains with the best matching fragments when the user refers to a job by description.",
+      "9) For route=manage_schedule, use enabled=enabled or disabled only when the request explicitly filters by current enabled state; otherwise use any.",
+      "10) For route=manage_schedule, populate patch only with the requested changes. Use patch.enabled for update/enable/disable requests that change enabled state.",
+      "11) Use kind=cron for recurring calendar schedules when you can express them with a standard 5-field cron expression.",
+      "12) Use kind=every only for fixed interval schedules and set everyMs.",
+      "13) Use kind=at only for one-shot future schedules when you can provide an RFC3339 datetime.",
+      "14) summaryText must be short and in the user's language when route=create_schedule.",
+      "15) If the schedule is ambiguous or any required field is missing for route=create_schedule, return route=none instead of guessing.",
       `User locale hint: ${locale}`,
       `User message: ${inputText}`,
     ].join("\n");
@@ -2506,20 +2527,33 @@ export class ChatAssistant {
 
     try {
       const parsed = JSON.parse(jsonText) as Record<string, unknown>;
-      const intent = normalizeScheduleIntentCandidate(inputText, parsed, {
+      const decision = normalizeScheduleIntentDecision(inputText, parsed, {
         locale,
         resolveTimezone: () => this.scheduleTimezoneForInput(inputText),
       });
-      if (!intent) {
+      if (!decision) {
         return null;
       }
+      const confidence =
+        typeof parsed.confidence === "number" && parsed.confidence >= 0 && parsed.confidence <= 1
+          ? parsed.confidence
+          : 0.9;
+      const reason = typeof parsed.reason === "string" ? parsed.reason : "schedule_model";
+      if (decision.route === "manage_schedule") {
+        return {
+          route: "manage_schedule",
+          task: decision.task,
+          manageAction: decision.manageAction,
+          cronManagementIntent: decision.cronManagement,
+          confidence,
+          reason,
+        };
+      }
       return {
-        intent,
-        confidence:
-          typeof parsed.confidence === "number" && parsed.confidence >= 0 && parsed.confidence <= 1
-            ? parsed.confidence
-            : 0.9,
-        reason: typeof parsed.reason === "string" ? parsed.reason : "schedule_model",
+        route: "create_schedule",
+        intent: decision.intent,
+        confidence,
+        reason,
       };
     } catch {
       this.logChat(
@@ -2539,12 +2573,13 @@ export class ChatAssistant {
     const prompt = [
       "Classify the user message for phone assistant routing.",
       "Output strict JSON only:",
-      '{"mode":"task|chat","task":"<task or empty>","reply":"<chat reply or empty>","taskAcceptedReply":"<one-line start ack for task mode, else empty>","confidence":0-1,"reason":"...","requiresExternalObservation":true|false,"canAnswerDirectly":true|false}',
+      '{"mode":"task|chat","task":"<task or empty>","reply":"<chat reply or empty>","taskAcceptedReply":"<one-line start ack for task mode, else empty>","confidence":0-1,"reason":"...","requiresExternalObservation":true|false,"canAnswerDirectly":true|false,"scheduleManagement":true|false,"scheduleManagementAction":"list|update|remove|enable|disable|unknown","scheduleManagementIntent":{"action":"list|update|remove|enable|disable|unknown","selector":{"all":true|false,"ids":["<job id>"],"nameContains":["<name fragment>"],"taskContains":["<task fragment>"],"scheduleContains":["<schedule fragment>"],"enabled":"any|enabled|disabled"},"patch":{"name":"<new name or empty>","task":"<new task or empty>","enabled":true|false|null,"schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","summaryText":"<short schedule summary>"}}}}',
       "Rules:",
       "1) mode=task when user wants the assistant to operate phone/apps.",
       "1.1) Treat operation as happening on phone by default.",
       "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
       "1.3) Question-like phrasing (e.g., 'can you ...? / 可以...吗？') must still be mode=task when it asks for executable outputs (create/write/build/run/install/open).",
+      "1.4) Requests to list/show/modify/update/delete/disable/enable existing cron jobs or scheduled tasks are mode=task management actions.",
       "2) requiresExternalObservation=true when correctness depends on current real-world/device/runtime/tool state.",
       "2.1) This includes requests about what is currently running, which device/environment/version/status is active, what is installed/connected/open right now, or any runtime fact that must be verified.",
       "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and stable general knowledge alone.",
@@ -2553,8 +2588,11 @@ export class ChatAssistant {
       "6) task should be executable imperative sentence.",
       "7) for chat mode, reply should be concise.",
       "8) If requiresExternalObservation=true, prefer mode=task.",
-      "9) If mode=task, taskAcceptedReply must be one short natural sentence that confirms execution starts now.",
-      "10) If mode=chat, taskAcceptedReply must be empty.",
+      "9) scheduleManagement=true only when the user is asking to inspect or modify existing cron jobs / scheduled tasks. Otherwise false.",
+      "10) If scheduleManagement=true, set scheduleManagementAction and scheduleManagementIntent.action consistently.",
+      "11) If scheduleManagement=true, populate scheduleManagementIntent.selector and scheduleManagementIntent.patch with the best structured target and change data you can infer from the user request.",
+      "12) If mode=task, taskAcceptedReply must be one short natural sentence that confirms execution starts now.",
+      "13) If mode=chat, taskAcceptedReply must be empty.",
       `User message: ${inputText}`,
     ].join("\n");
 
@@ -2570,8 +2608,29 @@ export class ChatAssistant {
     );
 
     try {
-      const parsed = JSON.parse(jsonText) as Partial<ChatDecision>;
+      const parsed = JSON.parse(jsonText) as Partial<ChatDecision> & {
+        scheduleManagementIntent?: unknown;
+      };
       const mode = parsed.mode === "task" ? "task" : "chat";
+      const scheduleManagement = mode === "task" && parsed.scheduleManagement === true;
+      const scheduleManagementIntent = scheduleManagement
+        ? normalizeCronManagementIntent(
+          isObject(parsed.scheduleManagementIntent)
+            ? {
+              ...parsed.scheduleManagementIntent,
+              action: parsed.scheduleManagementIntent.action ?? parsed.scheduleManagementAction,
+            }
+            : { action: parsed.scheduleManagementAction },
+          {
+            resolveTimezone: () => this.scheduleTimezoneForInput(inputText),
+          },
+        ) ?? {
+          action: "unknown",
+          selector: emptyCronManagementSelector(),
+          patch: emptyCronManagementPatch(),
+        }
+        : null;
+      const scheduleManagementAction = scheduleManagementIntent?.action ?? "unknown";
       const result: ChatDecision = {
         mode,
         task: typeof parsed.task === "string" ? parsed.task.trim() : "",
@@ -2586,6 +2645,9 @@ export class ChatAssistant {
         reason: typeof parsed.reason === "string" ? parsed.reason : "model_classify",
         requiresExternalObservation: parsed.requiresExternalObservation === true,
         canAnswerDirectly: parsed.canAnswerDirectly !== false,
+        scheduleManagement,
+        scheduleManagementAction: scheduleManagement ? scheduleManagementAction : undefined,
+        cronManagementIntent: scheduleManagement ? scheduleManagementIntent : undefined,
       };
       this.logChat("debug", `classify parsed mode=${result.mode} confidence=${result.confidence} reason=${result.reason}`);
       return result;
@@ -3564,16 +3626,31 @@ export class ChatAssistant {
         extractedSchedule = null;
       }
       if (extractedSchedule && extractedSchedule.confidence >= MIN_SCHEDULE_INTENT_CONFIDENCE) {
+        if (extractedSchedule.route === "manage_schedule") {
+          return {
+            mode: "task",
+            task: extractedSchedule.task || normalizedInput,
+            reply: "",
+            taskAcceptedReply: "",
+            confidence: extractedSchedule.confidence,
+            reason: `schedule_manage;${extractedSchedule.reason}`,
+            requiresExternalObservation: false,
+            canAnswerDirectly: false,
+            scheduleManagement: true,
+            scheduleManagementAction: extractedSchedule.manageAction ?? "unknown",
+            cronManagementIntent: extractedSchedule.cronManagementIntent ?? null,
+          };
+        }
         return {
           mode: "schedule_intent",
-          task: extractedSchedule.intent.normalizedTask,
-          reply: extractedSchedule.intent.confirmationPrompt,
+          task: extractedSchedule.intent?.normalizedTask || normalizedInput,
+          reply: extractedSchedule.intent?.confirmationPrompt || "",
           taskAcceptedReply: "",
           confidence: extractedSchedule.confidence,
-          reason: `schedule_intent:${extractedSchedule.intent.schedule.kind};${extractedSchedule.reason}`,
+          reason: `schedule_intent:${extractedSchedule.intent?.schedule.kind ?? "unknown"};${extractedSchedule.reason}`,
           requiresExternalObservation: false,
           canAnswerDirectly: false,
-          scheduleIntent: extractedSchedule.intent,
+          scheduleIntent: extractedSchedule.intent ?? null,
         };
       }
 

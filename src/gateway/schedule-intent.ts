@@ -1,6 +1,20 @@
 import type { ScheduleIntent } from "../types.js";
+import {
+  normalizeCronManagementIntent,
+  type CronManagementAction,
+  type CronManagementIntent,
+} from "./cron-management-intent.js";
 
 export type ScheduleIntentLocale = "zh" | "en";
+export type ScheduleManageAction = CronManagementAction;
+export type NormalizedScheduleIntentDecision =
+  | { route: "create_schedule"; intent: ScheduleIntent }
+  | {
+    route: "manage_schedule";
+    task: string;
+    manageAction: ScheduleManageAction;
+    cronManagement: CronManagementIntent;
+  };
 
 interface NormalizeScheduleIntentOptions {
   timezone?: string;
@@ -33,12 +47,40 @@ export function inferScheduleIntentLocale(input: string): ScheduleIntentLocale {
   return /[\u3400-\u9fff]/u.test(input) ? "zh" : "en";
 }
 
-export function normalizeScheduleIntentCandidate(
+export function normalizeScheduleIntentDecision(
   sourceText: string,
   candidate: unknown,
   options: NormalizeScheduleIntentOptions = {},
-): ScheduleIntent | null {
-  if (!isObject(candidate) || candidate.isScheduleIntent === false) {
+): NormalizedScheduleIntentDecision | null {
+  if (!isObject(candidate)) {
+    return null;
+  }
+
+  if (candidate.route === "manage_schedule") {
+    const normalizedTask = normalizeOneLine(String(candidate.task ?? sourceText));
+    const cronManagementSource = isObject(candidate.manageIntent)
+      ? {
+        ...candidate.manageIntent,
+        action: candidate.manageIntent.action ?? candidate.action ?? candidate.manageAction,
+      }
+      : candidate;
+    const cronManagement = normalizeCronManagementIntent(cronManagementSource, options);
+    if (!normalizedTask) {
+      return null;
+    }
+    if (!cronManagement) {
+      return null;
+    }
+    return {
+      route: "manage_schedule",
+      task: normalizedTask,
+      manageAction: cronManagement.action,
+      cronManagement,
+    };
+  }
+
+  const isCreateSchedule = candidate.route === "create_schedule" || candidate.isScheduleIntent === true;
+  if (!isCreateSchedule || candidate.isScheduleIntent === false) {
     return null;
   }
 
@@ -53,13 +95,25 @@ export function normalizeScheduleIntentCandidate(
   const localePack = SCHEDULE_INTENT_LOCALE_PACKS[locale];
 
   return {
-    sourceText: normalizedSourceText,
-    normalizedTask,
-    schedule,
-    delivery: null,
-    requiresConfirmation: true,
-    confirmationPrompt: localePack.confirmationPrompt(schedule.summaryText, normalizedTask),
+    route: "create_schedule",
+    intent: {
+      sourceText: normalizedSourceText,
+      normalizedTask,
+      schedule,
+      delivery: null,
+      requiresConfirmation: true,
+      confirmationPrompt: localePack.confirmationPrompt(schedule.summaryText, normalizedTask),
+    },
   };
+}
+
+export function normalizeScheduleIntentCandidate(
+  sourceText: string,
+  candidate: unknown,
+  options: NormalizeScheduleIntentOptions = {},
+): ScheduleIntent | null {
+  const decision = normalizeScheduleIntentDecision(sourceText, candidate, options);
+  return decision?.route === "create_schedule" ? decision.intent : null;
 }
 
 function normalizeSchedule(

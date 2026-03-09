@@ -32,6 +32,15 @@ import { HumanAuthBridge } from "../human-auth/bridge.js";
 import { LocalHumanAuthStack } from "../human-auth/local-stack.js";
 import { readLatestTaskJournalSnapshot } from "../agent/journal/task-journal-store.js";
 import { ChatAssistant } from "./chat-assistant.js";
+import {
+  emptyCronManagementPatch,
+  emptyCronManagementSelector,
+  hasCronManagementPatch,
+  hasCronManagementSelector,
+  type CronManagementAction,
+  type CronManagementIntent,
+  type CronManagementSelector,
+} from "./cron-management-intent.js";
 import { CronRegistry } from "./cron-registry.js";
 import { CronService, type CronRunResult } from "./cron-service.js";
 import { HeartbeatRunner } from "./heartbeat-runner.js";
@@ -68,16 +77,31 @@ type ChatContextPair = {
   value: string;
 };
 
+type QueuedTaskRunOptions = {
+  runtimeTask?: string;
+  promptMode?: "full" | "minimal" | "none";
+  availableToolNamesOverride?: string[];
+  skipTaskExecutionPlan?: boolean;
+};
+
 type QueuedTask = {
   envelope: InboundEnvelope;
   task: string;
   sessionKey: string;
   onDone?: (result: CronRunResult) => void | Promise<void>;
+  runOptions?: QueuedTaskRunOptions;
 };
 
 type PendingScheduleConfirmation = {
   intent: ScheduleIntent;
   createdAtMs: number;
+};
+
+type EnqueueTaskOptions = QueuedTaskRunOptions & {
+  sessionKey?: string;
+  onDone?: (result: CronRunResult) => void | Promise<void>;
+  skipAck?: boolean;
+  acceptedAck?: string;
 };
 
 export interface GatewayCoreOptions {
@@ -574,6 +598,16 @@ export class GatewayCore {
     if (decision.mode === "task") {
       const task = decision.task || text;
       this.chat.appendExternalTurn(chatId, "user", task);
+      if (decision.scheduleManagement === true) {
+        const reply = this.executeCronManagementIntent(
+          decision.cronManagementIntent
+          ?? this.defaultCronManagementIntent(decision.scheduleManagementAction),
+        );
+        const sanitizedReply = this.sanitizeForChat(reply, 1800);
+        await this.router.replyText(envelope, sanitizedReply);
+        this.chat.appendExternalTurn(chatId, "assistant", sanitizedReply);
+        return;
+      }
       await this.enqueueTask(envelope, task, {
         acceptedAck: decision.taskAcceptedReply || "",
       });
@@ -677,6 +711,323 @@ export class GatewayCore {
     ].join("\n");
   }
 
+  private defaultCronManagementIntent(action?: CronManagementAction): CronManagementIntent {
+    const patch = emptyCronManagementPatch();
+    if (action === "enable") {
+      patch.enabled = true;
+    } else if (action === "disable") {
+      patch.enabled = false;
+    }
+    return {
+      action: action ?? "unknown",
+      selector: emptyCronManagementSelector(),
+      patch,
+    };
+  }
+
+  private buildCronListReply(jobs: StoredCronJob[]): string {
+    if (jobs.length === 0) {
+      return "No scheduled jobs are configured.";
+    }
+
+    const header = `Scheduled jobs (${jobs.length}):`;
+    const body = jobs.slice(0, 20).map((job) => this.formatCronJobSummary(job)).join("\n");
+    const footer = jobs.length > 20 ? "Showing the first 20 jobs only." : "";
+    return [header, body, footer].filter(Boolean).join("\n");
+  }
+
+  private formatCronJobSummary(job: StoredCronJob): string {
+    const enabledLabel = job.enabled ? "enabled" : "disabled";
+    const scheduleLabel = job.schedule.summaryText || job.schedule.kind;
+    const target = job.delivery ? ` -> ${job.delivery.channel}:${job.delivery.to}` : "";
+    return `- ${job.id} | ${enabledLabel} | ${scheduleLabel}${target}\n  ${job.payload.task}`;
+  }
+
+  private normalizeCronMatchText(value: string): string {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[_-]+/g, " ")
+      .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private collapseCronMatchText(value: string): string {
+    return this.normalizeCronMatchText(value).replace(/\s+/g, "");
+  }
+
+  private tokenizeCronMatchText(value: string): string[] {
+    return this.canonicalizeCronMatchTokens(
+      this.normalizeCronMatchText(value)
+        .split(" ")
+        .filter(Boolean),
+    );
+  }
+
+  private canonicalizeCronMatchTokens(tokens: string[]): string[] {
+    const normalized: string[] = [];
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index] ?? "";
+      const next = tokens[index + 1] ?? "";
+      if (
+        token === "00"
+        && /^(am|pm)$/.test(next)
+        && normalized.length > 0
+        && /^\d{1,2}$/.test(normalized[normalized.length - 1] ?? "")
+      ) {
+        continue;
+      }
+      normalized.push(token);
+    }
+    return normalized;
+  }
+
+  private cronTextIncludesTokenSet(haystack: string, needle: string): boolean {
+    const needleTokens = this.tokenizeCronMatchText(needle);
+    if (needleTokens.length === 0) {
+      return true;
+    }
+    const haystackTokens = new Set(this.tokenizeCronMatchText(haystack));
+    return needleTokens.every((token) => haystackTokens.has(token));
+  }
+
+  private cronTextIncludes(haystack: string, needle: string): boolean {
+    const normalizedNeedle = this.normalizeCronMatchText(needle);
+    if (!normalizedNeedle) {
+      return true;
+    }
+    const normalizedHaystack = this.normalizeCronMatchText(haystack);
+    if (normalizedHaystack.includes(normalizedNeedle)) {
+      return true;
+    }
+
+    const collapsedNeedle = this.collapseCronMatchText(needle);
+    if (
+      collapsedNeedle
+      && (/\s/.test(normalizedNeedle) || /\d/.test(collapsedNeedle) || collapsedNeedle.length >= 6)
+      && this.collapseCronMatchText(haystack).includes(collapsedNeedle)
+    ) {
+      return true;
+    }
+
+    return this.cronTextIncludesTokenSet(haystack, needle);
+  }
+
+  private cronJobMatchesSelector(job: StoredCronJob, selector: CronManagementSelector): boolean {
+    if (selector.enabled === "enabled" && !job.enabled) {
+      return false;
+    }
+    if (selector.enabled === "disabled" && job.enabled) {
+      return false;
+    }
+    if (
+      selector.ids.length > 0
+      && !selector.ids.some((id) =>
+        this.normalizeCronMatchText(job.id) === this.normalizeCronMatchText(id)
+        || job.id.toLowerCase() === String(id).trim().toLowerCase())
+    ) {
+      return false;
+    }
+    if (!selector.nameContains.every((fragment) => this.cronTextIncludes(job.name, fragment))) {
+      return false;
+    }
+    if (!selector.taskContains.every((fragment) => this.cronTextIncludes(job.payload.task, fragment))) {
+      return false;
+    }
+    const scheduleText = [
+      job.schedule.summaryText,
+      job.schedule.expr ?? "",
+      job.schedule.at ?? "",
+      job.schedule.kind,
+    ].join(" ");
+    if (!selector.scheduleContains.every((fragment) => this.cronTextIncludes(scheduleText, fragment))) {
+      return false;
+    }
+    return true;
+  }
+
+  private selectCronJobs(jobs: StoredCronJob[], selector: CronManagementSelector): StoredCronJob[] {
+    if (!hasCronManagementSelector(selector)) {
+      return jobs.slice();
+    }
+    return jobs.filter((job) => this.cronJobMatchesSelector(job, selector));
+  }
+
+  private canApplyBulkCronManagement(intent: CronManagementIntent, jobs: StoredCronJob[]): boolean {
+    if (intent.selector.all) {
+      return true;
+    }
+    return intent.selector.ids.length > 1 && jobs.length === intent.selector.ids.length;
+  }
+
+  private buildCronUnknownActionReply(): string {
+    return "I could not determine whether you want to list, update, enable, disable, or remove scheduled jobs.";
+  }
+
+  private buildCronUnspecifiedTargetReply(action: CronManagementAction): string {
+    switch (action) {
+      case "remove":
+        return "I could not tell which scheduled job to remove. Reply with a specific job ID, or say to remove all scheduled jobs.";
+      case "enable":
+      case "disable":
+      case "update":
+        return "I could not tell which scheduled job to change. Reply with a specific job ID, or describe the target job more clearly.";
+      default:
+        return this.buildCronUnknownActionReply();
+    }
+  }
+
+  private buildCronNoMatchReply(): string {
+    return "No scheduled jobs matched that request.";
+  }
+
+  private buildCronAmbiguousReply(jobs: StoredCronJob[]): string {
+    const candidates = jobs.slice(0, 5).map((job) => this.formatCronJobSummary(job)).join("\n");
+    const footer = jobs.length > 5 ? "\nReply with one of the listed job IDs." : "";
+    return `Multiple scheduled jobs matched that request. Reply with a specific job ID.\n${candidates}${footer}`;
+  }
+
+  private buildCronUpdatePatch(intent: CronManagementIntent): {
+    enabled?: boolean;
+    name?: string;
+    payload?: { kind: "agent_turn"; task: string };
+    schedule?: StoredCronJob["schedule"];
+  } {
+    const patch: {
+      enabled?: boolean;
+      name?: string;
+      payload?: { kind: "agent_turn"; task: string };
+      schedule?: StoredCronJob["schedule"];
+    } = {};
+    const effectiveEnabled =
+      intent.action === "enable"
+        ? true
+        : intent.action === "disable"
+          ? false
+          : intent.patch.enabled;
+    if (typeof effectiveEnabled === "boolean") {
+      patch.enabled = effectiveEnabled;
+    }
+    if (intent.patch.name) {
+      patch.name = intent.patch.name;
+    }
+    if (intent.patch.task) {
+      patch.payload = {
+        kind: "agent_turn",
+        task: intent.patch.task,
+      };
+    }
+    if (intent.patch.schedule) {
+      patch.schedule = intent.patch.schedule;
+    }
+    return patch;
+  }
+
+  private buildCronChangeSummary(intent: CronManagementIntent): string {
+    const changes: string[] = [];
+    const effectiveEnabled =
+      intent.action === "enable"
+        ? true
+        : intent.action === "disable"
+          ? false
+          : intent.patch.enabled;
+    if (typeof effectiveEnabled === "boolean") {
+      changes.push(effectiveEnabled ? "enabled" : "disabled");
+    }
+    if (intent.patch.name) {
+      changes.push(`name -> ${intent.patch.name}`);
+    }
+    if (intent.patch.task) {
+      changes.push("task updated");
+    }
+    if (intent.patch.schedule) {
+      changes.push(`schedule -> ${intent.patch.schedule.summaryText || intent.patch.schedule.kind}`);
+    }
+    return changes.join("; ");
+  }
+
+  private executeCronManagementIntent(intent: CronManagementIntent): string {
+    const registry = new CronRegistry(this.config);
+    const allJobs = registry.list();
+    if (allJobs.length === 0) {
+      return "No scheduled jobs are configured.";
+    }
+
+    if (intent.action === "unknown") {
+      return this.buildCronUnknownActionReply();
+    }
+
+    const matchedJobs = this.selectCronJobs(allJobs, intent.selector);
+
+    if (intent.action === "list") {
+      if (matchedJobs.length === 0) {
+        return this.buildCronNoMatchReply();
+      }
+      return this.buildCronListReply(matchedJobs);
+    }
+
+    if (!hasCronManagementSelector(intent.selector) && !intent.selector.all) {
+      return this.buildCronUnspecifiedTargetReply(intent.action);
+    }
+
+    if (matchedJobs.length === 0) {
+      return this.buildCronNoMatchReply();
+    }
+
+    const bulkAllowed = this.canApplyBulkCronManagement(intent, matchedJobs);
+    if (matchedJobs.length > 1 && !bulkAllowed) {
+      return this.buildCronAmbiguousReply(matchedJobs);
+    }
+
+    if (intent.action === "remove") {
+      const removedIds = matchedJobs
+        .filter((job) => registry.remove(job.id))
+        .map((job) => job.id);
+      if (removedIds.length === 0) {
+        return this.buildCronNoMatchReply();
+      }
+      if (removedIds.length === 1) {
+        return `Removed scheduled job ${removedIds[0]}.`;
+      }
+      return `Removed ${removedIds.length} scheduled jobs: ${removedIds.join(", ")}.`;
+    }
+
+    const updatePatch = this.buildCronUpdatePatch(intent);
+    if (!hasCronManagementPatch(intent.patch) && intent.action === "update" && Object.keys(updatePatch).length === 0) {
+      return "I could not determine what change to apply to the scheduled job.";
+    }
+
+    const updatedIds = matchedJobs
+      .map((job) => registry.update(job.id, updatePatch))
+      .filter((job): job is StoredCronJob => job !== null)
+      .map((job) => job.id);
+    if (updatedIds.length === 0) {
+      return this.buildCronNoMatchReply();
+    }
+
+    const changeSummary = this.buildCronChangeSummary(intent);
+    if (updatedIds.length === 1) {
+      const prefix =
+        intent.action === "enable"
+          ? "Enabled"
+          : intent.action === "disable"
+            ? "Disabled"
+            : "Updated";
+      return changeSummary && intent.action === "update"
+        ? `${prefix} scheduled job ${updatedIds[0]}: ${changeSummary}.`
+        : `${prefix} scheduled job ${updatedIds[0]}.`;
+    }
+    const prefix =
+      intent.action === "enable"
+        ? "Enabled"
+        : intent.action === "disable"
+          ? "Disabled"
+          : "Updated";
+    return changeSummary
+      ? `${prefix} ${updatedIds.length} scheduled jobs: ${updatedIds.join(", ")}. Changes: ${changeSummary}.`
+      : `${prefix} ${updatedIds.length} scheduled jobs: ${updatedIds.join(", ")}.`;
+  }
+
   private async runCronSetupTask(envelope: InboundEnvelope, intent: ScheduleIntent): Promise<string | null> {
     const registry = new CronRegistry(this.config);
     const beforeIds = new Set(registry.list().map((job) => job.id));
@@ -766,12 +1117,7 @@ export class GatewayCore {
   private async enqueueTask(
     envelope: InboundEnvelope,
     task: string,
-    options?: {
-      sessionKey?: string;
-      onDone?: (result: CronRunResult) => void | Promise<void>;
-      skipAck?: boolean;
-      acceptedAck?: string;
-    },
+    options?: EnqueueTaskOptions,
   ): Promise<void> {
     const locale = this.inferTaskLocale(task);
     const isIdle = !this.drainingTaskQueue && !this.agent.isBusy() && this.pendingTasks.length === 0;
@@ -794,6 +1140,12 @@ export class GatewayCore {
       task,
       sessionKey: options?.sessionKey ?? this.sessionKeyResolver.resolve(envelope),
       onDone: options?.onDone,
+      runOptions: {
+        runtimeTask: options?.runtimeTask,
+        promptMode: options?.promptMode,
+        availableToolNamesOverride: options?.availableToolNamesOverride,
+        skipTaskExecutionPlan: options?.skipTaskExecutionPlan,
+      },
     });
     void this.drainTaskQueue();
   }
@@ -807,7 +1159,7 @@ export class GatewayCore {
         if (this.agent.isBusy()) break;
         const next = this.pendingTasks.shift();
         if (!next) break;
-        const result = await this.runTaskAndReport(next.envelope, next.task, next.sessionKey);
+        const result = await this.runTaskAndReport(next.envelope, next.task, next.sessionKey, next.runOptions);
         if (next.onDone) {
           try { await next.onDone(result); } catch (error) {
             this.log(`task completion callback error channel=${next.envelope.channelType} error=${(error as Error).message}`, "warn", "task");
@@ -826,9 +1178,14 @@ export class GatewayCore {
     envelope: InboundEnvelope,
     task: string,
     sessionKey: string,
+    runOptions?: QueuedTaskRunOptions,
   ): Promise<CronRunResult> {
-    const enrichedTask = this.enrichTaskWithChatContext(task, envelope.peerId);
-    const taskExecutionPlan: TaskExecutionPlan | null = await this.planTaskExecutionSafe(task);
+    const runtimeTask = runOptions?.runtimeTask?.trim()
+      ? runOptions.runtimeTask
+      : this.enrichTaskWithChatContext(task, envelope.peerId);
+    const taskExecutionPlan: TaskExecutionPlan | null = runOptions?.skipTaskExecutionPlan === true
+      ? null
+      : await this.planTaskExecutionSafe(task);
     if (taskExecutionPlan) {
       this.log(
         `task execution plan channel=${envelope.channelType} sender=${envelope.senderId} surface=${taskExecutionPlan.surface}` +
@@ -912,7 +1269,7 @@ export class GatewayCore {
       };
 
       const result = await this.agent.runTask(
-        enrichedTask,
+        runtimeTask,
         undefined,
         async (progress) => enqueueProgress(progress),
         async (request) => {
@@ -937,7 +1294,7 @@ export class GatewayCore {
             },
           );
         },
-        undefined,
+        runOptions?.promptMode,
         adapter
           ? async (request) => adapter.requestUserDecision(envelope.peerId, request)
           : undefined,
@@ -949,6 +1306,7 @@ export class GatewayCore {
           ? async (request) => this.deliverChannelMedia(envelope, request, adapter)
           : undefined,
         taskExecutionPlan,
+        runOptions?.availableToolNamesOverride,
       );
       await progressWork;
 

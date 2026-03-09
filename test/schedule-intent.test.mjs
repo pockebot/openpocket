@@ -5,6 +5,7 @@ import test from "node:test";
 
 const {
   inferScheduleIntentLocale,
+  normalizeScheduleIntentDecision,
   normalizeScheduleIntentCandidate,
 } = await import("../dist/gateway/schedule-intent.js");
 
@@ -59,6 +60,94 @@ test("schedule intent normalization requires RFC3339 at value for one-shot sched
   assert.equal(valid?.schedule.at, "2026-03-08T08:00:00-08:00");
 });
 
+test("schedule intent normalization supports manage-schedule decisions without local lexicon rules", () => {
+  const decision = normalizeScheduleIntentDecision("Modify the cron job for the Earn app", {
+    route: "manage_schedule",
+    task: "Modify the cron job for the Earn app",
+    action: "update",
+    selector: {
+      all: false,
+      nameContains: ["Earn app"],
+    },
+    patch: {
+      schedule: {
+        kind: "cron",
+        expr: "20 22 * * *",
+        summaryText: "Daily at 10:20 PM",
+      },
+    },
+  }, {
+    timezone: "America/Los_Angeles",
+  });
+
+  assert.deepEqual(decision, {
+    route: "manage_schedule",
+    task: "Modify the cron job for the Earn app",
+    manageAction: "update",
+    cronManagement: {
+      action: "update",
+      selector: {
+        all: false,
+        ids: [],
+        nameContains: ["Earn app"],
+        taskContains: [],
+        scheduleContains: [],
+        enabled: "any",
+      },
+      patch: {
+        name: null,
+        task: null,
+        enabled: null,
+        schedule: {
+          kind: "cron",
+          expr: "20 22 * * *",
+          at: null,
+          everyMs: null,
+          tz: "America/Los_Angeles",
+          summaryText: "Daily at 10:20 PM",
+        },
+      },
+    },
+  });
+});
+
+test("schedule intent normalization accepts nested manageIntent payloads from model output", () => {
+  const decision = normalizeScheduleIntentDecision("remove all scheduled jobs", {
+    route: "manage_schedule",
+    task: "remove all scheduled jobs",
+    manageIntent: {
+      action: "remove",
+      selector: {
+        all: true,
+      },
+      patch: {},
+    },
+  });
+
+  assert.deepEqual(decision, {
+    route: "manage_schedule",
+    task: "remove all scheduled jobs",
+    manageAction: "remove",
+    cronManagement: {
+      action: "remove",
+      selector: {
+        all: true,
+        ids: [],
+        nameContains: [],
+        taskContains: [],
+        scheduleContains: [],
+        enabled: "any",
+      },
+      patch: {
+        name: null,
+        task: null,
+        enabled: null,
+        schedule: null,
+      },
+    },
+  });
+});
+
 test("schedule intent module no longer embeds local keyword parsing tables", () => {
   const source = fs.readFileSync(path.join(process.cwd(), "src", "gateway", "schedule-intent.ts"), "utf-8");
 
@@ -66,6 +155,7 @@ test("schedule intent module no longer embeds local keyword parsing tables", () 
   assert.doesNotMatch(source, /ACTION_PREFIXES_ZH/);
   assert.doesNotMatch(source, /ZH_DAILY_PATTERN/);
   assert.doesNotMatch(source, /parseZhTimePrefix/);
+  assert.doesNotMatch(source, /SCHEDULE_ADMIN_LEXICONS/);
 });
 
 test("chat assistant uses model-based schedule extraction", () => {
