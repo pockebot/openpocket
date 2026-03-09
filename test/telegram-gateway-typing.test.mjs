@@ -66,7 +66,6 @@ test("TelegramGateway formats human-auth escalation as HTML and strips redundant
 
     const html = gateway.buildHumanAuthHtmlMessage(
       "Please open the authorization link now and approve or reject the request. Once you've done that, send a quick confirmation here. Security note: this auth page connects to your local OpenPocket relay.",
-      "en",
       ["/auth approve req_123", "Web link is unavailable. Use manual commands:"],
     );
 
@@ -288,6 +287,7 @@ test("TelegramGateway consumes profile-update payload after chat reply", async (
 
     await gateway.consumeMessage({ chat: { id: 456 }, text: "Rename yourself to Jarvis-Phone" });
 
+    // Telegram display-name sync copy is intentionally English-only.
     assert.equal(setNameCalls.length, 1);
     assert.equal(setNameCalls[0].name, "Jarvis-Phone");
     assert.equal(messageCalls.length, 2);
@@ -2051,8 +2051,8 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     assert.equal(sent.length, 3);
     assert.equal(sent[0].chatId, 9201);
     assert.equal(sent[0].text, "Progress: opened the Gmail home screen.");
-    assert.doesNotMatch(sent[0].text, /(\u6536\u5230\uff0c\u6211\u5148\u5904\u7406\u8fd9\u4e2a\u4efb\u52a1|On it:)/i);
-    assert.doesNotMatch(sent[0].text, /\u5df2\u5f00\u59cb\u6267\u884c\u4efb\u52a1/);
+    assert.doesNotMatch(sent[0].text, /(收到，我先处理这个任务|On it:)/i);
+    assert.doesNotMatch(sent[0].text, /已开始执行任务/);
     assert.doesNotMatch(sent[0].text, /\[(goal|screen|next)\]/i);
     assert.doesNotMatch(sent[0].text, /Sub-goal|Screen is|Next:/i);
     assert.equal(sent[2].text, "Inbox is open and the latest email list is visible.");

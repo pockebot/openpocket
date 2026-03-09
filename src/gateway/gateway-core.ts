@@ -598,10 +598,10 @@ export class GatewayCore {
     if (!normalized) {
       return null;
     }
-    if (["\u786e\u8ba4", "\u786e\u8ba4\u521b\u5efa", "confirm", "yes", "y"].includes(normalized)) {
+    if (["确认", "确认创建", "confirm", "yes", "y"].includes(normalized)) {
       return "confirm";
     }
-    if (["\u53d6\u6d88", "cancel", "no", "n"].includes(normalized)) {
+    if (["取消", "cancel", "no", "n"].includes(normalized)) {
       return "cancel";
     }
     return null;
@@ -610,7 +610,7 @@ export class GatewayCore {
   private slugifyScheduleTask(task: string): string {
     const slug = task
       .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+      .replace(/[^a-z0-9一-鿿]+/gu, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 32);
     return slug || "scheduled-task";
@@ -1330,11 +1330,11 @@ export class GatewayCore {
   private inferLocale(envelope: InboundEnvelope): OnboardingLocale {
     const lang = envelope.senderLanguageCode ?? "";
     if (lang.startsWith("zh")) return "zh";
-    return /[\u4e00-\u9fff]/.test(envelope.text) ? "zh" : "en";
+    return /[一-鿿]/u.test(envelope.text) ? "zh" : "en";
   }
 
   private inferTaskLocale(task: string): OnboardingLocale {
-    return /[\u4e00-\u9fff]/.test(task) ? "zh" : "en";
+    return /[一-鿿]/u.test(task) ? "zh" : "en";
   }
 
   /**

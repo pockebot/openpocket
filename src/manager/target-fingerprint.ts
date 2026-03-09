@@ -1,16 +1,6 @@
 import type { OpenPocketConfig } from "../types.js";
+import { normalizeAdbEndpoint } from "../device/adb-endpoint.js";
 import { normalizeDeviceTargetType } from "../device/target-types.js";
-
-function normalizeAdbEndpoint(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.includes(":")) {
-    return trimmed;
-  }
-  return `${trimmed}:5555`;
-}
 
 function firstNonEmpty(...values: Array<string | null | undefined>): string {
   for (const value of values) {

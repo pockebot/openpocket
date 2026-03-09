@@ -1,4 +1,5 @@
 import type { DeviceTargetType } from "../types.js";
+import { normalizeOptionalAdbEndpoint } from "./adb-endpoint.js";
 import { shouldIncludeDeviceForTarget } from "./target-types.js";
 
 export type AdbConnectionType = "usb" | "wifi" | "emulator" | "unknown";
@@ -60,10 +61,7 @@ function normalizeEndpoint(deviceId: string, connectionType: AdbConnectionType):
   if (connectionType !== "wifi") {
     return null;
   }
-  if (!deviceId.includes(":")) {
-    return `${deviceId}:5555`;
-  }
-  return deviceId;
+  return normalizeOptionalAdbEndpoint(deviceId);
 }
 
 export function parseAdbDevicesLongOutput(output: string): AdbDeviceDescriptor[] {
@@ -124,4 +122,3 @@ export function adbConnectionLabel(connectionType: AdbConnectionType): string {
       return "ADB";
   }
 }
-

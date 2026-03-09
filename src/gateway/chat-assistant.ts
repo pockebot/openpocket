@@ -868,7 +868,7 @@ export class ChatAssistant {
   private normalizeAssistantName(input: string): string {
     return this.normalizeOneLine(input)
       .replace(/[。！？.!?]+$/g, "")
-      .replace(/\s*(\u5427|\u5440|\u5462|\u5566|\u55d4|\u54e6|\u597d\u5417|\u53ef\u4ee5\u5417)\s*$/i, "")
+      .replace(/\s*(吧|呀|呢|啦|嗔|哦|好吗|可以吗)\s*$/i, "")
       .trim();
   }
 
@@ -1142,7 +1142,7 @@ export class ChatAssistant {
     return false;
   }
 
-  private isProfileSnapshotComplete(snapshot: ProfileSnapshot, locale: OnboardingLocale): boolean {
+  private isProfileSnapshotComplete(snapshot: ProfileSnapshot): boolean {
     return !this.isPlaceholderValue(snapshot.userPreferredAddress, [this.pickFallback("user")])
       && !this.isPlaceholderValue(
         snapshot.assistantName,
@@ -1154,7 +1154,6 @@ export class ChatAssistant {
   private applyModelProfilePatch(
     base: ProfileSnapshot,
     patch: BootstrapModelDecision["profile"] | undefined,
-    locale: OnboardingLocale,
   ): ProfileSnapshot {
     if (!patch) {
       return base;
@@ -1167,7 +1166,7 @@ export class ChatAssistant {
       next.assistantName = this.normalizeAssistantName(patch.assistantName);
     }
     if (typeof patch.assistantPersona === "string" && this.normalizeOneLine(patch.assistantPersona)) {
-      next.assistantPersona = this.resolvePersonaAnswer(this.normalizeOneLine(patch.assistantPersona), locale);
+      next.assistantPersona = this.resolvePersonaAnswer(this.normalizeOneLine(patch.assistantPersona));
     }
     if (typeof patch.userName === "string" && this.normalizeOneLine(patch.userName)) {
       next.userName = this.normalizeOneLine(patch.userName);
@@ -1183,7 +1182,7 @@ export class ChatAssistant {
 
   private detectOnboardingLocale(input: string): OnboardingLocale {
     // Use a simple CJK signal so onboarding language follows the user's first message.
-    return /[\u4e00-\u9fff]/.test(input) ? "zh" : "en";
+    return /[一-鿿]/u.test(input) ? "zh" : "en";
   }
 
   private questionForStep(step: OnboardingStep): string {
@@ -1197,7 +1196,7 @@ export class ChatAssistant {
     return fallbacks.persona;
   }
 
-  private completeProfileWithFallbacks(snapshot: ProfileSnapshot, locale: OnboardingLocale): ProfileSnapshot {
+  private completeProfileWithFallbacks(snapshot: ProfileSnapshot): ProfileSnapshot {
     const next: ProfileSnapshot = { ...snapshot };
     if (this.isPlaceholderValue(next.userPreferredAddress, [this.pickFallback("user")])) {
       next.userPreferredAddress = this.pickFallback("user");
@@ -1238,17 +1237,17 @@ export class ChatAssistant {
     }
 
     const userPreferredAddress = this.extractByPatterns(normalized, [
-      /(?:\u53eb\u6211|\u79f0\u547c\u6211|\u4f60\u53ef\u4ee5\u53eb\u6211|\u558a\u6211)\s*[:：]?\s*([^,，。;；\n]+)/i,
+      /(?:叫我|称呼我|你可以叫我|喊我)\s*[:：]?\s*([^,，。;；\n]+)/i,
       /(?:call me|address me as|you can call me)\s+([^,.;\n]+)/i,
     ]);
     const assistantName = this.extractByPatterns(normalized, [
-      /(?:\u4f60\u53eb|\u4f60\u5c31\u53eb|\u79f0\u547c\u4f60\u4e3a|\u6211\u53eb\u4f60|\u6211\u5e0c\u671b\u4f60\u53eb)\s*[:：]?\s*([^,，。;；\n]+)/i,
-      /(?:\u4f60(?:\u628a)?(?:\u4f60(?:\u7684)?)?\u540d\u5b57(?:\u6539\u6210|\u6539\u4e3a|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u53eb\u505a?)|\u4f60\u4ee5\u540e\u53eb)\s*[:：]?\s*([^,，。;；\n]+)/i,
+      /(?:你叫|你就叫|称呼你为|我叫你|我希望你叫)\s*[:：]?\s*([^,，。;；\n]+)/i,
+      /(?:你(?:把)?(?:你(?:的)?)?名字(?:改成|改为|设为|设置为|叫做?)|你以后叫)\s*[:：]?\s*([^,，。;；\n]+)/i,
       /(?:call you|your name is|i want to call you)\s+([^,.;\n]+)/i,
       /(?:rename yourself to|change your name to|set your name to|call yourself)\s+([^,.;\n]+)/i,
     ]);
     const assistantPersona = this.extractByPatterns(normalized, [
-      /(?:\u4eba\u8bbe|\u98ce\u683c|\u8bed\u6c14|\u8bbe\u5b9a)\s*[:：]?\s*([^。;；\n]+)/i,
+      /(?:人设|风格|语气|设定)\s*[:：]?\s*([^。;；\n]+)/i,
       /(?:\bpersona\b|\btone\b|\bstyle\b)\s*(?:is|:)?\s*([^.;\n]+)/i,
     ]);
 
@@ -1271,7 +1270,7 @@ export class ChatAssistant {
       return false;
     }
     return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start|check|query|look up|find)\b/.test(t)
-      || /(\u6253\u5f00|\u542f\u52a8|\u5b89\u88c5|\u4e0b\u8f7d|\u641c\u7d22|\u6ed1\u52a8|\u70b9\u51fb|\u8f93\u5165|\u767b\u5f55|\u4f7f\u7528|\u67e5\u8be2|\u67e5\u4e0b|\u770b\u770b|\u5e2e\u6211)/.test(t);
+      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用|查询|查下|看看|帮我)/.test(t);
   }
 
   private hasConcreteExecutableTarget(input: string): boolean {
@@ -1285,7 +1284,7 @@ export class ChatAssistant {
 
   private hasExplicitExecutionOutputConstraint(input: string): boolean {
     const normalized = this.normalizeOneLine(input);
-    return /(\u5185\u5bb9\u4e3a|\u5185\u5bb9\u662f|\u5199\u5165|\u4fdd\u5b58\u5230|\u8f93\u51fa|\u6253\u5370|\u751f\u6210.*\u6587\u4ef6|\u521b\u5efa.*\u6587\u4ef6|\u5e76\u5f00\u59cb\u5b9e\u73b0|with content|write.*file|print|output|install.*emulator|build.*apk)/i
+    return /(内容为|内容是|写入|保存到|输出|打印|生成.*文件|创建.*文件|并开始实现|with content|write.*file|print|output|install.*emulator|build.*apk)/i
       .test(normalized);
   }
 
@@ -1295,17 +1294,17 @@ export class ChatAssistant {
       return false;
     }
     const lower = normalized.toLowerCase();
-    const startsWithCapabilityLead = /^(?:\u4f60|\u4f60\u80fd|\u4f60\u53ef\u4ee5|\u4f60\u4f1a|\u4f60\u53ef\u4e0d\u53ef\u4ee5|\u4f60\u80fd\u4e0d\u80fd|\u4f60\u4f1a\u4e0d\u4f1a|can you|could you|would you|are you able to|do you know how to)\s*/i
+    const startsWithCapabilityLead = /^(?:你|你能|你可以|你会|你可不可以|你能不能|你会不会|can you|could you|would you|are you able to|do you know how to)\s*/i
       .test(normalized);
     if (!startsWithCapabilityLead) {
       return false;
     }
     const hasQuestionTone = /[?？]$/.test(normalized)
-      || /(\u53ef\u4ee5\u5417|\u80fd\u5417|\u4f1a\u5417|\u884c\u5417|\u53ef\u4e0d\u53ef\u4ee5|\u80fd\u4e0d\u80fd|\u4f1a\u4e0d\u4f1a|can you|could you|would you|possible)/i.test(lower);
+      || /(可以吗|能吗|会吗|行吗|可不可以|能不能|会不会|can you|could you|would you|possible)/i.test(lower);
     if (!hasQuestionTone) {
       return false;
     }
-    const hasImmediateCue = /(\u5e2e\u6211|\u8bf7\u4f60|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u76f4\u63a5|for me|go ahead|please)/i.test(normalized);
+    const hasImmediateCue = /(帮我|请你|请|马上|立即|直接|for me|go ahead|please)/i.test(normalized);
     return !hasImmediateCue
       && !this.hasConcreteExecutableTarget(normalized)
       && !this.hasExplicitExecutionOutputConstraint(normalized);
@@ -1319,13 +1318,13 @@ export class ChatAssistant {
     const lower = normalized.toLowerCase();
     const hasExecutionVerb = /\b(create|write|edit|modify|build|compile|run|execute|install|open|launch|start|fix|implement|generate|code|script|deploy)\b/i
       .test(lower)
-      || /(\u521b\u5efa|\u65b0\u5efa|\u5199|\u4fee\u6539|\u7f16\u8f91|\u5b9e\u73b0|\u751f\u6210|\u6784\u5efa|\u7f16\u8bd1|\u8fd0\u884c|\u6267\u884c|\u5b89\u88c5|\u6253\u5f00|\u542f\u52a8|\u4fee\u590d|\u5f00\u53d1|\u90e8\u7f72|\u505a\u4e00\u4e2a|\u505a\u4e2a|\u5e2e\u6211\u505a)/.test(normalized);
+      || /(创建|新建|写|修改|编辑|实现|生成|构建|编译|运行|执行|安装|打开|启动|修复|开发|部署|做一个|做个|帮我做)/.test(normalized);
     if (!hasExecutionVerb) {
       return false;
     }
-    const hasImperativeCue = /^(?:please|pls|open|launch|start|run|create|write|build|install|execute|\u5e2e\u6211|\u8bf7\u4f60|\u8bf7|\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u521b\u5efa|\u5199|\u5b89\u88c5|\u6267\u884c|\u53bb|\u524d\u5f80|\u7ed9\u6211)/i
+    const hasImperativeCue = /^(?:please|pls|open|launch|start|run|create|write|build|install|execute|帮我|请你|请|打开|启动|运行|创建|写|安装|执行|去|前往|给我)/i
       .test(normalized)
-      || /(\u5e2e\u6211|\u8bf7\u4f60|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u76f4\u63a5|for me|go ahead)/i.test(normalized);
+      || /(帮我|请你|请|马上|立即|直接|for me|go ahead)/i.test(normalized);
     const hasConcreteTarget = this.hasConcreteExecutableTarget(normalized);
     const hasOutputConstraint = this.hasExplicitExecutionOutputConstraint(normalized);
     if (this.looksLikeCapabilityQuestionOnly(normalized) && !hasImperativeCue && !hasConcreteTarget && !hasOutputConstraint) {
@@ -1334,9 +1333,8 @@ export class ChatAssistant {
     return hasImperativeCue || hasConcreteTarget || hasOutputConstraint;
   }
 
-  private scheduleTimezoneForInput(input: string): string {
-    const locale: OnboardingLocale = inferScheduleIntentLocale(input);
-    const snapshot = this.readProfileSnapshot(locale);
+  private scheduleTimezoneForInput(): string {
+    const snapshot = this.readProfileSnapshot();
     const configured = this.normalizeOneLine(snapshot.timezone ?? "");
     if (configured) {
       return configured;
@@ -1354,7 +1352,7 @@ export class ChatAssistant {
     return "";
   }
 
-  private resolvePersonaAnswer(answer: string, locale: OnboardingLocale): string {
+  private resolvePersonaAnswer(answer: string): string {
     const preset = this.personaPresetFromAnswer(answer);
     if (preset) {
       return preset;
@@ -1391,7 +1389,6 @@ export class ChatAssistant {
 
   private firstMissingSnapshotStep(
     snapshot: ProfileSnapshot,
-    locale: OnboardingLocale,
   ): OnboardingStep | null {
     if (this.isPlaceholderValue(snapshot.userPreferredAddress, [this.pickFallback("user")])) {
       return 1;
@@ -1410,8 +1407,8 @@ export class ChatAssistant {
     return null;
   }
 
-  private bootstrapFallbackQuestion(locale: OnboardingLocale, snapshot: ProfileSnapshot): string {
-    const step = this.firstMissingSnapshotStep(snapshot, locale);
+  private bootstrapFallbackQuestion(snapshot: ProfileSnapshot): string {
+    const step = this.firstMissingSnapshotStep(snapshot);
     if (step === null) {
       return "I already have your onboarding profile. Tell me what you want to do next.";
     }
@@ -1973,7 +1970,7 @@ export class ChatAssistant {
     return `${trimmed}\n- ${key}: ${value}`;
   }
 
-  private readProfileSnapshot(locale: OnboardingLocale): ProfileSnapshot {
+  private readProfileSnapshot(): ProfileSnapshot {
     const identity = this.readTextSafe(this.profileFilePath("IDENTITY.md"));
     const user = this.readTextSafe(this.profileFilePath("USER.md"));
 
@@ -2077,7 +2074,7 @@ export class ChatAssistant {
     state: BootstrapOnboardingState,
     locale: OnboardingLocale,
   ): string {
-    if (this.isProfileSnapshotComplete(state.profile, locale)) {
+    if (this.isProfileSnapshotComplete(state.profile)) {
       this.completeWorkspaceBootstrap(state.profile);
       this.bootstrapOnboarding.delete(chatId);
       this.profileOnboarding.delete(chatId);
@@ -2096,7 +2093,7 @@ export class ChatAssistant {
       profile: state.profile,
       turns: state.turns.slice(-20),
     });
-    return this.bootstrapFallbackQuestion(locale, state.profile);
+    return this.bootstrapFallbackQuestion(state.profile);
   }
 
   private async applyBootstrapOnboarding(chatId: number, inputText: string): Promise<string | null> {
@@ -2111,7 +2108,7 @@ export class ChatAssistant {
     const parsedFromInput = this.parseOnboardingFields(inputText);
     const state: BootstrapOnboardingState = active ?? {
       locale,
-      profile: this.readProfileSnapshot(locale),
+      profile: this.readProfileSnapshot(),
       turns: [],
     };
 
@@ -2122,7 +2119,7 @@ export class ChatAssistant {
       state.profile.assistantName = this.normalizeAssistantName(parsedFromInput.assistantName);
     }
     if (parsedFromInput.assistantPersona) {
-      state.profile.assistantPersona = this.resolvePersonaAnswer(parsedFromInput.assistantPersona, locale);
+      state.profile.assistantPersona = this.resolvePersonaAnswer(parsedFromInput.assistantPersona);
     }
 
     const userLine = this.normalizeOneLine(inputText);
@@ -2136,7 +2133,7 @@ export class ChatAssistant {
       || parsedFromInput.assistantPersona,
     );
     if (userLine && !parsedStructured && this.looksLikeTaskInstruction(userLine)) {
-      state.profile = this.completeProfileWithFallbacks(state.profile, locale);
+      state.profile = this.completeProfileWithFallbacks(state.profile);
       this.completeWorkspaceBootstrap(state.profile);
       this.bootstrapOnboarding.delete(chatId);
       this.profileOnboarding.delete(chatId);
@@ -2147,13 +2144,13 @@ export class ChatAssistant {
       return null;
     }
     if (continuingFlow && userLine && !parsedStructured) {
-      const step = this.firstMissingSnapshotStep(state.profile, locale);
+      const step = this.firstMissingSnapshotStep(state.profile);
       if (step === 1) {
         state.profile.userPreferredAddress = userLine;
       } else if (step === 2) {
         state.profile.assistantName = this.normalizeAssistantName(userLine);
       } else if (step === 3) {
-        state.profile.assistantPersona = this.resolvePersonaAnswer(userLine, locale);
+        state.profile.assistantPersona = this.resolvePersonaAnswer(userLine);
       }
     }
 
@@ -2185,7 +2182,7 @@ export class ChatAssistant {
       return this.tryCompleteOrFallback(chatId, state, locale);
     }
 
-    state.profile = this.applyModelProfilePatch(state.profile, decision.profile, locale);
+    state.profile = this.applyModelProfilePatch(state.profile, decision.profile);
     state.turns.push({ role: "assistant", content: decision.reply });
     this.bootstrapOnboarding.set(chatId, {
       locale,
@@ -2199,13 +2196,13 @@ export class ChatAssistant {
 
     const completeByModel = Boolean(decision.onboardingComplete);
     const completeByData =
-      this.isProfileSnapshotComplete(state.profile, locale) && !this.hasBootstrapOnboardingFile();
+      this.isProfileSnapshotComplete(state.profile) && !this.hasBootstrapOnboardingFile();
     const shouldComplete =
-      (completeByModel && this.isProfileSnapshotComplete(state.profile, locale)) || completeByData;
+      (completeByModel && this.isProfileSnapshotComplete(state.profile)) || completeByData;
     if (!shouldComplete) {
       // Guardrail: do not let model wording claim completion when required fields
       // are still incomplete; continue with deterministic next required question.
-      return this.bootstrapFallbackQuestion(locale, state.profile);
+      return this.bootstrapFallbackQuestion(state.profile);
     }
 
     this.completeWorkspaceBootstrap(state.profile);
@@ -2235,12 +2232,12 @@ export class ChatAssistant {
 
     const locale = this.detectOnboardingLocale(inputText);
     const template = this.onboardingTemplateCopy();
-    const current = this.readProfileSnapshot(locale);
+    const current = this.readProfileSnapshot();
     const next: ProfileSnapshot = {
       userPreferredAddress: parsed.userPreferredAddress ?? current.userPreferredAddress,
       assistantName: parsed.assistantName ?? current.assistantName,
       assistantPersona: parsed.assistantPersona
-        ? this.resolvePersonaAnswer(parsed.assistantPersona, locale)
+        ? this.resolvePersonaAnswer(parsed.assistantPersona)
         : current.assistantPersona,
     };
 
@@ -2305,7 +2302,7 @@ export class ChatAssistant {
         if (parsed.userPreferredAddress) state.userPreferredAddress = parsed.userPreferredAddress;
         if (parsed.assistantName) state.assistantName = parsed.assistantName;
         if (parsed.assistantPersona) {
-          state.assistantPersona = this.resolvePersonaAnswer(parsed.assistantPersona, state.locale);
+          state.assistantPersona = this.resolvePersonaAnswer(parsed.assistantPersona);
         }
         this.applyThreePartFallback(state, answer);
         const firstMissing = this.firstMissingStep(state);
@@ -2327,7 +2324,7 @@ export class ChatAssistant {
       if (parsed.userPreferredAddress) current.userPreferredAddress = parsed.userPreferredAddress;
       if (parsed.assistantName) current.assistantName = parsed.assistantName;
       if (parsed.assistantPersona) {
-        current.assistantPersona = this.resolvePersonaAnswer(parsed.assistantPersona, current.locale);
+        current.assistantPersona = this.resolvePersonaAnswer(parsed.assistantPersona);
       }
       this.applyThreePartFallback(current, answer);
 
@@ -2337,7 +2334,7 @@ export class ChatAssistant {
       } else if (current.step === 2 && !current.assistantName) {
         current.assistantName = answer;
       } else if (current.step === 3 && !current.assistantPersona) {
-        current.assistantPersona = this.resolvePersonaAnswer(answer, current.locale);
+        current.assistantPersona = this.resolvePersonaAnswer(answer);
       }
 
       const firstMissing = this.firstMissingStep(current);
@@ -2447,7 +2444,7 @@ export class ChatAssistant {
     try {
       const parsed = JSON.parse(jsonText) as Record<string, unknown>;
       const intent = normalizeScheduleIntentCandidate(inputText, parsed, {
-        resolveTimezone: () => this.scheduleTimezoneForInput(inputText),
+        resolveTimezone: () => this.scheduleTimezoneForInput(),
       });
       if (!intent) {
         return null;
@@ -2841,13 +2838,13 @@ export class ChatAssistant {
     return String(raw || "")
       .replace(/^task completed[.!:\s-]*/i, "")
       .replace(/^completed[.!:\s-]*/i, "")
-      .replace(/^\u5b8c\u6210(\u4e86|\u3002|!|\uff01)?\s*/i, "")
+      .replace(/^完成(了|。|!|！)?\s*/i, "")
       .trim();
   }
 
   private looksLikeShoppingTask(task: string): boolean {
     const text = String(task || "");
-    return /(where\s+to\s+buy|where\s+can\s+i\s+buy|buy\s+\w|purchase\s+\w|shop\s+for|shopping\s+for|for\s+sale|\u54ea\u91cc\u4e70|\u8d2d\u4e70\w|\u53bb\u54ea\u4e70)/i
+    return /(where\s+to\s+buy|where\s+can\s+i\s+buy|buy\s+\w|purchase\s+\w|shop\s+for|shopping\s+for|for\s+sale|哪里买|购买\w|去哪买)/i
       .test(text);
   }
 

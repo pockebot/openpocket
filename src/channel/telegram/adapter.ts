@@ -588,6 +588,6 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   private inferTaskLocale(text: string): "zh" | "en" {
-    return /[\u4e00-\u9fff]/.test(text) ? "zh" : "en";
+    return /[一-鿿]/u.test(text) ? "zh" : "en";
   }
 }

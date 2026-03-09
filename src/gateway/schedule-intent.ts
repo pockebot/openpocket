@@ -12,7 +12,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 export function inferScheduleIntentLocale(input: string): ScheduleIntentLocale {
-  return /[\u3400-\u9fff]/u.test(input) ? "zh" : "en";
+  return /[㐀-鿿]/u.test(input) ? "zh" : "en";
 }
 
 export function normalizeScheduleIntentCandidate(

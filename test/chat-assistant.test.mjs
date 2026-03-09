@@ -880,11 +880,12 @@ test("ChatAssistant taskAcceptedReply fallback keeps English template even for C
   const { assistant } = createAssistant();
   const out = await assistant.taskAcceptedReply("Read the latest picture on the phone and beautify it", "zh");
 
+  // The fallback receipt copy is intentionally locale-agnostic here.
   assert.match(
     out,
     /^(Starting now|Task received\. Beginning now|I am starting this now|Working on it now):/i,
   );
-  assert.doesNotMatch(out, /^(\u6536\u5230|\u4efb\u52a1\u5df2\u63a5\u6536|\u660e\u767d|\u597d\u7684)/);
+  assert.doesNotMatch(out, /^(收到|任务已接收|明白|好的)/);
 });
 
 test("ChatAssistant narrateTaskProgress uses model decision output", async () => {
@@ -1052,6 +1053,7 @@ test("ChatAssistant narrateEscalation fallback generates concise local-security 
     includeLocalSecurityAssurance: true,
   });
 
+  // This path stays English even when locale is zh.
   assert.match(out, /login authorization/i);
   assert.match(out, /local OpenPocket relay/i);
   assert.doesNotMatch(out, /Instruction:/i);
@@ -1080,6 +1082,7 @@ test("ChatAssistant narrateEscalation uses model output when available", async (
     includeLocalSecurityAssurance: true,
   });
 
+  // Locale is passed as context only; it does not force Chinese output.
   assert.match(out, /open the authorization link/i);
   assert.match(capturedPrompt, /Escalation context JSON/);
   assert.match(capturedPrompt, /includeLocalSecurityAssurance/);

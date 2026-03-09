@@ -326,10 +326,10 @@ export class TelegramGateway {
       .replace(/Once you['’]?ve done that,?\s*send (?:a )?(?:quick )?confirmation(?: here| in Telegram)?\.?/gi, "")
       .replace(/Then send (?:a )?confirmation(?: here| in Telegram)?\.?/gi, "")
       .replace(/then return to Telegram\.?/gi, "")
-      .replace(/\u7136\u540e\u56de\u5230\s*Telegram[^。！？.!?]*[。！？.!?]?/gi, "")
-      .replace(/\u5b8c\u6210\u540e(?:\u518d)?(?:\u5728|\u56de\u5230)?\s*Telegram[^。！？.!?]*[。！？.!?]?/gi, "")
+      .replace(/然后回到\s*Telegram[^。！？.!?]*[。！？.!?]?/gi, "")
+      .replace(/完成后(?:再)?(?:在|回到)?\s*Telegram[^。！？.!?]*[。！？.!?]?/gi, "")
       .replace(/Security note:[^.。!?！？]*(?:[.。!?！？]|$)/gi, "")
-      .replace(/\u5b89\u5168\u63d0\u793a\uff1a[^。！？]*(?:[。！？]|$)/g, "")
+      .replace(/安全提示：[^。！？]*(?:[。！？]|$)/g, "")
       .replace(/\s{2,}/g, " ")
       .trim();
   }
@@ -338,7 +338,7 @@ export class TelegramGateway {
     return "This auth page connects to your local OpenPocket relay. Credentials are transmitted only through a private encrypted channel and are never stored in a centralized OpenPocket relay.";
   }
 
-  private buildHumanAuthHtmlMessage(narration: string, locale: "zh" | "en", extraLines?: string[]): string {
+  private buildHumanAuthHtmlMessage(narration: string, extraLines?: string[]): string {
     const cleanedNarration = this.stripHumanAuthNarrationNoise(this.sanitizeForChat(narration, 1500));
     const payloadLines: string[] = [];
     if (cleanedNarration) {
@@ -859,11 +859,11 @@ export class TelegramGateway {
       return "zh";
     }
     const text = message.text ?? "";
-    return /[\u4e00-\u9fff]/.test(text) ? "zh" : "en";
+    return /[一-鿿]/u.test(text) ? "zh" : "en";
   }
 
   private inferTaskLocale(task: string): "zh" | "en" {
-    return /[\u4e00-\u9fff]/.test(task) ? "zh" : "en";
+    return /[一-鿿]/u.test(task) ? "zh" : "en";
   }
 
   private buildChatContextExtractors(): ChatContextExtractor[] {
@@ -942,7 +942,7 @@ export class TelegramGateway {
   }
 
   private isSensitiveContextText(text: string): boolean {
-    return /(password|passcode|otp|one[-\s]?time|verification|auth(?:orization)?\s*code|2fa|cvv|cvc|credit\s*card|debit\s*card|card\s*number|bank\s*account|ssn|social\s*security|passport|identity|id\s*number|\u94f6\u884c\u5361|\u4fe1\u7528\u5361|\u501f\u8bb0\u5361|\u5361\u53f7|\u5bc6\u7801|\u9a8c\u8bc1\u7801|\u4e00\u6b21\u6027|\u652f\u4ed8|\u8eab\u4efd\u8bc1|\u62a4\u7167|\u793e\u4fdd)/i
+    return /(password|passcode|otp|one[-\s]?time|verification|auth(?:orization)?\s*code|2fa|cvv|cvc|credit\s*card|debit\s*card|card\s*number|bank\s*account|ssn|social\s*security|passport|identity|id\s*number|银行卡|信用卡|借记卡|卡号|密码|验证码|一次性|支付|身份证|护照|社保)/i
       .test(String(text || ""));
   }
 
@@ -1070,7 +1070,7 @@ export class TelegramGateway {
     if (!normalized) {
       return false;
     }
-    return /^(?:\/run\b|open\b|start\b|launch\b|go\b|use\b|run\b|please\b|\u6253\u5f00|\u5f00\u59cb|\u542f\u52a8|\u8bf7|\u5e2e\u6211|\u53bb|\u524d\u5f80)/i.test(normalized);
+    return /^(?:\/run\b|open\b|start\b|launch\b|go\b|use\b|run\b|please\b|打开|开始|启动|请|帮我|去|前往)/i.test(normalized);
   }
 
   private buildChatContextSavedMessage(items: ChatContextItem[]): string {
@@ -1129,7 +1129,7 @@ export class TelegramGateway {
       .replace(/https?:\/\/\S+/g, " ")
       .replace(/[0-9]+\/[0-9]+/g, " ")
       .replace(/[0-9]+/g, " ")
-      .replace(/[^a-z0-9\u4e00-\u9fff\s]/g, " ")
+      .replace(/[^a-z0-9一-鿿\s]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
     if (!normalized) {
@@ -1197,7 +1197,7 @@ export class TelegramGateway {
       return false;
     }
 
-    const loadingLike = /(loading|still loading|gett?ing your messages|sync|\u7b49\u5f85|\u52a0\u8f7d|\u540c\u6b65|\u91cd\u8bd5)/i.test(
+    const loadingLike = /(loading|still loading|gett?ing your messages|sync|等待|加载|同步|重试)/i.test(
       `${message} ${progress.message} ${progress.thought}`,
     );
     if ((action === "wait" || action === "launch_app") && stepGap < 8) {
@@ -1286,7 +1286,7 @@ export class TelegramGateway {
 
   private stripStepCounterTelemetry(text: string): string {
     const stripped = String(text || "")
-      .replace(/(?:^|\n)\s*(?:step|progress|\u8fdb\u5ea6)\s*\d+\s*\/\s*\d+\s*[:：-]?\s*/gim, "\n")
+      .replace(/(?:^|\n)\s*(?:step|progress|进度)\s*\d+\s*\/\s*\d+\s*[:：-]?\s*/gim, "\n")
       .replace(/\b(?:step|progress)\s*\d+\s*[:：-]?\s*/gim, "")
       .replace(/\(\s*\d+\s*\/\s*\d+\s*\)/g, "")
       .replace(/(^|\s)\d+\s*\/\s*\d+\s*[:：-]?\s*/g, "$1")
@@ -1569,7 +1569,7 @@ export class TelegramGateway {
     if (/\b(stop|cancel|abort|terminate|halt)\b/i.test(normalized)) {
       return true;
     }
-    if (/(\u505c\u6b62|\u7ec8\u6b62|\u53d6\u6d88(?:\u5f53\u524d)?\u4efb\u52a1|\u505c\u4e00\u4e0b|\u505c\u4e0b|\u7ed3\u675f\u5f53\u524d\u4efb\u52a1)/.test(normalized)) {
+    if (/(停止|终止|取消(?:当前)?任务|停一下|停下|结束当前任务)/.test(normalized)) {
       return true;
     }
     return false;
@@ -2241,7 +2241,6 @@ export class TelegramGateway {
       const savedItems = this.upsertChatContextItems(chatId, contextItems);
       if (savedItems.length > 0) {
         if (!this.isLikelyTaskInstruction(text)) {
-          const locale = this.inferLocale(message);
           await this.bot.sendMessage(
             chatId,
             this.sanitizeForChat(this.buildChatContextSavedMessage(savedItems), 1800),
@@ -2521,7 +2520,7 @@ export class TelegramGateway {
                         `If multiple code requests are pending, use: ${opened.manualApproveCommand} 123456`,
                         `Reject with: ${opened.manualRejectCommand}`,
                       ];
-                      const codeBody = this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale, codeLines);
+                      const codeBody = this.buildHumanAuthHtmlMessage(escalationMessage, codeLines);
                       await this.bot.sendMessage(
                         chatId,
                         codeBody,
@@ -2545,7 +2544,7 @@ export class TelegramGateway {
                     }
 
                     if (opened.openUrl) {
-                      await this.bot.sendMessage(chatId, this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale), {
+                      await this.bot.sendMessage(chatId, this.buildHumanAuthHtmlMessage(escalationMessage), {
                         parse_mode: "HTML",
                         reply_markup: {
                           inline_keyboard: [
@@ -2564,7 +2563,7 @@ export class TelegramGateway {
                     const noLinkHint = "Web link is unavailable. Use manual commands:";
                     await this.bot.sendMessage(
                       chatId,
-                      this.buildHumanAuthHtmlMessage(escalationMessage, progressLocale, [
+                      this.buildHumanAuthHtmlMessage(escalationMessage, [
                         noLinkHint,
                         opened.manualApproveCommand,
                         opened.manualRejectCommand,
