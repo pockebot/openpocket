@@ -31,7 +31,6 @@ import { sleep } from "../utils/time.js";
 import { ensureDir, nowIso } from "../utils/paths.js";
 import { AdbRuntime } from "../device/adb-runtime.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
-import { isEmulatorTarget } from "../device/target-types.js";
 import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder.js";
 import { SkillLoader } from "../skills/skill-loader.js";
 import { ScriptExecutor } from "../tools/script-executor.js";
@@ -1697,9 +1696,6 @@ export class AgentRuntime {
     event: CapabilityProbeEvent,
     currentApp: string,
   ): boolean {
-    if (isEmulatorTarget(this.config.target.type)) {
-      return false;
-    }
     const sensitiveCapability =
       event.capability === "camera"
       || event.capability === "microphone"
@@ -1745,13 +1741,6 @@ export class AgentRuntime {
   ): Promise<string[]> {
     const preGuardLines: string[] = [];
     if (this.isPermissionDialogApp(currentApp)) {
-      if (isEmulatorTarget(this.config.target.type)) {
-        const auto = await this.autoApprovePermissionDialog(currentApp);
-        if (auto?.message) {
-          preGuardLines.push(`local_permission_guard=auto_approved_emulator (${capability})`);
-        }
-        return preGuardLines;
-      }
       const guardDecision: HumanAuthDecision = {
         requestId: "capability-probe-local-permission-guard",
         approved: false,
@@ -3092,22 +3081,19 @@ export class AgentRuntime {
             const currentApp = snapshot?.currentApp ?? "unknown";
 
             // VM permission policy:
-            // - On emulator: auto-approve ALL permission dialogs locally (no real user data).
-            // - On physical device: auto-approve only capability=permission; reject others to enforce delegated flow.
-            const isEmulator = isEmulatorTarget(runtime.config.target.type);
-            const shouldAutoApproveDialog = permOnly || (onVmDialog && isEmulator);
-
+            // - capability=permission: auto-approve locally.
+            // - any other human-auth capability: auto-reject local permission dialog to enforce delegated flow.
             if (onVmDialog || permOnly) {
               if (onVmDialog) {
-                if (shouldAutoApproveDialog) {
+                if (permOnly) {
                   const auto = await runtime.autoApprovePermissionDialog(snapshot!.currentApp);
                   if (auto?.action?.type === "tap") ctx.lastAutoPermissionAllowAtMs = Date.now();
                 } else {
                   await runtime.autoRejectPermissionDialog(snapshot!.currentApp, action.capability);
                 }
               }
-              if (shouldAutoApproveDialog) {
-                const msg = `permission auto-approved locally (${isEmulator ? "emulator" : "VM"} policy, capability=${action.capability})`;
+              if (permOnly) {
+                const msg = "permission auto-approved locally (VM policy)";
                 logStepSection("result", msg);
                 runtime.workspace.appendStep(
                   ctx.session,
@@ -3118,7 +3104,7 @@ export class AgentRuntime {
                   buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
                 );
                 ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
-                ctx.history.push(`step ${step}: action=request_human_auth(${action.capability}) auto_approved`);
+                ctx.history.push(`step ${step}: action=request_human_auth(permission) auto_approved`);
                 return { content: [{ type: "text" as const, text: msg }], details: {} };
               }
             }
