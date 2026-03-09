@@ -2406,6 +2406,13 @@ export class ChatAssistant {
     this.history.set(chatId, turns.slice(-20));
   }
 
+  private buildRoutingContextTranscript(chatId: number, limit = 8): string {
+    const turns = this.recentTurns(chatId).slice(-limit);
+    return turns
+      .map((turn) => `${turn.role.toUpperCase()}: ${turn.content}`)
+      .join("\n");
+  }
+
   appendExternalTurn(chatId: number, role: "user" | "assistant", content: string): void {
     const normalized = String(content || "").trim();
     if (!normalized) {
@@ -2418,9 +2425,11 @@ export class ChatAssistant {
     client: OpenAI,
     model: string,
     maxTokens: number,
+    chatId: number,
     inputText: string,
   ): Promise<ScheduleIntentExtractionDecision | null> {
     const locale: OnboardingLocale = inferScheduleIntentLocale(inputText);
+    const recentContext = this.buildRoutingContextTranscript(chatId);
     const prompt = [
       "Determine whether the user message asks to create a scheduled job, manage an existing scheduled job, or neither.",
       "Output strict JSON only:",
@@ -2442,6 +2451,7 @@ export class ChatAssistant {
       "14) summaryText must be short and in the user's language when route=create_schedule.",
       "15) If the schedule is ambiguous or any required field is missing for route=create_schedule, return route=none instead of guessing.",
       `User locale hint: ${locale}`,
+      recentContext ? `Recent conversation context:\n${recentContext}` : "",
       `User message: ${inputText}`,
     ].join("\n");
 
@@ -2504,8 +2514,10 @@ export class ChatAssistant {
     client: OpenAI,
     model: string,
     maxTokens: number,
+    chatId: number,
     inputText: string,
   ): Promise<ChatDecision> {
+    const recentContext = this.buildRoutingContextTranscript(chatId);
     const prompt = [
       "Classify the user message for phone assistant routing.",
       "Output strict JSON only:",
@@ -2529,6 +2541,7 @@ export class ChatAssistant {
       "11) If scheduleManagement=true, populate scheduleManagementIntent.selector and scheduleManagementIntent.patch with the best structured target and change data you can infer from the user request.",
       "12) If mode=task, taskAcceptedReply must be one short natural sentence that confirms execution starts now.",
       "13) If mode=chat, taskAcceptedReply must be empty.",
+      recentContext ? `Recent conversation context:\n${recentContext}` : "",
       `User message: ${inputText}`,
     ].join("\n");
 
@@ -3519,6 +3532,7 @@ export class ChatAssistant {
           client,
           profile.model,
           profile.maxTokens,
+          chatId,
           normalizedInput,
         );
       } catch (error) {
@@ -3558,6 +3572,7 @@ export class ChatAssistant {
         client,
         profile.model,
         profile.maxTokens,
+        chatId,
         normalizedInput,
       );
       const audited = await this.refineChatDecisionWithGroundingAudit(

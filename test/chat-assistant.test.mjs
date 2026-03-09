@@ -390,6 +390,79 @@ test("ChatAssistant decide routes cron management requests to task mode instead 
   assert.equal(out.cronManagementIntent?.patch.schedule?.expr, "20 22 * * *");
 });
 
+test("ChatAssistant decide includes recent schedule-management context for contextual cron updates", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  const chatId = 71;
+  assistant.appendExternalTurn(
+    chatId,
+    "assistant",
+    [
+      "Scheduled jobs (1):",
+      "- schedule-1773027487704-check-earnapp-do-a-quick-rewards | enabled | Daily at 9 PM -> telegram:user-1",
+      "  Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+    ].join("\n"),
+  );
+
+  let sawPriorScheduleContext = false;
+  assistant.callModelRaw = async (_client, _model, _maxTokens, prompt, purpose) => {
+    if (purpose !== "schedule classify") {
+      throw new Error(`unexpected model call: ${purpose}`);
+    }
+    sawPriorScheduleContext =
+      prompt.includes("Scheduled jobs (1):")
+      && prompt.includes("schedule-1773027487704-check-earnapp-do-a-quick-rewards")
+      && prompt.includes("Check EarnApp; do a quick rewards check; check if more rewards can be claimed");
+    return JSON.stringify({
+      route: "manage_schedule",
+      task:
+        "Is the scheduled task for this not clear to you? You need to use Google Opinion Rewards instead of this Earn App. In it, you should check whether you can do a quick win to earn some rewards daily that can accumulate. So, can you improve your schedule task for it? Also, you need to change the daily schedule time to 8 a.m.",
+      manageIntent: {
+        action: "update",
+        selector: {
+          all: false,
+          ids: [],
+          nameContains: ["Earn App"],
+          taskContains: [],
+          scheduleContains: ["Daily at 9 PM"],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: "Open Google Opinion Rewards and check for a quick daily reward or survey that can accumulate over time",
+          enabled: null,
+          schedule: {
+            kind: "cron",
+            expr: "0 8 * * *",
+            at: null,
+            everyMs: null,
+            tz: "America/Los_Angeles",
+            summaryText: "Daily at 8 AM",
+          },
+        },
+      },
+      confidence: 0.97,
+      reason: "contextual_schedule_manage",
+    });
+  };
+  assistant.classifyWithModel = async () => {
+    throw new Error("classifyWithModel should not run after contextual manage_schedule extraction");
+  };
+
+  const input =
+    "Is the scheduled task for this not clear to you? You need to use Google Opinion Rewards instead of this Earn App. In it, you should check whether you can do a quick win to earn some rewards daily that can accumulate. So, can you improve your schedule task for it? Also, you need to change the daily schedule time to 8 a.m.";
+  const out = await assistant.decide(chatId, input);
+  assert.equal(sawPriorScheduleContext, true);
+  assert.equal(out.mode, "task");
+  assert.equal(out.scheduleManagement, true);
+  assert.equal(out.scheduleManagementAction, "update");
+  assert.equal(out.cronManagementIntent?.selector.nameContains[0], "Earn App");
+  assert.equal(
+    out.cronManagementIntent?.patch.task,
+    "Open Google Opinion Rewards and check for a quick daily reward or survey that can accumulate over time",
+  );
+  assert.equal(out.cronManagementIntent?.patch.schedule?.expr, "0 8 * * *");
+});
+
 test("ChatAssistant decide ignores low-confidence schedule extraction and falls back to normal routing", async () => {
   const { assistant } = createAssistant({ withApiKey: true });
   assistant.extractScheduleIntentWithModel = async () => ({
