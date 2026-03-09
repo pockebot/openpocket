@@ -1635,6 +1635,7 @@ export class AgentRuntime {
     const candidates = events
       .filter((event) => this.mapProbeCapabilityToHumanAuthCapability(event.capability) !== null)
       .filter((event) => !this.isPermissionDialogApp(event.packageName))
+      .filter((event) => event.source !== "permission_dialog")
       .sort((a, b) => {
         if (observedApp) {
           const aCurrent = a.packageName.toLowerCase() === observedApp ? 1 : 0;
@@ -1768,6 +1769,10 @@ export class AgentRuntime {
     currentApp: string,
   ): Promise<string[]> {
     if (events.length === 0 || !this.config.humanAuth.enabled) {
+      return [];
+    }
+
+    if (this.isPermissionDialogApp(currentApp)) {
       return [];
     }
 
@@ -3076,37 +3081,42 @@ export class AgentRuntime {
 
           // ---- request_human_auth ----
           if (action.type === "request_human_auth") {
-            const permOnly = action.capability === "permission";
             const onVmDialog = snapshot ? runtime.isPermissionDialogApp(snapshot.currentApp) : false;
             const currentApp = snapshot?.currentApp ?? "unknown";
 
-            // VM permission policy:
-            // - capability=permission: auto-approve locally.
-            // - any other human-auth capability: auto-reject local permission dialog to enforce delegated flow.
-            if (onVmDialog || permOnly) {
-              if (onVmDialog) {
-                if (permOnly) {
-                  const auto = await runtime.autoApprovePermissionDialog(snapshot!.currentApp);
-                  if (auto?.action?.type === "tap") ctx.lastAutoPermissionAllowAtMs = Date.now();
-                } else {
-                  await runtime.autoRejectPermissionDialog(snapshot!.currentApp, action.capability);
-                }
-              }
-              if (permOnly) {
-                const msg = "permission auto-approved locally (VM policy)";
-                logStepSection("result", msg);
-                runtime.workspace.appendStep(
-                  ctx.session,
-                  step,
-                  thought,
-                  JSON.stringify(action, null, 2),
-                  msg,
-                  buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
-                );
-                ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
-                ctx.history.push(`step ${step}: action=request_human_auth(permission) auto_approved`);
-                return { content: [{ type: "text" as const, text: msg }], details: {} };
-              }
+            // Android permission dialogs are OS-level UI that the agent must handle
+            // locally by tapping Allow (if relevant to task) or Deny (if irrelevant).
+            // Never escalate them via human auth.
+            if (onVmDialog) {
+              const msg = `Android permission dialog detected (${action.capability}). Handle it locally: tap Allow if this permission is needed for the current task, or tap Deny/Don't Allow if it is irrelevant. Do not use request_human_auth for OS permission dialogs.`;
+              logStepSection("result", msg);
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(currentApp, "ok"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp });
+              ctx.history.push(`step ${step}: action=request_human_auth(${action.capability}) redirected_to_local_dialog_handling`);
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
+            }
+
+            if (action.capability === "permission") {
+              const msg = "permission auto-approved locally (VM policy)";
+              logStepSection("result", msg);
+              runtime.workspace.appendStep(
+                ctx.session,
+                step,
+                thought,
+                JSON.stringify(action, null, 2),
+                msg,
+                buildStepTrace(snapshot?.currentApp ?? "unknown", "ok"),
+              );
+              ctx.traces.push({ step, action, result: msg, thought, currentApp: snapshot?.currentApp ?? "unknown" });
+              ctx.history.push(`step ${step}: action=request_human_auth(permission) auto_approved`);
+              return { content: [{ type: "text" as const, text: msg }], details: {} };
             }
 
             if (!ctx.onHumanAuth) {
