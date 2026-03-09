@@ -18,6 +18,7 @@ test("buildSystemPrompt includes planning rules and skills", () => {
   assert.match(prompt, /Available Skills/);
   assert.match(prompt, /<available_skills>/);
   assert.match(prompt, /Skill Selection Protocol/);
+  assert.match(prompt, /If exactly one skill clearly applies, call read\(location\)/);
   assert.match(prompt, /Memory Recall Protocol/);
   assert.match(prompt, /memory_search/);
   assert.match(prompt, /memory_get/);
@@ -60,15 +61,15 @@ test("buildSystemPrompt includes workspace context when provided", () => {
   assert.match(prompt, /AGENTS\.md/);
 });
 
-test("buildSystemPrompt injects active skills content when activeSkillsText is provided", () => {
+test("buildSystemPrompt supports explicitly preloaded skill blocks when provided", () => {
   const prompt = buildSystemPrompt("- skill-a", "", {
     mode: "full",
     activeSkillsText: "<active_skill name=\"Skill A\" source=\"workspace\" score=\"120\" reason=\"explicit id match\">\n# SKILL BODY\n</active_skill>",
   });
   assert.match(prompt, /<available_skills>/);
-  assert.match(prompt, /Active Skills/);
+  assert.match(prompt, /Preloaded Skills/);
   assert.match(prompt, /SKILL BODY/);
-  assert.match(prompt, /no need to read\(\)/i);
+  assert.match(prompt, /does not need read\(\)/i);
 });
 
 test("buildSystemPrompt supports minimal mode", () => {

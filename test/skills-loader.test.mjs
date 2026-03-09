@@ -57,7 +57,7 @@ test("SkillLoader prefers bundled skills over workspace/local when skill IDs col
   assert.match(skill?.path || "", /skills[\\/]human-auth-location[\\/]SKILL\.md$/i);
 });
 
-test("SkillLoader auto-loads matching skill content for active task context", () => {
+test("SkillLoader keeps matching skills in the discovery index without preloading bodies", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-active-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -85,13 +85,12 @@ test("SkillLoader auto-loads matching skill content for active task context", ()
   );
 
   assert.match(context.summaryText, /PayByPhone Nearest Flow/);
-  assert.equal(context.activeEntries.length > 0, true);
-  assert.match(context.activePromptText, /PayByPhone Nearest Flow/);
-  assert.match(context.activePromptText, /<active_skill /);
-  assert.equal(context.activePromptChars > 0, true);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
+  assert.equal(context.activePromptChars, 0);
 });
 
-test("SkillLoader honors explicit metadata trigger phrases for active loading", () => {
+test("SkillLoader parses explicit metadata trigger phrases without preloading bodies", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-escape-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -128,9 +127,8 @@ test("SkillLoader honors explicit metadata trigger phrases for active loading", 
   );
 
   assert.match(context.summaryText, /Skill <A&B>/);
-  assert.equal(context.activeEntries.length, 1);
-  assert.match(context.activePromptText, /trigger:/);
-  assert.match(context.activePromptText, /Test content body/);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
 });
 
 test("SkillLoader supports SKILL.md directory layout and metadata gating", () => {
@@ -208,11 +206,11 @@ test("SkillLoader lists all discovered skills in summary regardless task text", 
 
   assert.match(context.summaryText, /X Twitter Login Recovery/);
   assert.match(context.summaryText, /Generic Login/);
-  assert.equal(context.activeEntries.length > 0, true);
-  assert.match(context.activePromptText, /X Twitter Login Recovery/);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
 });
 
-test("SkillLoader activates bundled device-file-search for file handoff task", () => {
+test("SkillLoader keeps bundled device-file-search discoverable for file handoff task", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-device-file-search-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -222,9 +220,7 @@ test("SkillLoader activates bundled device-file-search for file handoff task", (
     "Find the latest edited photo and send it to me in chat.",
   );
 
-  assert.equal(
-    context.activeEntries.some((entry) => entry.skill.id === "device-file-search"),
-    true,
-  );
-  assert.match(context.activePromptText, /Device File Search/);
+  assert.match(context.summaryText, /device-file-search/);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
 });

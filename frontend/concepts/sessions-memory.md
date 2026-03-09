@@ -113,6 +113,6 @@ Current auto-skill experience behavior:
 
 - generated skills include a `behavior_fingerprint` for replay dedupe
 - step-derived `ui_target` semantic traces are embedded for element intent reuse
-- runtime can inject active skill content (not only summary metadata) into prompt context when relevance is high
+- runtime injects summary metadata only; the model must `read(location)` to load a skill body when it decides one is relevant
 
 This experience layer is agent-local. A second agent does not see or reuse the first agent's auto-generated memory unless you manually copy files between workspaces.

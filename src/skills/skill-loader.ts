@@ -644,69 +644,15 @@ export class SkillLoader {
     const summaryText = summaryEntries.length > 0
       ? summaryEntries.map((entry) => entry.line).join("\n")
       : "(no skills loaded)";
-    const requestedActiveSkills = options?.maxActiveSkills;
-    const maxActiveSkills = Number.isFinite(requestedActiveSkills)
-      ? Math.max(0, Math.round(Number(requestedActiveSkills)))
-      : DEFAULT_MAX_ACTIVE_SKILLS;
-    const requestedPerSkillChars = options?.maxActiveSkillChars;
-    const maxActiveSkillChars = Number.isFinite(requestedPerSkillChars)
-      ? Math.max(200, Math.round(Number(requestedPerSkillChars)))
-      : DEFAULT_MAX_ACTIVE_SKILL_CHARS;
-    const requestedTotalChars = options?.maxActiveTotalChars;
-    const maxActiveTotalChars = Number.isFinite(requestedTotalChars)
-      ? Math.max(400, Math.round(Number(requestedTotalChars)))
-      : DEFAULT_MAX_ACTIVE_TOTAL_CHARS;
+    void task;
+    void options?.maxActiveSkills;
+    void options?.maxActiveSkillChars;
+    void options?.maxActiveTotalChars;
 
-    const scored = allSkills
-      .map((skill) => scoreSkillForTask(skill, task))
-      .filter((entry) => entry.score >= ACTIVE_SKILL_MIN_SCORE)
-      .sort((a, b) => {
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        const sourceDelta = SOURCE_PRIORITY[a.skill.source] - SOURCE_PRIORITY[b.skill.source];
-        if (sourceDelta !== 0) {
-          return sourceDelta;
-        }
-        return a.skill.name.localeCompare(b.skill.name);
-      })
-      .slice(0, maxActiveSkills);
-
+    // Skill bodies are no longer preloaded here. The runtime now gives the model
+    // only the discovery index and requires an explicit read(location) before use.
+    const activePromptText = "";
     const activeEntries: ActiveSkillPromptEntry[] = [];
-    const activeBlocks: string[] = [];
-    let usedChars = 0;
-
-    for (const scoredSkill of scored) {
-      const remainingChars = maxActiveTotalChars - usedChars;
-      if (remainingChars <= 0) {
-        break;
-      }
-      const allowedChars = Math.max(200, Math.min(maxActiveSkillChars, remainingChars));
-      const fullContent = scoredSkill.skill.content.trim();
-      const truncated = fullContent.length > allowedChars;
-      const content = truncated
-        ? `${fullContent.slice(0, Math.max(0, allowedChars - 26)).trimEnd()}\n...[truncated by skill-loader]`
-        : fullContent;
-      const block = formatActiveSkillBlock(scoredSkill.skill, scoredSkill.reason, scoredSkill.score, content);
-
-      activeEntries.push({
-        skill: {
-          id: scoredSkill.skill.id,
-          name: scoredSkill.skill.name,
-          description: scoredSkill.skill.description,
-          source: scoredSkill.skill.source,
-          path: scoredSkill.skill.path,
-        },
-        reason: scoredSkill.reason,
-        score: scoredSkill.score,
-        contentChars: content.length,
-        truncated,
-      });
-      activeBlocks.push(block);
-      usedChars += block.length;
-    }
-
-    const activePromptText = activeBlocks.join("\n\n");
 
     return {
       summaryText,

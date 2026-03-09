@@ -48,29 +48,32 @@ Optional frontmatter metadata supports runtime gating:
 - `openclaw.requires.env`: required env vars
 - `openclaw.requires.config`: required config keys
 - `openclaw.os`: allowed platforms
-- `openclaw.triggers.any|all|none`: lexical trigger hints
+- `openclaw.triggers.any|all|none`: legacy lexical trigger hints
 
-Skills that fail gating are not considered active candidates.
+Skills that fail gating are excluded from the discovery index.
 
 ## Prompt Injection Model
 
-Runtime injects two blocks:
+Runtime injects one discovery block by default:
 
-1. **Skill summary index** (compact list for discovery)
-2. **Active skill blocks** (full text snippets for top-ranked relevant skills)
+1. **Skill summary index** (compact list with `name`, `description`, and `location`)
 
-Active skill selection uses:
+At execution time, the model must choose whether a skill is relevant. If one clearly applies,
+it should call `read(location)` to load that `SKILL.md` before following it.
 
-- task text relevance
-- current app context
-- recent action trace keywords
-- metadata trigger/gating checks
+Default model-driven selection rules:
 
-Default active injection limits:
+- scan the full skill index first
+- read only one candidate skill up front
+- prefer the most specific matching skill when multiple could apply
+- skip skills entirely when none clearly fit the task
 
-- max active skills: 3
-- max chars per active skill: 7000
-- max chars total active block: 18000
+Runtime requirement gating still applies before any skill appears in the index:
+
+- `openclaw.requires.bins`
+- `openclaw.requires.env`
+- `openclaw.requires.config`
+- `openclaw.os`
 
 ## Auto-Skill Experience Engine
 
