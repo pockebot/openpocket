@@ -341,6 +341,55 @@ test("ChatAssistant decide treats one-shot tomorrow phrasing as schedule intent"
   assert.match(out.reply, /confirm/i);
 });
 
+test("ChatAssistant decide routes cron management requests to task mode instead of schedule intent", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  assistant.extractScheduleIntentWithModel = async () => ({
+    route: "manage_schedule",
+    task: "Modify the cron job for the Earn app to run daily at 10:20 PM",
+    manageAction: "update",
+    cronManagementIntent: {
+      action: "update",
+      selector: {
+        all: false,
+        ids: [],
+        nameContains: ["Earn app"],
+        taskContains: [],
+        scheduleContains: [],
+        enabled: "any",
+      },
+      patch: {
+        name: null,
+        task: null,
+        enabled: null,
+        schedule: {
+          kind: "cron",
+          expr: "20 22 * * *",
+          at: null,
+          everyMs: null,
+          tz: "America/Los_Angeles",
+          summaryText: "Daily at 10:20 PM",
+        },
+      },
+    },
+    confidence: 0.98,
+    reason: "schedule_model_manage",
+  });
+  assistant.classifyWithModel = async () => {
+    throw new Error("classifyWithModel should not run after manage_schedule extraction");
+  };
+
+  const input = "Modify the cron job for the Earn app to run daily at 10:20 PM";
+  const out = await assistant.decide(37, input);
+  assert.equal(out.mode, "task");
+  assert.equal(out.task, input);
+  assert.equal(out.reason, "schedule_manage;schedule_model_manage");
+  assert.equal(out.scheduleManagement, true);
+  assert.equal(out.scheduleManagementAction, "update");
+  assert.equal(out.cronManagementIntent?.action, "update");
+  assert.equal(out.cronManagementIntent?.selector.nameContains[0], "Earn app");
+  assert.equal(out.cronManagementIntent?.patch.schedule?.expr, "20 22 * * *");
+});
+
 test("ChatAssistant decide ignores low-confidence schedule extraction and falls back to normal routing", async () => {
   const { assistant } = createAssistant({ withApiKey: true });
   assistant.extractScheduleIntentWithModel = async () => ({

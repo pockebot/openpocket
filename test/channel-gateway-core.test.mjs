@@ -703,6 +703,625 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
   });
 });
 
+test("GatewayCore answers schedule-management list requests directly from the cron registry", async () => {
+  await withTempHome("gwcore-schedule-manage-list-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+    let enqueueCalls = 0;
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    registry.add({
+      id: "earn-app-daily-check",
+      name: "Earn App Daily Check",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 21 * * *",
+        at: null,
+        everyMs: null,
+        tz: "America/Los_Angeles",
+        summaryText: "Daily at 9 PM",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+      },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "list existing scheduled tasks",
+      reply: "",
+      confidence: 0.98,
+      reason: "schedule_manage;schedule_model_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "list",
+      cronManagementIntent: {
+        action: "list",
+        selector: {
+          all: false,
+          ids: [],
+          nameContains: [],
+          taskContains: [],
+          scheduleContains: [],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: null,
+          enabled: null,
+          schedule: null,
+        },
+      },
+    });
+    core.enqueueTask = async () => {
+      enqueueCalls += 1;
+    };
+
+    await core.handleInbound(makeEnvelope({
+      text: "list existing scheduled tasks",
+    }));
+
+    assert.equal(enqueueCalls, 0);
+    assert.match(adapter.sent[0].text, /Scheduled jobs \(\d+\):/i);
+    assert.match(adapter.sent[0].text, /earn-app-daily-check/);
+    assert.match(adapter.sent[0].text, /Daily at 9 PM/);
+  });
+});
+
+test("GatewayCore updates a single matching scheduled job directly from structured cron management intent", async () => {
+  await withTempHome("gwcore-schedule-manage-update-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+    let enqueueCalls = 0;
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    registry.add({
+      id: "earn-app-daily-check",
+      name: "Earn App Daily Check",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 21 * * *",
+        at: null,
+        everyMs: null,
+        tz: "America/Los_Angeles",
+        summaryText: "Daily at 9 PM",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+      },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "Modify the cron job for the Earn app to run daily at 10:20 PM",
+      reply: "",
+      confidence: 0.98,
+      reason: "schedule_manage;schedule_model_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "update",
+      cronManagementIntent: {
+        action: "update",
+        selector: {
+          all: false,
+          ids: [],
+          nameContains: ["Earn App"],
+          taskContains: [],
+          scheduleContains: [],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: null,
+          enabled: null,
+          schedule: {
+            kind: "cron",
+            expr: "20 22 * * *",
+            at: null,
+            everyMs: null,
+            tz: "America/Los_Angeles",
+            summaryText: "Daily at 10:20 PM",
+          },
+        },
+      },
+    });
+    core.enqueueTask = async () => {
+      enqueueCalls += 1;
+    };
+
+    await core.handleInbound(makeEnvelope({
+      text: "Modify the cron job for the Earn app to run daily at 10:20 PM",
+    }));
+    assert.equal(enqueueCalls, 0);
+
+    const updated = registry.get("earn-app-daily-check");
+    assert.equal(updated?.schedule.expr, "20 22 * * *");
+    assert.match(adapter.sent[0].text, /Updated scheduled job earn-app-daily-check/i);
+    assert.match(adapter.sent[0].text, /Daily at 10:20 PM/i);
+  });
+});
+
+test("GatewayCore removes all scheduled jobs directly from structured cron management intent", async () => {
+  await withTempHome("gwcore-schedule-manage-remove-all-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    const baselineCount = registry.list().length;
+    for (const id of ["earn-app-daily-check", "slack-daily-check"]) {
+      registry.add({
+        id,
+        name: id,
+        enabled: true,
+        schedule: {
+          kind: "cron",
+          expr: "0 21 * * *",
+          at: null,
+          everyMs: null,
+          tz: "America/Los_Angeles",
+          summaryText: "Daily at 9 PM",
+        },
+        payload: {
+          kind: "agent_turn",
+          task: `Task for ${id}`,
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        },
+        model: null,
+        promptMode: "minimal",
+      });
+    }
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "remove all scheduled jobs",
+      reply: "",
+      confidence: 0.99,
+      reason: "schedule_manage;schedule_model_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "remove",
+      cronManagementIntent: {
+        action: "remove",
+        selector: {
+          all: true,
+          ids: [],
+          nameContains: [],
+          taskContains: [],
+          scheduleContains: [],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: null,
+          enabled: null,
+          schedule: null,
+        },
+      },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      text: "remove all scheduled jobs",
+    }));
+
+    assert.equal(registry.list().length, 0);
+    assert.match(adapter.sent[0].text, new RegExp(`Removed ${baselineCount + 2} scheduled jobs`, "i"));
+    assert.match(adapter.sent[0].text, /earn-app-daily-check/);
+    assert.match(adapter.sent[0].text, /slack-daily-check/);
+  });
+});
+
+test("GatewayCore removes a specific scheduled job directly from structured cron management intent", async () => {
+  await withTempHome("gwcore-schedule-manage-remove-one-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    registry.add({
+      id: "earn-app-daily-check",
+      name: "Earn App Daily Check",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 21 * * *",
+        at: null,
+        everyMs: null,
+        tz: "America/Los_Angeles",
+        summaryText: "Daily at 9 PM",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Check EarnApp rewards",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+      },
+      model: null,
+      promptMode: "minimal",
+    });
+    registry.add({
+      id: "slack-daily-check",
+      name: "Slack Daily Check",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 8 * * *",
+        at: null,
+        everyMs: null,
+        tz: "America/Los_Angeles",
+        summaryText: "Daily at 8 AM",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Open Slack and check in",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+      },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "remove earn-app-daily-check",
+      reply: "",
+      confidence: 0.99,
+      reason: "schedule_manage;schedule_model_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "remove",
+      cronManagementIntent: {
+        action: "remove",
+        selector: {
+          all: false,
+          ids: ["earn-app-daily-check"],
+          nameContains: [],
+          taskContains: [],
+          scheduleContains: [],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: null,
+          enabled: null,
+          schedule: null,
+        },
+      },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      text: "remove earn-app-daily-check",
+    }));
+
+    assert.equal(registry.get("earn-app-daily-check"), null);
+    assert.ok(registry.get("slack-daily-check"));
+    assert.match(adapter.sent[0].text, /Removed scheduled job earn-app-daily-check/i);
+  });
+});
+
+test("GatewayCore removes Earn App jobs even when a stored job uses EarnApp without a space", async () => {
+  await withTempHome("gwcore-schedule-manage-remove-earnapp-variant-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    const baselineIds = new Set(registry.list().map((job) => job.id));
+    for (const job of [
+      {
+        id: "schedule-1773027487704-check-earnapp-do-a-quick-rewards",
+        name: "Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+        enabled: true,
+        schedule: {
+          kind: "cron",
+          expr: "0 21 * * *",
+          at: null,
+          everyMs: null,
+          tz: "America/Los_Angeles",
+          summaryText: "Daily at 9 PM",
+        },
+        payload: {
+          kind: "agent_turn",
+          task: "Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        },
+        model: null,
+        promptMode: "minimal",
+      },
+      {
+        id: "schedule-1772925597704-go-to-earn-app-and-read-listen",
+        name: "Go to Earn App and read one article and listen once",
+        enabled: true,
+        schedule: {
+          kind: "cron",
+          expr: "0 20 * * *",
+          at: null,
+          everyMs: null,
+          tz: "America/Los_Angeles",
+          summaryText: "Daily at 8 PM",
+        },
+        payload: {
+          kind: "agent_turn",
+          task: "Go to Earn App and read one article and listen once",
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        },
+        model: null,
+        promptMode: "minimal",
+      },
+      {
+        id: "schedule-1773033317242-modify-the-cron-job-for-the-earn",
+        name: "Modify the cron job for the Earn app",
+        enabled: true,
+        schedule: {
+          kind: "cron",
+          expr: "20 22 * * *",
+          at: null,
+          everyMs: null,
+          tz: "America/Los_Angeles",
+          summaryText: "Daily at 10:20 PM",
+        },
+        payload: {
+          kind: "agent_turn",
+          task: "Modify the cron job for the Earn app",
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "user-1",
+        },
+        model: null,
+        promptMode: "minimal",
+      },
+    ]) {
+      registry.add(job);
+    }
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "I want to remove all scheduled tasks associated with Earn App",
+      reply: "",
+      confidence: 0.98,
+      reason: "schedule_manage;schedule_model_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "remove",
+      cronManagementIntent: {
+        action: "remove",
+        selector: {
+          all: true,
+          ids: [],
+          nameContains: ["Earn App"],
+          taskContains: [],
+          scheduleContains: [],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: null,
+          enabled: null,
+          schedule: null,
+        },
+      },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      text: "I want to remove all scheduled tasks associated with Earn App",
+    }));
+
+    assert.equal(registry.get("schedule-1773027487704-check-earnapp-do-a-quick-rewards"), null);
+    assert.equal(registry.get("schedule-1772925597704-go-to-earn-app-and-read-listen"), null);
+    assert.equal(registry.get("schedule-1773033317242-modify-the-cron-job-for-the-earn"), null);
+    assert.deepEqual(
+      registry.list().map((job) => job.id).sort(),
+      [...baselineIds].sort(),
+    );
+    assert.match(adapter.sent[0].text, /Removed 3 scheduled jobs/i);
+    assert.match(adapter.sent[0].text, /schedule-1773027487704-check-earnapp-do-a-quick-rewards/);
+  });
+});
+
+test("GatewayCore asks for clarification when a cron removal target is ambiguous", async () => {
+  await withTempHome("gwcore-schedule-manage-ambiguous-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    const baselineCount = registry.list().length;
+    registry.add({
+      id: "earn-app-daily-check",
+      name: "Earn App Daily Check",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 21 * * *",
+        at: null,
+        everyMs: null,
+        tz: "America/Los_Angeles",
+        summaryText: "Daily at 9 PM",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Check EarnApp rewards",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+      },
+      model: null,
+      promptMode: "minimal",
+    });
+    registry.add({
+      id: "earn-app-weekend-check",
+      name: "Earn App Weekend Check",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 10 * * 6",
+        at: null,
+        everyMs: null,
+        tz: "America/Los_Angeles",
+        summaryText: "Every Saturday at 10 AM",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Check EarnApp bonus rewards",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+      },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "remove the Earn App scheduled job",
+      reply: "",
+      confidence: 0.95,
+      reason: "schedule_manage;schedule_model_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "remove",
+      cronManagementIntent: {
+        action: "remove",
+        selector: {
+          all: false,
+          ids: [],
+          nameContains: ["Earn App"],
+          taskContains: [],
+          scheduleContains: [],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: null,
+          enabled: null,
+          schedule: null,
+        },
+      },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      text: "remove the Earn App scheduled job",
+    }));
+
+    assert.equal(registry.list().length, baselineCount + 2);
+    assert.match(adapter.sent[0].text, /Multiple scheduled jobs matched/i);
+    assert.match(adapter.sent[0].text, /earn-app-daily-check/);
+    assert.match(adapter.sent[0].text, /earn-app-weekend-check/);
+  });
+});
+
+test("GatewayCore updates an EarnApp job when the selector uses Earn App wording and a 9:00 PM schedule phrase", async () => {
+  await withTempHome("gwcore-schedule-manage-update-earnapp-variant-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    registry.add({
+      id: "schedule-1773027487704-check-earnapp-do-a-quick-rewards",
+      name: "Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 21 * * *",
+        at: null,
+        everyMs: null,
+        tz: "America/Los_Angeles",
+        summaryText: "Daily at 9 PM",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Check EarnApp; do a quick rewards check; check if more rewards can be claimed",
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "user-1",
+      },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "Update the daily 9:00 PM Earn App schedule task to 12:10 AM",
+      reply: "",
+      confidence: 0.98,
+      reason: "schedule_manage;schedule_model_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "update",
+      cronManagementIntent: {
+        action: "update",
+        selector: {
+          all: false,
+          ids: [],
+          nameContains: ["Earn App"],
+          taskContains: [],
+          scheduleContains: ["daily 9:00 PM"],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: null,
+          enabled: null,
+          schedule: {
+            kind: "cron",
+            expr: "10 0 * * *",
+            at: null,
+            everyMs: null,
+            tz: "America/Los_Angeles",
+            summaryText: "Daily at 12:10 AM",
+          },
+        },
+      },
+    });
+
+    await core.handleInbound(makeEnvelope({
+      text: "Update the daily 9:00 PM Earn App schedule task to 12:10 AM",
+    }));
+
+    const updated = registry.get("schedule-1773027487704-check-earnapp-do-a-quick-rewards");
+    assert.equal(updated?.schedule.expr, "10 0 * * *");
+    assert.equal(updated?.schedule.summaryText, "Daily at 12:10 AM");
+    assert.match(
+      adapter.sent[0].text,
+      /Updated scheduled job schedule-1773027487704-check-earnapp-do-a-quick-rewards/i,
+    );
+    assert.match(adapter.sent[0].text, /Daily at 12:10 AM/i);
+  });
+});
+
 test("GatewayCore cancels pending schedule confirmation without creating a job", async () => {
   await withTempHome("gwcore-schedule-cancel-", async (home) => {
     const { adapter, core, config } = createGatewayCore(home);

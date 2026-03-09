@@ -350,6 +350,88 @@ test("CronService executes cron-expression jobs on wall-clock schedule", async (
   });
 });
 
+test("CronService executes a cron job when the tick lands just after the scheduled minute", async () => {
+  await withTempHome("openpocket-cron-cronexpr-late-tick-", async () => {
+    const cfg = loadConfig();
+    cfg.cron.enabled = true;
+    cfg.cron.tickSec = 10;
+
+    const jobsFile = path.join(cfg.workspaceDir, "cron", "jobs.json");
+    fs.mkdirSync(path.dirname(jobsFile), { recursive: true });
+    fs.writeFileSync(
+      jobsFile,
+      `${JSON.stringify(
+        {
+          version: 2,
+          jobs: [
+            {
+              id: "job-cron-late-tick",
+              name: "Job Cron Late Tick",
+              enabled: true,
+              schedule: {
+                kind: "cron",
+                expr: "0 8 * * *",
+                at: null,
+                everyMs: null,
+                tz: "UTC",
+                summaryText: "Every day at 08:00 UTC",
+              },
+              payload: {
+                kind: "agent_turn",
+                task: "Open settings app and check Wi-Fi",
+              },
+              delivery: null,
+              model: null,
+              promptMode: "minimal",
+              createdAt: "2026-03-07T00:00:00.000Z",
+              updatedAt: "2026-03-07T00:00:00.000Z",
+              createdBy: "test",
+              sourceChannel: "telegram",
+              sourcePeerId: "12345",
+              runOnStartup: false,
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    cfg.cron.jobsFile = jobsFile;
+
+    let nowMs = Date.parse("2026-03-07T07:59:55.000Z");
+    let tick = () => {};
+    const runs = [];
+
+    const service = new CronService(cfg, {
+      nowMs: () => nowMs,
+      setIntervalFn: (handler) => {
+        tick = handler;
+        return {};
+      },
+      clearIntervalFn: () => {},
+      runTask: async (job) => {
+        runs.push(job.id);
+        return {
+          accepted: true,
+          ok: true,
+          message: "ok",
+        };
+      },
+      log: () => {},
+    });
+
+    service.start();
+    await waitMicrotask();
+    assert.deepEqual(runs, []);
+
+    nowMs = Date.parse("2026-03-07T08:00:05.000Z");
+    tick();
+    await waitMicrotask();
+    assert.deepEqual(runs, ["job-cron-late-tick"]);
+  });
+});
+
 test("CronService computes next cron occurrence correctly across DST start", async () => {
   await withTempHome("openpocket-cron-dst-start-", async () => {
     const cfg = loadConfig();

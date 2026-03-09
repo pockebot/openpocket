@@ -121,7 +121,9 @@ export class CronService {
       const jobState = state.jobs[job.id] ?? {};
       const firstRun = !jobState.lastAttemptAtMs && !jobState.lastRunAtMs;
       const dueByStartup = firstRun && job.runOnStartup && nowMs - this.startedAtMs < 30_000;
-      const nextRunAtMs = this.computeNextRunAtMs(job, jobState, nowMs);
+      const nextRunAtMs =
+        this.persistedNextRunAtMs(job, jobState, state.updatedAt)
+        ?? this.computeNextRunAtMs(job, jobState, nowMs);
       jobState.nextRunAtMs = nextRunAtMs ?? undefined;
       state.jobs[job.id] = jobState;
       const dueBySchedule = nextRunAtMs !== null && nowMs >= nextRunAtMs;
@@ -269,6 +271,26 @@ export class CronService {
       }
     }
     return null;
+  }
+
+  private persistedNextRunAtMs(job: StoredCronJob, state: CronJobState, stateUpdatedAt: string): number | null {
+    const persisted = toFiniteNumber(state.nextRunAtMs);
+    if (persisted === null) {
+      return null;
+    }
+
+    const lastRef = Math.max(state.lastAttemptAtMs ?? 0, state.lastRunAtMs ?? 0);
+    if (persisted <= lastRef) {
+      return null;
+    }
+
+    const jobUpdatedAtMs = Date.parse(job.updatedAt);
+    const stateUpdatedAtMs = Date.parse(stateUpdatedAt);
+    if (Number.isFinite(jobUpdatedAtMs) && Number.isFinite(stateUpdatedAtMs) && jobUpdatedAtMs > stateUpdatedAtMs) {
+      return null;
+    }
+
+    return persisted;
   }
 
   private timezoneOffsetLabel(ms: number, tz: string): string {
