@@ -3689,7 +3689,7 @@ export class AgentRuntime {
     task?: string,
   ): { toolName: string; params: Record<string, unknown> } | null {
     const finishIntentRe =
-      /\b(call\s+finish|should\s+finish|finish\s+the\s+task|complete\s+the\s+task|end\s+the\s+task)\b|完成任务|结束任务|应该结束|应当结束/i;
+      /\b(call\s+finish|should\s+finish|finish\s+the\s+task|complete\s+the\s+task|end\s+the\s+task)\b|\u5b8c\u6210\u4efb\u52a1|\u7ed3\u675f\u4efb\u52a1|\u5e94\u8be5\u7ed3\u675f|\u5e94\u5f53\u7ed3\u675f/i;
     if (!finishIntentRe.test(text)) {
       return null;
     }

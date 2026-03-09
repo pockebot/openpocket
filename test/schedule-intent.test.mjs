@@ -9,15 +9,16 @@ const {
 } = await import("../dist/gateway/schedule-intent.js");
 
 test("schedule intent normalization builds confirmation from model output", () => {
-  assert.equal(inferScheduleIntentLocale("每天早上 8 点帮我打开 Slack"), "zh");
+  const zhRequest = "\u6bcf\u5929\u65e9\u4e0a 8 \u70b9\u5e2e\u6211\u6253\u5f00 Slack";
+  assert.equal(inferScheduleIntentLocale(zhRequest), "zh");
 
-  const intent = normalizeScheduleIntentCandidate("每天早上 8 点帮我打开 Slack 去打卡", {
+  const intent = normalizeScheduleIntentCandidate("\u6bcf\u5929\u65e9\u4e0a 8 \u70b9\u5e2e\u6211\u6253\u5f00 Slack \u53bb\u6253\u5361", {
     isScheduleIntent: true,
-    task: "打开 Slack 去打卡",
+    task: "Open Slack and complete check-in",
     schedule: {
       kind: "cron",
       expr: "0 8 * * *",
-      summaryText: "每天 08:00",
+      summaryText: "Every day at 08:00",
     },
   }, {
     timezone: "Asia/Shanghai",
@@ -26,8 +27,8 @@ test("schedule intent normalization builds confirmation from model output", () =
   assert.ok(intent);
   assert.equal(intent?.schedule.kind, "cron");
   assert.equal(intent?.schedule.expr, "0 8 * * *");
-  assert.equal(intent?.schedule.summaryText, "每天 08:00");
-  assert.match(intent?.confirmationPrompt ?? "", /确认/);
+  assert.equal(intent?.schedule.summaryText, "Every day at 08:00");
+  assert.match(intent?.confirmationPrompt ?? "", /confirm/i);
 });
 
 test("schedule intent normalization requires RFC3339 at value for one-shot schedules", () => {

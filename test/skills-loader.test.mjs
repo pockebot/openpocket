@@ -24,8 +24,8 @@ test("SkillLoader loads workspace skills", () => {
   const skills = loader.loadAll();
   assert.equal(skills.some((s) => s.id === "search-app"), true);
   const summary = loader.summaryText(200);
-  assert.match(summary, /Search App/);
-  assert.match(summary, /location="/);
+  assert.match(summary, /<name>Search App<\/name>/);
+  assert.match(summary, /<location>/);
 });
 
 test("SkillLoader prefers bundled skills over workspace/local when skill IDs collide", () => {
@@ -57,7 +57,7 @@ test("SkillLoader prefers bundled skills over workspace/local when skill IDs col
   assert.match(skill?.path || "", /skills[\\/]human-auth-location[\\/]SKILL\.md$/i);
 });
 
-test("SkillLoader auto-loads matching skill content for active task context", () => {
+test("SkillLoader keeps matching skills in the discovery index without preloading bodies", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-active-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -82,16 +82,16 @@ test("SkillLoader auto-loads matching skill content for active task context", ()
   const loader = new SkillLoader(cfg);
   const context = loader.buildPromptContextForTask(
     "Open PayByPhone and continue nearest location flow, use location auth if empty.",
+    { maxSummaryItems: 200 },
   );
 
   assert.match(context.summaryText, /PayByPhone Nearest Flow/);
-  assert.equal(context.activeEntries.length > 0, true);
-  assert.match(context.activePromptText, /PayByPhone Nearest Flow/);
-  assert.match(context.activePromptText, /<active_skill /);
-  assert.equal(context.activePromptChars > 0, true);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
+  assert.equal(context.activePromptChars, 0);
 });
 
-test("SkillLoader honors explicit metadata trigger phrases for active loading", () => {
+test("SkillLoader parses explicit metadata trigger phrases without preloading bodies", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-escape-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -125,12 +125,13 @@ test("SkillLoader honors explicit metadata trigger phrases for active loading", 
   const loader = new SkillLoader(cfg);
   const context = loader.buildPromptContextForTask(
     `Please run ${triggerPhrase} flow for Skill <A&B> "quote" 'apos' now.`,
+    { maxSummaryItems: 200 },
   );
 
-  assert.match(context.summaryText, /Skill <A&B>/);
-  assert.equal(context.activeEntries.length, 1);
-  assert.match(context.activePromptText, /trigger:/);
-  assert.match(context.activePromptText, /Test content body/);
+  assert.match(context.summaryText, /Skill &lt;A&amp;B&gt; &quot;quote&quot; 'apos'/);
+  assert.match(context.summaryText, /Trigger hints: token&lt;&amp;&gt;&quot;'/);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
 });
 
 test("SkillLoader supports SKILL.md directory layout and metadata gating", () => {
@@ -185,7 +186,7 @@ test("SkillLoader lists all discovered skills in summary regardless task text", 
       "---",
       'name: "X Twitter Login Recovery"',
       'description: "Recover X login when attestation denied happens"',
-      'metadata: {"openclaw":{"triggers":{"any":["x","twitter","tweet","attestation denied","attestationdenied","推特"]}}}',
+      'metadata: {"openclaw":{"triggers":{"any":["x","twitter","tweet","attestation denied","attestationdenied","x-twitter"]}}}',
       "---",
       "",
       "# X Twitter Login Recovery",
@@ -204,15 +205,17 @@ test("SkillLoader lists all discovered skills in summary regardless task text", 
   const loader = new SkillLoader(cfg);
   const context = loader.buildPromptContextForTask(
     "Open X app, login, and fix LoginError.AttestationDenied before posting a tweet.",
+    { maxSummaryItems: 200 },
   );
 
   assert.match(context.summaryText, /X Twitter Login Recovery/);
   assert.match(context.summaryText, /Generic Login/);
-  assert.equal(context.activeEntries.length > 0, true);
-  assert.match(context.activePromptText, /X Twitter Login Recovery/);
+  assert.match(context.summaryText, /attestation denied/);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
 });
 
-test("SkillLoader activates bundled device-file-search for file handoff task", () => {
+test("SkillLoader keeps bundled device-file-search discoverable for file handoff task", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-device-file-search-"));
   process.env.OPENPOCKET_HOME = home;
   const cfg = loadConfig();
@@ -222,9 +225,32 @@ test("SkillLoader activates bundled device-file-search for file handoff task", (
     "Find the latest edited photo and send it to me in chat.",
   );
 
-  assert.equal(
-    context.activeEntries.some((entry) => entry.skill.id === "device-file-search"),
-    true,
-  );
-  assert.match(context.activePromptText, /Device File Search/);
+  assert.match(context.summaryText, /device-file-search/);
+  assert.equal(context.activeEntries.length, 0);
+  assert.equal(context.activePromptText, "");
+});
+
+test("SkillLoader includes all skills in discovery index when still under the default char budget", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-skills-budget-"));
+  process.env.OPENPOCKET_HOME = home;
+  const cfg = loadConfig();
+
+  const skillsDir = path.join(cfg.workspaceDir, "skills");
+  fs.mkdirSync(skillsDir, { recursive: true });
+
+  for (let index = 1; index <= 10; index += 1) {
+    fs.writeFileSync(
+      path.join(skillsDir, `skill-${String(index).padStart(2, "0")}.md`),
+      `# Skill ${index}\n\nDescription for skill ${index}.`,
+      "utf-8",
+    );
+  }
+
+  const loader = new SkillLoader(cfg);
+  const context = loader.buildPromptContextForTask("List available skills.");
+  const discoveredCount = loader.loadAll().length;
+  const skillBlockCount = (context.summaryText.match(/<skill>/g) || []).length;
+
+  assert.equal(skillBlockCount, discoveredCount);
+  assert.match(context.summaryText, /<name>Skill 10<\/name>/);
 });

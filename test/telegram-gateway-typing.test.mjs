@@ -66,7 +66,6 @@ test("TelegramGateway formats human-auth escalation as HTML and strips redundant
 
     const html = gateway.buildHumanAuthHtmlMessage(
       "Please open the authorization link now and approve or reject the request. Once you've done that, send a quick confirmation here. Security note: this auth page connects to your local OpenPocket relay.",
-      "en",
       ["/auth approve req_123", "Web link is unavailable. Use manual commands:"],
     );
 
@@ -134,7 +133,7 @@ test("TelegramGateway syncs bot display name after onboarding update", async () 
     assert.equal(setNameCalls.length, 1);
     assert.equal(setNameCalls[0].name, "Jarvis");
     assert.equal(messageCalls.length, 1);
-    assert.match(messageCalls[0].text, /已同步 Telegram Bot 显示名/);
+    assert.match(messageCalls[0].text, /Telegram bot display name updated/i);
   });
 });
 
@@ -274,7 +273,7 @@ test("TelegramGateway consumes profile-update payload after chat reply", async (
     gateway.chat.decide = async () => ({
       mode: "chat",
       task: "",
-      reply: "已更新。我的名字改为“Jarvis-Phone”。",
+      reply: "Updated. my name is now \"Jarvis-Phone\".",
       confidence: 1,
       reason: "profile_update",
     });
@@ -286,13 +285,14 @@ test("TelegramGateway consumes profile-update payload after chat reply", async (
       return { assistantName: "Jarvis-Phone", locale: "zh" };
     };
 
-    await gateway.consumeMessage({ chat: { id: 456 }, text: "你把名字改成 Jarvis-Phone 吧" });
+    await gateway.consumeMessage({ chat: { id: 456 }, text: "Rename yourself to Jarvis-Phone" });
 
+    // Telegram display-name sync copy is intentionally English-only.
     assert.equal(setNameCalls.length, 1);
     assert.equal(setNameCalls[0].name, "Jarvis-Phone");
     assert.equal(messageCalls.length, 2);
-    assert.match(messageCalls[0].text, /已更新/);
-    assert.match(messageCalls[1].text, /已同步 Telegram Bot 显示名/);
+    assert.match(messageCalls[0].text, /Updated/i);
+    assert.match(messageCalls[1].text, /Telegram bot display name updated/i);
   });
 });
 
@@ -331,7 +331,7 @@ test("TelegramGateway play-store preflight starts a direct check/login task", as
     const handled = await gateway.ensurePlayStoreReady(7301, "zh");
     assert.equal(handled, true);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /系统 Google 账号登录状态/);
+    assert.match(sent[0].text, /Checking system Google account sign-in now/i);
     assert.equal(tasks.length, 1);
     assert.match(tasks[0], /request_human_auth\(oauth\)/);
 
@@ -368,7 +368,7 @@ test("TelegramGateway play-store preflight notifies once when emulator is not bo
     assert.equal(handled1, false);
     assert.equal(handled2, false);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /还没有检测到已启动的模拟器/);
+    assert.match(sent[0].text, /no booted emulator detected yet/i);
   });
 });
 
@@ -420,7 +420,7 @@ test("TelegramGateway play-store preflight re-checks device login even if onboar
     const handled = await gateway.ensurePlayStoreReady(7304, "zh");
     assert.equal(handled, true);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /系统 Google 账号登录状态/);
+    assert.match(sent[0].text, /Checking system Google account sign-in now/i);
     assert.equal(tasks.length, 1);
   });
 });
@@ -459,7 +459,7 @@ test("TelegramGateway play-store preflight falls back to manual hint when humanA
     const handled = await gateway.ensurePlayStoreReady(7302, "zh");
     assert.equal(handled, true);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /humanAuth 未启用/);
+    assert.match(sent[0].text, /humanAuth is disabled/i);
 
     const statePath = path.join(cfg.stateDir, "onboarding.json");
     const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
@@ -546,7 +546,7 @@ test("TelegramGateway play-store preflight can trigger remote login task", async
     const handled = await gateway.ensurePlayStoreReady(7303, "zh");
     assert.equal(handled, true);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /系统 Google 账号登录状态/);
+    assert.match(sent[0].text, /Checking system Google account sign-in now/i);
     assert.equal(tasks.length, 1);
     assert.match(tasks[0], /request_human_auth\(oauth\)/);
   });
@@ -974,7 +974,7 @@ test("TelegramGateway captures non-sensitive context key-values from plain chat 
 
     assert.equal(decideCalled, false);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /已记录/);
+    assert.match(sent[0].text, /Saved (context fields|non-sensitive context)/i);
   });
 });
 
@@ -1158,7 +1158,7 @@ test("TelegramGateway /start triggers onboarding reply when onboarding is pendin
       return {
         mode: "chat",
         task: "",
-        reply: "先做个简短初始化：我该怎么称呼你？",
+        reply: "Quick setup before we continue: how would you like me to address you?",
         confidence: 1,
         reason: "profile_onboarding",
       };
@@ -1175,10 +1175,10 @@ test("TelegramGateway /start triggers onboarding reply when onboarding is pendin
       text: "/start",
     });
 
-    assert.equal(decideInput, "你好");
+    assert.equal(decideInput, "hello");
     assert.equal(taskStarted, false);
     assert.equal(sent.length, 1);
-    assert.match(sent[0].text, /简短初始化/);
+    assert.match(sent[0].text, /Quick setup/i);
   });
 });
 
@@ -1284,7 +1284,7 @@ test("TelegramGateway /reset routes into onboarding when onboarding is pending",
     gateway.chat.decide = async () => ({
       mode: "chat",
       task: "",
-      reply: "先做个简短初始化：我该怎么称呼你？",
+      reply: "Quick setup before we continue: how would you like me to address you?",
       confidence: 1,
       reason: "profile_onboarding",
     });
@@ -1298,7 +1298,7 @@ test("TelegramGateway /reset routes into onboarding when onboarding is pending",
 
     assert.equal(sent.length, 2);
     assert.match(sent[0].text, /Conversation memory cleared/);
-    assert.match(sent[1].text, /简短初始化/);
+    assert.match(sent[1].text, /Quick setup/i);
   });
 });
 
@@ -1971,7 +1971,7 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     // so they use the fallback path which skips notification for "wait" actions.
     // Step 4 (tap) also uses fallback and notifies.
     const llmDecisions = [
-      { notify: true, message: "进度：已打开 Gmail 首页。", reason: "screen_transition" },
+      { notify: true, message: "Progress: opened the Gmail home screen.", reason: "screen_transition" },
     ];
     let llmIndex = 0;
     gateway.chat.narrateTaskProgress = async () => {
@@ -1987,11 +1987,11 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
       }
       return {
         notify: true,
-        message: `已做了 ${input.progress.actionType}`,
+        message: `Performed ${input.progress.actionType}`,
         reason: "fallback_notify",
       };
     };
-    gateway.chat.narrateTaskOutcome = async () => "收件箱已打开，当前可见最新邮件列表。";
+    gateway.chat.narrateTaskOutcome = async () => "Inbox is open and the latest email list is visible.";
 
     gateway.agent.runTask = async (_task, _modelName, onProgress) => {
       await onProgress({
@@ -2039,7 +2039,7 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
 
     const result = await gateway.runTaskAndReport({
       chatId: 9201,
-      task: "打开 Gmail 并进入收件箱",
+      task: "Open Gmail and enter the inbox",
       source: "chat",
       modelName: null,
     });
@@ -2050,12 +2050,12 @@ test("TelegramGateway narrates progress only when model marks meaningful updates
     // 3 messages: step 1 model narration + step 4 fallback narration + final outcome.
     assert.equal(sent.length, 3);
     assert.equal(sent[0].chatId, 9201);
-    assert.equal(sent[0].text, "进度：已打开 Gmail 首页。");
-    assert.doesNotMatch(sent[0].text, /收到，我先处理这个任务/);
+    assert.equal(sent[0].text, "Progress: opened the Gmail home screen.");
+    assert.doesNotMatch(sent[0].text, /(收到，我先处理这个任务|On it:)/i);
     assert.doesNotMatch(sent[0].text, /已开始执行任务/);
     assert.doesNotMatch(sent[0].text, /\[(goal|screen|next)\]/i);
     assert.doesNotMatch(sent[0].text, /Sub-goal|Screen is|Next:/i);
-    assert.equal(sent[2].text, "收件箱已打开，当前可见最新邮件列表。");
+    assert.equal(sent[2].text, "Inbox is open and the latest email list is visible.");
     assert.equal(sent.slice(0, 2).some((item) => /\d+\/\d+/.test(item.text)), false);
     assert.equal(
       sent.slice(0, 2).some((item) => /Current screen app:|Reasoning:|Action:/.test(item.text)),
@@ -2090,7 +2090,7 @@ test("TelegramGateway forces first progress narration when model skips step 1", 
       if (input.progress.step === 1) {
         return {
           notify: true,
-          message: "小更新：任务已开始，我先拿到最新照片再继续处理。",
+          message: "Quick update: the task has started. I am fetching the latest photo before continuing.",
           reason: "fallback_first_progress",
         };
       }
@@ -2117,7 +2117,7 @@ test("TelegramGateway forces first progress narration when model skips step 1", 
 
     const result = await gateway.runTaskAndReport({
       chatId: 9202,
-      task: "读取手机上最新的照片并进行美化编辑",
+      task: "Read the latest photo on the phone and beautify it",
       source: "chat",
       modelName: null,
     });
@@ -2126,7 +2126,7 @@ test("TelegramGateway forces first progress narration when model skips step 1", 
     assert.equal(llmCalls, 1);
     assert.equal(sent.length, 2);
     assert.equal(sent[0].chatId, 9202);
-    assert.equal(sent[0].text, "小更新：任务已开始，我先拿到最新照片再继续处理。");
+    assert.equal(sent[0].text, "Quick update: the task has started. I am fetching the latest photo before continuing.");
     assert.equal(sent[1].text, "done");
   });
 });

@@ -71,7 +71,7 @@ test("Dual-side smoke: Telegram instruction writes local JS file", async () => {
 
     gateway.chat.decide = async (_chatId, text) => ({
       mode: "task",
-      task: `创建文件 smoke_out/main.js，并写入 JavaScript 代码以打印 "dual-side-smoke-ok"。 source=${text.length}`,
+      task: `Create file smoke_out/main.js and write JavaScript that prints "dual-side-smoke-ok". source=${text.length}`,
       reply: "",
       confidence: 0.99,
       reason: "dual_side_smoke_forced_task_mode",
@@ -98,7 +98,7 @@ test("Dual-side smoke: Telegram instruction writes local JS file", async () => {
 
     await gateway.consumeMessage({
       chat: { id: 980088419 },
-      text: "请创建一个 JavaScript 文件 smoke_out/main.js，内容为打印 dual-side-smoke-ok",
+      text: "Please create a JavaScript file smoke_out/main.js that prints dual-side-smoke-ok",
     });
     await taskDone;
 
@@ -213,7 +213,7 @@ test("Dual-side smoke: Android build-install-run diagnostics chain persists unif
     };
 
     const outcome = await runRuntimeAttempt(deps, {
-      task: "写一个可在 emulator 运行的贪吃蛇 app，并自动修复直到能启动",
+      task: "Write a Snake app that runs in the emulator and keep fixing it until it launches.",
       availableToolNames: ["finish"],
     });
 

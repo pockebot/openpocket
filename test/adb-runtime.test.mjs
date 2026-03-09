@@ -304,7 +304,7 @@ test("AdbRuntime uses unverified clipboard paste when clipboard read is unavaila
   const emulator = new FakeEmulator({ failClipboardRead: true });
   const runtime = new AdbRuntime(makeConfig(), emulator);
 
-  const result = await runtime.executeAction({ type: "type", text: "旧金山 天气" });
+  const result = await runtime.executeAction({ type: "type", text: "S\u00e3o Paulo weather" });
   assert.match(result, /clipboard paste \(unverified\)/i);
   assert.equal(
     emulator.calls.some((args) => args.includes("KEYCODE_PASTE")),
@@ -322,7 +322,7 @@ test("AdbRuntime falls back to adb keyboard for non-ASCII when clipboard command
   const emulator = new FakeEmulator({ failClipboardSet: true });
   const runtime = new AdbRuntime(makeConfig(), emulator);
 
-  const result = await runtime.executeAction({ type: "type", text: "旧金山 天气" });
+  const result = await runtime.executeAction({ type: "type", text: "S\u00e3o Paulo weather" });
   assert.match(result, /adb keyboard/i);
   assert.equal(
     emulator.calls.some((args) => args.includes("ADB_INPUT_B64")),
@@ -341,7 +341,7 @@ test("AdbRuntime fails clearly when non-ASCII input methods are unavailable", as
   const runtime = new AdbRuntime(makeConfig(), emulator);
 
   await assert.rejects(
-    runtime.executeAction({ type: "type", text: "旧金山 天气" }),
+    runtime.executeAction({ type: "type", text: "S\u00e3o Paulo weather" }),
     /Text input failed/,
   );
 });

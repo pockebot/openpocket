@@ -117,7 +117,7 @@ interface OnboardingPreset {
   aliases: string[];
 }
 
-interface OnboardingLocaleTemplate {
+interface OnboardingTemplateCopy {
   questions: Record<OnboardingStep, string>;
   emptyAnswer: string;
   onboardingSaved: string;
@@ -133,9 +133,8 @@ interface OnboardingLocaleTemplate {
   personaPresets: OnboardingPreset[];
 }
 
-interface OnboardingTemplate {
+interface OnboardingTemplate extends OnboardingTemplateCopy {
   version: number;
-  locales: Record<OnboardingLocale, OnboardingLocaleTemplate>;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -153,125 +152,63 @@ const CHAT_LOG_LEVEL_RANK: Record<GatewayLogLevel, number> = {
   debug: 3,
 };
 
-const DEFAULT_SESSION_RESET_PROMPT: Record<OnboardingLocale, string> = {
-  zh: [
-    "会话已重置。请先完成 Session Startup：",
-    "1) 确认当前任务目标与约束",
-    "2) 读取 AGENTS.md / SOUL.md / USER.md / IDENTITY.md",
-    "3) 如果 BOOTSTRAP.md 存在，先完成初始化",
-    "4) 然后再进入任务执行",
-  ].join("\n"),
-  en: [
-    "Session reset complete. Run Session Startup first:",
-    "1) Reconfirm goal and constraints",
-    "2) Read AGENTS.md / SOUL.md / USER.md / IDENTITY.md",
-    "3) If BOOTSTRAP.md exists, finish onboarding first",
-    "4) Then continue task execution",
-  ].join("\n"),
-};
+const DEFAULT_SESSION_RESET_PROMPT = [
+  "Session reset complete. Run Session Startup first:",
+  "1) Reconfirm goal and constraints",
+  "2) Read AGENTS.md / SOUL.md / USER.md / IDENTITY.md",
+  "3) If BOOTSTRAP.md exists, finish onboarding first",
+  "4) Then continue task execution",
+].join("\n");
 
 const DEFAULT_ONBOARDING_TEMPLATE: OnboardingTemplate = {
   version: 1,
-  locales: {
-    zh: {
-      questions: {
-        1: "先做个简短初始化：我该怎么称呼你？如果你愿意，也可以一次告诉我你希望我叫什么和什么人设。",
-        2: "收到。那你希望我叫什么名字？",
-        3: [
-          "最后一步：设定我的人设/语气。",
-          "你可以直接描述，也可以选编号：",
-          "1) 专业可靠：清晰、稳健、少废话",
-          "2) 高效直给：结果导向、节奏快",
-          "3) 温和陪伴：耐心解释、语气柔和",
-          "4) 幽默轻松：轻松自然，但不影响执行",
-          "回复示例：`2` 或 `专业可靠，简洁，必要时幽默`",
-        ].join("\n"),
-      },
-      emptyAnswer: "请用一句话回答，我会帮你写入 profile。",
-      onboardingSaved:
-        "好，我已经写入 USER.md 和 IDENTITY.md。后续我会称呼你为“{userPreferredAddress}”，我的名字是“{assistantName}”，人设是“{assistantPersona}”。",
-      noChange: "这些设定已经是当前值了，不需要改动。",
-      updated: "已更新。{changes}。",
-      changeJoiner: "；",
-      changeTemplates: {
-        userPreferredAddress: "我会称呼你为“{value}”",
-        assistantName: "我的名字改为“{value}”",
-        assistantPersona: "人设改为“{value}”",
-      },
-      fallbacks: {
-        user: "用户",
-        assistant: "OpenPocket",
-        persona: "务实、冷静、可靠",
-      },
-      personaPresets: [
-        {
-          value: "专业可靠：清晰、稳健、少废话",
-          aliases: ["1", "a", "选1", "方案1"],
-        },
-        {
-          value: "高效直给：结果导向、节奏快",
-          aliases: ["2", "b", "选2", "方案2"],
-        },
-        {
-          value: "温和陪伴：耐心解释、语气柔和",
-          aliases: ["3", "c", "选3", "方案3"],
-        },
-        {
-          value: "幽默轻松：轻松自然，但不影响执行",
-          aliases: ["4", "d", "选4", "方案4"],
-        },
-      ],
-    },
-    en: {
-      questions: {
-        1: "Quick setup before we continue: how would you like me to address you? You can also tell me my name and persona in one message.",
-        2: "Great. What name would you like to call me?",
-        3: [
-          "Final step: choose my persona/tone.",
-          "You can describe it freely, or pick one preset:",
-          "1) Professional & reliable: clear, stable, minimal fluff",
-          "2) Fast & direct: action-oriented, concise, high tempo",
-          "3) Warm & supportive: patient guidance, softer tone",
-          "4) Light & humorous: relaxed tone while staying task-focused",
-          "Reply example: `2` or `professional, concise, lightly humorous`",
-        ].join("\n"),
-      },
-      emptyAnswer: "Please answer in one short sentence so I can save your profile.",
-      onboardingSaved:
-        "Done. I saved your profile to USER.md and IDENTITY.md. I will address you as \"{userPreferredAddress}\", and use \"{assistantName}\" with persona \"{assistantPersona}\".",
-      noChange: "These profile settings are already up to date.",
-      updated: "Updated. {changes}.",
-      changeJoiner: "; ",
-      changeTemplates: {
-        userPreferredAddress: "I will address you as \"{value}\"",
-        assistantName: "my name is now \"{value}\"",
-        assistantPersona: "persona updated to \"{value}\"",
-      },
-      fallbacks: {
-        user: "User",
-        assistant: "OpenPocket",
-        persona: "pragmatic, calm, and reliable",
-      },
-      personaPresets: [
-        {
-          value: "professional and reliable: clear, stable, minimal fluff",
-          aliases: ["1", "a", "option1"],
-        },
-        {
-          value: "fast and direct: action-oriented, concise, high tempo",
-          aliases: ["2", "b", "option2"],
-        },
-        {
-          value: "warm and supportive: patient guidance, softer tone",
-          aliases: ["3", "c", "option3"],
-        },
-        {
-          value: "light and humorous: relaxed tone while staying task-focused",
-          aliases: ["4", "d", "option4"],
-        },
-      ],
-    },
+  questions: {
+    1: "Quick setup before we continue: how would you like me to address you? You can also tell me my name and persona in one message.",
+    2: "Great. What name would you like to call me?",
+    3: [
+      "Final step: choose my persona/tone.",
+      "You can describe it freely, or pick one preset:",
+      "1) Professional & reliable: clear, stable, minimal fluff",
+      "2) Fast & direct: action-oriented, concise, high tempo",
+      "3) Warm & supportive: patient guidance, softer tone",
+      "4) Light & humorous: relaxed tone while staying task-focused",
+      "Reply example: `2` or `professional, concise, lightly humorous`",
+    ].join("\n"),
   },
+  emptyAnswer: "Please answer in one short sentence so I can save your profile.",
+  onboardingSaved:
+    "Done. I saved your profile to USER.md and IDENTITY.md. I will address you as \"{userPreferredAddress}\", and use \"{assistantName}\" with persona \"{assistantPersona}\".",
+  noChange: "These profile settings are already up to date.",
+  updated: "Updated. {changes}.",
+  changeJoiner: "; ",
+  changeTemplates: {
+    userPreferredAddress: "I will address you as \"{value}\"",
+    assistantName: "my name is now \"{value}\"",
+    assistantPersona: "persona updated to \"{value}\"",
+  },
+  fallbacks: {
+    user: "User",
+    assistant: "OpenPocket",
+    persona: "pragmatic, calm, and reliable",
+  },
+  personaPresets: [
+    {
+      value: "professional and reliable: clear, stable, minimal fluff",
+      aliases: ["1", "a", "option1"],
+    },
+    {
+      value: "fast and direct: action-oriented, concise, high tempo",
+      aliases: ["2", "b", "option2"],
+    },
+    {
+      value: "warm and supportive: patient guidance, softer tone",
+      aliases: ["3", "c", "option3"],
+    },
+    {
+      value: "light and humorous: relaxed tone while staying task-focused",
+      aliases: ["4", "d", "option4"],
+    },
+  ],
 };
 
 export interface ChatDecision {
@@ -875,23 +812,20 @@ export class ChatAssistant {
     return this.needsBootstrapOnboarding();
   }
 
-  sessionResetPrompt(locale: OnboardingLocale): string {
+  sessionResetPrompt(): string {
     const raw = this.readTextSafe(this.workspaceFilePath(BARE_SESSION_RESET_TEMPLATE_FILE)).trim();
     if (!raw) {
-      return DEFAULT_SESSION_RESET_PROMPT[locale];
+      return DEFAULT_SESSION_RESET_PROMPT;
     }
-
-    const zhMatch = raw.match(/(?:^|\n)##\s*zh\s*\n([\s\S]*?)(?=\n##\s*en\s*\n|$)/i);
-    const enMatch = raw.match(/(?:^|\n)##\s*en\s*\n([\s\S]*?)(?=\n##\s*zh\s*\n|$)/i);
-    // Preserve multi-line formatting; only collapse excessive blank lines.
-    const zh = (zhMatch?.[1] ?? "").replace(/\n{3,}/g, "\n\n").trim();
-    const en = (enMatch?.[1] ?? "").replace(/\n{3,}/g, "\n\n").trim();
-
-    if (zh && en) {
-      return locale === "zh" ? zh : en;
+    const enMatch = raw.match(/(?:^|\n)##\s*en\s*\n([\s\S]*?)(?=\n##\s*\w+\s*\n|$)/i);
+    if (enMatch?.[1]?.trim()) {
+      return enMatch[1].replace(/\n{3,}/g, "\n\n").trim();
     }
-
-    return raw.replace(/\n{3,}/g, "\n\n").trim() || DEFAULT_SESSION_RESET_PROMPT[locale];
+    const zhMatch = raw.match(/(?:^|\n)##\s*zh\s*\n([\s\S]*?)(?=\n##\s*\w+\s*\n|$)/i);
+    if (zhMatch?.[1]?.trim()) {
+      return zhMatch[1].replace(/\n{3,}/g, "\n\n").trim();
+    }
+    return raw.replace(/\n{3,}/g, "\n\n").trim() || DEFAULT_SESSION_RESET_PROMPT;
   }
 
   private workspaceFilePath(name: string): string {
@@ -995,19 +929,19 @@ export class ChatAssistant {
     return parsed;
   }
 
-  private mergeLocaleTemplate(
-    localeRaw: unknown,
-    fallback: OnboardingLocaleTemplate,
-  ): OnboardingLocaleTemplate {
-    if (!isObject(localeRaw)) {
+  private mergeTemplateCopy(
+    raw: unknown,
+    fallback: OnboardingTemplateCopy,
+  ): OnboardingTemplateCopy {
+    if (!isObject(raw)) {
       return fallback;
     }
 
-    const rawQuestions = isObject(localeRaw.questions) ? localeRaw.questions : {};
-    const rawChangeTemplates = isObject(localeRaw.changeTemplates)
-      ? localeRaw.changeTemplates
+    const rawQuestions = isObject(raw.questions) ? raw.questions : {};
+    const rawChangeTemplates = isObject(raw.changeTemplates)
+      ? raw.changeTemplates
       : {};
-    const rawFallbacks = isObject(localeRaw.fallbacks) ? localeRaw.fallbacks : {};
+    const rawFallbacks = isObject(raw.fallbacks) ? raw.fallbacks : {};
 
     return {
       questions: {
@@ -1015,11 +949,11 @@ export class ChatAssistant {
         2: this.readQuestionOrFallback(rawQuestions, 2, fallback.questions[2]),
         3: this.readQuestionOrFallback(rawQuestions, 3, fallback.questions[3]),
       },
-      emptyAnswer: this.readStringOrFallback(localeRaw.emptyAnswer, fallback.emptyAnswer),
-      onboardingSaved: this.readStringOrFallback(localeRaw.onboardingSaved, fallback.onboardingSaved),
-      noChange: this.readStringOrFallback(localeRaw.noChange, fallback.noChange),
-      updated: this.readStringOrFallback(localeRaw.updated, fallback.updated),
-      changeJoiner: this.readStringOrFallback(localeRaw.changeJoiner, fallback.changeJoiner),
+      emptyAnswer: this.readStringOrFallback(raw.emptyAnswer, fallback.emptyAnswer),
+      onboardingSaved: this.readStringOrFallback(raw.onboardingSaved, fallback.onboardingSaved),
+      noChange: this.readStringOrFallback(raw.noChange, fallback.noChange),
+      updated: this.readStringOrFallback(raw.updated, fallback.updated),
+      changeJoiner: this.readStringOrFallback(raw.changeJoiner, fallback.changeJoiner),
       changeTemplates: {
         userPreferredAddress: this.readStringOrFallback(
           rawChangeTemplates.userPreferredAddress,
@@ -1042,8 +976,35 @@ export class ChatAssistant {
         ),
         persona: this.readStringOrFallback(rawFallbacks.persona, fallback.fallbacks.persona),
       },
-      personaPresets: this.mergePersonaPresets(localeRaw.personaPresets, fallback.personaPresets),
+      personaPresets: this.mergePersonaPresets(raw.personaPresets, fallback.personaPresets),
     };
+  }
+
+  private resolveOnboardingTemplateSource(parsed: unknown): Record<string, unknown> {
+    if (!isObject(parsed)) {
+      return {};
+    }
+    const hasDirectTemplateFields = isObject(parsed.questions)
+      || typeof parsed.emptyAnswer === "string"
+      || typeof parsed.onboardingSaved === "string"
+      || typeof parsed.noChange === "string"
+      || typeof parsed.updated === "string"
+      || typeof parsed.changeJoiner === "string"
+      || isObject(parsed.changeTemplates)
+      || isObject(parsed.fallbacks)
+      || Array.isArray(parsed.personaPresets);
+    if (hasDirectTemplateFields) {
+      return parsed;
+    }
+
+    const rawLocales = isObject(parsed.locales) ? parsed.locales : {};
+    if (isObject(rawLocales.en)) {
+      return rawLocales.en;
+    }
+    if (isObject(rawLocales.zh)) {
+      return rawLocales.zh;
+    }
+    return {};
   }
 
   private loadOnboardingTemplate(): OnboardingTemplate {
@@ -1070,16 +1031,13 @@ export class ChatAssistant {
       parsed = null;
     }
 
-    const rawLocales = isObject(parsed) && isObject(parsed.locales) ? parsed.locales : {};
+    const rawTemplate = this.resolveOnboardingTemplateSource(parsed);
     const merged: OnboardingTemplate = {
       version:
         typeof (parsed as { version?: unknown })?.version === "number"
           ? (parsed as { version: number }).version
           : DEFAULT_ONBOARDING_TEMPLATE.version,
-      locales: {
-        zh: this.mergeLocaleTemplate(rawLocales.zh, DEFAULT_ONBOARDING_TEMPLATE.locales.zh),
-        en: this.mergeLocaleTemplate(rawLocales.en, DEFAULT_ONBOARDING_TEMPLATE.locales.en),
-      },
+      ...this.mergeTemplateCopy(rawTemplate, DEFAULT_ONBOARDING_TEMPLATE),
     };
     this.onboardingTemplateCache = {
       mtimeMs,
@@ -1088,8 +1046,8 @@ export class ChatAssistant {
     return merged;
   }
 
-  private localeTemplate(locale: OnboardingLocale): OnboardingLocaleTemplate {
-    return this.loadOnboardingTemplate().locales[locale];
+  private onboardingTemplateCopy(): OnboardingTemplateCopy {
+    return this.loadOnboardingTemplate();
   }
 
   private renderTemplate(template: string, values: Record<string, string>): string {
@@ -1184,19 +1142,18 @@ export class ChatAssistant {
     return false;
   }
 
-  private isProfileSnapshotComplete(snapshot: ProfileSnapshot, locale: OnboardingLocale): boolean {
-    return !this.isPlaceholderValue(snapshot.userPreferredAddress, [this.pickFallback(locale, "user")])
+  private isProfileSnapshotComplete(snapshot: ProfileSnapshot): boolean {
+    return !this.isPlaceholderValue(snapshot.userPreferredAddress, [this.pickFallback("user")])
       && !this.isPlaceholderValue(
         snapshot.assistantName,
-        ["openpocket", this.pickFallback(locale, "assistant")],
+        ["openpocket", this.pickFallback("assistant")],
       )
-      && !this.isPlaceholderValue(snapshot.assistantPersona, [this.pickFallback(locale, "persona")]);
+      && !this.isPlaceholderValue(snapshot.assistantPersona, [this.pickFallback("persona")]);
   }
 
   private applyModelProfilePatch(
     base: ProfileSnapshot,
     patch: BootstrapModelDecision["profile"] | undefined,
-    locale: OnboardingLocale,
   ): ProfileSnapshot {
     if (!patch) {
       return base;
@@ -1209,7 +1166,7 @@ export class ChatAssistant {
       next.assistantName = this.normalizeAssistantName(patch.assistantName);
     }
     if (typeof patch.assistantPersona === "string" && this.normalizeOneLine(patch.assistantPersona)) {
-      next.assistantPersona = this.resolvePersonaAnswer(this.normalizeOneLine(patch.assistantPersona), locale);
+      next.assistantPersona = this.resolvePersonaAnswer(this.normalizeOneLine(patch.assistantPersona));
     }
     if (typeof patch.userName === "string" && this.normalizeOneLine(patch.userName)) {
       next.userName = this.normalizeOneLine(patch.userName);
@@ -1225,35 +1182,35 @@ export class ChatAssistant {
 
   private detectOnboardingLocale(input: string): OnboardingLocale {
     // Use a simple CJK signal so onboarding language follows the user's first message.
-    return /[\u4e00-\u9fff]/.test(input) ? "zh" : "en";
+    return /[一-鿿]/u.test(input) ? "zh" : "en";
   }
 
-  private questionForStep(step: OnboardingStep, locale: OnboardingLocale): string {
-    return this.localeTemplate(locale).questions[step];
+  private questionForStep(step: OnboardingStep): string {
+    return this.onboardingTemplateCopy().questions[step];
   }
 
-  private pickFallback(locale: OnboardingLocale, key: "user" | "assistant" | "persona"): string {
-    const fallbacks = this.localeTemplate(locale).fallbacks;
+  private pickFallback(key: "user" | "assistant" | "persona"): string {
+    const fallbacks = this.onboardingTemplateCopy().fallbacks;
     if (key === "user") return fallbacks.user;
     if (key === "assistant") return fallbacks.assistant;
     return fallbacks.persona;
   }
 
-  private completeProfileWithFallbacks(snapshot: ProfileSnapshot, locale: OnboardingLocale): ProfileSnapshot {
+  private completeProfileWithFallbacks(snapshot: ProfileSnapshot): ProfileSnapshot {
     const next: ProfileSnapshot = { ...snapshot };
-    if (this.isPlaceholderValue(next.userPreferredAddress, [this.pickFallback(locale, "user")])) {
-      next.userPreferredAddress = this.pickFallback(locale, "user");
+    if (this.isPlaceholderValue(next.userPreferredAddress, [this.pickFallback("user")])) {
+      next.userPreferredAddress = this.pickFallback("user");
     }
     if (
       this.isPlaceholderValue(
         next.assistantName,
-        ["openpocket", this.pickFallback(locale, "assistant")],
+        ["openpocket", this.pickFallback("assistant")],
       )
     ) {
-      next.assistantName = this.pickFallback(locale, "assistant");
+      next.assistantName = this.pickFallback("assistant");
     }
-    if (this.isPlaceholderValue(next.assistantPersona, [this.pickFallback(locale, "persona")])) {
-      next.assistantPersona = this.pickFallback(locale, "persona");
+    if (this.isPlaceholderValue(next.assistantPersona, [this.pickFallback("persona")])) {
+      next.assistantPersona = this.pickFallback("persona");
     }
     return next;
   }
@@ -1376,9 +1333,8 @@ export class ChatAssistant {
     return hasImperativeCue || hasConcreteTarget || hasOutputConstraint;
   }
 
-  private scheduleTimezoneForInput(input: string): string {
-    const locale: OnboardingLocale = inferScheduleIntentLocale(input);
-    const snapshot = this.readProfileSnapshot(locale);
+  private scheduleTimezoneForInput(): string {
+    const snapshot = this.readProfileSnapshot();
     const configured = this.normalizeOneLine(snapshot.timezone ?? "");
     if (configured) {
       return configured;
@@ -1386,9 +1342,9 @@ export class ChatAssistant {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   }
 
-  private personaPresetFromAnswer(answer: string, locale: OnboardingLocale): string {
+  private personaPresetFromAnswer(answer: string): string {
     const normalized = this.normalizeOneLine(answer).toLowerCase();
-    for (const preset of this.localeTemplate(locale).personaPresets) {
+    for (const preset of this.onboardingTemplateCopy().personaPresets) {
       if (preset.aliases.includes(normalized)) {
         return preset.value;
       }
@@ -1396,8 +1352,8 @@ export class ChatAssistant {
     return "";
   }
 
-  private resolvePersonaAnswer(answer: string, locale: OnboardingLocale): string {
-    const preset = this.personaPresetFromAnswer(answer, locale);
+  private resolvePersonaAnswer(answer: string): string {
+    const preset = this.personaPresetFromAnswer(answer);
     if (preset) {
       return preset;
     }
@@ -1433,33 +1389,30 @@ export class ChatAssistant {
 
   private firstMissingSnapshotStep(
     snapshot: ProfileSnapshot,
-    locale: OnboardingLocale,
   ): OnboardingStep | null {
-    if (this.isPlaceholderValue(snapshot.userPreferredAddress, [this.pickFallback(locale, "user")])) {
+    if (this.isPlaceholderValue(snapshot.userPreferredAddress, [this.pickFallback("user")])) {
       return 1;
     }
     if (
       this.isPlaceholderValue(
         snapshot.assistantName,
-        ["openpocket", this.pickFallback(locale, "assistant")],
+        ["openpocket", this.pickFallback("assistant")],
       )
     ) {
       return 2;
     }
-    if (this.isPlaceholderValue(snapshot.assistantPersona, [this.pickFallback(locale, "persona")])) {
+    if (this.isPlaceholderValue(snapshot.assistantPersona, [this.pickFallback("persona")])) {
       return 3;
     }
     return null;
   }
 
-  private bootstrapFallbackQuestion(locale: OnboardingLocale, snapshot: ProfileSnapshot): string {
-    const step = this.firstMissingSnapshotStep(snapshot, locale);
+  private bootstrapFallbackQuestion(snapshot: ProfileSnapshot): string {
+    const step = this.firstMissingSnapshotStep(snapshot);
     if (step === null) {
-      return locale === "zh"
-        ? "初始化信息我已经拿到了。你可以直接告诉我要做什么。"
-        : "I already have your onboarding profile. Tell me what you want to do next.";
+      return "I already have your onboarding profile. Tell me what you want to do next.";
     }
-    return this.questionForStep(step, locale);
+    return this.questionForStep(step);
   }
 
   private readBootstrapGuide(): string {
@@ -1729,27 +1682,11 @@ export class ChatAssistant {
     ].join("\n");
   }
 
-  private capabilityLabel(capability: string | null | undefined, locale: OnboardingLocale): string {
+  private capabilityLabel(capability: string | null | undefined): string {
     const normalized = String(capability || "").trim().toLowerCase();
     if (!normalized) {
-      return locale === "zh" ? "授权" : "authorization";
+      return "authorization";
     }
-    const zhMap: Record<string, string> = {
-      oauth: "登录授权",
-      permission: "权限授权",
-      camera: "相机授权",
-      microphone: "麦克风授权",
-      location: "定位授权",
-      contacts: "通讯录授权",
-      nfc: "NFC 授权",
-      sms: "短信/验证码授权",
-      "2fa": "二步验证授权",
-      otp: "一次性验证码授权",
-      email: "邮箱验证码授权",
-      files: "文件访问授权",
-      payment: "支付确认授权",
-      unknown: "授权",
-    };
     const enMap: Record<string, string> = {
       oauth: "login authorization",
       permission: "permission authorization",
@@ -1766,7 +1703,7 @@ export class ChatAssistant {
       payment: "payment authorization",
       unknown: "authorization",
     };
-    return locale === "zh" ? (zhMap[normalized] || "授权") : (enMap[normalized] || "authorization");
+    return enMap[normalized] || "authorization";
   }
 
   private buildEscalationNarrationPrompt(input: EscalationNarrationInput): string {
@@ -1775,7 +1712,7 @@ export class ChatAssistant {
       localeHint: input.locale,
       task: this.trimForPrompt(input.task, 260),
       capability: this.trimForPrompt(String(input.capability || ""), 80),
-      capabilityLabel: this.capabilityLabel(input.capability, input.locale),
+      capabilityLabel: this.capabilityLabel(input.capability),
       currentApp: this.trimForPrompt(String(input.currentApp || ""), 140),
       instruction: this.trimForPrompt(String(input.instruction || ""), 360),
       reason: this.trimForPrompt(String(input.reason || ""), 280),
@@ -2033,7 +1970,7 @@ export class ChatAssistant {
     return `${trimmed}\n- ${key}: ${value}`;
   }
 
-  private readProfileSnapshot(locale: OnboardingLocale): ProfileSnapshot {
+  private readProfileSnapshot(): ProfileSnapshot {
     const identity = this.readTextSafe(this.profileFilePath("IDENTITY.md"));
     const user = this.readTextSafe(this.profileFilePath("USER.md"));
 
@@ -2052,13 +1989,13 @@ export class ChatAssistant {
 
     return {
       userPreferredAddress: this.isPlaceholderValue(userPreferredAddressRaw)
-        ? this.pickFallback(locale, "user")
+        ? this.pickFallback("user")
         : userPreferredAddressRaw,
       assistantName: this.isPlaceholderValue(assistantNameRaw, ["openpocket"])
-        ? this.pickFallback(locale, "assistant")
+        ? this.pickFallback("assistant")
         : assistantNameRaw,
       assistantPersona: this.isPlaceholderValue(assistantPersonaRaw)
-        ? this.pickFallback(locale, "persona")
+        ? this.pickFallback("persona")
         : assistantPersonaRaw,
       userName: this.isPlaceholderValue(userNameRaw) ? undefined : userNameRaw,
       timezone: this.isPlaceholderValue(timezoneRaw) ? undefined : timezoneRaw,
@@ -2137,7 +2074,7 @@ export class ChatAssistant {
     state: BootstrapOnboardingState,
     locale: OnboardingLocale,
   ): string {
-    if (this.isProfileSnapshotComplete(state.profile, locale)) {
+    if (this.isProfileSnapshotComplete(state.profile)) {
       this.completeWorkspaceBootstrap(state.profile);
       this.bootstrapOnboarding.delete(chatId);
       this.profileOnboarding.delete(chatId);
@@ -2145,7 +2082,7 @@ export class ChatAssistant {
         assistantName: state.profile.assistantName,
         locale,
       });
-      return this.renderTemplate(this.localeTemplate(locale).onboardingSaved, {
+      return this.renderTemplate(this.onboardingTemplateCopy().onboardingSaved, {
         userPreferredAddress: state.profile.userPreferredAddress,
         assistantName: state.profile.assistantName,
         assistantPersona: state.profile.assistantPersona,
@@ -2156,7 +2093,7 @@ export class ChatAssistant {
       profile: state.profile,
       turns: state.turns.slice(-20),
     });
-    return this.bootstrapFallbackQuestion(locale, state.profile);
+    return this.bootstrapFallbackQuestion(state.profile);
   }
 
   private async applyBootstrapOnboarding(chatId: number, inputText: string): Promise<string | null> {
@@ -2171,7 +2108,7 @@ export class ChatAssistant {
     const parsedFromInput = this.parseOnboardingFields(inputText);
     const state: BootstrapOnboardingState = active ?? {
       locale,
-      profile: this.readProfileSnapshot(locale),
+      profile: this.readProfileSnapshot(),
       turns: [],
     };
 
@@ -2182,7 +2119,7 @@ export class ChatAssistant {
       state.profile.assistantName = this.normalizeAssistantName(parsedFromInput.assistantName);
     }
     if (parsedFromInput.assistantPersona) {
-      state.profile.assistantPersona = this.resolvePersonaAnswer(parsedFromInput.assistantPersona, locale);
+      state.profile.assistantPersona = this.resolvePersonaAnswer(parsedFromInput.assistantPersona);
     }
 
     const userLine = this.normalizeOneLine(inputText);
@@ -2196,7 +2133,7 @@ export class ChatAssistant {
       || parsedFromInput.assistantPersona,
     );
     if (userLine && !parsedStructured && this.looksLikeTaskInstruction(userLine)) {
-      state.profile = this.completeProfileWithFallbacks(state.profile, locale);
+      state.profile = this.completeProfileWithFallbacks(state.profile);
       this.completeWorkspaceBootstrap(state.profile);
       this.bootstrapOnboarding.delete(chatId);
       this.profileOnboarding.delete(chatId);
@@ -2207,13 +2144,13 @@ export class ChatAssistant {
       return null;
     }
     if (continuingFlow && userLine && !parsedStructured) {
-      const step = this.firstMissingSnapshotStep(state.profile, locale);
+      const step = this.firstMissingSnapshotStep(state.profile);
       if (step === 1) {
         state.profile.userPreferredAddress = userLine;
       } else if (step === 2) {
         state.profile.assistantName = this.normalizeAssistantName(userLine);
       } else if (step === 3) {
-        state.profile.assistantPersona = this.resolvePersonaAnswer(userLine, locale);
+        state.profile.assistantPersona = this.resolvePersonaAnswer(userLine);
       }
     }
 
@@ -2245,7 +2182,7 @@ export class ChatAssistant {
       return this.tryCompleteOrFallback(chatId, state, locale);
     }
 
-    state.profile = this.applyModelProfilePatch(state.profile, decision.profile, locale);
+    state.profile = this.applyModelProfilePatch(state.profile, decision.profile);
     state.turns.push({ role: "assistant", content: decision.reply });
     this.bootstrapOnboarding.set(chatId, {
       locale,
@@ -2259,13 +2196,13 @@ export class ChatAssistant {
 
     const completeByModel = Boolean(decision.onboardingComplete);
     const completeByData =
-      this.isProfileSnapshotComplete(state.profile, locale) && !this.hasBootstrapOnboardingFile();
+      this.isProfileSnapshotComplete(state.profile) && !this.hasBootstrapOnboardingFile();
     const shouldComplete =
-      (completeByModel && this.isProfileSnapshotComplete(state.profile, locale)) || completeByData;
+      (completeByModel && this.isProfileSnapshotComplete(state.profile)) || completeByData;
     if (!shouldComplete) {
       // Guardrail: do not let model wording claim completion when required fields
       // are still incomplete; continue with deterministic next required question.
-      return this.bootstrapFallbackQuestion(locale, state.profile);
+      return this.bootstrapFallbackQuestion(state.profile);
     }
 
     this.completeWorkspaceBootstrap(state.profile);
@@ -2294,13 +2231,13 @@ export class ChatAssistant {
     }
 
     const locale = this.detectOnboardingLocale(inputText);
-    const template = this.localeTemplate(locale);
-    const current = this.readProfileSnapshot(locale);
+    const template = this.onboardingTemplateCopy();
+    const current = this.readProfileSnapshot();
     const next: ProfileSnapshot = {
       userPreferredAddress: parsed.userPreferredAddress ?? current.userPreferredAddress,
       assistantName: parsed.assistantName ?? current.assistantName,
       assistantPersona: parsed.assistantPersona
-        ? this.resolvePersonaAnswer(parsed.assistantPersona, locale)
+        ? this.resolvePersonaAnswer(parsed.assistantPersona)
         : current.assistantPersona,
     };
 
@@ -2365,29 +2302,29 @@ export class ChatAssistant {
         if (parsed.userPreferredAddress) state.userPreferredAddress = parsed.userPreferredAddress;
         if (parsed.assistantName) state.assistantName = parsed.assistantName;
         if (parsed.assistantPersona) {
-          state.assistantPersona = this.resolvePersonaAnswer(parsed.assistantPersona, state.locale);
+          state.assistantPersona = this.resolvePersonaAnswer(parsed.assistantPersona);
         }
         this.applyThreePartFallback(state, answer);
         const firstMissing = this.firstMissingStep(state);
         if (firstMissing) {
           state.step = firstMissing;
           this.profileOnboarding.set(chatId, state);
-          return this.questionForStep(firstMissing, state.locale);
+          return this.questionForStep(firstMissing);
         }
         this.profileOnboarding.set(chatId, state);
       } else {
         this.profileOnboarding.set(chatId, state);
-        return this.questionForStep(1, locale);
+        return this.questionForStep(1);
       }
     } else if (!answer) {
-      return this.localeTemplate(current.locale).emptyAnswer;
+      return this.onboardingTemplateCopy().emptyAnswer;
     } else {
       const parsed = this.parseOnboardingFields(answer);
 
       if (parsed.userPreferredAddress) current.userPreferredAddress = parsed.userPreferredAddress;
       if (parsed.assistantName) current.assistantName = parsed.assistantName;
       if (parsed.assistantPersona) {
-        current.assistantPersona = this.resolvePersonaAnswer(parsed.assistantPersona, current.locale);
+        current.assistantPersona = this.resolvePersonaAnswer(parsed.assistantPersona);
       }
       this.applyThreePartFallback(current, answer);
 
@@ -2397,14 +2334,14 @@ export class ChatAssistant {
       } else if (current.step === 2 && !current.assistantName) {
         current.assistantName = answer;
       } else if (current.step === 3 && !current.assistantPersona) {
-        current.assistantPersona = this.resolvePersonaAnswer(answer, current.locale);
+        current.assistantPersona = this.resolvePersonaAnswer(answer);
       }
 
       const firstMissing = this.firstMissingStep(current);
       if (firstMissing) {
         current.step = firstMissing;
         this.profileOnboarding.set(chatId, current);
-        return this.questionForStep(firstMissing, current.locale);
+        return this.questionForStep(firstMissing);
       }
     }
 
@@ -2412,9 +2349,9 @@ export class ChatAssistant {
     if (!finalized) {
       return null;
     }
-    const userPreferredAddress = finalized.userPreferredAddress ?? this.pickFallback(finalized.locale, "user");
-    const assistantName = finalized.assistantName ?? this.pickFallback(finalized.locale, "assistant");
-    const assistantPersona = finalized.assistantPersona ?? this.pickFallback(finalized.locale, "persona");
+    const userPreferredAddress = finalized.userPreferredAddress ?? this.pickFallback("user");
+    const assistantName = finalized.assistantName ?? this.pickFallback("assistant");
+    const assistantPersona = finalized.assistantPersona ?? this.pickFallback("persona");
     this.completeWorkspaceBootstrap({
       userPreferredAddress,
       assistantName,
@@ -2426,7 +2363,7 @@ export class ChatAssistant {
     });
     this.profileOnboarding.delete(chatId);
     this.bootstrapOnboarding.delete(chatId);
-    return this.renderTemplate(this.localeTemplate(finalized.locale).onboardingSaved, {
+    return this.renderTemplate(this.onboardingTemplateCopy().onboardingSaved, {
       userPreferredAddress,
       assistantName,
       assistantPersona,
@@ -2507,8 +2444,7 @@ export class ChatAssistant {
     try {
       const parsed = JSON.parse(jsonText) as Record<string, unknown>;
       const intent = normalizeScheduleIntentCandidate(inputText, parsed, {
-        locale,
-        resolveTimezone: () => this.scheduleTimezoneForInput(inputText),
+        resolveTimezone: () => this.scheduleTimezoneForInput(),
       });
       if (!intent) {
         return null;
@@ -2544,7 +2480,7 @@ export class ChatAssistant {
       "1) mode=task when user wants the assistant to operate phone/apps.",
       "1.1) Treat operation as happening on phone by default.",
       "1.2) Short imperative app commands (e.g., 'open duolingo', 'launch instagram', 'go to settings') must be mode=task.",
-      "1.3) Question-like phrasing (e.g., 'can you ...? / 可以...吗？') must still be mode=task when it asks for executable outputs (create/write/build/run/install/open).",
+      "1.3) Question-like phrasing (for example, 'can you ...?') must still be mode=task when it asks for executable outputs (create/write/build/run/install/open).",
       "2) requiresExternalObservation=true when correctness depends on current real-world/device/runtime/tool state.",
       "2.1) This includes requests about what is currently running, which device/environment/version/status is active, what is installed/connected/open right now, or any runtime fact that must be verified.",
       "3) canAnswerDirectly=true only when the answer can be produced reliably from conversation context and stable general knowledge alone.",
@@ -2889,9 +2825,7 @@ export class ChatAssistant {
         280,
       )
       : "";
-    const messageText = input.locale === "zh"
-      ? `小更新：我还在 ${app}。正在继续处理${summary ? `，当前遇到：${summary}` : "，确认后会马上给你结果"}。`
-      : `Quick update: still on ${app}. I am continuing${summary ? `, current blocker: ${summary}` : " and will share the verified result shortly"}.`;
+    const messageText = `Quick update: still on ${app}. I am continuing${summary ? `, current blocker: ${summary}` : " and will share the verified result shortly"}.`;
 
     return {
       notify: true,
@@ -2990,34 +2924,25 @@ export class ChatAssistant {
     return `https://www.google.com/search?q=${encoded}`;
   }
 
-  private downgradeShoppingClaimsWhenUnverified(message: string, locale: OnboardingLocale): string {
+  private downgradeShoppingClaimsWhenUnverified(message: string): string {
     const lines = this.normalizeMultiline(message).split("\n");
     const transformed = lines.map((line, idx) => {
       let next = line;
       if (idx === 0) {
-        if (locale === "zh") {
-          next = next.replace(/^可购买(?:渠道)?/i, "已发现相关商品列表");
-        } else {
-          next = next
-            .replace(/^available to buy now for\b/i, "Observed listings for")
-            .replace(/^available now for\b/i, "Observed listings for")
-            .replace(/^available places to buy\b/i, "Observed listings for");
-        }
-      }
-      if (locale === "zh") {
         next = next
-          .replace(/有货/gi, "页面显示有货（未验证）")
-          .replace(/现货/gi, "页面显示现货（未验证）");
-      } else {
-        next = next
-          .replace(/\bin stock online\b/gi, "listed as in stock (unverified)")
-          .replace(/\bin stock\b/gi, "listed as in stock (unverified)");
+          .replace(/^可购买(?:渠道)?/i, "已发现相关商品列表")
+          .replace(/^available to buy now for\b/i, "Observed listings for")
+          .replace(/^available now for\b/i, "Observed listings for")
+          .replace(/^available places to buy\b/i, "Observed listings for");
       }
+      next = next
+        .replace(/有货/gi, "页面显示有货（未验证）")
+        .replace(/现货/gi, "页面显示现货（未验证）")
+        .replace(/\bin stock online\b/gi, "listed as in stock (unverified)")
+        .replace(/\bin stock\b/gi, "listed as in stock (unverified)");
       return next;
     });
-    const disclaimer = locale === "zh"
-      ? "说明：本次未抓到可验证的商品直达链接；价格/库存来自页面摘要，可能变化。"
-      : "Note: No verifiable direct product URLs were captured; price/stock come from listing snippets and may change.";
+    const disclaimer = "Note: No verifiable direct product URLs were captured; price/stock come from listing snippets and may change.";
     return `${transformed.join("\n")}\n${disclaimer}`.trim();
   }
 
@@ -3092,7 +3017,7 @@ export class ChatAssistant {
         linkLines.push(`- ${store.label}: ${directFromContext}`);
         continue;
       }
-      const unavailable = input.locale === "zh" ? "暂无可验证直达链接" : "link unavailable";
+      const unavailable = "link unavailable";
       linkLines.push(`- ${store.label}: ${unavailable}`);
       missingStores.push(store.label);
     }
@@ -3103,16 +3028,12 @@ export class ChatAssistant {
 
     const allMissingDirectLinks = verifiedDirectCount === 0;
     const summary = allMissingDirectLinks
-      ? this.downgradeShoppingClaimsWhenUnverified(base, input.locale)
+      ? this.downgradeShoppingClaimsWhenUnverified(base)
       : base;
 
-    const title = allMissingDirectLinks
-      ? (input.locale === "zh" ? "商店链接：" : "Store links:")
-      : (input.locale === "zh" ? "购买链接（已验证）：" : "Store links (verified):");
+    const title = allMissingDirectLinks ? "Store links:" : "Store links (verified):";
     const query = this.deriveShoppingQuery(input.task, base, context);
-    const searchTitle = input.locale === "zh"
-      ? "快捷搜索链接（非商品直达页）："
-      : "Quick search links (not direct product pages):";
+    const searchTitle = "Quick search links (not direct product pages):";
     const searchLines = missingStores
       .map((store) => `- ${store}: ${this.buildStoreSearchLink(store, query)}`);
     const searchSection = searchLines.length > 0
@@ -3124,74 +3045,54 @@ export class ChatAssistant {
   private fallbackTaskOutcomeNarration(input: TaskOutcomeNarrationInput): string {
     const cleaned = this.sanitizeOutcomeBoilerplate(input.rawResult);
     const base = cleaned || (input.ok
-      ? (input.locale === "zh" ? "结果已获取，但可用细节较少。" : "I got the result, but details are limited.")
+      ? "I got the result, but details are limited."
       : this.trimForPrompt(input.rawResult, 400));
     const enrichedBase = this.appendShoppingLinksIfNeeded(input, base);
     const reuseNote =
       input.ok && (input.skillPath || input.scriptPath)
-        ? (input.locale === "zh"
-          ? "另外，我已把这次流程沉淀成可复用的自动化资产，下次可以更快复用。"
-          : "Also, I saved this workflow as reusable automation assets for faster reuse next time.")
+        ? "Also, I saved this workflow as reusable automation assets for faster reuse next time."
         : "";
     return reuseNote ? `${enrichedBase}\n${reuseNote}` : enrichedBase;
   }
 
   private fallbackEscalationNarration(input: EscalationNarrationInput): string {
     const locale = input.locale;
-    const capabilityLabel = this.capabilityLabel(input.capability, locale);
+    const capabilityLabel = this.capabilityLabel(input.capability);
     const appToken = String(input.currentApp || "").trim();
     const appLine = appToken && appToken.toLowerCase() !== "unknown"
-      ? (locale === "zh" ? `当前停在 ${appToken}。` : `Current app: ${appToken}.`)
+      ? `Current app: ${appToken}.`
       : "";
     const securityLine = input.includeLocalSecurityAssurance
-      ? (locale === "zh"
-        ? "安全提示：授权页连接的是你本机上的 OpenPocket Relay；凭据仅走当前私有加密通道，不会进入中心化服务器。"
-        : "Security note: this auth page connects to your local OpenPocket relay; credentials stay in a private encrypted channel and are not stored in a centralized relay.")
+      ? "Security note: this auth page connects to your local OpenPocket relay; credentials stay in a private encrypted channel and are not stored in a centralized relay."
       : "";
 
     if (input.event === "human_auth") {
-      const actionLine = locale === "zh"
-        ? (input.hasWebLink
-          ? "请点开下面链接并完成同意或拒绝。"
-          : "当前没有可用授权链接，请在 Telegram 里直接回复我是否同意。")
-        : (input.hasWebLink
-          ? "Open the link below and approve or reject."
-          : "Web link is unavailable; reply in Telegram with your decision.");
+      const actionLine = input.hasWebLink
+        ? "Open the link below and approve or reject."
+        : "Web link is unavailable; reply in Telegram with your decision.";
       const codeLine = input.isCodeFlow
-        ? (locale === "zh"
-          ? "这是验证码流程，你也可以直接回复 4-10 位验证码。"
-          : "This is a code flow: you can also reply with the 4-10 digit code directly.")
+        ? "This is a code flow: you can also reply with the 4-10 digit code directly."
         : "";
-      const intro = locale === "zh"
-        ? `我需要你完成一次${capabilityLabel}，我这边已暂停。`
-        : `I need your help for ${capabilityLabel}; automation is paused.`;
+      const intro = `I need your help for ${capabilityLabel}; automation is paused.`;
       return [intro, actionLine, codeLine, appLine, securityLine].filter(Boolean).join(" ");
     }
 
     const optionsLine = Array.isArray(input.options) && input.options.length > 0
-      ? (locale === "zh"
-        ? `可选项：${input.options.slice(0, 6).join(" / ")}。`
-        : `Options: ${input.options.slice(0, 6).join(" / ")}.`)
+      ? `Options: ${input.options.slice(0, 6).join(" / ")}.`
       : "";
     const questionLine = input.question
-      ? (locale === "zh" ? `问题：${input.question}` : `Question: ${input.question}`)
+      ? `Question: ${input.question}`
       : "";
-    const actionLine = locale === "zh"
-      ? "请直接回复选项编号或文本，我收到后会继续。"
-      : "Reply with the option number or text, and I will continue.";
+    const actionLine = "Reply with the option number or text, and I will continue.";
     return [questionLine, optionsLine, actionLine].filter(Boolean).join(" ");
   }
 
-  private fallbackStartReadyReply(locale: OnboardingLocale): string {
-    return locale === "zh"
-      ? "我已就绪，直接告诉我你想在手机上完成什么任务；需要命令时发送 /help。"
-      : "I am ready. Send what you want done on the phone directly, or use /help for commands.";
+  private fallbackStartReadyReply(): string {
+    return "I am ready. Send what you want done on the phone directly, or use /help for commands.";
   }
 
-  private fallbackSessionResetUserReply(locale: OnboardingLocale): string {
-    return locale === "zh"
-      ? "已开启新会话。直接告诉我你现在要完成什么任务，或发送 /help 查看命令。"
-      : "Started a fresh session. Tell me what you want to do now, or use /help for commands.";
+  private fallbackSessionResetUserReply(): string {
+    return "Started a fresh session. Tell me what you want to do now, or use /help for commands.";
   }
 
   private stableHash(input: string): number {
@@ -3203,8 +3104,7 @@ export class ChatAssistant {
     return hash >>> 0;
   }
 
-  taskAcceptedFallbackReply(task: string, locale: OnboardingLocale): string {
-    void locale;
+  taskAcceptedFallbackReply(task: string): string {
     const fallbackTask = "this task";
     const taskLine = this.trimForPrompt(String(task || "").replace(/\s+/g, " ").trim(), 160) || fallbackTask;
     const templates = [
@@ -3221,7 +3121,7 @@ export class ChatAssistant {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
-      return this.fallbackStartReadyReply(locale);
+      return this.fallbackStartReadyReply();
     }
 
     const client = new OpenAI({
@@ -3246,9 +3146,9 @@ export class ChatAssistant {
         "start welcome",
       );
       const normalized = this.normalizeOneLine(output);
-      return normalized || this.fallbackStartReadyReply(locale);
+      return normalized || this.fallbackStartReadyReply();
     } catch {
-      return this.fallbackStartReadyReply(locale);
+      return this.fallbackStartReadyReply();
     }
   }
 
@@ -3256,7 +3156,7 @@ export class ChatAssistant {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
-      return this.fallbackSessionResetUserReply(locale);
+      return this.fallbackSessionResetUserReply();
     }
 
     const client = new OpenAI({
@@ -3281,9 +3181,9 @@ export class ChatAssistant {
         "session reset user reply",
       );
       const normalized = this.normalizeOneLine(output);
-      return normalized || this.fallbackSessionResetUserReply(locale);
+      return normalized || this.fallbackSessionResetUserReply();
     } catch {
-      return this.fallbackSessionResetUserReply(locale);
+      return this.fallbackSessionResetUserReply();
     }
   }
 
@@ -3291,7 +3191,7 @@ export class ChatAssistant {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
-      return this.taskAcceptedFallbackReply(task, locale);
+      return this.taskAcceptedFallbackReply(task);
     }
 
     const client = new OpenAI({
@@ -3318,9 +3218,9 @@ export class ChatAssistant {
         "task accepted reply",
       );
       const normalized = this.normalizeOneLine(output);
-      return normalized || this.taskAcceptedFallbackReply(task, locale);
+      return normalized || this.taskAcceptedFallbackReply(task);
     } catch {
-      return this.taskAcceptedFallbackReply(task, locale);
+      return this.taskAcceptedFallbackReply(task);
     }
   }
 

@@ -251,11 +251,11 @@ export class TelegramAdapter implements ChannelAdapter {
       this.pendingUserDecisions.set(chatId, { request, resolve, reject, timeout });
 
       const locale = this.inferTaskLocale(`${request.question}\n${(request.options || []).join(" ")}`);
-      const optionsTitle = locale === "zh" ? "选项：" : "Options:";
-      const replyHint = locale === "zh" ? "请回复选项编号或文本。" : "Reply with option number or text.";
+      const optionsTitle = "Options:";
+      const replyHint = "Reply with option number or text.";
       const optionsList = request.options.length > 0
         ? request.options.map((item, index) => `${index + 1}. ${item}`).join("\n")
-        : (locale === "zh" ? "（没有可用选项）" : "(no options provided)");
+        : "(no options provided)";
       const prompt = [request.question, "", optionsTitle, optionsList, "", replyHint].join("\n");
       void this.bot.sendMessage(chatId, prompt.slice(0, 1800));
     });
@@ -279,11 +279,11 @@ export class TelegramAdapter implements ChannelAdapter {
       this.pendingUserInputs.set(chatId, { request, resolve, reject, timeout });
 
       const locale = this.inferTaskLocale(`${request.question}\n${request.placeholder ?? ""}`);
-      const questionTitle = locale === "zh" ? "需要的信息：" : "Requested value:";
+      const questionTitle = "Requested value:";
       const placeholderLine = request.placeholder
-        ? (locale === "zh" ? `格式提示：${request.placeholder}` : `Format hint: ${request.placeholder}`)
+        ? `Format hint: ${request.placeholder}`
         : "";
-      const replyHint = locale === "zh" ? "请直接回复文本内容。" : "Reply with the text value.";
+      const replyHint = "Reply with the text value.";
       const prompt = [questionTitle, request.question, placeholderLine, "", replyHint].filter(Boolean).join("\n");
       void this.bot.sendMessage(chatId, prompt.slice(0, 1800));
     });
@@ -588,6 +588,6 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   private inferTaskLocale(text: string): "zh" | "en" {
-    return /[\u4e00-\u9fff]/.test(text) ? "zh" : "en";
+    return /[一-鿿]/u.test(text) ? "zh" : "en";
   }
 }

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,33 +16,9 @@ const SOURCE_PRIORITY: Record<SkillInfo["source"], number> = {
   workspace: 2,
 };
 
-const DEFAULT_SUMMARY_ITEMS = 20;
-const DEFAULT_MAX_ACTIVE_SKILLS = 2;
-const DEFAULT_MAX_ACTIVE_SKILL_CHARS = 4_000;
-const DEFAULT_MAX_ACTIVE_TOTAL_CHARS = 7_500;
-const ACTIVE_SKILL_MIN_SCORE = 6;
-
-const SKILL_MATCH_STOPWORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "app",
-  "for",
-  "flow",
-  "from",
-  "help",
-  "in",
-  "into",
-  "of",
-  "on",
-  "or",
-  "play",
-  "skill",
-  "the",
-  "to",
-  "use",
-  "with",
-]);
+const DEFAULT_SUMMARY_ITEMS = Number.MAX_SAFE_INTEGER;
+const DEFAULT_SUMMARY_CHARS = 12_000;
+const DEFAULT_TRIGGER_HINTS = 8;
 
 export interface LoadedSkill extends SkillInfo {
   content: string;
@@ -352,11 +329,15 @@ function parseLoadedSkill(pathname: string, source: SkillInfo["source"]): Loaded
   return parseSkill(pathname, source);
 }
 
-function formatSummaryLine(skill: SkillInfo): string {
-  return `- name="${skill.name}" source="${skill.source}" location="${skill.path}" description="${skill.description.replace(/"/g, "'")}"`;
+function compactSkillPath(pathname: string): string {
+  const home = os.homedir();
+  if (home && pathname.startsWith(home)) {
+    return pathname.replace(home, "~");
+  }
+  return pathname;
 }
 
-function escapeAttr(value: string): string {
+function escapeXml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
@@ -364,39 +345,22 @@ function escapeAttr(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
-function normalizeForMatch(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function buildPromptDescription(skill: LoadedSkill): string {
+  const triggerHints = parseTriggerPhrases(skill.metadata).slice(0, DEFAULT_TRIGGER_HINTS);
+  if (triggerHints.length === 0) {
+    return skill.description;
+  }
+  return `${skill.description} Trigger hints: ${triggerHints.join("; ")}`;
 }
 
-function normalizeToken(token: string): string {
-  const normalized = token.toLowerCase().trim();
-  if (normalized.length > 4 && normalized.endsWith("s")) {
-    return normalized.slice(0, -1);
-  }
-  return normalized;
-}
-
-function extractKeywords(value: string): string[] {
-  const normalized = normalizeForMatch(value);
-  if (!normalized) {
-    return [];
-  }
-  const out = new Set<string>();
-  for (const raw of normalized.split(" ")) {
-    const token = normalizeToken(raw);
-    if (token.length < 3) {
-      continue;
-    }
-    if (SKILL_MATCH_STOPWORDS.has(token)) {
-      continue;
-    }
-    out.add(token);
-  }
-  return [...out];
+function formatSummaryLine(skill: LoadedSkill): string {
+  return [
+    "  <skill>",
+    `    <name>${escapeXml(skill.name)}</name>`,
+    `    <description>${escapeXml(buildPromptDescription(skill))}</description>`,
+    `    <location>${escapeXml(compactSkillPath(skill.path))}</location>`,
+    "  </skill>",
+  ].join("\n");
 }
 
 function parseTriggerPhrases(metadata: Record<string, unknown> | null): string[] {
@@ -415,92 +379,6 @@ function parseTriggerPhrases(metadata: Record<string, unknown> | null): string[]
     .map((item) => item.trim())
     .filter(Boolean);
   return [...new Set(phrases)];
-}
-
-type SkillTaskScore = {
-  skill: LoadedSkill;
-  score: number;
-  reason: string;
-};
-
-function scoreSkillForTask(skill: LoadedSkill, task: string): SkillTaskScore {
-  const normalizedTask = normalizeForMatch(task);
-  if (!normalizedTask) {
-    return { skill, score: 0, reason: "no task text" };
-  }
-  const taskTokens = new Set(
-    extractKeywords(normalizedTask).map((token) => normalizeToken(token)),
-  );
-
-  let score = 0;
-  const reasonBits: string[] = [];
-  const isHumanAuthSkill = skill.id.startsWith("human-auth-");
-
-  for (const phrase of parseTriggerPhrases(skill.metadata)) {
-    const normalizedPhrase = normalizeForMatch(phrase);
-    if (!normalizedPhrase) {
-      continue;
-    }
-    if (normalizedTask.includes(normalizedPhrase)) {
-      const phraseWordCount = normalizedPhrase.split(" ").filter(Boolean).length;
-      score += phraseWordCount >= 2 ? 10 : 4;
-      reasonBits.push(`trigger:"${phrase}"`);
-    }
-  }
-
-  const signatureKeywords = [
-    ...extractKeywords(skill.id),
-    ...extractKeywords(skill.name),
-    ...extractKeywords(skill.description),
-  ];
-  const uniqueSignature = [...new Set(signatureKeywords.map((token) => normalizeToken(token)))];
-  const matchedSignature = uniqueSignature.filter((token) => taskTokens.has(token));
-  if (matchedSignature.length > 0) {
-    score += matchedSignature.length * 2;
-    reasonBits.push(`keyword:${matchedSignature.slice(0, 4).join(",")}`);
-  }
-
-  const nameKeywords = extractKeywords(`${skill.id} ${skill.name}`).map((token) => normalizeToken(token));
-  const uniqueNameKeywords = [...new Set(nameKeywords)];
-  if (uniqueNameKeywords.length > 0) {
-    const matchedName = uniqueNameKeywords.filter((token) => taskTokens.has(token));
-    if (matchedName.length === uniqueNameKeywords.length) {
-      score += 4;
-      reasonBits.push("all-name-keywords");
-    }
-  }
-
-  if (isHumanAuthSkill) {
-    const humanAuthIntent = /request.human.auth|human.auth|human.phone|oauth|login|password|passkey|otp|2fa|sms.code|verification.code|payment.card|biometric|nfc/.test(normalizedTask);
-    if (!humanAuthIntent) {
-      score -= 6;
-      reasonBits.push("human-auth-penalty");
-    }
-  }
-
-  return {
-    skill,
-    score,
-    reason: reasonBits.join("; ") || "weak match",
-  };
-}
-
-function formatActiveSkillBlock(
-  skill: LoadedSkill,
-  reason: string,
-  score: number,
-  content: string,
-): string {
-  const safeName = escapeAttr(skill.name);
-  const safeSource = escapeAttr(skill.source);
-  const safePath = escapeAttr(skill.path);
-  const safeReason = escapeAttr(reason);
-  const safeScore = Number.isFinite(score) ? score.toFixed(2) : "0.00";
-  return [
-    `<active_skill name="${safeName}" source="${safeSource}" location="${safePath}" score="${safeScore}" reason="${safeReason}">`,
-    content.trim(),
-    "</active_skill>",
-  ].join("\n");
 }
 
 export class SkillLoader {
@@ -592,10 +470,16 @@ export class SkillLoader {
     skill: SkillInfo;
     line: string;
   }> {
-    return this.loadAll()
+    return this.loadDetailedAll()
       .slice(0, Math.max(1, maxItems))
       .map((skill) => ({
-        skill,
+        skill: {
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          source: skill.source,
+          path: skill.path,
+        },
         line: formatSummaryLine(skill),
       }));
   }
@@ -613,6 +497,7 @@ export class SkillLoader {
     task: string,
     options?: {
       maxSummaryItems?: number;
+      maxSummaryChars?: number;
       maxActiveSkills?: number;
       maxActiveSkillChars?: number;
       maxActiveTotalChars?: number;
@@ -622,10 +507,26 @@ export class SkillLoader {
     const requestedSummaryItems = options?.maxSummaryItems;
     const maxSummaryItems = Number.isFinite(requestedSummaryItems)
       ? Math.max(1, Math.round(Number(requestedSummaryItems)))
-      : Math.max(1, allSkills.length || DEFAULT_SUMMARY_ITEMS);
-    const summaryEntries = allSkills
-      .slice(0, maxSummaryItems)
-      .map((skill) => ({
+      : DEFAULT_SUMMARY_ITEMS;
+    const requestedSummaryChars = options?.maxSummaryChars;
+    const maxSummaryChars = Number.isFinite(requestedSummaryChars)
+      ? Math.max(200, Math.round(Number(requestedSummaryChars)))
+      : DEFAULT_SUMMARY_CHARS;
+    const summaryEntries: Array<{ skill: SkillInfo; line: string }> = [];
+    let usedSummaryChars = 0;
+
+    for (const skill of allSkills) {
+      if (summaryEntries.length >= maxSummaryItems) {
+        break;
+      }
+      const line = formatSummaryLine(skill);
+      const nextChars = summaryEntries.length === 0
+        ? line.length
+        : usedSummaryChars + 1 + line.length;
+      if (summaryEntries.length > 0 && nextChars > maxSummaryChars) {
+        break;
+      }
+      summaryEntries.push({
         skill: {
           id: skill.id,
           name: skill.name,
@@ -633,80 +534,22 @@ export class SkillLoader {
           source: skill.source,
           path: skill.path,
         } satisfies SkillInfo,
-        line: formatSummaryLine({
-          id: skill.id,
-          name: skill.name,
-          description: skill.description,
-          source: skill.source,
-          path: skill.path,
-        }),
-      }));
+        line,
+      });
+      usedSummaryChars = nextChars;
+    }
     const summaryText = summaryEntries.length > 0
       ? summaryEntries.map((entry) => entry.line).join("\n")
       : "(no skills loaded)";
-    const requestedActiveSkills = options?.maxActiveSkills;
-    const maxActiveSkills = Number.isFinite(requestedActiveSkills)
-      ? Math.max(0, Math.round(Number(requestedActiveSkills)))
-      : DEFAULT_MAX_ACTIVE_SKILLS;
-    const requestedPerSkillChars = options?.maxActiveSkillChars;
-    const maxActiveSkillChars = Number.isFinite(requestedPerSkillChars)
-      ? Math.max(200, Math.round(Number(requestedPerSkillChars)))
-      : DEFAULT_MAX_ACTIVE_SKILL_CHARS;
-    const requestedTotalChars = options?.maxActiveTotalChars;
-    const maxActiveTotalChars = Number.isFinite(requestedTotalChars)
-      ? Math.max(400, Math.round(Number(requestedTotalChars)))
-      : DEFAULT_MAX_ACTIVE_TOTAL_CHARS;
+    void task;
+    void options?.maxActiveSkills;
+    void options?.maxActiveSkillChars;
+    void options?.maxActiveTotalChars;
 
-    const scored = allSkills
-      .map((skill) => scoreSkillForTask(skill, task))
-      .filter((entry) => entry.score >= ACTIVE_SKILL_MIN_SCORE)
-      .sort((a, b) => {
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        const sourceDelta = SOURCE_PRIORITY[a.skill.source] - SOURCE_PRIORITY[b.skill.source];
-        if (sourceDelta !== 0) {
-          return sourceDelta;
-        }
-        return a.skill.name.localeCompare(b.skill.name);
-      })
-      .slice(0, maxActiveSkills);
-
+    // Skill bodies are no longer preloaded here. The runtime now gives the model
+    // only the discovery index and requires an explicit read(location) before use.
+    const activePromptText = "";
     const activeEntries: ActiveSkillPromptEntry[] = [];
-    const activeBlocks: string[] = [];
-    let usedChars = 0;
-
-    for (const scoredSkill of scored) {
-      const remainingChars = maxActiveTotalChars - usedChars;
-      if (remainingChars <= 0) {
-        break;
-      }
-      const allowedChars = Math.max(200, Math.min(maxActiveSkillChars, remainingChars));
-      const fullContent = scoredSkill.skill.content.trim();
-      const truncated = fullContent.length > allowedChars;
-      const content = truncated
-        ? `${fullContent.slice(0, Math.max(0, allowedChars - 26)).trimEnd()}\n...[truncated by skill-loader]`
-        : fullContent;
-      const block = formatActiveSkillBlock(scoredSkill.skill, scoredSkill.reason, scoredSkill.score, content);
-
-      activeEntries.push({
-        skill: {
-          id: scoredSkill.skill.id,
-          name: scoredSkill.skill.name,
-          description: scoredSkill.skill.description,
-          source: scoredSkill.skill.source,
-          path: scoredSkill.skill.path,
-        },
-        reason: scoredSkill.reason,
-        score: scoredSkill.score,
-        contentChars: content.length,
-        truncated,
-      });
-      activeBlocks.push(block);
-      usedChars += block.length;
-    }
-
-    const activePromptText = activeBlocks.join("\n\n");
 
     return {
       summaryText,
