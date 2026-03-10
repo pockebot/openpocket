@@ -45,21 +45,21 @@ Imagine having a second phone that works for you around the clock — replying t
 <video src="https://github.com/user-attachments/assets/0f69cc13-eb98-46f5-8f1d-8ffbea9452e4" width="240" controls muted></video>
 </td>
 <td align="center"><strong>Gaming</strong><br/>Play mobile games autonomously<br/><br/>
-<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/2.mp4" width="240" controls muted></video>
+<video src="https://github.com/user-attachments/assets/dbaacfc2-42b9-4d58-90ab-caa53aca86e0" width="240" controls muted></video>
 </td>
 <td align="center"><strong>Utility Payment</strong><br/>Handle bills and payments<br/><br/>
-<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/3.mp4" width="240" controls muted></video>
+<video src="https://github.com/user-attachments/assets/fe2162ea-ef75-4a96-a08b-7b42c115abee" width="240" controls muted></video>
 </td>
 </tr>
 <tr>
 <td align="center"><strong>Studying</strong><br/>Assist with learning tasks<br/><br/>
-<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/1.mp4" width="240" controls muted></video>
+<video src="https://github.com/user-attachments/assets/fba289ec-7df4-431a-8dd0-1e888ebadd53" width="240" controls muted></video>
 </td>
 <td align="center"><strong>Social</strong><br/>Autopilot your X<br/><br/>
-<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/5.mp4" width="240" controls muted></video>
+<video src="https://github.com/user-attachments/assets/8834e20e-66d4-48f9-ac67-beb65fc168c6" width="240" controls muted></video>
 </td>
 <td align="center"><strong>Utility</strong><br/>Find best price/travel option<br/><br/>
-<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/6.mp4" width="240" controls muted></video>
+<video src="https://github.com/user-attachments/assets/cc78ef7a-1af0-439c-a151-fe971e5beda3" width="240" controls muted></video>
 </td>
 </tr>
 </table>
