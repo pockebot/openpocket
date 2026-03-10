@@ -13,6 +13,7 @@
   <a href="https://www.openpocket.ai">Website</a> &middot;
   <a href="https://www.openpocket.ai/hubs#doc-hubs">Documentation</a> &middot;
   <a href="https://www.openpocket.ai/get-started/quickstart">Quickstart</a> &middot;
+  <a href="https://discord.gg/jS6HgkNpxK">Discord</a> &middot;
   <a href="./CONTRIBUTING.md">Contributing</a>
 </p>
 
