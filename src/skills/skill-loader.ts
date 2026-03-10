@@ -389,15 +389,26 @@ export class SkillLoader {
   }
 
   private sourceDirs(): Array<{ source: SkillInfo["source"]; dir: string }> {
-    const workspaceDir = ensureDir(path.join(this.config.workspaceDir, "skills"));
-    const localDir = ensureDir(path.join(openpocketHome(), "skills"));
     const bundledDir = path.resolve(path.join(__dirname, "..", "..", "skills"));
 
-    return [
+    const dirs: Array<{ source: SkillInfo["source"]; dir: string }> = [
       { source: "bundled", dir: bundledDir },
-      { source: "local", dir: localDir },
-      { source: "workspace", dir: workspaceDir },
     ];
+
+    // Local skills live under OPENPOCKET_HOME. In sandboxed or CI environments
+    // this path may not be writable. If mkdir fails, skip it so bundled +
+    // workspace skills still load.
+    try {
+      const localDir = ensureDir(path.join(openpocketHome(), "skills"));
+      dirs.push({ source: "local", dir: localDir });
+    } catch {
+      // ignore – lack of local skills should not be fatal
+    }
+
+    const workspaceDir = ensureDir(path.join(this.config.workspaceDir, "skills"));
+    dirs.push({ source: "workspace", dir: workspaceDir });
+
+    return dirs;
   }
 
   private loadDetailedFromSourceDir(
