@@ -25,6 +25,7 @@ const siteKeywords = [
   "privacy-first automation",
 ].join(", ");
 const defaultSiteUrl = "https://www.openpocket.ai";
+const repositoryUrl = "https://github.com/pockebot/openpocket";
 const assetVersion = process.env.DOCS_ASSET_VERSION?.trim() || "20260221";
 
 function normalizeSiteUrl(url) {
@@ -328,7 +329,7 @@ export default withMermaid(defineConfig({
       { text: "Docs", link: "/hubs" },
     ],
     socialLinks: [
-      { icon: "github", link: "https://github.com/SergioChan/openpocket" },
+      { icon: "github", link: repositoryUrl },
     ],
     sidebar: withPageHeadings(baseSidebar),
     search: {
@@ -338,7 +339,7 @@ export default withMermaid(defineConfig({
       level: [2, 3],
     },
     footer: {
-      message: "<a href=\"https://github.com/SergioChan/openpocket\" target=\"_blank\" rel=\"noreferrer\">GitHub Repository</a>",
+      message: `<a href="${repositoryUrl}" target="_blank" rel="noreferrer">GitHub Repository</a>`,
       copyright: "MIT License · OpenPocket Contributors",
     },
   },
