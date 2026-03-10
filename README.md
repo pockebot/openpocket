@@ -42,7 +42,7 @@ Imagine having a second phone that works for you around the clock — replying t
 <table>
 <tr>
 <td align="center"><strong>Social</strong><br/>Auto-manage social media<br/><br/>
-<video src="https://private-user-images.githubusercontent.com/10103766/561072173-747a3f6a-c167-42aa-af30-cf33944e621d.mp4?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzMxNjExNTQsIm5iZiI6MTc3MzE2MDg1NCwicGF0aCI6Ii8xMDEwMzc2Ni81NjEwNzIxNzMtNzQ3YTNmNmEtYzE2Ny00MmFhLWFmMzAtY2YzMzk0NGU2MjFkLm1wND9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjAzMTAlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwMzEwVDE2NDA1NFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTlmMzcxOWQyODE1Y2U3OTgwZmU2YmM3MmExYWZiMjcwY2M5Y2IwZDhiZmI2MjJjNDE1MWYyNjM0ZjFmZGE5N2QmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.EJsGPv13Cbp-upzzkQQ1Aa10ZY9AwKFg3nQI_OMH_bY" width="240" controls muted></video>
+<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/4.mp4" width="240" controls muted></video>
 </td>
 <td align="center"><strong>Gaming</strong><br/>Play mobile games autonomously<br/><br/>
 <video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/2.mp4" width="240" controls muted></video>
