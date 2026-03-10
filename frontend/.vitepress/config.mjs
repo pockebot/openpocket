@@ -27,6 +27,7 @@ const siteKeywords = [
 const defaultSiteUrl = "https://www.openpocket.ai";
 const repositoryUrl = "https://github.com/pockebot/openpocket";
 const communityDiscordUrl = "https://discord.gg/jS6HgkNpxK";
+const communityRedditUrl = "https://www.reddit.com/r/openpocket/";
 const assetVersion = process.env.DOCS_ASSET_VERSION?.trim() || "20260221";
 
 function normalizeSiteUrl(url) {
@@ -328,10 +329,11 @@ export default withMermaid(defineConfig({
     nav: [
       { text: "Setup", link: "/get-started/" },
       { text: "Docs", link: "/hubs" },
-      { text: "Discord", link: communityDiscordUrl },
     ],
     socialLinks: [
-      { icon: "github", link: repositoryUrl },
+      { icon: "github", link: repositoryUrl, ariaLabel: "GitHub" },
+      { icon: "discord", link: communityDiscordUrl, ariaLabel: "Discord" },
+      { icon: "reddit", link: communityRedditUrl, ariaLabel: "Reddit" },
     ],
     sidebar: withPageHeadings(baseSidebar),
     search: {
