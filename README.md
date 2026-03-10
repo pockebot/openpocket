@@ -42,7 +42,7 @@ Imagine having a second phone that works for you around the clock — replying t
 <table>
 <tr>
 <td align="center"><strong>Social</strong><br/>Auto-manage social media<br/><br/>
-<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/4.mp4" width="240" controls muted></video>
+<video src="https://github.com/user-attachments/assets/0f69cc13-eb98-46f5-8f1d-8ffbea9452e4" width="240" controls muted></video>
 </td>
 <td align="center"><strong>Gaming</strong><br/>Play mobile games autonomously<br/><br/>
 <video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/2.mp4" width="240" controls muted></video>
