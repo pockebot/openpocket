@@ -38,15 +38,31 @@ Imagine having a second phone that works for you around the clock — replying t
 
 ## Demos
 
-> Visit [openpocket.ai](https://www.openpocket.ai) for the full interactive experience with live video previews.
 
-| Use Case | Description |
-|----------|-------------|
-| [Social](https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/4.mp4) | Auto-manage social media — reply, post, and browse feeds |
-| [Gaming](https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/2.mp4) | Play mobile games autonomously |
-| [Utility Payment](https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/3.mp4) | Handle bills and utility payments |
-| [Studying](https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/1.mp4) | Assist with learning and study tasks on phone |
-| [Utility](https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/6.mp4) | Automate daily utility operations |
+<table>
+<tr>
+<td align="center"><strong>Social</strong><br/>Auto-manage social media<br/><br/>
+<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/4.mp4" width="240" controls muted></video>
+</td>
+<td align="center"><strong>Gaming</strong><br/>Play mobile games autonomously<br/><br/>
+<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/2.mp4" width="240" controls muted></video>
+</td>
+<td align="center"><strong>Utility Payment</strong><br/>Handle bills and payments<br/><br/>
+<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/3.mp4" width="240" controls muted></video>
+</td>
+</tr>
+<tr>
+<td align="center"><strong>Studying</strong><br/>Assist with learning tasks<br/><br/>
+<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/1.mp4" width="240" controls muted></video>
+</td>
+<td align="center"><strong>Social</strong><br/>Autopilot your X<br/><br/>
+<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/5.mp4" width="240" controls muted></video>
+</td>
+<td align="center"><strong>Utility</strong><br/>Find best price/travel option<br/><br/>
+<video src="https://kg6otgbdad5zepkn.public.blob.vercel-storage.com/6.mp4" width="240" controls muted></video>
+</td>
+</tr>
+</table>
 
 ## Highlights
 
