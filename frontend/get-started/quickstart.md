@@ -45,7 +45,7 @@ openpocket dashboard start
 ## Source Install
 
 ```bash
-git clone git@github.com:SergioChan/openpocket.git
+git clone git@github.com:pockebot/openpocket.git
 cd openpocket
 npm install
 npm run build
