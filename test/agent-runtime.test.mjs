@@ -765,6 +765,55 @@ test("AgentRuntime injects model-routed execution surface guidance into system p
   assert.match(capturedSystemPrompt, /switch to the other surface/i);
 });
 
+test("AgentRuntime injects bounded cron plan guidance into system prompt", async () => {
+  let capturedSystemPrompt = "";
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      onInit: (options) => {
+        capturedSystemPrompt = options.initialState?.systemPrompt ?? "";
+      },
+    },
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask(
+    "Check X for Open Pocket mentions",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {
+      summary: "Do one focused social pass and stop.",
+      steps: [
+        "Check the most relevant conversation surface first.",
+        "Reply to one or two relevant posts if appropriate.",
+        "Capture evidence and stop after this pass.",
+      ],
+      stepBudget: 24,
+      completionCriteria: "Finish after one focused pass or when the step budget is exhausted.",
+    },
+  );
+  assert.equal(result.ok, true);
+  assert.match(capturedSystemPrompt, /Scheduled Run Plan \(bounded\)/);
+  assert.match(capturedSystemPrompt, /Do one focused social pass and stop/i);
+  assert.match(capturedSystemPrompt, /step budget for this run: 24/i);
+  assert.match(capturedSystemPrompt, /do not monitor indefinitely/i);
+});
+
 test("AgentRuntime runtime_info returns active model metadata for current attempt", async () => {
   const runtime = setupRuntime({
     returnHomeOnTaskEnd: false,

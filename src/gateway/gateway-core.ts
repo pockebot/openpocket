@@ -5,6 +5,7 @@ import type {
   AgentProgressUpdate,
   ChannelMediaDeliveryResult,
   ChannelMediaRequest,
+  CronTaskPlan,
   HumanAuthCapability,
   OpenPocketConfig,
   ScheduleIntent,
@@ -82,6 +83,8 @@ type QueuedTaskRunOptions = {
   promptMode?: "full" | "minimal" | "none";
   availableToolNamesOverride?: string[];
   skipTaskExecutionPlan?: boolean;
+  cronStepBudget?: number;
+  cronTaskPlan?: CronTaskPlan;
 };
 
 type QueuedTask = {
@@ -595,7 +598,7 @@ export class GatewayCore {
       const task = decision.task || text;
       this.chat.appendExternalTurn(chatId, "user", task);
       if (decision.scheduleManagement === true) {
-        const reply = this.executeCronManagementIntent(
+        const reply = await this.executeCronManagementIntent(
           decision.cronManagementIntent
           ?? this.defaultCronManagementIntent(decision.scheduleManagementAction),
         );
@@ -949,7 +952,7 @@ export class GatewayCore {
     return [];
   }
 
-  private executeCronManagementIntent(intent: CronManagementIntent): string {
+  private async executeCronManagementIntent(intent: CronManagementIntent): Promise<string> {
     const registry = new CronRegistry(this.config);
     const allJobs = registry.list();
     if (allJobs.length === 0) {
@@ -1010,15 +1013,21 @@ export class GatewayCore {
 
     if (updatePatch.payload && matchedJobs.length === 1) {
       const originalTask = matchedJobs[0].payload.task;
-      const patchedTask = updatePatch.payload.task;
-      if (
-        originalTask.length > 80
-        && patchedTask.length < originalTask.length * 0.5
-        && !patchedTask.includes(originalTask.slice(0, 40))
-      ) {
+      const patchedTask = updatePatch.payload.task.trim();
+      const originalPrefix = originalTask.slice(0, Math.min(40, originalTask.length)).toLowerCase();
+      const looksLikeDelta = originalTask.length > 60
+        && patchedTask.length < originalTask.length * 0.7
+        && !patchedTask.toLowerCase().startsWith(originalPrefix);
+      if (looksLikeDelta) {
+        let consolidated: string;
+        try {
+          consolidated = await this.chat.consolidateCronTaskUpdate(originalTask, patchedTask);
+        } catch {
+          consolidated = `${originalTask}\n\nAdditional instruction: ${patchedTask}`;
+        }
         updatePatch.payload = {
           kind: "agent_turn",
-          task: `${originalTask}\n\nAdditional instruction: ${patchedTask}`,
+          task: consolidated,
         };
       }
     }
@@ -1321,6 +1330,8 @@ export class GatewayCore {
           : undefined,
         taskExecutionPlan,
         runOptions?.availableToolNamesOverride,
+        runOptions?.cronStepBudget,
+        runOptions?.cronTaskPlan,
       );
       await progressWork;
 
@@ -1382,6 +1393,8 @@ export class GatewayCore {
       return { accepted: false, ok: false, message: "No channel adapter available." };
     }
 
+    const cronPlan = await this.chat.planCronTask(job.payload.task);
+
     const envelope: InboundEnvelope = {
       channelType: adapter.channelType,
       senderId: "cron",
@@ -1401,7 +1414,10 @@ export class GatewayCore {
       this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", startMsg);
     }
 
-    return this.runTaskAndReport(envelope, job.payload.task, `cron:${job.id}`);
+    return this.runTaskAndReport(envelope, job.payload.task, `cron:${job.id}`, {
+      cronStepBudget: cronPlan.stepBudget,
+      cronTaskPlan: cronPlan,
+    });
   }
 
   // -----------------------------------------------------------------------

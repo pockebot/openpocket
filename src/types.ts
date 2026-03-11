@@ -670,6 +670,13 @@ export interface TaskExecutionPlan {
   reason: string;
 }
 
+export interface CronTaskPlan {
+  summary: string;
+  steps: string[];
+  stepBudget: number;
+  completionCriteria: string;
+}
+
 export interface SkillInfo {
   id: string;
   name: string;
