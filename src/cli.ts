@@ -28,6 +28,7 @@ import { installCliShortcut } from "./install/cli-shortcut.js";
 import { ensureAndroidPrerequisites } from "./environment/android-prerequisites.js";
 import { PermissionLabManager } from "./test/permission-lab.js";
 import { createCliTheme, createOpenPocketBanner, type CliStepStatus, type CliTone } from "./utils/cli-theme.js";
+import { formatDetailedError } from "./utils/error-details.js";
 import { openpocketHome } from "./utils/paths.js";
 import type { ManagerAgentRecord } from "./manager/registry.js";
 import {
@@ -209,7 +210,7 @@ type CliChildProcessError = Error & {
 
 function formatCliError(error: unknown): string {
   if (!(error instanceof Error)) {
-    return String(error);
+    return formatDetailedError(error);
   }
   const childError = error as CliChildProcessError;
   const toText = (value: unknown): string => {
@@ -224,7 +225,7 @@ function formatCliError(error: unknown): string {
     }
     return "";
   };
-  const parts = [error.message];
+  const parts = [formatDetailedError(error)];
   const stderr = toText(childError.stderr);
   const stdout = toText(childError.stdout);
   if (stderr) {

@@ -13,6 +13,7 @@ import type {
 import type { TaskJournalSnapshot } from "../agent/journal/task-journal-store.js";
 import { CODEX_CLI_BASE_URL } from "../config/codex-cli.js";
 import { getModelProfile, resolveModelAuth } from "../config/index.js";
+import { formatDetailedError } from "../utils/error-details.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceOnboardingCompleted,
@@ -288,13 +289,6 @@ function readResponseOutputText(response: unknown): string {
   }
 
   return chunks.join("\n").trim();
-}
-
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
 }
 
 function extractJsonObjectText(output: string): string {
@@ -632,7 +626,7 @@ export class ChatAssistant {
         const provider = this.detectAnthropicProvider(client);
         return await this.callAnthropicText({ apiKey, model, baseUrl, provider, maxTokens, prompt });
       } catch (error) {
-        this.logChat("warn", `${label} failed provider=anthropic error=${stringifyError(error)}`);
+        this.logChat("warn", `${label} failed provider=anthropic error=${formatDetailedError(error)}`);
         return "";
       }
     }
@@ -643,7 +637,7 @@ export class ChatAssistant {
         const baseUrl = String((client as { baseURL?: string }).baseURL ?? "");
         return await this.callGoogleText({ apiKey, model, baseUrl, maxTokens, prompt });
       } catch (error) {
-        this.logChat("warn", `${label} failed provider=google-generative-ai error=${stringifyError(error)}`);
+        this.logChat("warn", `${label} failed provider=google-generative-ai error=${formatDetailedError(error)}`);
         return "";
       }
     }
@@ -665,7 +659,7 @@ export class ChatAssistant {
         }
         return output;
       } catch (error) {
-        this.logChat("warn", `${label} failed provider=codex-responses error=${stringifyError(error)}`);
+        this.logChat("warn", `${label} failed provider=codex-responses error=${formatDetailedError(error)}`);
         return "";
       }
     }
@@ -718,7 +712,7 @@ export class ChatAssistant {
         }
         break;
       } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
+        errors.push(`${mode}: ${formatDetailedError(error)}`);
       }
     }
 
@@ -3429,7 +3423,7 @@ export class ChatAssistant {
         this.pushTurn(chatId, "assistant", reply);
         return reply;
       } catch (error) {
-        return `Conversation failed: codex-responses: ${stringifyError(error)}`;
+        return `Conversation failed: codex-responses: ${formatDetailedError(error)}`;
       }
     }
 
@@ -3458,7 +3452,7 @@ export class ChatAssistant {
         }
         break;
       } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
+        errors.push(`${mode}: ${formatDetailedError(error)}`);
       }
     }
 
@@ -3536,7 +3530,7 @@ export class ChatAssistant {
           normalizedInput,
         );
       } catch (error) {
-        this.logChat("warn", `schedule extraction failed error=${stringifyError(error)}`);
+        this.logChat("warn", `schedule extraction failed error=${formatDetailedError(error)}`);
         extractedSchedule = null;
       }
       if (extractedSchedule && extractedSchedule.confidence >= MIN_SCHEDULE_INTENT_CONFIDENCE) {

@@ -19,6 +19,7 @@ import type {
 } from "@mariozechner/pi-ai";
 
 import type { AgentAction, ModelProfile, ModelStepOutput, ScreenSnapshot } from "../types.js";
+import { formatDetailedError } from "../utils/error-details.js";
 import { normalizeAction } from "./actions.js";
 import { buildUserPrompt } from "./prompts.js";
 import { TOOL_METAS, toolNameToActionType } from "./tools.js";
@@ -39,11 +40,6 @@ async function ensurePiAiLoaded(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
 
 function isChatGptBackendUrl(baseUrlLower: string): boolean {
   return baseUrlLower.includes("chatgpt.com/backend-api");
@@ -306,7 +302,7 @@ export class ModelClient {
     try {
       response = await completeSimple(this.piModel, context, streamOptions);
     } catch (error) {
-      throw new Error(`Model call failed: ${stringifyError(error)}`);
+      throw new Error(`Model call failed: ${formatDetailedError(error)}`);
     }
 
     if (response.stopReason === "error") {

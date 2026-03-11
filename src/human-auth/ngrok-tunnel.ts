@@ -1,17 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import type { HumanAuthTunnelNgrokConfig } from "../types.js";
+import { formatDetailedError } from "../utils/error-details.js";
 import { sleep } from "../utils/time.js";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
 }
 
 function normalizeHost(host: string): string {
@@ -154,7 +148,7 @@ export class NgrokTunnel {
         this.apiBaseUrl = candidate;
         return url;
       } catch (error) {
-        lastError = stringifyError(error);
+        lastError = formatDetailedError(error);
       }
     }
     throw new Error(lastError);
@@ -222,7 +216,7 @@ export class NgrokTunnel {
       );
     });
     child.on("error", (error) => {
-      this.log(`[OpenPocket][human-auth][error][ngrok] process error=${error.message}`);
+      this.log(`[OpenPocket][human-auth][error][ngrok] process error=${formatDetailedError(error)}`);
     });
 
     const deadline = Date.now() + this.config.startupTimeoutSec * 1000;
@@ -237,7 +231,7 @@ export class NgrokTunnel {
         this.publicUrl = url;
         return url;
       } catch (error) {
-        lastError = stringifyError(error);
+        lastError = formatDetailedError(error);
       }
       await sleep(500);
     }
