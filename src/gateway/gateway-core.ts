@@ -1013,12 +1013,12 @@ export class GatewayCore {
 
     if (updatePatch.payload && matchedJobs.length === 1) {
       const originalTask = matchedJobs[0].payload.task;
-      const patchedTask = updatePatch.payload.task;
-      if (
-        originalTask.length > 80
-        && patchedTask.length < originalTask.length * 0.5
-        && !patchedTask.includes(originalTask.slice(0, 40))
-      ) {
+      const patchedTask = updatePatch.payload.task.trim();
+      const originalPrefix = originalTask.slice(0, Math.min(40, originalTask.length)).toLowerCase();
+      const looksLikeDelta = originalTask.length > 60
+        && patchedTask.length < originalTask.length * 0.7
+        && !patchedTask.toLowerCase().startsWith(originalPrefix);
+      if (looksLikeDelta) {
         updatePatch.payload = {
           kind: "agent_turn",
           task: `${originalTask}\n\nAdditional instruction: ${patchedTask}`,

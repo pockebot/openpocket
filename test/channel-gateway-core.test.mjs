@@ -857,6 +857,149 @@ test("GatewayCore updates a single matching scheduled job directly from structur
   });
 });
 
+test("GatewayCore merges task delta into original task when updating a cron job", async () => {
+  await withTempHome("gwcore-schedule-manage-merge-task-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+    let enqueueCalls = 0;
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    const longOriginalTask =
+      "Browse my X feed and comment on content related to the Open Pocket project, Phone Use, or Phone Use Agent; " +
+      "reply to comments on my tweets; periodically check my profile and pinned tweets for new replies or retweets; " +
+      "use a very social engagement-optimized style and write all replies and interactions entirely in English.";
+    registry.add({
+      id: "x-social-engagement",
+      name: "X Social Engagement",
+      enabled: true,
+      schedule: {
+        kind: "every",
+        expr: null,
+        at: null,
+        everyMs: 3600000,
+        tz: "UTC",
+        summaryText: "Every hour",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: longOriginalTask,
+      },
+      delivery: { mode: "announce", channel: "telegram", to: "user-1" },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "Update the cron job to also post tweets from my account",
+      reply: "",
+      confidence: 0.95,
+      reason: "schedule_manage;schedule_model_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "update",
+      cronManagementIntent: {
+        action: "update",
+        selector: {
+          all: false,
+          ids: ["x-social-engagement"],
+          nameContains: [],
+          taskContains: [],
+          scheduleContains: [],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: "Also post tweets from my account instead of only replying to others.",
+          enabled: null,
+          schedule: null,
+        },
+      },
+    });
+    core.enqueueTask = async () => {
+      enqueueCalls += 1;
+    };
+
+    await core.handleInbound(makeEnvelope({
+      text: "Update the cron job to also post tweets from my account",
+    }));
+    assert.equal(enqueueCalls, 0);
+
+    const updated = registry.get("x-social-engagement");
+    assert.ok(updated);
+    assert.ok(updated.payload.task.startsWith(longOriginalTask), "original task must be preserved at the beginning");
+    assert.match(updated.payload.task, /Additional instruction/i, "delta must be appended as additional instruction");
+    assert.match(updated.payload.task, /post tweets from my account/i, "amendment text must be present");
+    assert.match(adapter.sent[0].text, /Updated scheduled job/i);
+  });
+});
+
+test("GatewayCore preserves full task when patch already starts with the original prefix", async () => {
+  await withTempHome("gwcore-schedule-manage-full-replace-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    const originalTask =
+      "Browse my X feed and comment on content related to the Open Pocket project and use English style.";
+    registry.add({
+      id: "x-engagement",
+      name: "X Engagement",
+      enabled: true,
+      schedule: {
+        kind: "every",
+        expr: null,
+        at: null,
+        everyMs: 3600000,
+        tz: "UTC",
+        summaryText: "Every hour",
+      },
+      payload: { kind: "agent_turn", task: originalTask },
+      delivery: { mode: "announce", channel: "telegram", to: "user-1" },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    const fullReplacementTask =
+      "Browse my X feed and comment on content related to the Open Pocket project and use English style. Also post original tweets.";
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "Update the job with the new task",
+      reply: "",
+      confidence: 0.95,
+      reason: "schedule_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "update",
+      cronManagementIntent: {
+        action: "update",
+        selector: {
+          all: false,
+          ids: ["x-engagement"],
+          nameContains: [],
+          taskContains: [],
+          scheduleContains: [],
+          enabled: "any",
+        },
+        patch: {
+          name: null,
+          task: fullReplacementTask,
+          enabled: null,
+          schedule: null,
+        },
+      },
+    });
+    core.enqueueTask = async () => {};
+
+    await core.handleInbound(makeEnvelope({
+      text: "Update the job with the new complete task",
+    }));
+
+    const updated = registry.get("x-engagement");
+    assert.ok(updated);
+    assert.equal(updated.payload.task, fullReplacementTask, "full replacement task must be stored as-is");
+    assert.ok(!updated.payload.task.includes("Additional instruction"), "no amendment marker for full replacements");
+  });
+});
+
 test("GatewayCore removes all scheduled jobs directly from structured cron management intent", async () => {
   await withTempHome("gwcore-schedule-manage-remove-all-", async (home) => {
     const { adapter, core, config } = createGatewayCore(home);

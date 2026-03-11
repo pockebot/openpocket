@@ -2555,7 +2555,7 @@ export class ChatAssistant {
       "10) If scheduleManagement=true, set scheduleManagementAction and scheduleManagementIntent.action consistently.",
       "11) If scheduleManagement=true, populate scheduleManagementIntent.selector and scheduleManagementIntent.patch with the best structured target and change data you can infer from the user request.",
       "11.1) When the user refers to 'the task', 'this job', or uses other anaphoric references without specifying a name or ID, resolve the reference using conversation context and the existing jobs list below. Prefer populating selector.ids with the resolved job ID.",
-      "11.2) CRITICAL: When patch.task is set, it MUST contain the COMPLETE final task text — merge the user's requested changes into the ORIGINAL task from the existing jobs list. Never replace the original task with just the change instruction.",
+      "11.2) When patch.task is set, include ONLY the user's requested change or amendment — NOT the full original task. The system merges it into the original task server-side. Example: if the user says 'also post tweets from my account', patch.task should be 'also post tweets from my account' — do NOT reproduce the entire existing task text.",
       "12) If mode=task, taskAcceptedReply must be one short natural sentence that confirms execution starts now.",
       "13) If mode=chat, taskAcceptedReply must be empty.",
       this.buildExistingJobsCatalog(),
@@ -2563,7 +2563,7 @@ export class ChatAssistant {
       `User message: ${inputText}`,
     ].join("\n");
 
-    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 1024), prompt, "classify");
+    const output = await this.callModelRaw(client, model, Math.min(maxTokens, 2048), prompt, "classify");
     if (!output) {
       throw new Error("classify failed: all endpoint modes returned empty output");
     }
