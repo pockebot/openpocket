@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type {
   AgentProgressUpdate,
+  CronTaskPlan,
   OpenPocketConfig,
   StoredCronJob,
   TaskExecutionPlan,
@@ -2341,6 +2342,8 @@ export class TelegramGateway {
     const chatIdRaw = job.delivery?.to ? Number(job.delivery.to) : NaN;
     const chatId = Number.isFinite(chatIdRaw) ? chatIdRaw : null;
 
+    const cronPlan = await this.chat.planCronTask(job.payload.task);
+
     if (chatId !== null) {
       const startMsg = await this.chat.narrateScheduledTaskStart(job.name, job.payload.task);
       await this.bot.sendMessage(chatId, startMsg);
@@ -2353,6 +2356,8 @@ export class TelegramGateway {
       source: "cron",
       modelName: job.model,
       sessionKey: chatId !== null ? this.resolveChatSessionKey(chatId) : `telegram:cron:${job.id}`,
+      cronStepBudget: cronPlan.stepBudget,
+      cronTaskPlan: cronPlan,
     });
   }
 
@@ -2362,8 +2367,10 @@ export class TelegramGateway {
     source: "chat" | "cron";
     modelName: string | null;
     sessionKey: string;
+    cronStepBudget?: number | null;
+    cronTaskPlan?: CronTaskPlan | null;
   }): Promise<CronRunResult> {
-    const { chatId, task, source, modelName, sessionKey } = params;
+    const { chatId, task, source, modelName, sessionKey, cronStepBudget, cronTaskPlan } = params;
     const taskAcceptedAtHr = process.hrtime.bigint();
     const agentTask = this.enrichTaskWithChatContext(task, chatId);
     const taskExecutionPlan: TaskExecutionPlan | null = await this.planTaskExecutionSafe(task);
@@ -2587,6 +2594,9 @@ export class TelegramGateway {
               : async (request) => this.requestUserInputFromChat(chatId, request),
             undefined,
             taskExecutionPlan,
+            undefined,
+            cronStepBudget ?? undefined,
+            cronTaskPlan ?? undefined,
           );
           await progressWork;
 
