@@ -75,6 +75,7 @@ import {
   parseAdbDevicesLongOutput,
 } from "./device/adb-device-discovery.js";
 import { normalizeAdbEndpoint } from "./device/adb-endpoint.js";
+import { isHelperImeInstalled, installHelperIme, resolveHelperImeApkPath } from "./device/adb-runtime.js";
 
 const cliTheme = createCliTheme(output);
 const DEFAULT_ONBOARD_AVD_DATA_PARTITION_SIZE_GB = 24;
@@ -1110,9 +1111,40 @@ async function runTargetCommand(configPath: string | undefined, args: string[]):
     registerManagedAgent({ agentId: owningAgent.id, config: cfg });
   }
 
+  // Auto-install helper IME on physical devices for reliable Unicode text input.
+  if (cfg.target.type === "physical-phone" || cfg.target.type === "android-tv") {
+    await tryInstallHelperIme(cfg);
+  }
+
   printSuccess("Deployment target updated.");
   printTargetSummary(cfg);
   return 0;
+}
+
+async function tryInstallHelperIme(cfg: OpenPocketConfig): Promise<void> {
+  const apkPath = resolveHelperImeApkPath();
+  if (!apkPath) {
+    printWarn("Helper IME APK not found — Unicode text input may be unreliable.");
+    return;
+  }
+  try {
+    const candidates = discoverConnectedTargetDevices(cfg);
+    if (candidates.length === 0) {
+      printWarn("No online ADB device detected — skipping helper IME install.");
+      return;
+    }
+    const deviceId = cfg.agent.deviceId ?? candidates[0].deviceId;
+    const emulator = new EmulatorManager(JSON.parse(JSON.stringify(cfg)) as OpenPocketConfig);
+    if (isHelperImeInstalled(emulator, deviceId)) {
+      printInfo("OpenPocket helper IME already installed.");
+      return;
+    }
+    printInfo("Installing OpenPocket helper IME for reliable text input...");
+    installHelperIme(emulator, deviceId);
+    printSuccess("OpenPocket helper IME installed and enabled.");
+  } catch (err) {
+    printWarn(`Could not install helper IME: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 async function runModelCommand(configPath: string | undefined, args: string[]): Promise<number> {
