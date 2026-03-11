@@ -857,10 +857,11 @@ test("GatewayCore updates a single matching scheduled job directly from structur
   });
 });
 
-test("GatewayCore merges task delta into original task when updating a cron job", async () => {
+test("GatewayCore consolidates task delta via LLM when updating a cron job", async () => {
   await withTempHome("gwcore-schedule-manage-merge-task-", async (home) => {
     const { adapter, core, config } = createGatewayCore(home);
     let enqueueCalls = 0;
+    let consolidateCalled = false;
 
     const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
     const registry = new CronRegistry(config);
@@ -888,6 +889,19 @@ test("GatewayCore merges task delta into original task when updating a cron job"
       model: null,
       promptMode: "minimal",
     });
+
+    const consolidatedResult =
+      "Browse my X feed and comment on content related to the Open Pocket project, Phone Use, or Phone Use Agent; " +
+      "reply to comments on my tweets; periodically check my profile and pinned tweets for new replies or retweets; " +
+      "also post tweets from my account instead of only replying to others; " +
+      "use a very social engagement-optimized style and write all replies and interactions entirely in English.";
+
+    core.chat.consolidateCronTaskUpdate = async (original, amendment) => {
+      consolidateCalled = true;
+      assert.equal(original, longOriginalTask);
+      assert.match(amendment, /post tweets from my account/i);
+      return consolidatedResult;
+    };
 
     core.chat.decide = async () => ({
       mode: "task",
@@ -923,13 +937,65 @@ test("GatewayCore merges task delta into original task when updating a cron job"
       text: "Update the cron job to also post tweets from my account",
     }));
     assert.equal(enqueueCalls, 0);
+    assert.equal(consolidateCalled, true, "consolidateCronTaskUpdate must be called for delta patches");
 
     const updated = registry.get("x-social-engagement");
     assert.ok(updated);
-    assert.ok(updated.payload.task.startsWith(longOriginalTask), "original task must be preserved at the beginning");
-    assert.match(updated.payload.task, /Additional instruction/i, "delta must be appended as additional instruction");
-    assert.match(updated.payload.task, /post tweets from my account/i, "amendment text must be present");
+    assert.equal(updated.payload.task, consolidatedResult);
+    assert.ok(!updated.payload.task.includes("Additional instruction"), "no raw append marker when LLM consolidation succeeds");
+    assert.match(updated.payload.task, /post tweets from my account/i);
     assert.match(adapter.sent[0].text, /Updated scheduled job/i);
+  });
+});
+
+test("GatewayCore falls back to simple append when consolidation fails", async () => {
+  await withTempHome("gwcore-schedule-manage-consolidate-fallback-", async (home) => {
+    const { adapter, core, config } = createGatewayCore(home);
+
+    const { CronRegistry } = await import("../dist/gateway/cron-registry.js");
+    const registry = new CronRegistry(config);
+    const longOriginalTask =
+      "Browse my X feed and comment on content related to the Open Pocket project, Phone Use, or Phone Use Agent; " +
+      "reply to comments on my tweets; periodically check my profile and pinned tweets for new replies or retweets; " +
+      "use a very social engagement-optimized style and write all replies and interactions entirely in English.";
+    registry.add({
+      id: "x-social-fallback",
+      name: "X Social Fallback",
+      enabled: true,
+      schedule: { kind: "every", expr: null, at: null, everyMs: 3600000, tz: "UTC", summaryText: "Every hour" },
+      payload: { kind: "agent_turn", task: longOriginalTask },
+      delivery: { mode: "announce", channel: "telegram", to: "user-1" },
+      model: null,
+      promptMode: "minimal",
+    });
+
+    core.chat.consolidateCronTaskUpdate = async () => {
+      throw new Error("model unavailable");
+    };
+
+    core.chat.decide = async () => ({
+      mode: "task",
+      task: "Update job",
+      reply: "",
+      confidence: 0.95,
+      reason: "schedule_manage",
+      scheduleManagement: true,
+      scheduleManagementAction: "update",
+      cronManagementIntent: {
+        action: "update",
+        selector: { all: false, ids: ["x-social-fallback"], nameContains: [], taskContains: [], scheduleContains: [], enabled: "any" },
+        patch: { name: null, task: "also post original tweets", enabled: null, schedule: null },
+      },
+    });
+    core.enqueueTask = async () => {};
+
+    await core.handleInbound(makeEnvelope({ text: "also post original tweets" }));
+
+    const updated = registry.get("x-social-fallback");
+    assert.ok(updated);
+    assert.ok(updated.payload.task.startsWith(longOriginalTask), "original task preserved on fallback");
+    assert.match(updated.payload.task, /Additional instruction/i, "falls back to simple append");
+    assert.match(updated.payload.task, /post original tweets/i);
   });
 });
 

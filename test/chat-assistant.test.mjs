@@ -663,6 +663,19 @@ test("ChatAssistant cron planner returns bounded fallback plan without model aut
   assert.match(plan.completionCriteria, /focused pass|step budget/i);
 });
 
+test("ChatAssistant consolidateCronTaskUpdate falls back to simple append without model auth", async () => {
+  const { assistant } = createAssistant();
+
+  const original = "Browse X feed and comment on posts related to Open Pocket; reply to comments; use English.";
+  const amendment = "also post tweets from my account";
+  const result = await assistant.consolidateCronTaskUpdate(original, amendment);
+
+  assert.ok(result.startsWith(original), "original task preserved at beginning");
+  assert.match(result, /Additional instruction/i);
+  assert.match(result, /post tweets from my account/i);
+  assert.ok(result.length <= 2000, "result within length limit");
+});
+
 test("ChatAssistant runs profile onboarding when identity and user are empty", async () => {
   const { assistant, cfg } = createAssistant({ keepProfileEmpty: true });
 

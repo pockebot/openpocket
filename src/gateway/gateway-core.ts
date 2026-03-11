@@ -598,7 +598,7 @@ export class GatewayCore {
       const task = decision.task || text;
       this.chat.appendExternalTurn(chatId, "user", task);
       if (decision.scheduleManagement === true) {
-        const reply = this.executeCronManagementIntent(
+        const reply = await this.executeCronManagementIntent(
           decision.cronManagementIntent
           ?? this.defaultCronManagementIntent(decision.scheduleManagementAction),
         );
@@ -952,7 +952,7 @@ export class GatewayCore {
     return [];
   }
 
-  private executeCronManagementIntent(intent: CronManagementIntent): string {
+  private async executeCronManagementIntent(intent: CronManagementIntent): Promise<string> {
     const registry = new CronRegistry(this.config);
     const allJobs = registry.list();
     if (allJobs.length === 0) {
@@ -1019,9 +1019,15 @@ export class GatewayCore {
         && patchedTask.length < originalTask.length * 0.7
         && !patchedTask.toLowerCase().startsWith(originalPrefix);
       if (looksLikeDelta) {
+        let consolidated: string;
+        try {
+          consolidated = await this.chat.consolidateCronTaskUpdate(originalTask, patchedTask);
+        } catch {
+          consolidated = `${originalTask}\n\nAdditional instruction: ${patchedTask}`;
+        }
         updatePatch.payload = {
           kind: "agent_turn",
-          task: `${originalTask}\n\nAdditional instruction: ${patchedTask}`,
+          task: consolidated,
         };
       }
     }

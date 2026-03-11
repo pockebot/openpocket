@@ -2458,7 +2458,7 @@ export class ChatAssistant {
       "8.1) When the user refers to 'the task', 'this job', or uses other anaphoric references without specifying a name or ID, resolve the reference using conversation context and the existing jobs list below. Prefer populating selector.ids with the resolved job ID.",
       "9) For route=manage_schedule, use enabled=enabled or disabled only when the request explicitly filters by current enabled state; otherwise use any.",
       "10) For route=manage_schedule, populate patch only with the requested changes. Use patch.enabled for update/enable/disable requests that change enabled state.",
-      "10.1) CRITICAL: When patch.task is set, it MUST contain the COMPLETE final task text — merge the user's requested changes into the ORIGINAL task from the existing jobs list. Never replace the original task with just the change instruction. For example, if the original task is 'Browse X feed and comment on posts; reply to comments; use formal style' and the user says 'make it more casual', patch.task should be 'Browse X feed and comment on posts; reply to comments; use a casual and brief style' — preserving all original context.",
+      "10.1) When patch.task is set, include ONLY the user's requested change or amendment — NOT the full original task. The system merges it into the original task server-side. Example: if the user says 'make it more casual', patch.task should be 'use a casual and brief style' — do NOT reproduce the entire existing task text.",
       "11) Use kind=cron for recurring calendar schedules when you can express them with a standard 5-field cron expression.",
       "12) Use kind=every only for fixed interval schedules and set everyMs.",
       "13) Use kind=at only for one-shot future schedules when you can provide an RFC3339 datetime.",
@@ -3381,6 +3381,66 @@ export class ChatAssistant {
       stepBudget: Math.max(20, Math.min(60, Number(value?.stepBudget) || fallback.stepBudget)),
       completionCriteria: this.normalizeOneLine(String(value?.completionCriteria || "")) || fallback.completionCriteria,
     };
+  }
+
+  private static readonly CRON_TASK_MAX_CHARS = 2000;
+
+  /**
+   * Merge an original cron task with a user amendment into a single consolidated task.
+   * Uses the LLM to rewrite intelligently; falls back to simple append on failure.
+   */
+  async consolidateCronTaskUpdate(originalTask: string, amendment: string): Promise<string> {
+    const fallback = `${originalTask}\n\nAdditional instruction: ${amendment}`;
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return fallback.slice(0, ChatAssistant.CRON_TASK_MAX_CHARS);
+    }
+
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+
+    const prompt = [
+      "You are rewriting a scheduled task description for a phone-use agent.",
+      "The user has requested a change to an existing scheduled task. Your job is to produce ONE clean, consolidated task description that integrates the amendment into the original.",
+      "",
+      "Rules:",
+      "1) Output ONLY the final consolidated task text — no JSON, no labels, no explanation.",
+      "2) Preserve ALL original instructions that are not contradicted by the amendment.",
+      "3) Integrate the amendment naturally into the text instead of appending it.",
+      "4) If the amendment contradicts part of the original, the amendment takes priority.",
+      "5) Remove any redundant or duplicated instructions.",
+      `6) Keep the result under ${ChatAssistant.CRON_TASK_MAX_CHARS} characters.`,
+      "7) Maintain the same language and tone as the original task.",
+      "8) Do not add instructions that were not in the original or the amendment.",
+      "",
+      "--- ORIGINAL TASK ---",
+      originalTask,
+      "",
+      "--- USER AMENDMENT ---",
+      amendment,
+      "",
+      "--- CONSOLIDATED TASK ---",
+    ].join("\n");
+
+    try {
+      const output = await this.callModelRaw(
+        client,
+        profile.model,
+        Math.min(profile.maxTokens, 2048),
+        prompt,
+        "cron task consolidation",
+      );
+      const consolidated = (output || "").trim();
+      if (!consolidated || consolidated.length < 20) {
+        return fallback.slice(0, ChatAssistant.CRON_TASK_MAX_CHARS);
+      }
+      return consolidated.slice(0, ChatAssistant.CRON_TASK_MAX_CHARS);
+    } catch {
+      return fallback.slice(0, ChatAssistant.CRON_TASK_MAX_CHARS);
+    }
   }
 
   /**
