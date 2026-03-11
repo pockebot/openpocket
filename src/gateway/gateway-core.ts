@@ -942,6 +942,13 @@ export class GatewayCore {
     return changes.join("; ");
   }
 
+  private resolveSingleJobFallback(allJobs: StoredCronJob[]): StoredCronJob[] {
+    const enabledJobs = allJobs.filter((j) => j.enabled);
+    if (enabledJobs.length === 1) return enabledJobs;
+    if (allJobs.length === 1) return allJobs;
+    return [];
+  }
+
   private executeCronManagementIntent(intent: CronManagementIntent): string {
     const registry = new CronRegistry(this.config);
     const allJobs = registry.list();
@@ -953,7 +960,7 @@ export class GatewayCore {
       return this.buildCronUnknownActionReply();
     }
 
-    const matchedJobs = this.selectCronJobs(allJobs, intent.selector);
+    let matchedJobs = this.selectCronJobs(allJobs, intent.selector);
 
     if (intent.action === "list") {
       if (matchedJobs.length === 0) {
@@ -963,9 +970,17 @@ export class GatewayCore {
     }
 
     if (!hasCronManagementSelector(intent.selector) && !intent.selector.all) {
-      return this.buildCronUnspecifiedTargetReply(intent.action);
+      const singleFallback = this.resolveSingleJobFallback(allJobs);
+      if (singleFallback.length === 1) {
+        matchedJobs = singleFallback;
+      } else {
+        return this.buildCronUnspecifiedTargetReply(intent.action);
+      }
     }
 
+    if (matchedJobs.length === 0) {
+      matchedJobs = this.resolveSingleJobFallback(allJobs);
+    }
     if (matchedJobs.length === 0) {
       return this.buildCronNoMatchReply();
     }
@@ -991,6 +1006,21 @@ export class GatewayCore {
     const updatePatch = this.buildCronUpdatePatch(intent);
     if (!hasCronManagementPatch(intent.patch) && intent.action === "update" && Object.keys(updatePatch).length === 0) {
       return "I could not determine what change to apply to the scheduled job.";
+    }
+
+    if (updatePatch.payload && matchedJobs.length === 1) {
+      const originalTask = matchedJobs[0].payload.task;
+      const patchedTask = updatePatch.payload.task;
+      if (
+        originalTask.length > 80
+        && patchedTask.length < originalTask.length * 0.5
+        && !patchedTask.includes(originalTask.slice(0, 40))
+      ) {
+        updatePatch.payload = {
+          kind: "agent_turn",
+          task: `${originalTask}\n\nAdditional instruction: ${patchedTask}`,
+        };
+      }
     }
 
     const updatedIds = matchedJobs
@@ -1366,7 +1396,9 @@ export class GatewayCore {
     };
 
     if (job.delivery?.to) {
-      await this.router.replyText(envelope, `Scheduled task started (${job.name}): ${job.payload.task}`);
+      const startMsg = await this.chat.narrateScheduledTaskStart(job.name, job.payload.task);
+      await this.router.replyText(envelope, startMsg);
+      this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", startMsg);
     }
 
     return this.runTaskAndReport(envelope, job.payload.task, `cron:${job.id}`);

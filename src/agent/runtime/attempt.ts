@@ -24,6 +24,7 @@ import type {
   TaskExecutionPlan,
 } from "../../types.js";
 import { getModelProfile, resolveModelAuth } from "../../config/index.js";
+import { formatDetailedError } from "../../utils/error-details.js";
 import { sleep } from "../../utils/time.js";
 import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
 import { buildPiAiModel } from "../model-client.js";
@@ -161,6 +162,13 @@ export async function runRuntimeAttempt(
   );
   const autoSkillRefiner = new AutoSkillRefiner(deps.config);
   const reusedSessionMessages = session.reused ? loadReusedSessionMessages(session.path) : [];
+  let runtimeModelInfo = {
+    provider: "unknown",
+    api: "unknown",
+    model: profile.model,
+    currentApp: "unknown",
+    stepNo: 0,
+  };
   const resolveFinalSkillPath = (skillPath: string | null, finalMessage: string): string | null => {
     if (!skillPath) {
       return null;
@@ -304,6 +312,40 @@ export async function runRuntimeAttempt(
       onUserDecision: request.onUserDecision,
       onUserInput: request.onUserInput,
       onProgress: request.onProgress,
+    };
+    runtimeModelInfo = {
+      provider: ctx.runtimeModel.provider,
+      api: ctx.runtimeModel.api,
+      model: ctx.runtimeModel.id,
+      currentApp: "unknown",
+      stepNo: 0,
+    };
+
+    const recordModelResponseError = (source: string, error: unknown): string => {
+      const detail = formatDetailedError(error);
+      runtimeModelInfo = {
+        ...runtimeModelInfo,
+        stepNo: ctx.stepCount,
+        currentApp: ctx.latestSnapshot?.currentApp ?? "unknown",
+      };
+      // eslint-disable-next-line no-console
+      console.error(
+        `[OpenPocket][model][error] source=${source} provider=${runtimeModelInfo.provider} api=${runtimeModelInfo.api} model=${runtimeModelInfo.model} step=${runtimeModelInfo.stepNo} app=${runtimeModelInfo.currentApp} detail=${detail}`,
+      );
+      deps.workspace.appendEvent(
+        session,
+        "model_response_error",
+        {
+          source,
+          provider: runtimeModelInfo.provider,
+          api: runtimeModelInfo.api,
+          model: runtimeModelInfo.model,
+          stepNo: runtimeModelInfo.stepNo,
+          currentApp: runtimeModelInfo.currentApp,
+        },
+        detail,
+      );
+      return `Model response error: ${detail}`;
     };
 
     const runtimeBackend = resolveRuntimeBackend(deps.config);
@@ -550,8 +592,11 @@ export async function runRuntimeAttempt(
       if (!ctx.finishMessage && !ctx.failMessage && bridgeState.lastAssistantMessage) {
         const lastAssistantMessage = bridgeState.lastAssistantMessage;
         if (lastAssistantMessage.stopReason === "error" || lastAssistantMessage.stopReason === "aborted") {
-          const detail = lastAssistantMessage.errorMessage || lastAssistantMessage.stopReason;
-          ctx.failMessage = `Model response error: ${detail}`;
+          ctx.failMessage = recordModelResponseError("pi_session_bridge", {
+            message: lastAssistantMessage.errorMessage || lastAssistantMessage.stopReason,
+            errorMessage: lastAssistantMessage.errorMessage,
+            stopReason: lastAssistantMessage.stopReason,
+          });
         } else {
           const parsed = deps.parseTextualToolFallback(lastAssistantMessage, ctx.task);
           if (parsed) {
@@ -897,8 +942,11 @@ export async function runRuntimeAttempt(
         return;
       }
       if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
-        const detail = assistantMessage.errorMessage || assistantMessage.stopReason;
-        ctx.failMessage = `Model response error: ${detail}`;
+        ctx.failMessage = recordModelResponseError("legacy_agent_core", {
+          message: assistantMessage.errorMessage || assistantMessage.stopReason,
+          errorMessage: assistantMessage.errorMessage,
+          stopReason: assistantMessage.stopReason,
+        });
         return;
       }
       const hasToolCall = assistantMessage.content.some((item) => item.type === "toolCall");
@@ -937,7 +985,7 @@ export async function runRuntimeAttempt(
     }
     const agentStateError = (agent as { state?: { error?: string } }).state?.error;
     if (!ctx.finishMessage && !ctx.failMessage && typeof agentStateError === "string" && agentStateError.trim()) {
-      ctx.failMessage = `Model response error: ${agentStateError}`;
+      ctx.failMessage = recordModelResponseError("legacy_agent_core_state", agentStateError);
     }
 
     if (ctx.finishMessage) {
@@ -979,7 +1027,24 @@ export async function runRuntimeAttempt(
       shouldReturnHome,
     };
   } catch (error) {
-    const message = `Agent execution failed: ${(error as Error).message}`;
+    const detail = formatDetailedError(error);
+    // eslint-disable-next-line no-console
+    console.error(
+      `[OpenPocket][agent][error] provider=${runtimeModelInfo.provider} api=${runtimeModelInfo.api} model=${runtimeModelInfo.model} step=${runtimeModelInfo.stepNo} app=${runtimeModelInfo.currentApp} detail=${detail}`,
+    );
+    deps.workspace.appendEvent(
+      session,
+      "agent_execution_error",
+      {
+        provider: runtimeModelInfo.provider,
+        api: runtimeModelInfo.api,
+        model: runtimeModelInfo.model,
+        stepNo: runtimeModelInfo.stepNo,
+        currentApp: runtimeModelInfo.currentApp,
+      },
+      detail,
+    );
+    const message = `Agent execution failed: ${detail}`;
     deps.workspace.finalizeSession(session, false, message);
     deps.workspace.appendDailyMemory(profileKey, request.task, false, message);
     return {

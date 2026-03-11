@@ -13,6 +13,7 @@ import type {
 import type { TaskJournalSnapshot } from "../agent/journal/task-journal-store.js";
 import { CODEX_CLI_BASE_URL } from "../config/codex-cli.js";
 import { getModelProfile, resolveModelAuth } from "../config/index.js";
+import { formatDetailedError } from "../utils/error-details.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceOnboardingCompleted,
@@ -25,6 +26,7 @@ import {
   type CronManagementAction,
   type CronManagementIntent,
 } from "./cron-management-intent.js";
+import { CronRegistry } from "./cron-registry.js";
 import {
   inferScheduleIntentLocale,
   normalizeScheduleIntentDecision,
@@ -290,13 +292,6 @@ function readResponseOutputText(response: unknown): string {
   return chunks.join("\n").trim();
 }
 
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
 function extractJsonObjectText(output: string): string {
   const fenced = output.match(/```json\s*([\s\S]*?)```/i) ?? output.match(/```\s*([\s\S]*?)```/i);
   if (fenced?.[1]) {
@@ -325,6 +320,26 @@ export class ChatAssistant {
 
   constructor(config: OpenPocketConfig) {
     this.config = config;
+  }
+
+  private buildExistingJobsCatalog(maxJobs = 20, maxTaskChars = 500): string {
+    try {
+      const registry = new CronRegistry(this.config);
+      const jobs = registry.list();
+      if (jobs.length === 0) return "";
+      const lines = jobs.slice(0, maxJobs).map((job) => {
+        const taskPreview = job.payload.task.length > maxTaskChars
+          ? `${job.payload.task.slice(0, maxTaskChars)}...`
+          : job.payload.task;
+        return `- id="${job.id}" name="${job.name}" enabled=${job.enabled} schedule="${job.schedule.summaryText}" task="${taskPreview}"`;
+      });
+      return [
+        `Existing scheduled jobs (${jobs.length} total):`,
+        ...lines,
+      ].join("\n");
+    } catch {
+      return "";
+    }
   }
 
   private shouldLogChat(level: GatewayLogLevel): boolean {
@@ -632,7 +647,7 @@ export class ChatAssistant {
         const provider = this.detectAnthropicProvider(client);
         return await this.callAnthropicText({ apiKey, model, baseUrl, provider, maxTokens, prompt });
       } catch (error) {
-        this.logChat("warn", `${label} failed provider=anthropic error=${stringifyError(error)}`);
+        this.logChat("warn", `${label} failed provider=anthropic error=${formatDetailedError(error)}`);
         return "";
       }
     }
@@ -643,7 +658,7 @@ export class ChatAssistant {
         const baseUrl = String((client as { baseURL?: string }).baseURL ?? "");
         return await this.callGoogleText({ apiKey, model, baseUrl, maxTokens, prompt });
       } catch (error) {
-        this.logChat("warn", `${label} failed provider=google-generative-ai error=${stringifyError(error)}`);
+        this.logChat("warn", `${label} failed provider=google-generative-ai error=${formatDetailedError(error)}`);
         return "";
       }
     }
@@ -665,7 +680,7 @@ export class ChatAssistant {
         }
         return output;
       } catch (error) {
-        this.logChat("warn", `${label} failed provider=codex-responses error=${stringifyError(error)}`);
+        this.logChat("warn", `${label} failed provider=codex-responses error=${formatDetailedError(error)}`);
         return "";
       }
     }
@@ -718,7 +733,7 @@ export class ChatAssistant {
         }
         break;
       } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
+        errors.push(`${mode}: ${formatDetailedError(error)}`);
       }
     }
 
@@ -882,7 +897,7 @@ export class ChatAssistant {
   private normalizeAssistantName(input: string): string {
     return this.normalizeOneLine(input)
       .replace(/[。！？.!?]+$/g, "")
-      .replace(/\s*(吧|呀|呢|啦|喔|哦|好吗|可以吗)\s*$/i, "")
+      .replace(/\s*[?!.]+\s*$/i, "")
       .trim();
   }
 
@@ -1194,9 +1209,8 @@ export class ChatAssistant {
     return next;
   }
 
-  private detectOnboardingLocale(input: string): OnboardingLocale {
-    // Use a simple CJK signal so onboarding language follows the user's first message.
-    return /[一-鿿]/u.test(input) ? "zh" : "en";
+  private detectOnboardingLocale(_input: string): OnboardingLocale {
+    return "en";
   }
 
   private questionForStep(step: OnboardingStep): string {
@@ -1251,18 +1265,15 @@ export class ChatAssistant {
     }
 
     const userPreferredAddress = this.extractByPatterns(normalized, [
-      /(?:叫我|称呼我|你可以叫我|喊我)\s*[:：]?\s*([^,，。;；\n]+)/i,
       /(?:call me|address me as|you can call me)\s+([^,.;\n]+)/i,
     ]);
     const assistantName = this.extractByPatterns(normalized, [
-      /(?:你叫|你就叫|称呼你为|我叫你|我希望你叫)\s*[:：]?\s*([^,，。;；\n]+)/i,
-      /(?:你(?:把)?(?:你(?:的)?)?名字(?:改成|改为|设为|设置为|叫做?)|你以后叫)\s*[:：]?\s*([^,，。;；\n]+)/i,
       /(?:call you|your name is|i want to call you)\s+([^,.;\n]+)/i,
       /(?:rename yourself to|change your name to|set your name to|call yourself)\s+([^,.;\n]+)/i,
     ]);
     const assistantPersona = this.extractByPatterns(normalized, [
-      /(?:人设|风格|语气|设定)\s*[:：]?\s*([^。;；\n]+)/i,
-      /(?:\bpersona\b|\btone\b|\bstyle\b)\s*(?:is|:)?\s*([^.;\n]+)/i,
+      /(?:\bpersona\b)\s*[:]\s*([^.;\n]+)/i,
+      /(?:\bmy persona\b|\byour persona\b|\byour tone\b)\s*(?:is|should be|:)\s*([^.;\n]+)/i,
     ]);
 
     if (userPreferredAddress) {
@@ -1283,8 +1294,7 @@ export class ChatAssistant {
     if (!t) {
       return false;
     }
-    return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start|check|query|look up|find)\b/.test(t)
-      || /(打开|启动|安装|下载|搜索|滑动|点击|输入|登录|使用|查询|查下|看看|帮我)/.test(t);
+    return /\b(open|launch|install|download|search|swipe|tap|click|type|go to|login|log in|sign in|use|start|check|query|look up|find)\b/.test(t);
   }
 
   private hasConcreteExecutableTarget(input: string): boolean {
@@ -1298,7 +1308,7 @@ export class ChatAssistant {
 
   private hasExplicitExecutionOutputConstraint(input: string): boolean {
     const normalized = this.normalizeOneLine(input);
-    return /(内容为|内容是|写入|保存到|输出|打印|生成.*文件|创建.*文件|并开始实现|with content|write.*file|print|output|install.*emulator|build.*apk)/i
+    return /(with content|write.*file|print|output|install.*emulator|build.*apk)/i
       .test(normalized);
   }
 
@@ -1308,17 +1318,17 @@ export class ChatAssistant {
       return false;
     }
     const lower = normalized.toLowerCase();
-    const startsWithCapabilityLead = /^(?:你|你能|你可以|你会|你可不可以|你能不能|你会不会|can you|could you|would you|are you able to|do you know how to)\s*/i
+    const startsWithCapabilityLead = /^(?:can you|could you|would you|are you able to|do you know how to)\s*/i
       .test(normalized);
     if (!startsWithCapabilityLead) {
       return false;
     }
     const hasQuestionTone = /[?？]$/.test(normalized)
-      || /(可以吗|能吗|会吗|行吗|可不可以|能不能|会不会|can you|could you|would you|possible)/i.test(lower);
+      || /(can you|could you|would you|possible)/i.test(lower);
     if (!hasQuestionTone) {
       return false;
     }
-    const hasImmediateCue = /(帮我|请你|请|马上|立即|直接|for me|go ahead|please)/i.test(normalized);
+    const hasImmediateCue = /(for me|go ahead|please)/i.test(normalized);
     return !hasImmediateCue
       && !this.hasConcreteExecutableTarget(normalized)
       && !this.hasExplicitExecutionOutputConstraint(normalized);
@@ -1331,14 +1341,13 @@ export class ChatAssistant {
     }
     const lower = normalized.toLowerCase();
     const hasExecutionVerb = /\b(create|write|edit|modify|build|compile|run|execute|install|open|launch|start|fix|implement|generate|code|script|deploy)\b/i
-      .test(lower)
-      || /(创建|新建|写|修改|编辑|实现|生成|构建|编译|运行|执行|安装|打开|启动|修复|开发|部署|做一个|做个|帮我做)/.test(normalized);
+      .test(lower);
     if (!hasExecutionVerb) {
       return false;
     }
-    const hasImperativeCue = /^(?:please|pls|open|launch|start|run|create|write|build|install|execute|帮我|请你|请|打开|启动|运行|创建|写|安装|执行|去|前往|给我)/i
+    const hasImperativeCue = /^(?:please|pls|open|launch|start|run|create|write|build|install|execute)/i
       .test(normalized)
-      || /(帮我|请你|请|马上|立即|直接|for me|go ahead)/i.test(normalized);
+      || /(for me|go ahead)/i.test(normalized);
     const hasConcreteTarget = this.hasConcreteExecutableTarget(normalized);
     const hasOutputConstraint = this.hasExplicitExecutionOutputConstraint(normalized);
     if (this.looksLikeCapabilityQuestionOnly(normalized) && !hasImperativeCue && !hasConcreteTarget && !hasOutputConstraint) {
@@ -2443,14 +2452,17 @@ export class ChatAssistant {
       "6) For route=manage_schedule, populate manageIntent.action as list, update, remove, enable, disable, or unknown.",
       "7) For route=manage_schedule, populate selector.all=true only when the user clearly targets every matching job (for example, all scheduled jobs or all disabled jobs).",
       "8) For route=manage_schedule, populate selector.ids when the user names specific job IDs, and populate nameContains/taskContains/scheduleContains with the best matching fragments when the user refers to a job by description.",
+      "8.1) When the user refers to 'the task', 'this job', or uses other anaphoric references without specifying a name or ID, resolve the reference using conversation context and the existing jobs list below. Prefer populating selector.ids with the resolved job ID.",
       "9) For route=manage_schedule, use enabled=enabled or disabled only when the request explicitly filters by current enabled state; otherwise use any.",
       "10) For route=manage_schedule, populate patch only with the requested changes. Use patch.enabled for update/enable/disable requests that change enabled state.",
+      "10.1) CRITICAL: When patch.task is set, it MUST contain the COMPLETE final task text — merge the user's requested changes into the ORIGINAL task from the existing jobs list. Never replace the original task with just the change instruction. For example, if the original task is 'Browse X feed and comment on posts; reply to comments; use formal style' and the user says 'make it more casual', patch.task should be 'Browse X feed and comment on posts; reply to comments; use a casual and brief style' — preserving all original context.",
       "11) Use kind=cron for recurring calendar schedules when you can express them with a standard 5-field cron expression.",
       "12) Use kind=every only for fixed interval schedules and set everyMs.",
       "13) Use kind=at only for one-shot future schedules when you can provide an RFC3339 datetime.",
       "14) summaryText must be short and in the user's language when route=create_schedule.",
       "15) If the schedule is ambiguous or any required field is missing for route=create_schedule, return route=none instead of guessing.",
       `User locale hint: ${locale}`,
+      this.buildExistingJobsCatalog(),
       recentContext ? `Recent conversation context:\n${recentContext}` : "",
       `User message: ${inputText}`,
     ].join("\n");
@@ -2539,8 +2551,11 @@ export class ChatAssistant {
       "9) scheduleManagement=true only when the user is asking to inspect or modify existing cron jobs / scheduled tasks. Otherwise false.",
       "10) If scheduleManagement=true, set scheduleManagementAction and scheduleManagementIntent.action consistently.",
       "11) If scheduleManagement=true, populate scheduleManagementIntent.selector and scheduleManagementIntent.patch with the best structured target and change data you can infer from the user request.",
+      "11.1) When the user refers to 'the task', 'this job', or uses other anaphoric references without specifying a name or ID, resolve the reference using conversation context and the existing jobs list below. Prefer populating selector.ids with the resolved job ID.",
+      "11.2) CRITICAL: When patch.task is set, it MUST contain the COMPLETE final task text — merge the user's requested changes into the ORIGINAL task from the existing jobs list. Never replace the original task with just the change instruction.",
       "12) If mode=task, taskAcceptedReply must be one short natural sentence that confirms execution starts now.",
       "13) If mode=chat, taskAcceptedReply must be empty.",
+      this.buildExistingJobsCatalog(),
       recentContext ? `Recent conversation context:\n${recentContext}` : "",
       `User message: ${inputText}`,
     ].join("\n");
@@ -2913,13 +2928,12 @@ export class ChatAssistant {
     return String(raw || "")
       .replace(/^task completed[.!:\s-]*/i, "")
       .replace(/^completed[.!:\s-]*/i, "")
-      .replace(/^完成(了|。|!|！)?\s*/i, "")
       .trim();
   }
 
   private looksLikeShoppingTask(task: string): boolean {
     const text = String(task || "");
-    return /(where\s+to\s+buy|where\s+can\s+i\s+buy|buy\s+\w|purchase\s+\w|shop\s+for|shopping\s+for|for\s+sale|哪里买|购买\w|去哪买)/i
+    return /(where\s+to\s+buy|where\s+can\s+i\s+buy|buy\s+\w|purchase\s+\w|shop\s+for|shopping\s+for|for\s+sale)/i
       .test(text);
   }
 
@@ -3005,14 +3019,11 @@ export class ChatAssistant {
       let next = line;
       if (idx === 0) {
         next = next
-          .replace(/^可购买(?:渠道)?/i, "已发现相关商品列表")
           .replace(/^available to buy now for\b/i, "Observed listings for")
           .replace(/^available now for\b/i, "Observed listings for")
           .replace(/^available places to buy\b/i, "Observed listings for");
       }
       next = next
-        .replace(/有货/gi, "页面显示有货（未验证）")
-        .replace(/现货/gi, "页面显示现货（未验证）")
         .replace(/\bin stock online\b/gi, "listed as in stock (unverified)")
         .replace(/\bin stock\b/gi, "listed as in stock (unverified)");
       return next;
@@ -3299,6 +3310,43 @@ export class ChatAssistant {
     }
   }
 
+  async narrateScheduledTaskStart(jobName: string, task: string): Promise<string> {
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return `Starting scheduled task: ${jobName}`;
+    }
+
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+    const prompt = [
+      "You are OpenPocket, a phone-use agent notifying the user that a recurring scheduled task is starting now.",
+      "Write one casual, brief sentence telling the user what you are about to do.",
+      "Vary your wording each time — do not repeat the same phrasing.",
+      "Do not quote the full task verbatim; paraphrase it naturally.",
+      "Do not mention cron, job IDs, schedules, or implementation details.",
+      "Write entirely in English.",
+      `Job name: ${jobName}`,
+      `Task: ${task}`,
+    ].join("\n");
+
+    try {
+      const output = await this.callModelRaw(
+        client,
+        profile.model,
+        Math.min(profile.maxTokens, 100),
+        prompt,
+        "scheduled task start narration",
+      );
+      const normalized = this.normalizeOneLine(output);
+      return normalized || `Starting scheduled task: ${jobName}`;
+    } catch {
+      return `Starting scheduled task: ${jobName}`;
+    }
+  }
+
   async narrateTaskProgress(input: TaskProgressNarrationInput): Promise<TaskProgressNarrationDecision> {
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
@@ -3429,7 +3477,7 @@ export class ChatAssistant {
         this.pushTurn(chatId, "assistant", reply);
         return reply;
       } catch (error) {
-        return `Conversation failed: codex-responses: ${stringifyError(error)}`;
+        return `Conversation failed: codex-responses: ${formatDetailedError(error)}`;
       }
     }
 
@@ -3458,7 +3506,7 @@ export class ChatAssistant {
         }
         break;
       } catch (error) {
-        errors.push(`${mode}: ${stringifyError(error)}`);
+        errors.push(`${mode}: ${formatDetailedError(error)}`);
       }
     }
 
@@ -3496,22 +3544,21 @@ export class ChatAssistant {
       };
     }
 
-    const profileUpdateReply = this.applyProfileUpdate(chatId, normalizedInput);
-    if (profileUpdateReply) {
-      this.pushTurn(chatId, "user", normalizedInput);
-      this.pushTurn(chatId, "assistant", profileUpdateReply);
-      return {
-        mode: "chat",
-        task: "",
-        reply: profileUpdateReply,
-        confidence: 1,
-        reason: "profile_update",
-      };
-    }
-
     const profile = getModelProfile(this.config);
     const auth = resolveModelAuth(profile);
     if (!auth) {
+      const profileUpdateReply = this.applyProfileUpdate(chatId, normalizedInput);
+      if (profileUpdateReply) {
+        this.pushTurn(chatId, "user", normalizedInput);
+        this.pushTurn(chatId, "assistant", profileUpdateReply);
+        return {
+          mode: "chat",
+          task: "",
+          reply: profileUpdateReply,
+          confidence: 1,
+          reason: "profile_update",
+        };
+      }
       return {
         mode: "chat",
         task: "",
@@ -3536,7 +3583,7 @@ export class ChatAssistant {
           normalizedInput,
         );
       } catch (error) {
-        this.logChat("warn", `schedule extraction failed error=${stringifyError(error)}`);
+        this.logChat("warn", `schedule extraction failed error=${formatDetailedError(error)}`);
         extractedSchedule = null;
       }
       if (extractedSchedule && extractedSchedule.confidence >= MIN_SCHEDULE_INTENT_CONFIDENCE) {
@@ -3582,7 +3629,24 @@ export class ChatAssistant {
         normalizedInput,
         classified,
       );
-      return this.arbitrateRoutingDecision(normalizedInput, audited);
+      const decision = this.arbitrateRoutingDecision(normalizedInput, audited);
+
+      if (decision.mode === "chat") {
+        const profileUpdateReply = this.applyProfileUpdate(chatId, normalizedInput);
+        if (profileUpdateReply) {
+          this.pushTurn(chatId, "user", normalizedInput);
+          this.pushTurn(chatId, "assistant", profileUpdateReply);
+          return {
+            mode: "chat",
+            task: "",
+            reply: profileUpdateReply,
+            confidence: 1,
+            reason: "profile_update",
+          };
+        }
+      }
+
+      return decision;
     } catch {
       return {
         mode: "task",
