@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ai.openpocket.ime">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="34" />
+
+    <application
+        android:label="OpenPocket IME"
+        android:supportsRtl="true">
+
+        <service
+            android:name=".OpenPocketIME"
+            android:exported="true"
+            android:label="OpenPocket IME"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
+        <receiver
+            android:name=".InputReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="ai.openpocket.ime.COMMIT_TEXT" />
+                <action android:name="ai.openpocket.ime.COMMIT_B64" />
+                <action android:name="ai.openpocket.ime.CLEAR" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

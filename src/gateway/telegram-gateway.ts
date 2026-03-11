@@ -2342,7 +2342,9 @@ export class TelegramGateway {
     const chatId = Number.isFinite(chatIdRaw) ? chatIdRaw : null;
 
     if (chatId !== null) {
-      await this.bot.sendMessage(chatId, `Scheduled task started (${job.name}): ${job.payload.task}`);
+      const startMsg = await this.chat.narrateScheduledTaskStart(job.name, job.payload.task);
+      await this.bot.sendMessage(chatId, startMsg);
+      this.chat.appendExternalTurn(chatId, "assistant", startMsg);
     }
 
     return this.runTaskAndReport({
