@@ -5,6 +5,7 @@ import type {
   AgentProgressUpdate,
   ChannelMediaDeliveryResult,
   ChannelMediaRequest,
+  CronTaskPlan,
   HumanAuthCapability,
   OpenPocketConfig,
   ScheduleIntent,
@@ -82,6 +83,8 @@ type QueuedTaskRunOptions = {
   promptMode?: "full" | "minimal" | "none";
   availableToolNamesOverride?: string[];
   skipTaskExecutionPlan?: boolean;
+  cronStepBudget?: number;
+  cronTaskPlan?: CronTaskPlan;
 };
 
 type QueuedTask = {
@@ -1321,6 +1324,8 @@ export class GatewayCore {
           : undefined,
         taskExecutionPlan,
         runOptions?.availableToolNamesOverride,
+        runOptions?.cronStepBudget,
+        runOptions?.cronTaskPlan,
       );
       await progressWork;
 
@@ -1382,6 +1387,8 @@ export class GatewayCore {
       return { accepted: false, ok: false, message: "No channel adapter available." };
     }
 
+    const cronPlan = await this.chat.planCronTask(job.payload.task);
+
     const envelope: InboundEnvelope = {
       channelType: adapter.channelType,
       senderId: "cron",
@@ -1401,7 +1408,10 @@ export class GatewayCore {
       this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", startMsg);
     }
 
-    return this.runTaskAndReport(envelope, job.payload.task, `cron:${job.id}`);
+    return this.runTaskAndReport(envelope, job.payload.task, `cron:${job.id}`, {
+      cronStepBudget: cronPlan.stepBudget,
+      cronTaskPlan: cronPlan,
+    });
   }
 
   // -----------------------------------------------------------------------

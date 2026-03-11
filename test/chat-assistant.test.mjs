@@ -651,6 +651,18 @@ test("ChatAssistant task execution planner falls back to hybrid on invalid model
   assert.match(plan?.reason ?? "", /fallback/i);
 });
 
+test("ChatAssistant cron planner returns bounded fallback plan without model auth", async () => {
+  const { assistant } = createAssistant();
+
+  const plan = await assistant.planCronTask("Check X for new Open Pocket replies and respond when relevant.");
+  assert.ok(plan);
+  assert.equal(Array.isArray(plan.steps), true);
+  assert.ok(plan.steps.length >= 3);
+  assert.ok(plan.stepBudget >= 20);
+  assert.ok(plan.stepBudget <= 60);
+  assert.match(plan.completionCriteria, /focused pass|step budget/i);
+});
+
 test("ChatAssistant runs profile onboarding when identity and user are empty", async () => {
   const { assistant, cfg } = createAssistant({ keepProfileEmpty: true });
 
@@ -1093,7 +1105,42 @@ test("ChatAssistant narrateTaskProgress falls back when model output is unavaila
   });
 
   assert.equal(out.notify, true);
-  assert.match(out.message, /Quick update:/i);
+  assert.doesNotMatch(out.message, /com\.google\.android\.gm/i);
+  assert.match(out.message, /Still working on it/i);
+});
+
+test("ChatAssistant progress narration prompt tells model not to expose package names", async () => {
+  const { assistant } = createAssistant({ withApiKey: true });
+  let capturedPrompt = "";
+  assistant.requestTaskProgressNarrationDecision = async (_client, _model, _maxTokens, prompt) => {
+    capturedPrompt = prompt;
+    return {
+      notify: true,
+      message: "Quick update: still in the current app and checking the thread now.",
+      reason: "checkpoint",
+    };
+  };
+
+  const out = await assistant.narrateTaskProgress({
+    task: "Check X notifications",
+    locale: "en",
+    progress: {
+      step: 2,
+      maxSteps: 10,
+      currentApp: "com.twitter.android",
+      actionType: "tap",
+      message: "Opened thread",
+      thought: "inspect latest replies",
+      screenshotPath: null,
+    },
+    recentProgress: [],
+    lastNotifiedProgress: null,
+    skippedSteps: 0,
+  });
+
+  assert.equal(out.notify, true);
+  assert.match(out.message, /the current app/i);
+  assert.match(capturedPrompt, /Never expose Android package names or bundle identifiers/i);
 });
 
 test("ChatAssistant narrateTaskOutcome rewrites final output with model decision", async () => {
@@ -1217,4 +1264,5 @@ test("ChatAssistant narrateEscalation uses model output when available", async (
   assert.match(capturedPrompt, /Escalation context JSON/);
   assert.match(capturedPrompt, /includeLocalSecurityAssurance/);
   assert.match(capturedPrompt, /event/);
+  assert.match(capturedPrompt, /Never expose Android package names or bundle identifiers/i);
 });

@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type {
   AgentProgressUpdate,
+  CronTaskPlan,
   ScheduleIntent,
   GatewayLogLevel,
   OpenPocketConfig,
@@ -1632,8 +1633,9 @@ export class ChatAssistant {
       "4) Do not include step counters (8/50, step 8, progress 8) unless user explicitly asked for it.",
       "5) Talk like a helpful friend, not a robot. Vary your phrasing naturally.",
       "6) Never expose internal mechanics: no tool names, action types, model names, JSON, log lines, file paths, or debug output.",
-      "7) Never echo back raw 'thought' or 'observation' text from the progress context. Rephrase in your own words.",
-      "8) If notify=false, message must be empty string.",
+      "7) Never expose Android package names or bundle identifiers (for example com.twitter.android). Use a natural app name only if already obvious; otherwise say 'the current app' or describe the screen generically.",
+      "8) Never echo back raw 'thought' or 'observation' text from the progress context. Rephrase in your own words.",
+      "9) If notify=false, message must be empty string.",
       "",
       "TASK_PROGRESS_REPORTER.md:",
       this.readTaskProgressReporterGuide(),
@@ -1758,14 +1760,15 @@ export class ChatAssistant {
       "1) Keep it concise, natural, and conversational (2-4 short sentences).",
       "2) Lead with what user should do now.",
       "3) Do NOT use rigid labels like 'Instruction:', 'Reason:', 'Request ID:', 'Current app:'.",
-      "4) Mention current app only when it is available and meaningful.",
-      "5) If includeLocalSecurityAssurance=true, include one short reassurance sentence:",
+      "4) Never expose Android package names or bundle identifiers (for example com.twitter.android). Use a natural app name only if already obvious; otherwise describe it generically.",
+      "5) Mention current app only when it is available and meaningful.",
+      "6) If includeLocalSecurityAssurance=true, include one short reassurance sentence:",
       "   relay is local on user's machine, channel is private/encrypted, no centralized OpenPocket relay stores credentials.",
-      "6) event=human_auth: ask user to open link and approve/reject, unless link unavailable.",
-      "7) For human_auth with a web link, do NOT ask user to send an extra confirmation message in Telegram.",
-      "8) event=user_decision: ask user to reply with an option clearly and briefly.",
-      "9) event with code flow should mention user can reply code directly in Telegram.",
-      "10) Use locale hint language and avoid unnecessary long context copy.",
+      "7) event=human_auth: ask user to open link and approve/reject, unless link unavailable.",
+      "8) For human_auth with a web link, do NOT ask user to send an extra confirmation message in Telegram.",
+      "9) event=user_decision: ask user to reply with an option clearly and briefly.",
+      "10) event with code flow should mention user can reply code directly in Telegram.",
+      "11) Use locale hint language and avoid unnecessary long context copy.",
       "",
       "SOUL.md:",
       this.trimForPrompt(soul, 1200),
@@ -2908,14 +2911,15 @@ export class ChatAssistant {
       };
     }
 
-    const app = this.trimForPrompt(input.progress.currentApp || "unknown", 120);
     const summary = isErrorLike
       ? this.cleanProgressSummaryForUser(
         input.progress.message || input.progress.thought || "",
         280,
       )
       : "";
-    const messageText = `Quick update: still on ${app}. I am continuing${summary ? `, current blocker: ${summary}` : " and will share the verified result shortly"}.`;
+    const messageText = summary
+      ? `Still working on it — hit a snag: ${summary}`
+      : "Still working on it. I will share the result shortly.";
 
     return {
       notify: true,
@@ -3144,10 +3148,7 @@ export class ChatAssistant {
   private fallbackEscalationNarration(input: EscalationNarrationInput): string {
     const locale = input.locale;
     const capabilityLabel = this.capabilityLabel(input.capability);
-    const appToken = String(input.currentApp || "").trim();
-    const appLine = appToken && appToken.toLowerCase() !== "unknown"
-      ? `Current app: ${appToken}.`
-      : "";
+    const appLine = "";
     const securityLine = input.includeLocalSecurityAssurance
       ? "Security note: this auth page connects to your local OpenPocket relay; credentials stay in a private encrypted channel and are not stored in a centralized relay."
       : "";
@@ -3344,6 +3345,100 @@ export class ChatAssistant {
       return normalized || `Starting scheduled task: ${jobName}`;
     } catch {
       return `Starting scheduled task: ${jobName}`;
+    }
+  }
+
+  private buildFallbackCronTaskPlan(task: string): CronTaskPlan {
+    const normalizedTask = this.normalizeOneLine(task);
+    const summary = normalizedTask
+      ? `I will do one focused pass on "${normalizedTask.slice(0, 80)}" and then stop.`
+      : "I will do one focused scheduled pass and then stop.";
+    return {
+      summary,
+      steps: [
+        "Inspect the most relevant current state and gather the first concrete evidence.",
+        "Take one or two high-value actions that directly advance the scheduled task.",
+        "If the first path is blocked or not useful, try one reasonable alternative path.",
+        "Capture any meaningful result or confirmation before ending the run.",
+        "Stop after this focused pass and leave remaining work for the next scheduled trigger.",
+      ],
+      stepBudget: 30,
+      completionCriteria: "Finish after one focused pass, once meaningful progress is made, or when the step budget is exhausted.",
+    };
+  }
+
+  private normalizeCronTaskPlan(task: string, value: Partial<CronTaskPlan> | null | undefined): CronTaskPlan {
+    const fallback = this.buildFallbackCronTaskPlan(task);
+    const steps = Array.isArray(value?.steps)
+      ? value.steps
+        .map((step) => this.normalizeOneLine(String(step || "")))
+        .filter(Boolean)
+        .slice(0, 8)
+      : [];
+    return {
+      summary: this.normalizeOneLine(String(value?.summary || "")) || fallback.summary,
+      steps: steps.length > 0 ? steps : fallback.steps,
+      stepBudget: Math.max(20, Math.min(60, Number(value?.stepBudget) || fallback.stepBudget)),
+      completionCriteria: this.normalizeOneLine(String(value?.completionCriteria || "")) || fallback.completionCriteria,
+    };
+  }
+
+  /**
+   * Generate a bounded execution plan for a cron-triggered task.
+   * Always returns a bounded plan, with a deterministic fallback when model planning is unavailable.
+   */
+  async planCronTask(task: string): Promise<CronTaskPlan> {
+    const profile = getModelProfile(this.config);
+    const auth = resolveModelAuth(profile);
+    if (!auth) {
+      return this.buildFallbackCronTaskPlan(task);
+    }
+
+    const client = new OpenAI({
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl ?? profile.baseUrl,
+    });
+
+    const prompt = [
+      "You are a task planner for OpenPocket, a phone-use agent that controls an Android device.",
+      "A recurring scheduled task is about to start. Your job is to create a concrete, bounded execution plan so the agent knows exactly what to do and when to stop.",
+      "",
+      "Output strict JSON only:",
+      '{',
+      '  "steps": ["step 1 description", "step 2 description", ...],',
+      '  "stepBudget": <number 20-60>,',
+      '  "completionCriteria": "when to call finish",',
+      '  "summary": "one-line plan summary for the user"',
+      '}',
+      "",
+      "Rules:",
+      "1) Break the task into 3-8 concrete, actionable steps. Each step should be specific (e.g. 'Open X app and scroll the home feed for 2-3 posts related to Open Pocket' not 'Browse feed').",
+      "2) Set stepBudget to a realistic number of agent steps needed (typically 20-60). Open-ended monitoring tasks should be capped, not infinite.",
+      "3) completionCriteria must be clear and achievable within a single session. The task will trigger again later, so do NOT try to be exhaustive.",
+      "4) For social media tasks: plan specific interactions (e.g. 'comment on 2-3 relevant posts', 'check profile for new replies'), not open-ended browsing.",
+      "5) For monitoring tasks: do one focused pass, not continuous monitoring. The cron schedule handles repetition.",
+      "6) summary should be casual and brief, suitable for sending to the user.",
+      "",
+      `Task: ${task}`,
+    ].join("\n");
+
+    try {
+      const output = await this.callModelRaw(
+        client,
+        profile.model,
+        Math.min(profile.maxTokens, 800),
+        prompt,
+        "cron task planning",
+      );
+      if (!output) {
+        return this.buildFallbackCronTaskPlan(task);
+      }
+
+      const jsonText = extractJsonObjectText(output);
+      const parsed = JSON.parse(jsonText) as Partial<CronTaskPlan>;
+      return this.normalizeCronTaskPlan(task, parsed);
+    } catch {
+      return this.buildFallbackCronTaskPlan(task);
     }
   }
 
