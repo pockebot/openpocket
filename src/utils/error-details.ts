@@ -57,6 +57,51 @@ function summarizeStructuredValue(value: unknown): string {
   return "";
 }
 
+function tryParseJsonText(text: string): unknown {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const candidates = [trimmed];
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+  const firstBracket = trimmed.indexOf("[");
+  const lastBracket = trimmed.lastIndexOf("]");
+  if (firstBracket >= 0 && lastBracket > firstBracket) {
+    candidates.push(trimmed.slice(firstBracket, lastBracket + 1));
+  }
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+function extractRawResponseSnippet(value: unknown): string {
+  if (typeof value === "string") {
+    const parsed = tryParseJsonText(value);
+    if (parsed !== null) {
+      return summarizeStructuredValue(parsed);
+    }
+    return "";
+  }
+  if (Array.isArray(value) || isRecord(value)) {
+    return summarizeStructuredValue(value);
+  }
+  return "";
+}
+
+function extractRequestIdFromText(value: string): string {
+  const match = String(value || "").match(/\brequest id[:\s]+([a-z0-9-]{8,})\b/i);
+  return match?.[1]?.trim() ?? "";
+}
+
 function readFirstScalar(record: GenericRecord, keys: string[]): string {
   for (const key of keys) {
     const value = scalarToText(record[key]);
@@ -124,6 +169,10 @@ function collectMessages(value: unknown, parts: string[], seen: WeakSet<object>,
   }
   if (typeof value === "string") {
     appendUnique(parts, value);
+    const parsed = tryParseJsonText(value);
+    if (parsed !== null) {
+      collectMessages(parsed, parts, seen, depth + 1);
+    }
     return;
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
@@ -167,7 +216,14 @@ function collectMessages(value: unknown, parts: string[], seen: WeakSet<object>,
 }
 
 function collectMetadata(value: unknown, parts: string[], seen: WeakSet<object>, depth = 0): void {
-  if (depth > 2 || !isRecord(value)) {
+  if (typeof value === "string") {
+    const parsed = tryParseJsonText(value);
+    if (parsed !== null) {
+      collectMetadata(parsed, parts, seen, depth + 1);
+    }
+    return;
+  }
+  if (depth > 3 || !isRecord(value)) {
     return;
   }
   if (seen.has(value)) {
@@ -180,6 +236,9 @@ function collectMetadata(value: unknown, parts: string[], seen: WeakSet<object>,
   const type = readFirstScalar(value, ["type", "errorType"]);
   const param = readFirstScalar(value, ["param"]);
   const requestId = readFirstScalar(value, ["requestId", "requestID", "request_id"]);
+  const messageRequestId = readFirstScalar(value, ["message", "errorMessage"])
+    ? extractRequestIdFromText(readFirstScalar(value, ["message", "errorMessage"]))
+    : "";
   const headerRequestId = readHeaderValue(value.headers, [
     "x-request-id",
     "request-id",
@@ -212,6 +271,9 @@ function collectMetadata(value: unknown, parts: string[], seen: WeakSet<object>,
   if (requestId) {
     appendUnique(parts, `request_id=${requestId}`);
   }
+  if (messageRequestId) {
+    appendUnique(parts, `request_id=${messageRequestId}`);
+  }
   if (headerRequestId) {
     appendUnique(parts, `request_id=${headerRequestId}`);
   }
@@ -227,10 +289,63 @@ function collectMetadata(value: unknown, parts: string[], seen: WeakSet<object>,
     }
   }
 
-  for (const key of ["error", "cause", "response"]) {
+  for (const key of ["sequence_number", "sequenceNumber"]) {
+    const sequenceNumber = scalarToText(value[key]);
+    if (sequenceNumber) {
+      appendUnique(parts, `sequence_number=${sequenceNumber}`);
+      break;
+    }
+  }
+
+  for (const key of ["message", "errorMessage", "error", "cause", "response"]) {
     if (key in value) {
       collectMetadata(value[key], parts, seen, depth + 1);
     }
+  }
+}
+
+function collectRawResponses(value: unknown, parts: string[], seen: WeakSet<object>, depth = 0): void {
+  if (depth > 3 || value === null || value === undefined) {
+    return;
+  }
+  if (typeof value === "string") {
+    const raw = extractRawResponseSnippet(value);
+    if (raw) {
+      appendUnique(parts, raw);
+    }
+    const parsed = tryParseJsonText(value);
+    if (parsed !== null) {
+      collectRawResponses(parsed, parts, seen, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+
+  if (value instanceof Error) {
+    collectRawResponses(value.message, parts, seen, depth + 1);
+    if ("cause" in value) {
+      collectRawResponses(value.cause, parts, seen, depth + 1);
+    }
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+
+  for (const key of ["body", "data", "response", "error", "cause", "message"]) {
+    if (!(key in value)) {
+      continue;
+    }
+    const raw = extractRawResponseSnippet(value[key]);
+    if (raw) {
+      appendUnique(parts, raw);
+    }
+    collectRawResponses(value[key], parts, seen, depth + 1);
   }
 }
 
@@ -246,6 +361,13 @@ export function formatDetailedError(error: unknown): string {
   const metadata: string[] = [];
   const metadataSeen = new WeakSet<object>();
   collectMetadata(error, metadata, metadataSeen);
+
+  const rawResponses: string[] = [];
+  const rawSeen = new WeakSet<object>();
+  collectRawResponses(error, rawResponses, rawSeen);
+  if (rawResponses.length > 0) {
+    metadata.push(`raw_response=${rawResponses[0]}`);
+  }
 
   const baseMessage = messages[0]
     || scalarToText(error)

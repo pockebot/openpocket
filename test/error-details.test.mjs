@@ -35,3 +35,17 @@ test("formatDetailedError extracts nested provider details", () => {
 test("formatDetailedError handles non-Error values", () => {
   assert.equal(formatDetailedError("plain failure"), "plain failure");
 });
+
+test("formatDetailedError parses raw JSON embedded in provider message", () => {
+  const error = new Error(
+    'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"Please include the request ID req-codex-1 in your message.","param":null},"sequence_number":2}',
+  );
+
+  const out = formatDetailedError(error);
+
+  assert.match(out, /request_id=req-codex-1/);
+  assert.match(out, /code=server_error/);
+  assert.match(out, /type=server_error/);
+  assert.match(out, /sequence_number=2/);
+  assert.match(out, /raw_response=\{"type":"error"/);
+});
