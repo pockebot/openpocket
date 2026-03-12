@@ -1,5 +1,6 @@
 import type {
   AgentAction,
+  InstalledAppInfo,
   OpenPocketConfig,
   ScreenSnapshot,
   ScreenSnapshotCaptureMetrics,
@@ -195,6 +196,42 @@ function stripOuterQuotes(value: string): string {
       .replace(/\\`/g, "`");
   }
   return input;
+}
+
+const COMMON_APP_LABEL_RESOURCE_NAMES = [
+  "app_name",
+  "application_name",
+  "app_label",
+  "appLabel",
+  "launcher_name",
+] as const;
+
+function parseLaunchablePackages(raw: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const line of String(raw || "").split("\n")) {
+    const m = line.match(/packageName=(\S+)/);
+    if (m && m[1] && !seen.has(m[1])) {
+      seen.add(m[1]);
+      result.push(m[1]);
+    }
+  }
+  return result.sort();
+}
+
+function parseOverlayLookupValue(raw: string): string | null {
+  const firstLine = String(raw || "")
+    .split("\n")
+    .map((line) => stripOuterQuotes(line))
+    .find((line) => Boolean(line.trim()));
+  if (!firstLine) {
+    return null;
+  }
+  const trimmed = firstLine.trim();
+  if (!trimmed || /^error:/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
 }
 
 function parseExplicitShellWrap(command: string): { shell: "sh" | "bash"; mode: "-c" | "-lc"; script: string } | null {
@@ -488,6 +525,7 @@ type SecureSurfaceObservation = {
 export class AdbRuntime {
   private readonly config: OpenPocketConfig;
   private readonly emulator: EmulatorManager;
+  private readonly appLabelCache = new Map<string, string>();
   private readonly screenSizeCache = new Map<string, { width: number; height: number; updatedAtMs: number }>();
   private readonly uiDumpCache = new Map<string, UiDumpCacheEntry>();
   private readonly createScreenAwakeWorker: (params: ScreenAwakeWorkerParams) => ScreenAwakeWorkerHandle;
@@ -905,26 +943,60 @@ export class AdbRuntime {
     throw new Error("No online target device found.");
   }
 
-  queryLaunchablePackages(preferred?: string | null): string[] {
-    const deviceId = this.resolveDeviceId(preferred);
+  private queryLaunchablePackagesForDevice(deviceId: string): string[] {
     try {
       const raw = this.emulator.runAdb([
         "-s", deviceId, "shell",
         "pm", "query-activities", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
       ]);
-      const seen = new Set<string>();
-      const result: string[] = [];
-      for (const line of raw.split("\n")) {
-        const m = line.match(/packageName=(\S+)/);
-        if (m && m[1] && !seen.has(m[1])) {
-          seen.add(m[1]);
-          result.push(m[1]);
-        }
-      }
-      return result.sort();
+      return parseLaunchablePackages(raw);
     } catch {
       return [];
     }
+  }
+
+  private resolveLaunchableAppLabel(deviceId: string, packageName: string): string {
+    const cacheKey = `${deviceId}:${packageName}`;
+    const cached = this.appLabelCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    for (const resourceName of COMMON_APP_LABEL_RESOURCE_NAMES) {
+      try {
+        const raw = this.emulator.runAdb([
+          "-s",
+          deviceId,
+          "shell",
+          "cmd",
+          "overlay",
+          "lookup",
+          packageName,
+          `${packageName}:string/${resourceName}`,
+        ], 1_500);
+        const parsed = parseOverlayLookupValue(raw);
+        if (parsed) {
+          this.appLabelCache.set(cacheKey, parsed);
+          return parsed;
+        }
+      } catch {
+        // Try the next common resource key.
+      }
+    }
+    this.appLabelCache.set(cacheKey, packageName);
+    return packageName;
+  }
+
+  queryLaunchableApps(preferred?: string | null): InstalledAppInfo[] {
+    const deviceId = this.resolveDeviceId(preferred);
+    return this.queryLaunchablePackagesForDevice(deviceId).map((packageName) => ({
+      packageName,
+      label: this.resolveLaunchableAppLabel(deviceId, packageName),
+    }));
+  }
+
+  queryLaunchablePackages(preferred?: string | null): string[] {
+    const deviceId = this.resolveDeviceId(preferred);
+    return this.queryLaunchablePackagesForDevice(deviceId);
   }
 
   private resolveScreenSize(deviceId: string): { width: number; height: number } {

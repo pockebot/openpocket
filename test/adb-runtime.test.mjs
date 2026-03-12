@@ -336,6 +336,28 @@ test("AdbRuntime falls back to adb keyboard for non-ASCII when clipboard command
   );
 });
 
+test("AdbRuntime queryLaunchableApps resolves human labels with package fallback", () => {
+  const emulator = new FakeEmulator({
+    shellOutputByCommand: {
+      "pm query-activities -a android.intent.action.MAIN -c android.intent.category.LAUNCHER": [
+        "ActivityInfo:",
+        "  packageName=us.current.android",
+        "ActivityInfo:",
+        "  packageName=com.example.fallback",
+      ].join("\n"),
+      "cmd overlay lookup us.current.android us.current.android:string/app_name": "An Earn App by Mode",
+    },
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const apps = runtime.queryLaunchableApps();
+
+  assert.deepEqual(apps, [
+    { packageName: "com.example.fallback", label: "com.example.fallback" },
+    { packageName: "us.current.android", label: "An Earn App by Mode" },
+  ]);
+});
+
 test("AdbRuntime fails clearly when non-ASCII input methods are unavailable", async () => {
   const emulator = new FakeEmulator({ failClipboardSet: true, availableImes: [] });
   const runtime = new AdbRuntime(makeConfig(), emulator);

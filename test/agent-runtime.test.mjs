@@ -346,6 +346,33 @@ test("AgentRuntime injects BOOTSTRAP guidance into system prompt context", async
   assert.match(capturedSystemPrompt, /runtime-bootstrap-check/);
 });
 
+test("AgentRuntime injects installed app labels into the user prompt", async () => {
+  const capturedUserPrompt = [];
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [{ thought: "done", action: { type: "finish", message: "task completed" } }],
+    hooks: {
+      captureUserPrompt: capturedUserPrompt,
+    },
+  });
+
+  runtime.adb = {
+    queryLaunchableApps: () => [
+      { packageName: "us.current.android", label: "An Earn App by Mode" },
+      { packageName: "com.discord", label: "Discord" },
+    ],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  const result = await runtime.runTask("open the earn app");
+  assert.equal(result.ok, true);
+  assert.match(capturedUserPrompt.at(-1), /"installedApps"/);
+  assert.match(capturedUserPrompt.at(-1), /An Earn App by Mode/);
+  assert.match(capturedUserPrompt.at(-1), /us\.current\.android/);
+  assert.match(capturedUserPrompt.at(-1), /"installedPackages"/);
+});
+
 test("AgentRuntime prefers quick observation for post-action state delta when available", async () => {
   let screenCaptureCalls = 0;
   let quickObservationCalls = 0;

@@ -254,7 +254,24 @@ export async function runRuntimeAttempt(
     });
     deps.setLastSystemPromptReport(report);
 
+    const launchableApps = (() => {
+      if (typeof deps.adb.queryLaunchableApps === "function") {
+        try {
+          const apps = deps.adb.queryLaunchableApps(deps.config.agent.deviceId);
+          if (Array.isArray(apps) && apps.length > 0) {
+            return apps;
+          }
+        } catch {
+          // Fall back to package-only metadata.
+        }
+      }
+      return null;
+    })();
+
     const launchablePackages = (() => {
+      if (launchableApps) {
+        return launchableApps.map((item) => item.packageName);
+      }
       if (typeof deps.adb.queryLaunchablePackages !== "function") {
         return [];
       }
@@ -398,6 +415,7 @@ export async function runRuntimeAttempt(
 
       await sleep(350);
       const refreshed = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+      refreshed.installedApps = launchableApps ?? refreshed.installedApps;
       refreshed.installedPackages = launchablePackages;
       ctx.latestSnapshot = refreshed;
     };
@@ -682,6 +700,7 @@ export async function runRuntimeAttempt(
 
         ctx.lastScreenshotStartMs = Date.now();
         const snapshot = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+        snapshot.installedApps = launchableApps ?? snapshot.installedApps;
         snapshot.installedPackages = launchablePackages;
         ctx.latestSnapshot = snapshot;
         ctx.lastScreenshotEndMs = Date.now();
@@ -738,6 +757,7 @@ export async function runRuntimeAttempt(
             ctx.lastAutoPermissionAllowAtMs = Date.now();
             await sleep(300);
             const refreshed = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+            refreshed.installedApps = launchableApps ?? refreshed.installedApps;
             refreshed.installedPackages = launchablePackages;
             ctx.latestSnapshot = refreshed;
           }
