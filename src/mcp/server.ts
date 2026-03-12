@@ -185,6 +185,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scaleY: snap.scaleY,
           capturedAt: snap.capturedAt,
           uiElements: snap.uiElements,
+          installedApps: snap.installedApps,
           installedPackages: snap.installedPackages,
         };
         return {

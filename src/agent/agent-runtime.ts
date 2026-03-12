@@ -9,6 +9,7 @@ import type {
   BatchableAgentAction,
   ChannelMediaDeliveryResult,
   ChannelMediaRequest,
+  CronTaskPlan,
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
@@ -29,6 +30,7 @@ import { WorkspaceStore } from "../memory/workspace.js";
 import { ScreenshotStore } from "../memory/screenshot-store.js";
 import { sleep } from "../utils/time.js";
 import { ensureDir, nowIso } from "../utils/paths.js";
+import { colorizeAgentLog } from "../utils/cli-theme.js";
 import { AdbRuntime } from "../device/adb-runtime.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
 import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder.js";
@@ -314,6 +316,7 @@ interface PhoneAgentRunContext {
   lastAutoPermissionAllowAtMs: number;
   launchablePackages: string[];
   taskExecutionPlan: TaskExecutionPlan | null;
+  cronTaskPlan: CronTaskPlan | null;
   runtimeModel: {
     id: string;
     provider: string;
@@ -2585,6 +2588,14 @@ export class AgentRuntime {
           reason: ctx.taskExecutionPlan.reason,
         }
         : null,
+      cronPlan: ctx.cronTaskPlan
+        ? {
+          summary: ctx.cronTaskPlan.summary,
+          stepBudget: ctx.cronTaskPlan.stepBudget,
+          completionCriteria: ctx.cronTaskPlan.completionCriteria,
+          steps: ctx.cronTaskPlan.steps,
+        }
+        : null,
       task: ctx.task,
       generatedAt: nowIso(),
     };
@@ -2855,6 +2866,11 @@ export class AgentRuntime {
             return { content: [{ type: "text" as const, text: skipMsg }], details: { skipped: true } };
           }
           if (ctx.stepCount >= ctx.maxSteps) {
+            if (ctx.cronTaskPlan) {
+              const summary = String(ctx.cronTaskPlan.summary || "").replace(/\s+/g, " ").trim();
+              ctx.finishMessage = `Completed this scheduled run window after ${ctx.stepCount}/${ctx.maxSteps} steps.${summary ? ` ${summary}` : ""} Remaining work can continue on the next scheduled trigger.`;
+              return { content: [{ type: "text" as const, text: ctx.finishMessage }], details: { skipped: true } };
+            }
             ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
             return { content: [{ type: "text" as const, text: ctx.failMessage }], details: { skipped: true } };
           }
@@ -2869,14 +2885,24 @@ export class AgentRuntime {
           const stepStartedAtMs = Date.now();
           const stepStartedAtHr = process.hrtime.bigint();
           const stepStartedAt = nowIso();
+          const RESULT_LOG_MAX_LINES = 4;
           const logStepSection = (section: string, text: string): void => {
             const normalized = String(text ?? "").trim();
             if (!normalized) {
               return;
             }
-            for (const line of normalized.split("\n")) {
+            const lines = normalized.split("\n");
+            const truncate = section === "result" && lines.length > RESULT_LOG_MAX_LINES;
+            const visible = truncate ? lines.slice(0, RESULT_LOG_MAX_LINES) : lines;
+            for (const line of visible) {
+              const raw = `[OpenPocket][step ${step}][${section}] ${line}`;
               // eslint-disable-next-line no-console
-              console.log(`[OpenPocket][step ${step}][${section}] ${line}`);
+              console.log(colorizeAgentLog(raw));
+            }
+            if (truncate) {
+              const raw = `[OpenPocket][step ${step}][${section}] ... (${lines.length - RESULT_LOG_MAX_LINES} more lines omitted)`;
+              // eslint-disable-next-line no-console
+              console.log(colorizeAgentLog(raw));
             }
           };
           const buildStepTrace = (
@@ -3750,6 +3776,8 @@ export class AgentRuntime {
     onChannelMedia?: (request: ChannelMediaRequest) => Promise<ChannelMediaDeliveryResult> | ChannelMediaDeliveryResult,
     taskExecutionPlan?: TaskExecutionPlan | null,
     availableToolNamesOverride?: string[],
+    maxStepsOverride?: number,
+    cronTaskPlan?: CronTaskPlan | null,
   ): Promise<AgentRunResult> {
     const activeToolNames = Array.isArray(availableToolNamesOverride) && availableToolNamesOverride.length > 0
       ? availableToolNamesOverride
@@ -3766,6 +3794,8 @@ export class AgentRuntime {
       availableToolNames: activeToolNames,
       onUserInput,
       taskExecutionPlan,
+      maxStepsOverride,
+      cronTaskPlan,
     };
 
     return runRuntimeTask(

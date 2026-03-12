@@ -22,12 +22,15 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<void
 
   const request = (action: "stop" | "restart", signal: NodeJS.Signals): void => {
     if (shuttingDown) {
-      return;
+      log(
+        `[OpenPocket][gateway-loop][warn] ${new Date().toISOString()} signal=${signal} received again — forcing exit`,
+      );
+      process.exit(1);
     }
     shuttingDown = true;
     restarting = action === "restart";
     log(
-      `[OpenPocket][gateway-loop][warn] ${new Date().toISOString()} signal=${signal} action=${restarting ? "restart" : "stop"}`,
+      `[OpenPocket][gateway-loop][warn] ${new Date().toISOString()} signal=${signal} action=${restarting ? "restart" : "stop"} (press Ctrl+C again to force quit)`,
     );
     void Promise.resolve(current?.stop(`signal:${signal}`))
       .catch(() => {

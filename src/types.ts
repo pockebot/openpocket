@@ -398,6 +398,11 @@ export interface ScreenSnapshotCaptureMetrics {
   secureSurfaceEvidence: string;
 }
 
+export interface InstalledAppInfo {
+  packageName: string;
+  label: string;
+}
+
 export interface ScreenSnapshot {
   deviceId: string;
   currentApp: string;
@@ -419,6 +424,8 @@ export interface ScreenSnapshot {
   scaledWidth: number;
   /** Height of the scaled image the model actually sees. */
   scaledHeight: number;
+  /** Installed launchable apps with package ids and human-facing labels when available. */
+  installedApps?: InstalledAppInfo[];
   /** Installed launchable package names (for launch_app). */
   installedPackages?: string[];
   /** Actionable UI nodes extracted from uiautomator dump for deterministic element targeting. */
@@ -668,6 +675,13 @@ export interface TaskExecutionPlan {
   surface: TaskExecutionSurface;
   confidence: number;
   reason: string;
+}
+
+export interface CronTaskPlan {
+  summary: string;
+  steps: string[];
+  stepBudget: number;
+  completionCriteria: string;
 }
 
 export interface SkillInfo {

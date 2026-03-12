@@ -20,6 +20,7 @@ import type {
 
 import type { AgentAction, ModelProfile, ModelStepOutput, ScreenSnapshot } from "../types.js";
 import { formatDetailedError } from "../utils/error-details.js";
+import { colorizeAgentLog } from "../utils/cli-theme.js";
 import { normalizeAction } from "./actions.js";
 import { buildUserPrompt } from "./prompts.js";
 import { TOOL_METAS, toolNameToActionType } from "./tools.js";
@@ -327,10 +328,10 @@ export class ModelClient {
     const actionRaw = { type: actionType, ...actionArgs };
 
     // eslint-disable-next-line no-console
-    console.log(`[OpenPocket][model][decision] tool=${toolCall.toolName} action=${JSON.stringify(actionRaw)}`);
+    console.log(colorizeAgentLog(`[OpenPocket][model][decision] tool=${toolCall.toolName} action=${JSON.stringify(actionRaw)}`));
     if (thought.trim()) {
       // eslint-disable-next-line no-console
-      console.log(`[OpenPocket][model][thought] ${thought.trim()}`);
+      console.log(colorizeAgentLog(`[OpenPocket][model][thought] ${thought.trim()}`));
     }
 
     const action: AgentAction = normalizeAction(actionRaw);

@@ -18,6 +18,7 @@ import {
 } from "@mariozechner/pi-ai";
 
 import type {
+  CronTaskPlan,
   HumanAuthDecision,
   OpenPocketConfig,
   ScreenSnapshot,
@@ -144,6 +145,53 @@ function buildExecutionSurfaceGuidance(plan: TaskExecutionPlan | null | undefine
   ].join("\n");
 }
 
+function buildCronTaskPlanGuidance(plan: CronTaskPlan | null | undefined): string {
+  if (!plan) {
+    return "";
+  }
+  const summary = String(plan.summary || "").replace(/\s+/g, " ").trim().slice(0, 240) || "Run one focused scheduled pass.";
+  const completionCriteria = String(plan.completionCriteria || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 320) || "Finish after completing one focused pass or when the step budget is exhausted.";
+  const stepBudget = Number.isFinite(plan.stepBudget) ? Math.max(1, Math.round(plan.stepBudget)) : 30;
+  const steps = Array.isArray(plan.steps)
+    ? plan.steps
+      .map((step) => String(step || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    : [];
+  return [
+    "",
+    "## Scheduled Run Plan (bounded)",
+    `- Summary: ${summary}`,
+    `- Step budget for this run: ${stepBudget}.`,
+    `- Completion criteria: ${completionCriteria}`,
+    "- This task is recurring. Complete one focused pass only; do not monitor indefinitely.",
+    "- If the checklist is substantially complete before the budget is exhausted, call finish immediately.",
+    "- If the step budget is exhausted, the run will be closed normally and the next scheduled trigger can continue later.",
+    steps.length > 0 ? "- Planned checklist:" : "",
+    ...steps.map((step, idx) => `  ${idx + 1}. ${step}`),
+  ].filter(Boolean).join("\n");
+}
+
+function buildCronBudgetCompletionMessage(ctx: Pick<PhoneAgentRunContext, "stepCount" | "maxSteps" | "cronTaskPlan">): string {
+  const summary = String(ctx.cronTaskPlan?.summary || "").replace(/\s+/g, " ").trim();
+  const summarySuffix = summary ? ` ${summary}` : "";
+  return `Completed this scheduled run window after ${ctx.stepCount}/${ctx.maxSteps} steps.${summarySuffix} Remaining work can continue on the next scheduled trigger.`;
+}
+
+function completeBoundedCronRunIfNeeded(ctx: Pick<PhoneAgentRunContext, "finishMessage" | "failMessage" | "stepCount" | "maxSteps" | "cronTaskPlan">): boolean {
+  if (!ctx.cronTaskPlan) {
+    return false;
+  }
+  if (ctx.finishMessage || ctx.failMessage) {
+    return true;
+  }
+  ctx.finishMessage = buildCronBudgetCompletionMessage(ctx);
+  return true;
+}
+
 export async function runRuntimeAttempt(
   deps: RuntimeAttemptDependencies,
   request: RunTaskRequest,
@@ -242,7 +290,7 @@ export async function runRuntimeAttempt(
       availableToolNames: request.availableToolNames,
       activeSkillsText: skillPromptContext.activePromptText,
     });
-    const systemPrompt = `${baseSystemPrompt}${buildExecutionSurfaceGuidance(request.taskExecutionPlan)}`;
+    const systemPrompt = `${baseSystemPrompt}${buildExecutionSurfaceGuidance(request.taskExecutionPlan)}${buildCronTaskPlanGuidance(request.cronTaskPlan)}`;
     const report = deps.buildSystemPromptReport({
       source: "run",
       promptMode: effectivePromptMode,
@@ -262,7 +310,24 @@ export async function runRuntimeAttempt(
     });
     deps.setLastSystemPromptReport(report);
 
+    const launchableApps = (() => {
+      if (typeof deps.adb.queryLaunchableApps === "function") {
+        try {
+          const apps = deps.adb.queryLaunchableApps(deps.config.agent.deviceId);
+          if (Array.isArray(apps) && apps.length > 0) {
+            return apps;
+          }
+        } catch {
+          // Fall back to package-only metadata.
+        }
+      }
+      return null;
+    })();
+
     const launchablePackages = (() => {
+      if (launchableApps) {
+        return launchableApps.map((item) => item.packageName);
+      }
       if (typeof deps.adb.queryLaunchablePackages !== "function") {
         return [];
       }
@@ -279,7 +344,7 @@ export async function runRuntimeAttempt(
       profile,
       session,
       stepCount: 0,
-      maxSteps: deps.config.agent.maxSteps,
+      maxSteps: request.maxStepsOverride ?? deps.config.agent.maxSteps,
       latestSnapshot: null,
       recentSnapshotWindow: [],
       lastScreenshotPath: null,
@@ -298,6 +363,7 @@ export async function runRuntimeAttempt(
       secureSurfaceTakeoverRequestedApps: new Set(),
       launchablePackages,
       taskExecutionPlan: request.taskExecutionPlan ?? null,
+      cronTaskPlan: request.cronTaskPlan ?? null,
       runtimeModel: {
         id: String((finalModel as { id?: unknown }).id ?? effectiveProfile.model),
         provider: String((finalModel as { provider?: unknown }).provider ?? "unknown"),
@@ -440,6 +506,7 @@ export async function runRuntimeAttempt(
 
       await sleep(350);
       const refreshed = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+      refreshed.installedApps = launchableApps ?? refreshed.installedApps;
       refreshed.installedPackages = launchablePackages;
       ctx.latestSnapshot = refreshed;
     };
@@ -721,12 +788,15 @@ export async function runRuntimeAttempt(
           return messages;
         }
         if (ctx.stepCount >= ctx.maxSteps) {
-          ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+          if (!completeBoundedCronRunIfNeeded(ctx)) {
+            ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+          }
           return messages;
         }
 
         ctx.lastScreenshotStartMs = Date.now();
         const snapshot = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+        snapshot.installedApps = launchableApps ?? snapshot.installedApps;
         snapshot.installedPackages = launchablePackages;
         ctx.latestSnapshot = snapshot;
         ctx.lastScreenshotEndMs = Date.now();
@@ -783,6 +853,7 @@ export async function runRuntimeAttempt(
             ctx.lastAutoPermissionAllowAtMs = Date.now();
             await sleep(300);
             const refreshed = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+            refreshed.installedApps = launchableApps ?? refreshed.installedApps;
             refreshed.installedPackages = launchablePackages;
             ctx.latestSnapshot = refreshed;
           }
@@ -846,7 +917,9 @@ export async function runRuntimeAttempt(
         return;
       }
       if (ctx.stepCount >= ctx.maxSteps) {
-        ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+        if (!completeBoundedCronRunIfNeeded(ctx)) {
+          ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+        }
         if (typeof agent.abort === "function") {
           agent.abort();
         }

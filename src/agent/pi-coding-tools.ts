@@ -55,6 +55,13 @@ export class PiCodingToolsExecutor {
   }
 
   private canUsePath(rawPath: string, options?: { allowSkillRootsForRead?: boolean }): boolean {
+    return this.resolvePath(rawPath, options) !== null;
+  }
+
+  private resolvePath(
+    rawPath: string,
+    options?: { allowSkillRootsForRead?: boolean },
+  ): string | null {
     const resolved = resolveWorkspacePathPolicy({
       workspaceDir: this.config.workspaceDir,
       inputPath: rawPath,
@@ -62,7 +69,7 @@ export class PiCodingToolsExecutor {
       workspaceOnly: this.config.codingTools.workspaceOnly,
       allowSkillRootsForRead: options?.allowSkillRootsForRead,
     });
-    return resolved.ok;
+    return resolved.ok && resolved.resolved ? resolved.resolved : null;
   }
 
   private resolveWorkdir(inputPath?: string): string | null {
@@ -94,11 +101,12 @@ export class PiCodingToolsExecutor {
     }
 
     if (action.type === "read") {
-      if (!this.canUsePath(action.path, { allowSkillRootsForRead: true })) {
+      const resolvedReadPath = this.resolvePath(action.path, { allowSkillRootsForRead: true });
+      if (!resolvedReadPath) {
         return null;
       }
       const result = await this.readTool.execute("pi-read", {
-        path: action.path,
+        path: resolvedReadPath,
         offset: action.from,
         limit: action.lines,
       });
