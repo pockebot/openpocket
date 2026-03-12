@@ -499,6 +499,7 @@ export function buildUserPrompt(
         capturedAt: snapshot.capturedAt,
         secureSurfaceDetected,
         secureSurfaceEvidence: secureSurfaceEvidence || undefined,
+        installedApps: snapshot.installedApps,
         installedPackages: snapshot.installedPackages,
       },
       null,
