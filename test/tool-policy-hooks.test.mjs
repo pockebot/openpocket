@@ -8,6 +8,7 @@ const { loadConfig } = await import("../dist/config/index.js");
 const { PiCodingToolsExecutor } = await import("../dist/agent/pi-coding-tools.js");
 const { CodingExecutor } = await import("../dist/tools/coding-executor.js");
 const { ScriptExecutor } = await import("../dist/tools/script-executor.js");
+const { resolveWorkspacePathPolicy } = await import("../dist/agent/tool-policy.js");
 
 async function withTempHome(prefix, fn) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -114,6 +115,32 @@ test("tool policy strips sensitive env vars for coding and script command execut
         process.env.OPENAI_API_KEY = prevOpenAi;
       }
     }
+  });
+});
+
+test("resolveWorkspacePathPolicy redirects home-relative skill paths to real skill root", async () => {
+  await withTempHome("openpocket-skill-resolve-", async (opHome) => {
+    const skillDir = path.join(opHome, "skills", "my-skill");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), "# test");
+
+    const workspaceDir = path.join(opHome, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+
+    // Model outputs ".openpocket/skills/my-skill/SKILL.md" without ~ prefix.
+    // openpocketHome() returns opHome (set via OPENPOCKET_HOME env).
+    // The path ".openpocket/skills/..." resolved against workspace would
+    // land inside workspace, but the REAL file lives under opHome/skills/.
+    // With the home-relative fallback this must resolve to the real location.
+    const result = resolveWorkspacePathPolicy({
+      workspaceDir,
+      inputPath: path.relative(os.homedir(), path.join(opHome, "skills", "my-skill", "SKILL.md")),
+      purpose: "read",
+      workspaceOnly: true,
+      allowSkillRootsForRead: true,
+    });
+    assert.equal(result.ok, true, `expected ok but got: ${result.error}`);
+    assert.equal(result.resolved, path.join(skillDir, "SKILL.md"));
   });
 });
 
