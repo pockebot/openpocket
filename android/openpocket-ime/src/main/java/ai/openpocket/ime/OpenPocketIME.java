@@ -3,15 +3,15 @@ package ai.openpocket.ime;
 import android.inputmethodservice.InputMethodService;
 import android.view.View;
 import android.view.inputmethod.InputConnection;
-import android.widget.FrameLayout;
 
 /**
- * Minimal InputMethodService that exposes a programmatic text-commit API
- * for OpenPocket automation.  No visible keyboard is shown; all input
- * arrives through {@link InputReceiver} broadcasts sent via ADB.
+ * Invisible InputMethodService for OpenPocket automation.
  *
- * The keyboard view is a 1-pixel transparent strip so it does not
- * obscure the screen when momentarily activated during text injection.
+ * No keyboard window is ever shown — {@link #onEvaluateInputViewShown()}
+ * returns false so the system never creates a visible keyboard surface.
+ * The service still binds to the focused input field, providing a valid
+ * {@link InputConnection} for text injection via {@link InputReceiver}
+ * broadcasts sent from ADB.
  */
 public class OpenPocketIME extends InputMethodService {
 
@@ -30,19 +30,18 @@ public class OpenPocketIME extends InputMethodService {
     }
 
     @Override
-    public View onCreateInputView() {
-        View v = new View(this);
-        v.setBackgroundColor(0x00000000);
-        v.setLayoutParams(new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, 1));
-        return v;
+    public boolean onEvaluateInputViewShown() {
+        // Never show a keyboard window. The IME service stays connected
+        // to the focused input field so getCurrentInputConnection() works,
+        // but no visual surface is created — preventing black-screen artifacts.
+        return false;
     }
 
     @Override
-    public void onComputeInsets(Insets outInsets) {
-        super.onComputeInsets(outInsets);
-        // Report zero visible height so the app content is not pushed up.
-        outInsets.contentTopInsets = outInsets.visibleTopInsets;
+    public View onCreateInputView() {
+        // Returning null as an extra safety measure; onEvaluateInputViewShown
+        // already prevents this from being called, but defensive coding.
+        return null;
     }
 
     void commitText(String text) {
