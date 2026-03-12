@@ -18,12 +18,14 @@ import {
 } from "@mariozechner/pi-ai";
 
 import type {
+  CronTaskPlan,
   HumanAuthDecision,
   OpenPocketConfig,
   ScreenSnapshot,
   TaskExecutionPlan,
 } from "../../types.js";
 import { getModelProfile, resolveModelAuth } from "../../config/index.js";
+import { formatDetailedError } from "../../utils/error-details.js";
 import { sleep } from "../../utils/time.js";
 import { ensureAndroidCustomToolNames } from "../android-custom-tools.js";
 import { buildPiAiModel } from "../model-client.js";
@@ -143,6 +145,53 @@ function buildExecutionSurfaceGuidance(plan: TaskExecutionPlan | null | undefine
   ].join("\n");
 }
 
+function buildCronTaskPlanGuidance(plan: CronTaskPlan | null | undefined): string {
+  if (!plan) {
+    return "";
+  }
+  const summary = String(plan.summary || "").replace(/\s+/g, " ").trim().slice(0, 240) || "Run one focused scheduled pass.";
+  const completionCriteria = String(plan.completionCriteria || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 320) || "Finish after completing one focused pass or when the step budget is exhausted.";
+  const stepBudget = Number.isFinite(plan.stepBudget) ? Math.max(1, Math.round(plan.stepBudget)) : 30;
+  const steps = Array.isArray(plan.steps)
+    ? plan.steps
+      .map((step) => String(step || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    : [];
+  return [
+    "",
+    "## Scheduled Run Plan (bounded)",
+    `- Summary: ${summary}`,
+    `- Step budget for this run: ${stepBudget}.`,
+    `- Completion criteria: ${completionCriteria}`,
+    "- This task is recurring. Complete one focused pass only; do not monitor indefinitely.",
+    "- If the checklist is substantially complete before the budget is exhausted, call finish immediately.",
+    "- If the step budget is exhausted, the run will be closed normally and the next scheduled trigger can continue later.",
+    steps.length > 0 ? "- Planned checklist:" : "",
+    ...steps.map((step, idx) => `  ${idx + 1}. ${step}`),
+  ].filter(Boolean).join("\n");
+}
+
+function buildCronBudgetCompletionMessage(ctx: Pick<PhoneAgentRunContext, "stepCount" | "maxSteps" | "cronTaskPlan">): string {
+  const summary = String(ctx.cronTaskPlan?.summary || "").replace(/\s+/g, " ").trim();
+  const summarySuffix = summary ? ` ${summary}` : "";
+  return `Completed this scheduled run window after ${ctx.stepCount}/${ctx.maxSteps} steps.${summarySuffix} Remaining work can continue on the next scheduled trigger.`;
+}
+
+function completeBoundedCronRunIfNeeded(ctx: Pick<PhoneAgentRunContext, "finishMessage" | "failMessage" | "stepCount" | "maxSteps" | "cronTaskPlan">): boolean {
+  if (!ctx.cronTaskPlan) {
+    return false;
+  }
+  if (ctx.finishMessage || ctx.failMessage) {
+    return true;
+  }
+  ctx.finishMessage = buildCronBudgetCompletionMessage(ctx);
+  return true;
+}
+
 export async function runRuntimeAttempt(
   deps: RuntimeAttemptDependencies,
   request: RunTaskRequest,
@@ -161,6 +210,13 @@ export async function runRuntimeAttempt(
   );
   const autoSkillRefiner = new AutoSkillRefiner(deps.config);
   const reusedSessionMessages = session.reused ? loadReusedSessionMessages(session.path) : [];
+  let runtimeModelInfo = {
+    provider: "unknown",
+    api: "unknown",
+    model: profile.model,
+    currentApp: "unknown",
+    stepNo: 0,
+  };
   const resolveFinalSkillPath = (skillPath: string | null, finalMessage: string): string | null => {
     if (!skillPath) {
       return null;
@@ -234,7 +290,7 @@ export async function runRuntimeAttempt(
       availableToolNames: request.availableToolNames,
       activeSkillsText: skillPromptContext.activePromptText,
     });
-    const systemPrompt = `${baseSystemPrompt}${buildExecutionSurfaceGuidance(request.taskExecutionPlan)}`;
+    const systemPrompt = `${baseSystemPrompt}${buildExecutionSurfaceGuidance(request.taskExecutionPlan)}${buildCronTaskPlanGuidance(request.cronTaskPlan)}`;
     const report = deps.buildSystemPromptReport({
       source: "run",
       promptMode: effectivePromptMode,
@@ -288,7 +344,7 @@ export async function runRuntimeAttempt(
       profile,
       session,
       stepCount: 0,
-      maxSteps: deps.config.agent.maxSteps,
+      maxSteps: request.maxStepsOverride ?? deps.config.agent.maxSteps,
       latestSnapshot: null,
       recentSnapshotWindow: [],
       lastScreenshotPath: null,
@@ -307,6 +363,7 @@ export async function runRuntimeAttempt(
       secureSurfaceTakeoverRequestedApps: new Set(),
       launchablePackages,
       taskExecutionPlan: request.taskExecutionPlan ?? null,
+      cronTaskPlan: request.cronTaskPlan ?? null,
       runtimeModel: {
         id: String((finalModel as { id?: unknown }).id ?? effectiveProfile.model),
         provider: String((finalModel as { provider?: unknown }).provider ?? "unknown"),
@@ -321,6 +378,40 @@ export async function runRuntimeAttempt(
       onUserDecision: request.onUserDecision,
       onUserInput: request.onUserInput,
       onProgress: request.onProgress,
+    };
+    runtimeModelInfo = {
+      provider: ctx.runtimeModel.provider,
+      api: ctx.runtimeModel.api,
+      model: ctx.runtimeModel.id,
+      currentApp: "unknown",
+      stepNo: 0,
+    };
+
+    const recordModelResponseError = (source: string, error: unknown): string => {
+      const detail = formatDetailedError(error);
+      runtimeModelInfo = {
+        ...runtimeModelInfo,
+        stepNo: ctx.stepCount,
+        currentApp: ctx.latestSnapshot?.currentApp ?? "unknown",
+      };
+      // eslint-disable-next-line no-console
+      console.error(
+        `[OpenPocket][model][error] source=${source} provider=${runtimeModelInfo.provider} api=${runtimeModelInfo.api} model=${runtimeModelInfo.model} step=${runtimeModelInfo.stepNo} app=${runtimeModelInfo.currentApp} detail=${detail}`,
+      );
+      deps.workspace.appendEvent(
+        session,
+        "model_response_error",
+        {
+          source,
+          provider: runtimeModelInfo.provider,
+          api: runtimeModelInfo.api,
+          model: runtimeModelInfo.model,
+          stepNo: runtimeModelInfo.stepNo,
+          currentApp: runtimeModelInfo.currentApp,
+        },
+        detail,
+      );
+      return `Model response error: ${detail}`;
     };
 
     const runtimeBackend = resolveRuntimeBackend(deps.config);
@@ -568,8 +659,11 @@ export async function runRuntimeAttempt(
       if (!ctx.finishMessage && !ctx.failMessage && bridgeState.lastAssistantMessage) {
         const lastAssistantMessage = bridgeState.lastAssistantMessage;
         if (lastAssistantMessage.stopReason === "error" || lastAssistantMessage.stopReason === "aborted") {
-          const detail = lastAssistantMessage.errorMessage || lastAssistantMessage.stopReason;
-          ctx.failMessage = `Model response error: ${detail}`;
+          ctx.failMessage = recordModelResponseError("pi_session_bridge", {
+            message: lastAssistantMessage.errorMessage || lastAssistantMessage.stopReason,
+            errorMessage: lastAssistantMessage.errorMessage,
+            stopReason: lastAssistantMessage.stopReason,
+          });
         } else {
           const parsed = deps.parseTextualToolFallback(lastAssistantMessage, ctx.task);
           if (parsed) {
@@ -694,7 +788,9 @@ export async function runRuntimeAttempt(
           return messages;
         }
         if (ctx.stepCount >= ctx.maxSteps) {
-          ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+          if (!completeBoundedCronRunIfNeeded(ctx)) {
+            ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+          }
           return messages;
         }
 
@@ -821,7 +917,9 @@ export async function runRuntimeAttempt(
         return;
       }
       if (ctx.stepCount >= ctx.maxSteps) {
-        ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+        if (!completeBoundedCronRunIfNeeded(ctx)) {
+          ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+        }
         if (typeof agent.abort === "function") {
           agent.abort();
         }
@@ -917,8 +1015,11 @@ export async function runRuntimeAttempt(
         return;
       }
       if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
-        const detail = assistantMessage.errorMessage || assistantMessage.stopReason;
-        ctx.failMessage = `Model response error: ${detail}`;
+        ctx.failMessage = recordModelResponseError("legacy_agent_core", {
+          message: assistantMessage.errorMessage || assistantMessage.stopReason,
+          errorMessage: assistantMessage.errorMessage,
+          stopReason: assistantMessage.stopReason,
+        });
         return;
       }
       const hasToolCall = assistantMessage.content.some((item) => item.type === "toolCall");
@@ -957,7 +1058,7 @@ export async function runRuntimeAttempt(
     }
     const agentStateError = (agent as { state?: { error?: string } }).state?.error;
     if (!ctx.finishMessage && !ctx.failMessage && typeof agentStateError === "string" && agentStateError.trim()) {
-      ctx.failMessage = `Model response error: ${agentStateError}`;
+      ctx.failMessage = recordModelResponseError("legacy_agent_core_state", agentStateError);
     }
 
     if (ctx.finishMessage) {
@@ -999,7 +1100,24 @@ export async function runRuntimeAttempt(
       shouldReturnHome,
     };
   } catch (error) {
-    const message = `Agent execution failed: ${(error as Error).message}`;
+    const detail = formatDetailedError(error);
+    // eslint-disable-next-line no-console
+    console.error(
+      `[OpenPocket][agent][error] provider=${runtimeModelInfo.provider} api=${runtimeModelInfo.api} model=${runtimeModelInfo.model} step=${runtimeModelInfo.stepNo} app=${runtimeModelInfo.currentApp} detail=${detail}`,
+    );
+    deps.workspace.appendEvent(
+      session,
+      "agent_execution_error",
+      {
+        provider: runtimeModelInfo.provider,
+        api: runtimeModelInfo.api,
+        model: runtimeModelInfo.model,
+        stepNo: runtimeModelInfo.stepNo,
+        currentApp: runtimeModelInfo.currentApp,
+      },
+      detail,
+    );
+    const message = `Agent execution failed: ${detail}`;
     deps.workspace.finalizeSession(session, false, message);
     deps.workspace.appendDailyMemory(profileKey, request.task, false, message);
     return {

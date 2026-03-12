@@ -104,6 +104,26 @@ function normalizeVolatileRuntimeMessage(message) {
     .join("\n");
 }
 
+function makeSnapshot(overrides = {}) {
+  return {
+    deviceId: "emulator-5554",
+    currentApp: "com.android.launcher3",
+    width: 1080,
+    height: 2400,
+    screenshotBase64: "abc",
+    secureSurfaceDetected: false,
+    secureSurfaceEvidence: "",
+    somScreenshotBase64: null,
+    capturedAt: new Date().toISOString(),
+    scaleX: 1,
+    scaleY: 1,
+    scaledWidth: 1080,
+    scaledHeight: 2400,
+    uiElements: [],
+    ...overrides,
+  };
+}
+
 test("runRuntimeTask keeps busy rejection contract", async () => {
   const result = await runRuntimeTask(
     {
@@ -291,4 +311,75 @@ test("runRuntimeAttempt falls back to legacy backend when phone-only tools are r
   assert.match(outcome.result.message, /legacy-fallback-ok/);
   assert.equal(legacyFactoryCalls, 1);
   assert.equal(bridgeFactoryCalls, 0);
+});
+
+test("runRuntimeAttempt treats bounded cron step budget exhaustion as a normal completion", async () => {
+  const runtime = createRuntimeWithApiKey();
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    resolveDeviceId: () => "emulator-5554",
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+
+  runtime.agentFactory = (options) => {
+    const listeners = new Set();
+    return {
+      followUp() {},
+      subscribe(listener) {
+        listeners.add(listener);
+      },
+      async prompt() {
+        const tapTool = options.initialState?.tools?.find((item) => item.name === "tap");
+        if (!tapTool) {
+          throw new Error("tap tool not found");
+        }
+        for (let i = 0; i < 4; i += 1) {
+          if (options.transformContext) {
+            await options.transformContext([]);
+          }
+          await tapTool.execute(`tc-${i + 1}`, { thought: "continue cron pass", x: 32, y: 48 });
+          for (const listener of listeners) {
+            listener({
+              type: "turn_end",
+              message: {
+                role: "assistant",
+                content: [{
+                  type: "toolCall",
+                  id: `tc-${i + 1}`,
+                  name: "tap",
+                  arguments: { thought: "continue cron pass", x: 32, y: 48 },
+                }],
+                stopReason: "toolUse",
+                timestamp: Date.now(),
+              },
+              toolResults: [],
+            });
+          }
+        }
+      },
+      async waitForIdle() {},
+      abort() {},
+    };
+  };
+
+  const outcome = await runRuntimeAttempt(createAttemptDeps(runtime), {
+    task: "Check for new replies and do one focused pass.",
+    availableToolNames: ["tap"],
+    maxStepsOverride: 2,
+    cronTaskPlan: {
+      summary: "Do one focused pass and stop.",
+      steps: [
+        "Check the most relevant conversation surface first.",
+        "Take one high-value action if appropriate.",
+        "Stop after this pass.",
+      ],
+      stepBudget: 2,
+      completionCriteria: "Finish after one focused pass or when the step budget is exhausted.",
+    },
+  });
+
+  assert.equal(outcome.result.ok, true);
+  assert.match(outcome.result.message, /scheduled run window/i);
+  assert.doesNotMatch(outcome.result.message, /Max steps reached/i);
 });

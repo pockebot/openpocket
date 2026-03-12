@@ -8,6 +8,7 @@ import type {
   AgentRunResult,
   ChannelMediaDeliveryResult,
   ChannelMediaRequest,
+  CronTaskPlan,
   HumanAuthDecision,
   HumanAuthRequest,
   ModelProfile,
@@ -38,6 +39,8 @@ export interface RunTaskRequest {
   onUserInput?: (request: UserInputRequest) => Promise<UserInputResponse> | UserInputResponse;
   availableToolNames?: string[];
   taskExecutionPlan?: TaskExecutionPlan | null;
+  maxStepsOverride?: number;
+  cronTaskPlan?: CronTaskPlan | null;
 }
 
 export interface RunTaskAttemptOutcome {
@@ -157,6 +160,7 @@ export interface PhoneAgentRunContext {
   lastAutoPermissionAllowAtMs: number;
   launchablePackages: string[];
   taskExecutionPlan: TaskExecutionPlan | null;
+  cronTaskPlan: CronTaskPlan | null;
   runtimeModel: RuntimeModelMetadata;
   effectivePromptMode: SystemPromptMode;
   systemPrompt: string;

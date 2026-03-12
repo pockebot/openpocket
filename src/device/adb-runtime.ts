@@ -7,6 +7,7 @@ import type {
   UiElementSnapshot,
 } from "../types.js";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,44 @@ import { sleep } from "../utils/time.js";
 import { EmulatorManager } from "./emulator-manager.js";
 import { normalizeOptionalAdbEndpoint } from "./adb-endpoint.js";
 import { normalizeDeviceTargetType } from "./target-types.js";
+
+const HELPER_IME_PKG = "ai.openpocket.ime";
+const HELPER_IME_ID = "ai.openpocket.ime/.OpenPocketIME";
+
+export function resolveHelperImeApkPath(): string | null {
+  // Resolve from project root: assets/android/openpocket-ime.apk
+  // At runtime we are in dist/device/, so project root is ../../
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(thisDir, "../../assets/android/openpocket-ime.apk"),
+    path.resolve(thisDir, "../assets/android/openpocket-ime.apk"),
+    path.resolve(thisDir, "../../android/openpocket-ime/build/openpocket-ime.apk"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function isHelperImeInstalled(emulator: EmulatorManager, deviceId: string): boolean {
+  try {
+    const output = emulator.runAdb(["-s", deviceId, "shell", "pm", "list", "packages", HELPER_IME_PKG]);
+    return output.includes(HELPER_IME_PKG);
+  } catch {
+    return false;
+  }
+}
+
+export function installHelperIme(emulator: EmulatorManager, deviceId: string): void {
+  const apkPath = resolveHelperImeApkPath();
+  if (!apkPath) {
+    throw new Error("OpenPocket helper IME APK not found in assets");
+  }
+  emulator.runAdb(["-s", deviceId, "install", "-r", apkPath], 30_000);
+  emulator.runAdb(["-s", deviceId, "shell", "ime", "enable", HELPER_IME_ID]);
+}
 
 export function extractPackageName(input: string): string {
   const patterns = [
@@ -883,6 +922,56 @@ export class AdbRuntime {
     }
   }
 
+  private inputByHelperIme(deviceId: string, text: string): string {
+    if (!this.hasInputMethod(deviceId, HELPER_IME_ID)) {
+      this.ensureHelperImeInstalled(deviceId);
+      if (!this.hasInputMethod(deviceId, HELPER_IME_ID)) {
+        throw new Error("OpenPocket helper IME is unavailable after install attempt");
+      }
+    }
+
+    const previousIme = this.getDefaultInputMethod(deviceId);
+    try {
+      this.emulator.runAdb(["-s", deviceId, "shell", "ime", "enable", HELPER_IME_ID]);
+      this.emulator.runAdb(["-s", deviceId, "shell", "ime", "set", HELPER_IME_ID]);
+
+      const base64Text = Buffer.from(text, "utf8").toString("base64");
+      const output = this.emulator.runAdb([
+        "-s",
+        deviceId,
+        "shell",
+        "am",
+        "broadcast",
+        "-a",
+        "ai.openpocket.ime.COMMIT_B64",
+        "--es",
+        "msg",
+        base64Text,
+        HELPER_IME_PKG,
+      ]);
+      if (looksLikeBroadcastFailure(output)) {
+        throw new Error(this.normalizeClipboardText(output));
+      }
+      return `Typed text via helper IME length=${text.length}`;
+    } finally {
+      if (previousIme && previousIme !== HELPER_IME_ID) {
+        try {
+          this.emulator.runAdb(["-s", deviceId, "shell", "ime", "set", previousIme]);
+        } catch {
+          // best effort restore
+        }
+      }
+      // Dismiss the helper IME keyboard view so its (near-invisible) strip
+      // doesn't linger on-screen.  The first BACK while a keyboard is
+      // visible only hides the keyboard—it does not navigate away.
+      try {
+        this.emulator.runAdb(["-s", deviceId, "shell", "input", "keyevent", "4"]);
+      } catch {
+        // best effort
+      }
+    }
+  }
+
   private inputByAdbKeyboard(deviceId: string, text: string): string {
     const adbIme = "com.android.adbkeyboard/.AdbIME";
     if (!this.hasInputMethod(deviceId, adbIme)) {
@@ -920,6 +1009,14 @@ export class AdbRuntime {
         }
       }
     }
+  }
+
+  private ensureHelperImeInstalled(deviceId: string): void {
+    if (isHelperImeInstalled(this.emulator, deviceId)) {
+      this.emulator.runAdb(["-s", deviceId, "shell", "ime", "enable", HELPER_IME_ID]);
+      return;
+    }
+    installHelperIme(this.emulator, deviceId);
   }
 
   resolveDeviceId(preferred?: string | null): string {
@@ -1486,36 +1583,48 @@ export class AdbRuntime {
       }
       case "type": {
         const encoded = encodeInputText(action.text);
-        // On some emulator images, `input text` throws NPE for unicode text.
-        // For unicode text, skip `input text` and use clipboard/ADB keyboard.
+        // For unicode text, skip `adb input text` (unreliable) and use
+        // clipboard → helper IME → ADB Keyboard fallback chain.
         if (hasNonAscii(action.text)) {
+          const unicodeErrors: string[] = [];
           try {
             return this.inputByClipboardPaste(deviceId, action.text);
-          } catch (clipboardError) {
-            try {
-              return this.inputByAdbKeyboard(deviceId, action.text);
-            } catch (imeError) {
-              throw new Error(
-                `Text input failed (clipboard + adb keyboard): clipboard=${errorMessage(clipboardError)}; adbKeyboard=${errorMessage(imeError)}`,
-              );
-            }
+          } catch (e) {
+            unicodeErrors.push(`clipboard=${errorMessage(e)}`);
           }
+          try {
+            return this.inputByHelperIme(deviceId, action.text);
+          } catch (e) {
+            unicodeErrors.push(`helperIme=${errorMessage(e)}`);
+          }
+          try {
+            return this.inputByAdbKeyboard(deviceId, action.text);
+          } catch (e) {
+            unicodeErrors.push(`adbKeyboard=${errorMessage(e)}`);
+          }
+          throw new Error(`Text input failed (${unicodeErrors.join("; ")})`);
         }
         try {
           this.emulator.runAdb(["-s", deviceId, "shell", "input", "text", encoded]);
           return `Typed text length=${action.text.length}`;
         } catch (inputTextError) {
+          const asciiErrors: string[] = [`adbInput=${errorMessage(inputTextError)}`];
           try {
             return this.inputByClipboardPaste(deviceId, action.text);
-          } catch (clipboardError) {
-            try {
-              return this.inputByAdbKeyboard(deviceId, action.text);
-            } catch (imeError) {
-              throw new Error(
-                `Text input failed (adb input + clipboard + adb keyboard): adbInput=${errorMessage(inputTextError)}; clipboard=${errorMessage(clipboardError)}; adbKeyboard=${errorMessage(imeError)}`,
-              );
-            }
+          } catch (e) {
+            asciiErrors.push(`clipboard=${errorMessage(e)}`);
           }
+          try {
+            return this.inputByHelperIme(deviceId, action.text);
+          } catch (e) {
+            asciiErrors.push(`helperIme=${errorMessage(e)}`);
+          }
+          try {
+            return this.inputByAdbKeyboard(deviceId, action.text);
+          } catch (e) {
+            asciiErrors.push(`adbKeyboard=${errorMessage(e)}`);
+          }
+          throw new Error(`Text input failed (${asciiErrors.join("; ")})`);
         }
       }
       case "keyevent": {

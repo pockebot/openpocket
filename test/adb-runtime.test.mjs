@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { AdbRuntime, extractPackageName } = await import("../dist/device/adb-runtime.js");
+const {
+  AdbRuntime,
+  extractPackageName,
+  isHelperImeInstalled,
+  resolveHelperImeApkPath,
+} = await import("../dist/device/adb-runtime.js");
 const sharp = (await import("sharp")).default;
 
 const ONE_BY_ONE_PNG = Buffer.from(
@@ -58,6 +63,9 @@ class FakeEmulator {
     this.failClipboardRead = Boolean(options.failClipboardRead);
     this.failClipboardSet = Boolean(options.failClipboardSet);
     this.failAdbKeyboardBroadcast = Boolean(options.failAdbKeyboardBroadcast);
+    this.failHelperImeBroadcast = Boolean(options.failHelperImeBroadcast);
+    this.installedPackages = Array.isArray(options.installedPackages) ? [...options.installedPackages] : [];
+    this.failInstall = Boolean(options.failInstall);
     this.availableImes = Array.isArray(options.availableImes)
       ? options.availableImes
       : ["com.android.adbkeyboard/.AdbIME", "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME"];
@@ -253,6 +261,40 @@ class FakeEmulator {
         return "Broadcast failed: no receivers";
       }
       return "Broadcast completed: result=0";
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "am" &&
+      args[4] === "broadcast" &&
+      args[6] === "ai.openpocket.ime.COMMIT_B64"
+    ) {
+      if (this.failHelperImeBroadcast) {
+        return "Broadcast failed: no receivers";
+      }
+      return "Broadcast completed: result=0";
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "pm" &&
+      args[4] === "list" &&
+      args[5] === "packages"
+    ) {
+      const query = args[6] ?? "";
+      return this.installedPackages
+        .filter((pkg) => !query || pkg.includes(query))
+        .map((pkg) => `package:${pkg}`)
+        .join("\n");
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "install"
+    ) {
+      if (this.failInstall) {
+        throw new Error("adb: failed to install");
+      }
+      return "Success";
     }
     if (
       this.failInputTextOnce &&
@@ -1047,4 +1089,153 @@ test("captureScreenSnapshot falls back to cached UI dump on timeout", async () =
     (args) => args[0] === "-s" && args[3] === "uiautomator" && args[4] === "dump",
   ).length;
   assert.equal(uiDumpCalls, 3);
+});
+
+// ─── Helper IME tests ───
+
+const HELPER_IME_ID = "ai.openpocket.ime/.OpenPocketIME";
+
+test("AdbRuntime uses helper IME for non-ASCII when clipboard fails", async () => {
+  const emulator = new FakeEmulator({
+    failClipboardSet: true,
+    availableImes: [
+      HELPER_IME_ID,
+      "com.android.adbkeyboard/.AdbIME",
+      "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
+    ],
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({ type: "type", text: "测试中文 🚀" });
+  assert.match(result, /helper IME/i);
+  const broadcastCall = emulator.calls.find(
+    (a) => a.includes("ai.openpocket.ime.COMMIT_B64"),
+  );
+  assert.ok(broadcastCall, "should send broadcast to helper IME");
+  const msgIdx = broadcastCall.indexOf("--es") + 2;
+  const decoded = Buffer.from(broadcastCall[msgIdx], "base64").toString("utf8");
+  assert.equal(decoded, "测试中文 🚀");
+});
+
+test("AdbRuntime sends correct base64 for emoji-only text through helper IME", async () => {
+  const emulator = new FakeEmulator({
+    failClipboardSet: true,
+    availableImes: [HELPER_IME_ID],
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const text = "👀🔥💯";
+  const result = await runtime.executeAction({ type: "type", text });
+  assert.match(result, /helper IME/i);
+  const broadcastCall = emulator.calls.find(
+    (a) => a.includes("ai.openpocket.ime.COMMIT_B64"),
+  );
+  assert.ok(broadcastCall);
+  const msgIdx = broadcastCall.indexOf("--es") + 2;
+  const decoded = Buffer.from(broadcastCall[msgIdx], "base64").toString("utf8");
+  assert.equal(decoded, text);
+});
+
+test("AdbRuntime restores original IME after helper IME input", async () => {
+  const originalIme = "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME";
+  const emulator = new FakeEmulator({
+    failClipboardSet: true,
+    availableImes: [HELPER_IME_ID, originalIme],
+    defaultIme: originalIme,
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  await runtime.executeAction({ type: "type", text: "日本語テスト" });
+
+  const setCalls = emulator.calls.filter(
+    (a) => a[0] === "-s" && a[2] === "shell" && a[3] === "ime" && a[4] === "set",
+  );
+  assert.ok(setCalls.length >= 2, "should switch IME at least twice (to helper, then back)");
+  const lastSetCall = setCalls[setCalls.length - 1];
+  assert.equal(lastSetCall[5], originalIme, "should restore original IME");
+});
+
+test("AdbRuntime falls through helper IME to ADB keyboard when helper broadcast fails", async () => {
+  const emulator = new FakeEmulator({
+    failClipboardSet: true,
+    failHelperImeBroadcast: true,
+    availableImes: [
+      HELPER_IME_ID,
+      "com.android.adbkeyboard/.AdbIME",
+    ],
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({ type: "type", text: "Ação rápida" });
+  assert.match(result, /adb keyboard/i);
+  assert.ok(
+    emulator.calls.some((a) => a.includes("ADB_INPUT_B64")),
+    "should fall through to ADB keyboard broadcast",
+  );
+});
+
+test("AdbRuntime fails clearly when clipboard, helper IME and ADB keyboard all unavailable", async () => {
+  const emulator = new FakeEmulator({
+    failClipboardSet: true,
+    availableImes: [],
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  await assert.rejects(
+    runtime.executeAction({ type: "type", text: "Привет мир" }),
+    (err) => {
+      assert.match(err.message, /Text input failed/);
+      assert.match(err.message, /clipboard=/);
+      assert.match(err.message, /helperIme=/);
+      assert.match(err.message, /adbKeyboard=/);
+      return true;
+    },
+  );
+});
+
+test("AdbRuntime prefers clipboard over helper IME for non-ASCII text", async () => {
+  const emulator = new FakeEmulator({
+    availableImes: [HELPER_IME_ID, "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME"],
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({ type: "type", text: "São Paulo" });
+  assert.match(result, /clipboard paste/i);
+  assert.ok(
+    !emulator.calls.some((a) => a.includes("ai.openpocket.ime.COMMIT_B64")),
+    "should not use helper IME when clipboard succeeds",
+  );
+});
+
+test("AdbRuntime ASCII fallback chain includes helper IME", async () => {
+  const emulator = new FakeEmulator({
+    failInputTextOnce: true,
+    failClipboardSet: true,
+    availableImes: [HELPER_IME_ID],
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({ type: "type", text: "hello world" });
+  assert.match(result, /helper IME/i);
+});
+
+test("isHelperImeInstalled returns true when package is present", () => {
+  const emulator = new FakeEmulator({
+    installedPackages: ["ai.openpocket.ime", "com.google.android.gms"],
+  });
+  assert.equal(isHelperImeInstalled(emulator, "emulator-5554"), true);
+});
+
+test("isHelperImeInstalled returns false when package is absent", () => {
+  const emulator = new FakeEmulator({
+    installedPackages: ["com.google.android.gms"],
+  });
+  assert.equal(isHelperImeInstalled(emulator, "emulator-5554"), false);
+});
+
+test("resolveHelperImeApkPath finds APK in assets directory", () => {
+  const apkPath = resolveHelperImeApkPath();
+  if (apkPath) {
+    assert.match(apkPath, /openpocket-ime\.apk$/);
+  }
 });
