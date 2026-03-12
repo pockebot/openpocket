@@ -99,22 +99,36 @@ export function resolveWorkspacePathPolicy(params: ResolveWorkspacePathPolicyPar
   }
 
   const resolved = path.resolve(params.workspaceDir, expandTilde(raw));
-  if (!params.workspaceOnly) {
-    return { ok: true, resolved };
-  }
-  if (pathWithin(params.workspaceDir, resolved)) {
-    return { ok: true, resolved };
-  }
 
+  // Skill root resolution must run BEFORE the workspace check.
+  // Paths like ".openpocket/skills/..." resolve inside the workspace dir
+  // (e.g. /workspace/.openpocket/skills/...) and would pass pathWithin,
+  // returning the wrong path.  We need to redirect them to the real
+  // skill root under the user's home directory first.
   if (params.allowSkillRootsForRead) {
     const skillRoots = [
       path.join(params.workspaceDir, "skills"),
       path.join(openpocketHome(), "skills"),
       BUNDLED_SKILLS_DIR,
     ];
+
+    // The model may output home-relative paths without the ~ prefix
+    // (e.g. ".openpocket/skills/...").  Try resolving against $HOME.
+    const homeResolved = path.resolve(os.homedir(), raw);
+    if (homeResolved !== resolved && skillRoots.some((root) => pathWithin(root, homeResolved))) {
+      return { ok: true, resolved: homeResolved };
+    }
+
     if (skillRoots.some((root) => pathWithin(root, resolved))) {
       return { ok: true, resolved };
     }
+  }
+
+  if (!params.workspaceOnly) {
+    return { ok: true, resolved };
+  }
+  if (pathWithin(params.workspaceDir, resolved)) {
+    return { ok: true, resolved };
   }
 
   return { ok: false, error: `${params.purpose}: path escapes workspace (${raw}).` };
