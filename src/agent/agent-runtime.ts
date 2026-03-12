@@ -30,6 +30,7 @@ import { WorkspaceStore } from "../memory/workspace.js";
 import { ScreenshotStore } from "../memory/screenshot-store.js";
 import { sleep } from "../utils/time.js";
 import { ensureDir, nowIso } from "../utils/paths.js";
+import { colorizeAgentLog } from "../utils/cli-theme.js";
 import { AdbRuntime } from "../device/adb-runtime.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
 import { AutoArtifactBuilder, type StepTrace } from "../skills/auto-artifact-builder.js";
@@ -2884,14 +2885,24 @@ export class AgentRuntime {
           const stepStartedAtMs = Date.now();
           const stepStartedAtHr = process.hrtime.bigint();
           const stepStartedAt = nowIso();
+          const RESULT_LOG_MAX_LINES = 4;
           const logStepSection = (section: string, text: string): void => {
             const normalized = String(text ?? "").trim();
             if (!normalized) {
               return;
             }
-            for (const line of normalized.split("\n")) {
+            const lines = normalized.split("\n");
+            const truncate = section === "result" && lines.length > RESULT_LOG_MAX_LINES;
+            const visible = truncate ? lines.slice(0, RESULT_LOG_MAX_LINES) : lines;
+            for (const line of visible) {
+              const raw = `[OpenPocket][step ${step}][${section}] ${line}`;
               // eslint-disable-next-line no-console
-              console.log(`[OpenPocket][step ${step}][${section}] ${line}`);
+              console.log(colorizeAgentLog(raw));
+            }
+            if (truncate) {
+              const raw = `[OpenPocket][step ${step}][${section}] ... (${lines.length - RESULT_LOG_MAX_LINES} more lines omitted)`;
+              // eslint-disable-next-line no-console
+              console.log(colorizeAgentLog(raw));
             }
           };
           const buildStepTrace = (
