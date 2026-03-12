@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,6 +81,13 @@ export function pathWithin(root: string, target: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+function expandTilde(input: string): string {
+  if (input === "~" || input.startsWith("~/")) {
+    return path.join(os.homedir(), input.slice(1));
+  }
+  return input;
+}
+
 export function resolveWorkspacePathPolicy(params: ResolveWorkspacePathPolicyParams): {
   ok: boolean;
   resolved?: string;
@@ -90,7 +98,7 @@ export function resolveWorkspacePathPolicy(params: ResolveWorkspacePathPolicyPar
     return { ok: false, error: `${params.purpose}: path is required.` };
   }
 
-  const resolved = path.resolve(params.workspaceDir, raw);
+  const resolved = path.resolve(params.workspaceDir, expandTilde(raw));
   if (!params.workspaceOnly) {
     return { ok: true, resolved };
   }

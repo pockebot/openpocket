@@ -25,6 +25,10 @@ const ANSI_BOLD_GREEN = "\u001b[1;32m";
 const ANSI_BOLD_YELLOW = "\u001b[1;33m";
 const ANSI_BOLD_RED = "\u001b[1;31m";
 const ANSI_BOLD_BLUE = "\u001b[1;34m";
+const ANSI_CYAN = "\u001b[36m";
+const ANSI_YELLOW = "\u001b[33m";
+const ANSI_GREEN = "\u001b[32m";
+const ANSI_BOLD_MAGENTA = "\u001b[1;35m";
 
 const TONE_ANSI: Record<CliTone, string | null> = {
   plain: null,
@@ -127,6 +131,13 @@ export function createCliTheme(stream: NodeJS.WriteStream = output): CliTheme {
 
   const runtimeTone = (line: string): CliTone => {
     const lowered = line.toLowerCase();
+    if (lowered.includes("[step ") || lowered.includes("[model]")) {
+      if (lowered.includes("[thought]")) return "accent";
+      if (lowered.includes("[decision]")) return "warn";
+      if (lowered.includes("[start]") || lowered.includes("[input]") || lowered.includes("[end]")) return "muted";
+      if (lowered.includes("[result]")) return "success";
+      return "plain";
+    }
     if (lowered.includes("[download]") && lowered.includes("100%")) {
       return "success";
     }
@@ -186,4 +197,72 @@ export function createCliTheme(stream: NodeJS.WriteStream = output): CliTheme {
     emphasize: (text: string, tone: CliTone = "accent") => paint(text, tone),
     classifyRuntimeLine: (line: string) => paint(line, runtimeTone(line)),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Agent step/model log colorizer
+// ---------------------------------------------------------------------------
+
+const AGENT_LOG_RE = /^(\[OpenPocket\])(\[(?:step \d+|model)\])(\[[^\]]+\]) ?(.*)/;
+
+const RESULT_PATH_RE = /^local_/;
+const RESULT_ERROR_RE = /\b(error|fail(?:ed)?|crash|exception)\b/i;
+const RESULT_ACTION_RE = /^(Tapped |tap_mark |state_delta )/;
+
+type AgentSectionStyle = { tag: string; content: string | null };
+
+function agentSectionStyle(section: string, content: string): AgentSectionStyle {
+  switch (section) {
+    case "thought":
+      return { tag: ANSI_BOLD_CYAN, content: ANSI_CYAN };
+    case "decision":
+      return { tag: ANSI_BOLD_YELLOW, content: ANSI_YELLOW };
+    case "result": {
+      const trimmed = content.trimStart();
+      if (RESULT_ERROR_RE.test(trimmed)) {
+        return { tag: ANSI_BOLD_RED, content: ANSI_BOLD_RED };
+      }
+      if (RESULT_ACTION_RE.test(trimmed)) {
+        return { tag: ANSI_BOLD_GREEN, content: ANSI_GREEN };
+      }
+      if (RESULT_PATH_RE.test(trimmed)) {
+        return { tag: ANSI_DIM, content: ANSI_DIM };
+      }
+      return { tag: ANSI_BOLD_GREEN, content: null };
+    }
+    case "start":
+    case "input":
+    case "end":
+      return { tag: ANSI_DIM, content: ANSI_DIM };
+    default:
+      return { tag: ANSI_DIM, content: null };
+  }
+}
+
+/**
+ * Colorize an agent log line of the form
+ *   [OpenPocket][step N][section] content
+ * or
+ *   [OpenPocket][model][section] content
+ *
+ * Returns the original line unchanged if colors are disabled or the line
+ * doesn't match the expected pattern.
+ */
+export function colorizeAgentLog(line: string): string {
+  if (!shouldUseColor()) {
+    return line;
+  }
+  const m = line.match(AGENT_LOG_RE);
+  if (!m) {
+    return line;
+  }
+  const [, brand, stepTag, sectionTag, body] = m;
+  const section = sectionTag.slice(1, -1).toLowerCase();
+  const style = agentSectionStyle(section, body);
+
+  const cBrand = colorize(brand, ANSI_DIM, true);
+  const cStep = colorize(stepTag, ANSI_BOLD_MAGENTA, true);
+  const cSection = colorize(sectionTag, style.tag, true);
+  const cBody = body ? ` ${colorize(body, style.content, true)}` : "";
+  return `${cBrand}${cStep}${cSection}${cBody}`;
 }

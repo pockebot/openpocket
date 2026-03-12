@@ -330,10 +330,6 @@ function parseLoadedSkill(pathname: string, source: SkillInfo["source"]): Loaded
 }
 
 function compactSkillPath(pathname: string): string {
-  const home = os.homedir();
-  if (home && pathname.startsWith(home)) {
-    return pathname.replace(home, "~");
-  }
   return pathname;
 }
 
