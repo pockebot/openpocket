@@ -124,6 +124,27 @@ function makeSnapshot(overrides = {}) {
   };
 }
 
+function createAssistantErrorMessage(errorMessage, model, stopReason = "error") {
+  return {
+    role: "assistant",
+    content: [],
+    api: model?.api ?? "openai-codex-responses",
+    provider: model?.provider ?? "openai-codex",
+    model: model?.id ?? "mock-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    errorMessage,
+    timestamp: Date.now(),
+  };
+}
+
 test("runRuntimeTask keeps busy rejection contract", async () => {
   const result = await runRuntimeTask(
     {
@@ -262,6 +283,102 @@ test("runRuntimeAttempt uses pi_session_bridge backend when configured", async (
   assert.equal(agentFactoryCalls, 0);
 });
 
+test("runRuntimeAttempt retries retryable pi_session_bridge Codex server errors instead of failing immediately", async () => {
+  const runtime = createRuntimeWithApiKey();
+  runtime.config.agent.runtimeBackend = "pi_session_bridge";
+
+  let promptCalls = 0;
+  const promptTexts = [];
+  const listeners = new Set();
+  const deps = createAttemptDeps(runtime);
+  deps.piSessionBridgeFactory = async () => ({
+    sessionId: "pi-bridge-session-retry",
+    sessionFile: "/tmp/pi-bridge-session-retry.jsonl",
+    prompt: async (text) => {
+      promptCalls += 1;
+      promptTexts.push(text);
+      const message = promptCalls === 1
+        ? createAssistantErrorMessage(
+          'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. Please include the request ID req-pi-bridge-retry-1 in your message.","param":null},"sequence_number":2}',
+          runtime.config.models[runtime.config.defaultModel],
+        )
+        : {
+          role: "assistant",
+          content: [{ type: "text", text: "finish(message=\"pi-bridge-retried-ok\")" }],
+          stopReason: "stop",
+          timestamp: Date.now(),
+        };
+      for (const listener of listeners) {
+        listener({
+          type: "turn_end",
+          message,
+          toolResults: [],
+        });
+      }
+    },
+    abort: async () => {},
+    dispose: () => {},
+    subscribeRaw: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeNormalized: (_listener) => () => {},
+  });
+
+  const outcome = await runRuntimeAttempt(deps, {
+    task: "pi-session-bridge retry transient codex server error",
+    availableToolNames: ["finish"],
+  });
+
+  assert.equal(outcome.result.ok, true);
+  assert.match(outcome.result.message, /pi-bridge-retried-ok/);
+  assert.equal(promptCalls, 2);
+  assert.equal(promptTexts[0], "Task: pi-session-bridge retry transient codex server error");
+  assert.equal(promptTexts[1], "Step 1: continue executing the task.");
+});
+
+test("runRuntimeAttempt does not retry non-retryable pi_session_bridge Codex model errors", async () => {
+  const runtime = createRuntimeWithApiKey();
+  runtime.config.agent.runtimeBackend = "pi_session_bridge";
+
+  let promptCalls = 0;
+  const listeners = new Set();
+  const deps = createAttemptDeps(runtime);
+  deps.piSessionBridgeFactory = async () => ({
+    sessionId: "pi-bridge-session-no-retry",
+    sessionFile: "/tmp/pi-bridge-session-no-retry.jsonl",
+    prompt: async () => {
+      promptCalls += 1;
+      for (const listener of listeners) {
+        listener({
+          type: "turn_end",
+          message: createAssistantErrorMessage(
+            'Codex error: {"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Context length exceeded.","param":null},"sequence_number":2}',
+            runtime.config.models[runtime.config.defaultModel],
+          ),
+          toolResults: [],
+        });
+      }
+    },
+    abort: async () => {},
+    dispose: () => {},
+    subscribeRaw: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeNormalized: (_listener) => () => {},
+  });
+
+  const outcome = await runRuntimeAttempt(deps, {
+    task: "pi-session-bridge do not retry invalid request errors",
+    availableToolNames: ["finish"],
+  });
+
+  assert.equal(outcome.result.ok, false);
+  assert.match(outcome.result.message, /context_length_exceeded/);
+  assert.equal(promptCalls, 1);
+});
+
 test("runRuntimeAttempt falls back to legacy backend when phone-only tools are requested", async () => {
   const runtime = createRuntimeWithApiKey();
   runtime.config.agent.runtimeBackend = "pi_session_bridge";
@@ -382,4 +499,151 @@ test("runRuntimeAttempt treats bounded cron step budget exhaustion as a normal c
   assert.equal(outcome.result.ok, true);
   assert.match(outcome.result.message, /scheduled run window/i);
   assert.doesNotMatch(outcome.result.message, /Max steps reached/i);
+});
+
+test("runRuntimeAttempt retries retryable Codex server errors instead of failing immediately", async () => {
+  const runtime = createRuntimeWithApiKey();
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    resolveDeviceId: () => "emulator-5554",
+    captureScreenSnapshot: () => makeSnapshot({ currentApp: "com.twitter.android" }),
+    executeAction: async () => "ok",
+  };
+
+  let followUpCalls = 0;
+  runtime.agentFactory = (options) => {
+    const listeners = new Set();
+    let idlePromise = Promise.resolve();
+
+    const emit = (event) => {
+      for (const listener of listeners) {
+        listener(event);
+      }
+    };
+
+    return {
+      followUp() {
+        followUpCalls += 1;
+        idlePromise = (async () => {
+          if (options.transformContext) {
+            await options.transformContext([]);
+          }
+          const finishTool = options.initialState?.tools?.find((item) => item.name === "finish");
+          if (!finishTool) {
+            throw new Error("finish tool not found");
+          }
+          await finishTool.execute("tc-retry-finish", {
+            thought: "retry after transient codex error",
+            message: "retried ok",
+          });
+          emit({
+            type: "turn_end",
+            message: {
+              role: "assistant",
+              content: [{
+                type: "toolCall",
+                id: "tc-retry-finish",
+                name: "finish",
+                arguments: {
+                  thought: "retry after transient codex error",
+                  message: "retried ok",
+                },
+              }],
+              stopReason: "toolUse",
+              timestamp: Date.now(),
+            },
+            toolResults: [],
+          });
+        })();
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+      },
+      async prompt() {
+        idlePromise = (async () => {
+          if (options.transformContext) {
+            await options.transformContext([]);
+          }
+          emit({
+            type: "turn_end",
+            message: createAssistantErrorMessage(
+              'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. Please include the request ID req-codex-retry-1 in your message.","param":null},"sequence_number":2}',
+              options.initialState?.model,
+            ),
+            toolResults: [],
+          });
+        })();
+        await idlePromise;
+      },
+      async waitForIdle() {
+        await idlePromise;
+      },
+      abort() {},
+    };
+  };
+
+  const outcome = await runRuntimeAttempt(createAttemptDeps(runtime), {
+    task: "Retry transient codex server error",
+    availableToolNames: ["finish"],
+  });
+
+  assert.equal(outcome.result.ok, true);
+  assert.match(outcome.result.message, /retried ok/);
+  assert.equal(followUpCalls, 1);
+});
+
+test("runRuntimeAttempt does not retry non-retryable Codex model errors", async () => {
+  const runtime = createRuntimeWithApiKey();
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    resolveDeviceId: () => "emulator-5554",
+    captureScreenSnapshot: () => makeSnapshot({ currentApp: "com.twitter.android" }),
+    executeAction: async () => "ok",
+  };
+
+  let followUpCalls = 0;
+  runtime.agentFactory = (options) => {
+    const listeners = new Set();
+    let idlePromise = Promise.resolve();
+
+    return {
+      followUp() {
+        followUpCalls += 1;
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+      },
+      async prompt() {
+        idlePromise = (async () => {
+          if (options.transformContext) {
+            await options.transformContext([]);
+          }
+          for (const listener of listeners) {
+            listener({
+              type: "turn_end",
+              message: createAssistantErrorMessage(
+                'Codex error: {"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Context length exceeded.","param":null},"sequence_number":2}',
+                options.initialState?.model,
+              ),
+              toolResults: [],
+            });
+          }
+        })();
+        await idlePromise;
+      },
+      async waitForIdle() {
+        await idlePromise;
+      },
+      abort() {},
+    };
+  };
+
+  const outcome = await runRuntimeAttempt(createAttemptDeps(runtime), {
+    task: "Do not retry invalid request errors",
+    availableToolNames: ["finish"],
+  });
+
+  assert.equal(outcome.result.ok, false);
+  assert.match(outcome.result.message, /context_length_exceeded/);
+  assert.equal(followUpCalls, 0);
 });
