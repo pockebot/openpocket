@@ -18,6 +18,7 @@ import {
 } from "@mariozechner/pi-ai";
 
 import type {
+  AgentAction,
   CronTaskPlan,
   HumanAuthDecision,
   OpenPocketConfig,
@@ -400,15 +401,24 @@ export async function runRuntimeAttempt(
       launchablePackages,
       taskExecutionPlan: request.taskExecutionPlan ?? null,
       cronTaskPlan: request.cronTaskPlan ?? null,
-      runtimeModel: {
-        id: String((finalModel as { id?: unknown }).id ?? effectiveProfile.model),
-        provider: String((finalModel as { provider?: unknown }).provider ?? "unknown"),
-        api: String((finalModel as { api?: unknown }).api ?? "unknown"),
-        baseUrl: String((finalModel as { baseUrl?: unknown }).baseUrl ?? effectiveProfile.baseUrl),
-        authSource: auth.source,
-      },
+      runtimeModel: profile.backend === "aliyun_ui_agent_mobile" || profile.backend === "aliyun_gui_plus"
+        ? {
+          id: effectiveProfile.model,
+          provider: profile.backend === "aliyun_gui_plus" ? "aliyun-gui-plus" : "aliyun-ui-agent",
+          api: profile.backend === "aliyun_gui_plus" ? "aliyun-gui-plus" : "aliyun-ui-agent-mobile",
+          baseUrl: effectiveProfile.baseUrl,
+          authSource: auth.source,
+        }
+        : {
+          id: String((finalModel as { id?: unknown }).id ?? effectiveProfile.model),
+          provider: String((finalModel as { provider?: unknown }).provider ?? "unknown"),
+          api: String((finalModel as { api?: unknown }).api ?? "unknown"),
+          baseUrl: String((finalModel as { baseUrl?: unknown }).baseUrl ?? effectiveProfile.baseUrl),
+          authSource: auth.source,
+        },
       effectivePromptMode,
       systemPrompt,
+      aliyunSessionId: null,
       onHumanAuth: request.onHumanAuth,
       onChannelMedia: request.onChannelMedia,
       onUserDecision: request.onUserDecision,
@@ -573,6 +583,401 @@ export async function runRuntimeAttempt(
     };
     const thinkingLevel: ThinkingLevel = profile.reasoningEffort && profile.reasoningEffort in thinkingMap
       ? thinkingMap[profile.reasoningEffort] : "off";
+
+    const captureAliyunSnapshot = async (): Promise<ScreenSnapshot | null> => {
+      if (ctx.finishMessage || ctx.failMessage) {
+        return null;
+      }
+      if (ctx.stopRequested()) {
+        ctx.failMessage = "Task stopped by user.";
+        return null;
+      }
+      if (ctx.stepCount >= ctx.maxSteps) {
+        if (!completeBoundedCronRunIfNeeded(ctx)) {
+          ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+        }
+        return null;
+      }
+
+      ctx.lastScreenshotStartMs = Date.now();
+      const snapshot = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+      snapshot.installedApps = launchableApps ?? snapshot.installedApps;
+      snapshot.installedPackages = launchablePackages;
+      ctx.latestSnapshot = snapshot;
+      ctx.lastScreenshotEndMs = Date.now();
+      shouldReturnHome = true;
+
+      if (deps.config.screenshots.saveStepScreenshots) {
+        try {
+          ctx.lastScreenshotPath = deps.screenshotStore.save(
+            Buffer.from(snapshot.screenshotBase64, "base64"),
+            { sessionId: session.id, step: ctx.stepCount + 1, currentApp: snapshot.currentApp },
+          );
+        } catch {
+          ctx.lastScreenshotPath = null;
+        }
+        try {
+          ctx.lastSomScreenshotPath = snapshot.somScreenshotBase64
+            ? deps.screenshotStore.save(
+                Buffer.from(snapshot.somScreenshotBase64, "base64"),
+                { sessionId: session.id, step: ctx.stepCount + 1, currentApp: `${snapshot.currentApp}-som` },
+              )
+            : null;
+        } catch {
+          ctx.lastSomScreenshotPath = null;
+        }
+        const recentForSave = ctx.recentSnapshotWindow.slice(-2);
+        const recentPaths: string[] = [];
+        for (const recent of recentForSave) {
+          try {
+            const selected = selectObservationImage(recent);
+            if (!selected) {
+              continue;
+            }
+            const saved = deps.screenshotStore.save(
+              Buffer.from(selected.data, "base64"),
+              {
+                sessionId: session.id,
+                step: ctx.stepCount + 1,
+                currentApp: `${recent.currentApp}${selected.tag === "som" ? "-recent-som" : "-recent"}`,
+              },
+            );
+            recentPaths.push(saved);
+          } catch {
+            // Best-effort recent screenshot persistence.
+          }
+        }
+        ctx.lastRecentScreenshotPaths = recentPaths;
+      }
+
+      if (
+        deps.isPermissionDialogApp(snapshot.currentApp) &&
+        Date.now() - ctx.lastAutoPermissionAllowAtMs >= 1_200
+      ) {
+        const auto = await deps.autoApprovePermissionDialog(snapshot.currentApp);
+        if (auto?.action?.type === "tap") {
+          ctx.lastAutoPermissionAllowAtMs = Date.now();
+          await sleep(300);
+          const refreshed = await deps.adb.captureScreenSnapshot(deps.config.agent.deviceId, profile.model);
+          refreshed.installedApps = launchableApps ?? refreshed.installedApps;
+          refreshed.installedPackages = launchablePackages;
+          ctx.latestSnapshot = refreshed;
+        }
+      }
+
+      await maybeEscalateSecureSurfaceTakeover();
+      if (ctx.failMessage || !ctx.latestSnapshot) {
+        return null;
+      }
+
+      deps.saveModelInputArtifacts({
+        sessionId: session.id,
+        step: ctx.stepCount + 1,
+        task: ctx.task,
+        profileModel: profile.model,
+        promptMode: ctx.effectivePromptMode,
+        systemPrompt: ctx.systemPrompt,
+        userPrompt: buildUserPrompt(
+          ctx.task,
+          ctx.stepCount + 1,
+          ctx.latestSnapshot,
+          ctx.history,
+          ctx.recentSnapshotWindow.slice(-2),
+        ),
+        snapshot: ctx.latestSnapshot,
+        history: ctx.history,
+      });
+
+      ctx.recentSnapshotWindow.push(ctx.latestSnapshot);
+      if (ctx.recentSnapshotWindow.length > 3) {
+        ctx.recentSnapshotWindow = ctx.recentSnapshotWindow.slice(-3);
+      }
+      return ctx.latestSnapshot;
+    };
+
+    const buildAliyunAddInfo = (snapshot: ScreenSnapshot): string => {
+      const lines = [
+        `Current app: ${snapshot.currentApp}`,
+        `Step: ${ctx.stepCount + 1}/${ctx.maxSteps}`,
+      ];
+      const recentHistory = ctx.history.slice(-4);
+      if (recentHistory.length > 0) {
+        lines.push("Recent history:");
+        for (const item of recentHistory) {
+          lines.push(`- ${item}`);
+        }
+      }
+      return lines.join("\n");
+    };
+
+    const executeAliyunAction = async (action: AgentAction): Promise<string> => {
+      if (action.type === "finish") {
+        ctx.finishMessage = action.message;
+        return `FINISH: ${action.message}`;
+      }
+      if (action.type === "wait") {
+        const durationMs = Math.max(100, Number(action.durationMs ?? 1000));
+        await sleep(durationMs);
+        return `Waited ${durationMs}ms`;
+      }
+      shouldReturnHome = true;
+      return await deps.adb.executeAction(action, deps.config.agent.deviceId);
+    };
+
+    if (profile.backend === "aliyun_ui_agent_mobile") {
+      const screenshotStack = deps.localHumanAuthStackFactory(deps.config);
+      const aliyunClient = deps.aliyunUiAgentClientFactory({
+        apiKey,
+        baseUrl: effectiveProfile.baseUrl,
+        modelName: effectiveProfile.model,
+        thoughtLanguage: "english",
+        sessionId: ctx.aliyunSessionId,
+      });
+
+      try {
+        await screenshotStack.start();
+
+        while (!ctx.finishMessage && !ctx.failMessage) {
+          const snapshot = await captureAliyunSnapshot();
+          if (!snapshot) {
+            break;
+          }
+
+          ctx.lastModelInferenceStartMs = Date.now();
+          const signedScreenshot = await screenshotStack.createSignedScreenshotUrl({ ttlSec: 60 });
+          const stepResult = await aliyunClient.nextStep({
+            task: ctx.task,
+            screenshotUrl: signedScreenshot.url,
+            addInfo: buildAliyunAddInfo(snapshot),
+            viewportWidth: snapshot.width,
+            viewportHeight: snapshot.height,
+          });
+
+          ctx.aliyunSessionId = stepResult.sessionId;
+          aliyunClient.setSessionId(stepResult.sessionId);
+
+          const stepNo = ctx.stepCount + 1;
+          ctx.stepCount = stepNo;
+          const executionResult = await executeAliyunAction(stepResult.output.action);
+
+          deps.workspace.appendStep(
+            session,
+            stepNo,
+            stepResult.output.thought,
+            JSON.stringify(stepResult.output.action),
+            executionResult,
+          );
+
+          ctx.history.push(
+            `step ${stepNo}: action=${stepResult.output.action.type} result=${executionResult.replace(/\s+/g, " ").trim()}`,
+          );
+
+          if (ctx.onProgress) {
+            await ctx.onProgress({
+              step: stepNo,
+              maxSteps: ctx.maxSteps,
+              actionType: stepResult.output.action.type,
+              thought: stepResult.output.thought,
+              message: executionResult,
+              currentApp: ctx.latestSnapshot?.currentApp ?? "unknown",
+              screenshotPath: ctx.lastScreenshotPath,
+            });
+          }
+
+          if (!ctx.finishMessage && !ctx.failMessage && ctx.stepCount >= ctx.maxSteps) {
+            if (!completeBoundedCronRunIfNeeded(ctx)) {
+              ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+            }
+          }
+        }
+      } catch (error) {
+        ctx.failMessage = `Aliyun UI Agent error: ${(error as Error).message}`;
+      } finally {
+        await screenshotStack.stop().catch(() => {});
+      }
+
+      if (!ctx.finishMessage && !ctx.failMessage && ctx.stopRequested()) {
+        ctx.failMessage = "Task stopped by user.";
+      }
+
+      if (ctx.finishMessage) {
+        deps.workspace.finalizeSession(session, true, ctx.finishMessage);
+        deps.workspace.appendDailyMemory(profileKey, request.task, true, ctx.finishMessage);
+        const artifacts = deps.autoArtifactBuilder.build({
+          task: request.task,
+          sessionPath: session.path,
+          ok: true,
+          finalMessage: ctx.finishMessage,
+          traces: ctx.traces,
+        });
+        if (artifacts.skillPath) {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][artifact] auto skill: ${artifacts.skillPath}`);
+        }
+        if (artifacts.scriptPath) {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
+        }
+        const finalSkillPath = resolveFinalSkillPath(artifacts.skillPath, ctx.finishMessage);
+        return {
+          result: {
+            ok: true,
+            message: ctx.finishMessage,
+            sessionPath: session.path,
+            skillPath: finalSkillPath,
+            scriptPath: artifacts.scriptPath,
+          },
+          shouldReturnHome,
+        };
+      }
+
+      const failMsg = ctx.failMessage || "Aliyun UI Agent stopped without finishing.";
+      deps.workspace.finalizeSession(session, false, failMsg);
+      deps.workspace.appendDailyMemory(profileKey, request.task, false, failMsg);
+      return {
+        result: { ok: false, message: failMsg, sessionPath: session.path, skillPath: null, scriptPath: null },
+        shouldReturnHome,
+      };
+    }
+
+    if (profile.backend === "aliyun_gui_plus") {
+      const guiPlusClient = deps.aliyunGuiPlusClientFactory({
+        apiKey,
+        baseUrl: effectiveProfile.baseUrl,
+        modelName: effectiveProfile.model,
+        thoughtLanguage: "english",
+      });
+
+      const buildGuiPlusAddInfo = (snapshot: ScreenSnapshot): string => {
+        const lines = [
+          `Current app: ${snapshot.currentApp}`,
+          `Step: ${ctx.stepCount + 1}/${ctx.maxSteps}`,
+        ];
+        const recentHistory = ctx.history.slice(-4);
+        if (recentHistory.length > 0) {
+          lines.push("Recent history:");
+          for (const item of recentHistory) {
+            lines.push(`- ${item}`);
+          }
+        }
+        return lines.join("\n");
+      };
+
+      const executeGuiPlusAction = async (action: AgentAction): Promise<string> => {
+        if (action.type === "finish") {
+          ctx.finishMessage = action.message;
+          return `FINISH: ${action.message}`;
+        }
+        if (action.type === "wait") {
+          const durationMs = Math.max(100, Number(action.durationMs ?? 1000));
+          await sleep(durationMs);
+          return `Waited ${durationMs}ms`;
+        }
+        shouldReturnHome = true;
+        return await deps.adb.executeAction(action, deps.config.agent.deviceId);
+      };
+
+      try {
+        while (!ctx.finishMessage && !ctx.failMessage) {
+          if (ctx.stopRequested()) {
+            break;
+          }
+
+          const snapshot = await captureAliyunSnapshot();
+          if (!snapshot) {
+            break;
+          }
+
+          ctx.lastModelInferenceStartMs = Date.now();
+          const stepResult = await guiPlusClient.nextStep({
+            task: ctx.task,
+            screenshotBase64: snapshot.screenshotBase64,
+            addInfo: buildGuiPlusAddInfo(snapshot),
+            viewportWidth: snapshot.width,
+            viewportHeight: snapshot.height,
+          });
+
+          const stepNo = ctx.stepCount + 1;
+          ctx.stepCount = stepNo;
+          const executionResult = await executeGuiPlusAction(stepResult.output.action);
+
+          deps.workspace.appendStep(
+            session,
+            stepNo,
+            stepResult.output.thought,
+            JSON.stringify(stepResult.output.action),
+            executionResult,
+          );
+
+          ctx.history.push(
+            `step ${stepNo}: action=${stepResult.output.action.type} result=${executionResult.replace(/\s+/g, " ").trim()}`,
+          );
+
+          if (ctx.onProgress) {
+            await ctx.onProgress({
+              step: stepNo,
+              maxSteps: ctx.maxSteps,
+              actionType: stepResult.output.action.type,
+              thought: stepResult.output.thought,
+              message: executionResult,
+              currentApp: ctx.latestSnapshot?.currentApp ?? "unknown",
+              screenshotPath: ctx.lastScreenshotPath,
+            });
+          }
+
+          if (!ctx.finishMessage && !ctx.failMessage && ctx.stepCount >= ctx.maxSteps) {
+            if (!completeBoundedCronRunIfNeeded(ctx)) {
+              ctx.failMessage = `Max steps reached (${ctx.maxSteps})`;
+            }
+          }
+        }
+      } catch (error) {
+        ctx.failMessage = `GUI-Plus error: ${(error as Error).message}`;
+      }
+
+      if (!ctx.finishMessage && !ctx.failMessage && ctx.stopRequested()) {
+        ctx.failMessage = "Task stopped by user.";
+      }
+
+      if (ctx.finishMessage) {
+        deps.workspace.finalizeSession(session, true, ctx.finishMessage);
+        deps.workspace.appendDailyMemory(profileKey, request.task, true, ctx.finishMessage);
+        const artifacts = deps.autoArtifactBuilder.build({
+          task: request.task,
+          sessionPath: session.path,
+          ok: true,
+          finalMessage: ctx.finishMessage,
+          traces: ctx.traces,
+        });
+        if (artifacts.skillPath) {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][artifact] auto skill: ${artifacts.skillPath}`);
+        }
+        if (artifacts.scriptPath) {
+          // eslint-disable-next-line no-console
+          console.log(`[OpenPocket][artifact] auto script: ${artifacts.scriptPath}`);
+        }
+        const finalSkillPath = resolveFinalSkillPath(artifacts.skillPath, ctx.finishMessage);
+        return {
+          result: {
+            ok: true,
+            message: ctx.finishMessage,
+            sessionPath: session.path,
+            skillPath: finalSkillPath,
+            scriptPath: artifacts.scriptPath,
+          },
+          shouldReturnHome,
+        };
+      }
+
+      const failMsg = ctx.failMessage || "GUI-Plus stopped without finishing.";
+      deps.workspace.finalizeSession(session, false, failMsg);
+      deps.workspace.appendDailyMemory(profileKey, request.task, false, failMsg);
+      return {
+        result: { ok: false, message: failMsg, sessionPath: session.path, skillPath: null, scriptPath: null },
+        shouldReturnHome,
+      };
+    }
 
     if (usePiSessionBridge) {
       const appendSessionEvent = (

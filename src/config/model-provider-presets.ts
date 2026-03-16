@@ -8,6 +8,9 @@ export type ModelProviderPreset = {
   defaultModelId: string;
   suggestedModelIds: string[];
   matchHosts: string[];
+  matchPaths?: string[];
+  hostFallback?: boolean;
+  backend?: ModelProfile["backend"];
 };
 
 const MODEL_PROVIDER_PRESETS: ReadonlyArray<ModelProviderPreset> = [
@@ -84,6 +87,28 @@ const MODEL_PROVIDER_PRESETS: ReadonlyArray<ModelProviderPreset> = [
     matchHosts: ["api.deepseek.com"],
   },
   {
+    key: "aliyun-ui-agent",
+    label: "Aliyun UI Agent (Mobile)",
+    baseUrl: "https://dashscope.aliyuncs.com/api/v2/apps/gui-owl/gui_agent_server",
+    apiKeyEnv: "DASHSCOPE_API_KEY",
+    defaultModelId: "pre-gui_owl_7b",
+    suggestedModelIds: ["pre-gui_owl_7b"],
+    matchHosts: ["dashscope.aliyuncs.com"],
+    matchPaths: ["/api/v2/apps/gui-owl/gui_agent_server"],
+    backend: "aliyun_ui_agent_mobile",
+  },
+  {
+    key: "aliyun-gui-plus",
+    label: "Aliyun GUI-Plus (Mobile)",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    apiKeyEnv: "DASHSCOPE_API_KEY",
+    defaultModelId: "gui-plus",
+    suggestedModelIds: ["gui-plus"],
+    matchHosts: ["dashscope.aliyuncs.com"],
+    matchPaths: ["/compatible-mode/v1/chat/completions"],
+    backend: "aliyun_gui_plus",
+  },
+  {
     key: "qwen",
     label: "Qwen (DashScope)",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -91,6 +116,8 @@ const MODEL_PROVIDER_PRESETS: ReadonlyArray<ModelProviderPreset> = [
     defaultModelId: "qwen-max",
     suggestedModelIds: ["qwen-max", "qwen-plus", "qwen-coder-plus"],
     matchHosts: ["dashscope.aliyuncs.com"],
+    matchPaths: ["/compatible-mode/v1"],
+    hostFallback: true,
   },
   {
     key: "minimax",
@@ -173,12 +200,31 @@ export function resolveModelProviderPreset(providerKey: string): ModelProviderPr
 
 export function resolveModelProviderPresetByBaseUrl(baseUrl: string): ModelProviderPreset | null {
   const lower = baseUrl.toLowerCase();
+  let pathname = "";
+  try {
+    pathname = new URL(baseUrl).pathname.toLowerCase();
+  } catch {
+    pathname = "";
+  }
+
   for (const preset of MODEL_PROVIDER_PRESETS) {
-    if (preset.matchHosts.some((host) => lower.includes(host))) {
+    if (!preset.matchPaths || preset.matchPaths.length === 0) {
+      continue;
+    }
+    if (!preset.matchHosts.some((host) => lower.includes(host))) {
+      continue;
+    }
+    if (preset.matchPaths.some((candidate) => pathname.includes(candidate.toLowerCase()))) {
       return preset;
     }
   }
-  return null;
+
+  const hostMatches = MODEL_PROVIDER_PRESETS.filter((preset) => preset.matchHosts.some((host) => lower.includes(host)));
+  const hostFallback = hostMatches.find((preset) => preset.hostFallback);
+  if (hostFallback) {
+    return hostFallback;
+  }
+  return hostMatches[0] ?? null;
 }
 
 export function listModelProviderPresetKeys(): string[] {
@@ -217,5 +263,6 @@ export function buildModelProfileFromPreset(
     maxTokens: Number.isFinite(existing?.maxTokens) ? Number(existing?.maxTokens) : 4096,
     reasoningEffort: normalizeReasoningEffort(existing?.reasoningEffort) ?? inferReasoningEffort(normalizedModelId),
     temperature: Number.isFinite(existing?.temperature) ? Number(existing?.temperature) : null,
+    backend: existing?.backend ?? preset.backend ?? "default",
   };
 }

@@ -4124,6 +4124,8 @@ export class DashboardServer {
       if (text.includes("anthropic.com")) return "Anthropic";
       if (text.includes("googleapis.com")) return "Google";
       if (text.includes("api.deepseek.com")) return "DeepSeek";
+      if (text.includes("/api/v2/apps/gui-owl/gui_agent_server")) return "Aliyun UI Agent (Mobile)";
+      if (text.includes("gui-plus")) return "Aliyun GUI-Plus (Mobile)";
       if (text.includes("dashscope.aliyuncs.com")) return "Qwen (DashScope)";
       if (text.includes("api.minimax.io") || text.includes("api.minimaxi.com")) return "MiniMax";
       if (text.includes("volces.com") || text.includes("volcengine.com")) return "Volcano Engine";

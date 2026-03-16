@@ -385,6 +385,26 @@ function defaultConfigObject() {
         reasoningEffort: "medium" as const,
         temperature: null,
       },
+      "aliyun-ui-agent/mobile": {
+        baseUrl: "https://dashscope.aliyuncs.com/api/v2/apps/gui-owl/gui_agent_server",
+        model: "pre-gui_owl_7b",
+        apiKey: "",
+        apiKeyEnv: "DASHSCOPE_API_KEY",
+        maxTokens: 4096,
+        reasoningEffort: null,
+        temperature: null,
+        backend: "aliyun_ui_agent_mobile" as const,
+      },
+      "aliyun-gui-plus/mobile": {
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "gui-plus",
+        apiKey: "",
+        apiKeyEnv: "DASHSCOPE_API_KEY",
+        maxTokens: 4096,
+        reasoningEffort: null,
+        temperature: null,
+        backend: "aliyun_gui_plus" as const,
+      },
       "qwen-max": {
         baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         model: "qwen-max",
@@ -923,6 +943,7 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
         ? reasoningRaw
         : null;
     const tempRaw = model.temperature;
+    const backendRaw = String(model.backend ?? "").trim().toLowerCase();
     const parsedBaseUrl = String(model.baseUrl ?? model.base_url ?? "https://api.openai.com/v1");
     const baseUrl = normalizeAnthropicBaseUrl(normalizeGoogleBaseUrl(parsedBaseUrl));
     models[key] = {
@@ -936,6 +957,11 @@ function normalizeConfig(raw: Record<string, unknown>, configPath: string): Open
         tempRaw === null || tempRaw === undefined || Number.isNaN(Number(tempRaw))
           ? null
           : Number(tempRaw),
+      backend: backendRaw === "aliyun_ui_agent_mobile"
+        ? "aliyun_ui_agent_mobile"
+        : backendRaw === "aliyun_gui_plus"
+          ? "aliyun_gui_plus"
+          : "default",
     };
   }
   const defaultModel = String(merged.defaultModel ?? "gpt-5.2-codex");
