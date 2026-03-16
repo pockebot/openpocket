@@ -83,6 +83,10 @@ function createAttemptDeps(runtime) {
     piSessionBridgeFactory: async () => {
       throw new Error("piSessionBridgeFactory not configured");
     },
+    aliyunGuiPlusClientFactory: () => ({
+      resetConversation: () => {},
+      nextStep: async () => { throw new Error("aliyunGuiPlusClientFactory not configured"); },
+    }),
   };
 }
 
@@ -428,6 +432,101 @@ test("runRuntimeAttempt falls back to legacy backend when phone-only tools are r
   assert.match(outcome.result.message, /legacy-fallback-ok/);
   assert.equal(legacyFactoryCalls, 1);
   assert.equal(bridgeFactoryCalls, 0);
+});
+
+test("runRuntimeAttempt uses Aliyun UI Agent mobile backend when configured", async () => {
+  const runtime = createRuntimeWithApiKey();
+  runtime.config.models[runtime.config.defaultModel] = {
+    baseUrl: "https://dashscope.aliyuncs.com/api/v2/apps/gui-owl/gui_agent_server",
+    model: "pre-gui_owl_7b",
+    apiKey: "dashscope-test-key",
+    apiKeyEnv: "DASHSCOPE_API_KEY",
+    maxTokens: 4096,
+    reasoningEffort: null,
+    temperature: null,
+    backend: "aliyun_ui_agent_mobile",
+  };
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    resolveDeviceId: () => "emulator-5554",
+    captureScreenSnapshot: () => makeSnapshot({ currentApp: "com.android.launcher3" }),
+    executeAction: async (action) => {
+      runtime.__executedActions = runtime.__executedActions ?? [];
+      runtime.__executedActions.push(action);
+      return "ok";
+    },
+  };
+
+  let agentFactoryCalls = 0;
+  runtime.agentFactory = () => {
+    agentFactoryCalls += 1;
+    throw new Error("legacy agentFactory should not be used for Aliyun UI Agent backend");
+  };
+
+  const deps = createAttemptDeps(runtime);
+  const screenshotUrls = [];
+  let stackStops = 0;
+  deps.localHumanAuthStackFactory = () => ({
+    start: async () => ({ relayBaseUrl: "http://127.0.0.1:8787", publicBaseUrl: "https://public.example/a/default" }),
+    createSignedScreenshotUrl: async () => {
+      const url = `https://public.example/a/default/v1/human-auth/takeover/screenshot?token=${screenshotUrls.length + 1}`;
+      screenshotUrls.push(url);
+      return { url, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    },
+    stop: async () => {
+      stackStops += 1;
+    },
+  });
+
+  let clientCalls = 0;
+  deps.aliyunUiAgentClientFactory = () => ({
+    getSessionId: () => (clientCalls > 0 ? "aliyun-session-1" : null),
+    setSessionId: () => {},
+    nextStep: async ({ screenshotUrl }) => {
+      clientCalls += 1;
+      if (clientCalls === 1) {
+        assert.match(screenshotUrl, /token=1$/);
+        return {
+          sessionId: "aliyun-session-1",
+          explanation: "Tap the icon",
+          output: {
+            thought: "The target icon is visible.",
+            action: { type: "tap", x: 64, y: 96, reason: "Tap the icon" },
+            raw: "{\"step\":1}",
+          },
+        };
+      }
+      assert.match(screenshotUrl, /token=2$/);
+      return {
+        sessionId: "aliyun-session-1",
+        explanation: "Task completed",
+        output: {
+          thought: "The task is complete.",
+          action: { type: "finish", message: "aliyun-ui-agent-ok" },
+          raw: "{\"step\":2}",
+        },
+      };
+    },
+  });
+
+  const outcome = await runRuntimeAttempt(deps, {
+    task: "Open an app with Aliyun UI Agent",
+  });
+
+  assert.equal(outcome.result.ok, true);
+  assert.match(outcome.result.message, /aliyun-ui-agent-ok/);
+  assert.equal(agentFactoryCalls, 0);
+  assert.equal(clientCalls, 2);
+  assert.equal(stackStops, 1);
+  assert.equal(screenshotUrls.length, 2);
+  assert.equal(runtime.__executedActions.length, 1);
+  assert.deepEqual(runtime.__executedActions[0], {
+    type: "tap",
+    x: 64,
+    y: 96,
+    reason: "Tap the icon",
+  });
 });
 
 test("runRuntimeAttempt treats bounded cron step budget exhaustion as a normal completion", async () => {

@@ -295,10 +295,28 @@ Managed agents created later with `openpocket create agent <id>` start from the 
       "maxTokens": 4096,
       "reasoningEffort": null,
       "temperature": null
+    },
+    "aliyun-ui-agent/mobile": {
+      "baseUrl": "https://dashscope.aliyuncs.com/api/v2/apps/gui-owl/gui_agent_server",
+      "model": "pre-gui_owl_7b",
+      "apiKey": "",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null,
+      "backend": "aliyun_ui_agent_mobile"
     }
   }
 }
 ```
+
+### Aliyun UI Agent mobile note
+
+- built-in profile key: `aliyun-ui-agent/mobile`
+- backend discriminator: `models.<name>.backend = "aliyun_ui_agent_mobile"`
+- screenshot delivery depends on the local relay stack, so public Aliyun fetches require either:
+  - the shared relay hub (`openpocket human-auth-relay start`)
+  - or per-agent ngrok (`humanAuth.tunnel.provider=ngrok`)
 
 ## Managed Agent Overrides
 
@@ -356,6 +374,7 @@ Notes:
 - `humanAuth.pollIntervalMs` is clamped to at least `500`.
 - `humanAuth.tunnel.provider` accepts only `none|ngrok`.
 - `humanAuth.tunnel.ngrok.startupTimeoutSec` is clamped to at least `3`.
+- `models.<name>.backend` accepts only `default|aliyun_ui_agent_mobile`; other values fall back to `default`.
 - `allowedChatIds` is coerced to numeric array with non-finite values removed.
 - model `baseUrl` is normalized for known providers:
   - Google Generative Language bare host -> `/v1beta`

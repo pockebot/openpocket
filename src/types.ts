@@ -345,6 +345,7 @@ export interface ModelProfile {
   maxTokens: number;
   reasoningEffort: "low" | "medium" | "high" | "xhigh" | null;
   temperature: number | null;
+  backend: "default" | "aliyun_ui_agent_mobile" | "aliyun_gui_plus";
 }
 
 export interface OpenPocketConfig {

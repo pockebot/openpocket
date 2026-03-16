@@ -53,6 +53,21 @@
 - verify model supports requested endpoint and multimodal input
 - switch model profile and retry
 
+## Aliyun UI Agent cannot fetch screenshot URL
+
+- verify the selected model profile uses `backend: "aliyun_ui_agent_mobile"`
+- ensure `humanAuth.useLocalRelay=true`
+- if using managed agents, start the shared relay hub with `openpocket human-auth-relay start`
+- if Aliyun must fetch over the public internet, verify ngrok/shared public relay URL is reachable from outside your LAN
+- inspect logs for `[OpenPocket][human-auth]`, `[OpenPocket][relay-hub]`, and local relay startup failures
+
+## Aliyun UI Agent keeps returning `wait` or unsupported operations
+
+- inspect the selected agent session file for the raw `Operation` string returned by Aliyun
+- confirm the task is in `device_type=mobile` scope and the current screen is an Android phone UI, not a secure/blank surface
+- if the screen is `FLAG_SECURE` or blacked out, use the human-auth takeover path instead of retrying model calls
+- retry after enabling a public screenshot URL path (shared relay hub or ngrok), because stale/unreachable image URLs often degrade action quality
+
 ## Channel bot does not respond
 
 - validate token for the selected agent (`channels.<type>.*` or env)

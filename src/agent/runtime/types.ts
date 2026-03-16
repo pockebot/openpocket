@@ -12,6 +12,7 @@ import type {
   HumanAuthDecision,
   HumanAuthRequest,
   ModelProfile,
+  ModelStepOutput,
   OpenPocketConfig,
   ScreenSnapshot,
   TaskExecutionPlan,
@@ -136,6 +137,52 @@ export interface RuntimeAttemptDependencies {
   isPermissionDialogApp: (currentApp: string) => boolean;
   autoApprovePermissionDialog: (currentApp: string) => Promise<DelegationApplyLike | null>;
   saveModelInputArtifacts: (params: RuntimeModelInputArtifactsParams) => void;
+  aliyunUiAgentClientFactory: (options: {
+    apiKey: string;
+    baseUrl?: string;
+    modelName?: string;
+    thoughtLanguage?: string;
+    sessionId?: string | null;
+  }) => {
+    getSessionId(): string | null;
+    setSessionId(sessionId: string | null | undefined): void;
+    nextStep(params: {
+      task: string;
+      screenshotUrl: string;
+      addInfo?: string;
+      thoughtLanguage?: string;
+      viewportWidth?: number;
+      viewportHeight?: number;
+    }): Promise<{
+      sessionId: string | null;
+      explanation: string;
+      output: ModelStepOutput;
+    }>;
+  };
+  aliyunGuiPlusClientFactory: (options: {
+    apiKey: string;
+    baseUrl?: string;
+    modelName?: string;
+    thoughtLanguage?: string;
+  }) => {
+    resetConversation(): void;
+    nextStep(params: {
+      task: string;
+      screenshotBase64: string;
+      addInfo?: string;
+      thoughtLanguage?: string;
+      viewportWidth: number;
+      viewportHeight: number;
+    }): Promise<{
+      explanation: string;
+      output: ModelStepOutput;
+    }>;
+  };
+  localHumanAuthStackFactory: (config: OpenPocketConfig, log?: (line: string) => void) => {
+    start(): Promise<{ relayBaseUrl: string; publicBaseUrl: string }>;
+    stop(): Promise<void>;
+    createSignedScreenshotUrl(options?: { ttlSec?: number }): Promise<{ url: string; expiresAt: string }>;
+  };
 }
 
 /** Mutable state shared across tool execute closures during a single runTask invocation. */
@@ -164,6 +211,7 @@ export interface PhoneAgentRunContext {
   runtimeModel: RuntimeModelMetadata;
   effectivePromptMode: SystemPromptMode;
   systemPrompt: string;
+  aliyunSessionId: string | null;
   onHumanAuth?: (request: HumanAuthRequest) => Promise<HumanAuthDecision> | HumanAuthDecision;
   onChannelMedia?: (request: ChannelMediaRequest) => Promise<ChannelMediaDeliveryResult> | ChannelMediaDeliveryResult;
   onUserDecision?: (request: UserDecisionRequest) => Promise<UserDecisionResponse> | UserDecisionResponse;

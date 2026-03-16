@@ -97,6 +97,9 @@ export function providerLabel(baseUrl: string): string {
   if (lower.includes("api.deepseek.com")) {
     return "DeepSeek";
   }
+  if (lower.includes("/api/v2/apps/gui-owl/gui_agent_server")) {
+    return "Aliyun UI Agent (Mobile)";
+  }
   if (lower.includes("dashscope.aliyuncs.com")) {
     return "Qwen (DashScope)";
   }

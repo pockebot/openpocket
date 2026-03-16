@@ -557,6 +557,35 @@ test("model list prints configured profiles including Gemini 3.1", () => {
   assert.match(run.stdout, /gpt-5\.4/i);
 });
 
+test("model list and model set expose Aliyun UI Agent mobile distinctly", () => {
+  const home = makeHome("openpocket-ts-model-aliyun-ui-agent-");
+  const init = runCli(["init"], { OPENPOCKET_HOME: home });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+
+  const listRun = runCli(["model", "list"], {
+    OPENPOCKET_HOME: home,
+  });
+  assert.equal(listRun.status, 0, listRun.stderr || listRun.stdout);
+  assert.match(listRun.stdout, /aliyun-ui-agent\/mobile/i);
+  assert.match(listRun.stdout, /Aliyun UI Agent \(Mobile\)/i);
+
+  const setRun = runCli(
+    ["model", "set", "--provider", "aliyun-ui-agent", "--model", "pre-gui_owl_7b"],
+    {
+      OPENPOCKET_HOME: home,
+    },
+  );
+  assert.equal(setRun.status, 0, setRun.stderr || setRun.stdout);
+  assert.match(setRun.stdout, /aliyun-ui-agent\/pre-gui_owl_7b/i);
+  assert.match(setRun.stdout, /Aliyun UI Agent \(Mobile\)/i);
+
+  const cfgPath = path.join(home, "config.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  assert.equal(cfg.defaultModel, "aliyun-ui-agent/pre-gui_owl_7b");
+  assert.equal(cfg.models["aliyun-ui-agent/pre-gui_owl_7b"].apiKeyEnv, "DASHSCOPE_API_KEY");
+  assert.equal(cfg.models["aliyun-ui-agent/pre-gui_owl_7b"].backend, "aliyun_ui_agent_mobile");
+});
+
 test("model set updates default model persistently", () => {
   const home = makeHome("openpocket-ts-model-set-");
   const init = runCli(["init"], { OPENPOCKET_HOME: home });

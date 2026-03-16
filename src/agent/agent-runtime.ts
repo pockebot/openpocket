@@ -63,7 +63,10 @@ import {
 import { runRuntimeAttempt } from "./runtime/attempt.js";
 import { runRuntimeTask } from "./runtime/run.js";
 import type { RunTaskRequest } from "./runtime/types.js";
+import { AliyunUiAgentClient } from "./aliyun-ui-agent-client.js";
+import { AliyunGuiPlusClient } from "./aliyun-gui-plus-client.js";
 import { createPiSessionBridge } from "./pi-session-bridge.js";
+import { LocalHumanAuthStack } from "../human-auth/local-stack.js";
 import { scaleCoordinates, drawDebugMarker } from "../utils/image-scale.js";
 import {
   PhoneUseCapabilityProbe,
@@ -3850,6 +3853,9 @@ export class AgentRuntime {
             isPermissionDialogApp: (currentApp) => this.isPermissionDialogApp(currentApp),
             autoApprovePermissionDialog: (currentApp) => this.autoApprovePermissionDialog(currentApp),
             saveModelInputArtifacts: (params) => this.saveModelInputArtifacts(params),
+            aliyunUiAgentClientFactory: (options) => new AliyunUiAgentClient(options),
+            aliyunGuiPlusClientFactory: (options) => new AliyunGuiPlusClient(options),
+            localHumanAuthStackFactory: (config, log) => new LocalHumanAuthStack(config, log),
           },
           attemptRequest,
         ),

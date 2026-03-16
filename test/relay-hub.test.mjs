@@ -14,6 +14,8 @@ const { RelayHubServer } = await import("../dist/manager/relay-hub.js");
 const { loadManagerPorts, saveManagerPorts } = await import("../dist/manager/ports.js");
 const { LocalHumanAuthStack } = await import("../dist/human-auth/local-stack.js");
 
+const ONE_PIXEL_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0mQAAAAASUVORK5CYII=";
+
 function runCli(args, env = {}) {
   return spawnSync("node", [cliPath, ...args], {
     cwd: repoRoot,
@@ -97,6 +99,59 @@ test("managed local human-auth stack registers through relay hub and returns pre
         created.takeover?.streamUrl,
         /^http:\/\/127\.0\.0\.1:\d+\/a\/auth-bot\/v1\/human-auth\//,
       );
+    } finally {
+      await stack.stop();
+      await hub.stop();
+    }
+  });
+});
+
+test("managed relay hub proxies signed screenshot URLs", async () => {
+  await withTempHome("openpocket-relay-hub-screenshot-", async (home) => {
+    const init = runCli(["init"], { OPENPOCKET_HOME: home });
+    assert.equal(init.status, 0, init.stderr || init.stdout);
+
+    const create = runCli(
+      ["create", "agent", "auth-bot", "--type", "physical-phone", "--device", "AUTH-DEVICE-1"],
+      { OPENPOCKET_HOME: home },
+    );
+    assert.equal(create.status, 0, create.stderr || create.stdout);
+
+    const hub = new RelayHubServer({ host: "127.0.0.1", port: 0 });
+    await hub.start();
+    const ports = loadManagerPorts();
+    saveManagerPorts({ ...ports, relayHubPort: Number(new URL(hub.address).port) });
+
+    const cfg = loadConfig(path.join(home, "agents", "auth-bot", "config.json"));
+    cfg.humanAuth.enabled = true;
+    cfg.humanAuth.useLocalRelay = true;
+    cfg.humanAuth.tunnel.provider = "none";
+    cfg.humanAuth.tunnel.ngrok.enabled = false;
+
+    const stack = new LocalHumanAuthStack(cfg, undefined, {
+      takeoverRuntime: {
+        captureFrame: async () => ({
+          deviceId: "emulator-5554",
+          currentApp: "com.example.camera",
+          width: 1,
+          height: 1,
+          screenshotBase64: ONE_PIXEL_PNG_BASE64,
+          capturedAt: new Date().toISOString(),
+        }),
+        execute: async () => "noop",
+      },
+    });
+
+    await stack.start();
+    try {
+      const signed = await stack.createSignedScreenshotUrl({ ttlSec: 60 });
+      assert.match(signed.url, /^http:\/\/127\.0\.0\.1:\d+\/a\/auth-bot\/v1\/human-auth\/takeover\/screenshot\?token=/);
+
+      const response = await fetch(signed.url);
+      const body = Buffer.from(await response.arrayBuffer());
+      assert.equal(response.status, 200);
+      assert.match(String(response.headers.get("content-type") || ""), /^image\/png/i);
+      assert.equal(body.equals(Buffer.from(ONE_PIXEL_PNG_BASE64, "base64")), true);
     } finally {
       await stack.stop();
       await hub.stop();

@@ -232,6 +232,9 @@ function providerFromBaseUrl(baseUrl: string): string {
   if (lower.includes("api.deepseek.com")) {
     return "DeepSeek";
   }
+  if (lower.includes("/api/v2/apps/gui-owl/gui_agent_server")) {
+    return "Aliyun UI Agent (Mobile)";
+  }
   if (lower.includes("dashscope.aliyuncs.com")) {
     return "Qwen (DashScope)";
   }
@@ -277,6 +280,9 @@ function applyProviderApiKey(config: OpenPocketConfig, targetModelKey: string, a
 }
 
 function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
+  if (profile.backend === "aliyun_ui_agent_mobile" || profileKey === "aliyun-ui-agent/mobile") {
+    return "Aliyun UI Agent (Mobile)";
+  }
   if (profileKey === "gpt-5.2-codex") {
     return "GPT-5.2 Codex (OpenAI)";
   }
@@ -350,6 +356,11 @@ function modelOptionLabel(profileKey: string, profile: ModelProfile): string {
     return "DeepSeek V3.2 (Volcano Engine)";
   }
   return `${profile.model} (${providerFromBaseUrl(profile.baseUrl)})`;
+}
+
+function currentModelRequiresReadyNgrok(config: OpenPocketConfig): boolean {
+  const profile = config.models[config.defaultModel];
+  return profile?.backend === "aliyun_ui_agent_mobile";
 }
 
 function isOpenAiLikeHost(baseUrl: string): boolean {
@@ -2514,30 +2525,50 @@ async function runHumanAuthStep(
   prompter: SetupPrompter,
   state: SetupState,
 ): Promise<void> {
+  const requiresReadyNgrok = currentModelRequiresReadyNgrok(config);
+  if (requiresReadyNgrok) {
+    await prompter.note(
+      "Aliyun UI Agent (Mobile)",
+      "This model requires a public screenshot URL. Onboarding will only continue with a ready ngrok setup.",
+    );
+  }
+
   const mode = await prompter.select(
     "Real-device authorization bridge mode",
-    [
-      {
-        value: "ngrok",
-        label: "Enable local relay + ngrok tunnel (recommended)",
-      },
-      {
-        value: "lan",
-        label: "Enable local relay only (same Wi-Fi / LAN access)",
-      },
-      {
-        value: "disabled",
-        label: "Disable human-auth bridge for now",
-      },
-    ],
-    config.humanAuth.enabled
-      ? config.humanAuth.tunnel.provider === "ngrok" && config.humanAuth.tunnel.ngrok.enabled
-        ? "ngrok"
-        : "lan"
-      : "disabled",
+    requiresReadyNgrok
+      ? [
+        {
+          value: "ngrok",
+          label: "Enable local relay + ngrok tunnel (required)",
+        },
+      ]
+      : [
+        {
+          value: "ngrok",
+          label: "Enable local relay + ngrok tunnel (recommended)",
+        },
+        {
+          value: "lan",
+          label: "Enable local relay only (same Wi-Fi / LAN access)",
+        },
+        {
+          value: "disabled",
+          label: "Disable human-auth bridge for now",
+        },
+      ],
+    requiresReadyNgrok
+      ? "ngrok"
+      : config.humanAuth.enabled
+        ? config.humanAuth.tunnel.provider === "ngrok" && config.humanAuth.tunnel.ngrok.enabled
+          ? "ngrok"
+          : "lan"
+        : "disabled",
   );
 
   state.humanAuthMode = mode;
+  if (requiresReadyNgrok && mode !== "ngrok") {
+    throw new Error("Aliyun UI Agent (Mobile) requires ngrok.");
+  }
   if (mode === "disabled") {
     config.humanAuth.enabled = false;
     saveConfig(config);
@@ -2598,6 +2629,9 @@ async function runHumanAuthStep(
       ? `Detected ${config.humanAuth.tunnel.ngrok.executable}: ${ngrokVersion}`
       : buildNgrokSetupGuide(config.humanAuth.tunnel.ngrok.executable, envName),
   );
+  if (requiresReadyNgrok && !ngrokVersion) {
+    throw new Error("Aliyun UI Agent (Mobile) requires ngrok CLI.");
+  }
 
   const envToken = process.env[envName]?.trim() ?? "";
   const configToken = config.humanAuth.tunnel.ngrok.authtoken.trim();
@@ -2608,21 +2642,23 @@ async function runHumanAuthStep(
       label: `Use environment variable ${envName}`,
       hint: envToken ? `Detected (length ${envToken.length})` : "Not detected",
     },
-    {
-      value: "config",
-      label: "Paste token and save to local config.json",
-      hint: hasConfigToken ? `Current config token detected (length ${configToken.length})` : undefined,
-    },
-    {
-      value: "skip",
-      label: "Skip for now",
-    },
   ];
   if (hasConfigToken) {
-    ngrokTokenOptions.splice(1, 0, {
+    ngrokTokenOptions.push({
       value: "config-existing",
       label: "Use existing token from local config.json",
       hint: `Detected (length ${configToken.length})`,
+    });
+  }
+  ngrokTokenOptions.push({
+    value: "config",
+    label: "Paste token and save to local config.json",
+    hint: hasConfigToken ? `Current config token detected (length ${configToken.length})` : undefined,
+  });
+  if (!requiresReadyNgrok) {
+    ngrokTokenOptions.push({
+      value: "skip",
+      label: "Skip for now",
     });
   }
 
@@ -2631,10 +2667,16 @@ async function runHumanAuthStep(
     ngrokTokenOptions,
     hasConfigToken ? "config-existing" : envToken ? "env" : "config",
   );
+  if (requiresReadyNgrok && tokenMethod === "skip") {
+    throw new Error("Aliyun UI Agent (Mobile) requires ngrok authtoken.");
+  }
 
   if (tokenMethod === "env") {
     config.humanAuth.tunnel.ngrok.authtoken = "";
     if (!envToken) {
+      if (requiresReadyNgrok) {
+        throw new Error("Aliyun UI Agent (Mobile) requires ngrok authtoken.");
+      }
       await prompter.note(
         "ngrok Setup",
         `${envName} is not set in the current shell. Gateway may fail to open ngrok tunnel until you export this env.`,
@@ -2649,7 +2691,11 @@ async function runHumanAuthStep(
       );
       if (confirmed) {
         config.humanAuth.tunnel.ngrok.authtoken = token;
+      } else if (requiresReadyNgrok) {
+        throw new Error("Aliyun UI Agent (Mobile) requires ngrok authtoken.");
       }
+    } else if (requiresReadyNgrok) {
+      throw new Error("Aliyun UI Agent (Mobile) requires ngrok authtoken.");
     }
   }
 
