@@ -521,6 +521,7 @@ export class HumanAuthRelayServer {
   private readonly options: HumanAuthRelayServerOptions;
   private readonly log: (line: string) => void;
   private readonly records = new Map<string, RelayRecord>();
+  private readonly screenshotTokens = new Map<string, number>();
   private server: http.Server | null = null;
   /** Per-request rate limiting: track last takeover action timestamp. */
   private readonly takeoverActionTimestamps = new Map<string, number>();
@@ -706,12 +707,15 @@ export class HumanAuthRelayServer {
     return authHeader.slice("Bearer ".length).trim() === apiKey;
   }
 
-  private makePublicBaseUrl(req: http.IncomingMessage, bodyPublicBaseUrl: string): string {
+  private makePublicBaseUrl(req: http.IncomingMessage | null, bodyPublicBaseUrl: string): string {
     if (bodyPublicBaseUrl.trim()) {
       return bodyPublicBaseUrl.trim().replace(/\/+$/, "");
     }
     if (this.options.publicBaseUrl.trim()) {
       return this.options.publicBaseUrl.trim().replace(/\/+$/, "");
+    }
+    if (!req) {
+      return this.address.replace(/\/+$/, "");
     }
     const host = String(req.headers.host ?? `${this.options.host}:${this.options.port}`);
     const proto = String(req.headers["x-forwarded-proto"] ?? "http");
@@ -765,6 +769,43 @@ export class HumanAuthRelayServer {
 
   private ensureTakeoverRuntime(): HumanAuthTakeoverRuntime | null {
     return this.options.takeoverRuntime ?? null;
+  }
+
+  private purgeExpiredScreenshotTokens(now = nowMs()): void {
+    for (const [tokenHash, expiresAtMs] of this.screenshotTokens.entries()) {
+      if (expiresAtMs <= now) {
+        this.screenshotTokens.delete(tokenHash);
+      }
+    }
+  }
+
+  private verifyScreenshotToken(tokenRaw: unknown): { ok: true } | { ok: false; error: string; status: number } {
+    const token = String(tokenRaw ?? "");
+    this.purgeExpiredScreenshotTokens();
+    const expiresAtMs = this.screenshotTokens.get(hashToken(token));
+    if (!token || !expiresAtMs || expiresAtMs <= nowMs()) {
+      return { ok: false, error: "Invalid or expired token.", status: 403 };
+    }
+    return { ok: true };
+  }
+
+  createSignedScreenshotUrl(options?: { publicBaseUrl?: string; ttlSec?: number }): { url: string; expiresAt: string } {
+    if (!this.ensureTakeoverRuntime()) {
+      throw new Error("Remote takeover runtime is not configured.");
+    }
+    const ttlSecRaw = Number(options?.ttlSec ?? 60);
+    const ttlSec = Math.max(5, Math.min(300, Number.isFinite(ttlSecRaw) ? Math.round(ttlSecRaw) : 60));
+    const expiresAtMs = nowMs() + ttlSec * 1000;
+    const token = randomToken();
+    this.screenshotTokens.set(hashToken(token), expiresAtMs);
+    const baseUrl = this.makePublicBaseUrl(
+      null,
+      String(options?.publicBaseUrl ?? this.options.publicBaseUrl ?? ""),
+    );
+    return {
+      url: `${baseUrl}/v1/human-auth/takeover/screenshot?token=${encodeURIComponent(token)}`,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+    };
   }
 
   private sanitizeHeaderValue(input: string): string {
@@ -3372,6 +3413,30 @@ export class HumanAuthRelayServer {
 
     if (method === "GET" && pathname === "/healthz") {
       sendJson(res, 200, { ok: true, now: nowIso(), requests: this.records.size });
+      return;
+    }
+
+    if (method === "GET" && pathname === "/v1/human-auth/takeover/screenshot") {
+      const auth = this.verifyScreenshotToken(requestUrl.searchParams.get("token"));
+      if (!auth.ok) {
+        sendText(res, auth.status, auth.error);
+        return;
+      }
+      const runtime = this.ensureTakeoverRuntime();
+      if (!runtime) {
+        sendText(res, 501, "Remote takeover runtime is not configured.");
+        return;
+      }
+      try {
+        const frame = await runtime.captureFrame();
+        const imageBuffer = Buffer.from(frame.screenshotBase64, "base64");
+        res.statusCode = 200;
+        res.setHeader("content-type", "image/png");
+        res.setHeader("cache-control", "no-store, no-cache, must-revalidate, private");
+        res.end(imageBuffer);
+      } catch (error) {
+        sendText(res, 500, `Failed to capture screenshot: ${(error as Error).message}`);
+      }
       return;
     }
 

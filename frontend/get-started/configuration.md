@@ -108,6 +108,39 @@ For human-auth relay:
 - shared relay hub launched by `openpocket human-auth-relay start` does not use separate per-agent relay state or per-agent hub API keys
 - in managed mode, agent-local request state still stays under the agent's own `state/`
 
+### Aliyun UI Agent mobile backend
+
+OpenPocket now includes a first-class `aliyun-ui-agent/mobile` model profile.
+
+Key points:
+
+- the profile sets `models.<name>.backend` to `aliyun_ui_agent_mobile`
+- runtime routes this backend through the dedicated Aliyun GUI-agent client instead of the default OpenAI-compatible tool-calling path
+- image input is delivered as a short-lived screenshot URL from the local relay stack, so the selected agent must have `humanAuth.useLocalRelay=true`
+- if Aliyun must fetch screenshots from the public internet, use either:
+  - the shared relay hub from `openpocket human-auth-relay start`
+  - or per-agent ngrok via `humanAuth.tunnel.provider=ngrok`
+
+Minimal example:
+
+```json
+{
+  "defaultModel": "aliyun-ui-agent/mobile",
+  "models": {
+    "aliyun-ui-agent/mobile": {
+      "baseUrl": "https://dashscope.aliyuncs.com/api/v2/apps/gui-owl/gui_agent_server",
+      "model": "pre-gui_owl_7b",
+      "apiKey": "",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "maxTokens": 4096,
+      "reasoningEffort": null,
+      "temperature": null,
+      "backend": "aliyun_ui_agent_mobile"
+    }
+  }
+}
+```
+
 ## Backward Compatibility Keys
 
 Loader maps old keys automatically, including:

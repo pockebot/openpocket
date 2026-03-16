@@ -9,6 +9,7 @@ const {
   dashboardPaths,
   defaultControlSettings,
   defaultOnboardingState,
+  providerLabel,
   loadControlSettings,
   loadOnboardingState,
   saveControlSettings,
@@ -71,6 +72,17 @@ test("control store provides defaults and persists onboarding/control files", ()
     assert.equal(fs.existsSync(paths.onboardingPath), true);
     assert.equal(fs.existsSync(paths.controlPanelPath), true);
   });
+});
+
+test("dashboard providerLabel distinguishes Aliyun UI Agent from DashScope compatible mode", () => {
+  assert.equal(
+    providerLabel("https://dashscope.aliyuncs.com/api/v2/apps/gui-owl/gui_agent_server"),
+    "Aliyun UI Agent (Mobile)",
+  );
+  assert.equal(
+    providerLabel("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    "Qwen (DashScope)",
+  );
 });
 
 test("default prompt entries include core prompt files", () => {

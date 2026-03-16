@@ -4,6 +4,7 @@ import { loadManagerPorts } from "../manager/ports.js";
 import { HumanAuthRelayServer } from "./relay-server.js";
 import { NgrokTunnel } from "./ngrok-tunnel.js";
 import { LocalHumanAuthTakeoverRuntime } from "./takeover-runtime.js";
+import type { HumanAuthTakeoverRuntime } from "./takeover-runtime.js";
 
 export interface LocalHumanAuthStackStartResult {
   relayBaseUrl: string;
@@ -15,6 +16,15 @@ type HubRegistrationResponse = {
   publicBaseUrl: string;
 };
 
+export interface LocalHumanAuthStackOptions {
+  takeoverRuntime?: HumanAuthTakeoverRuntime;
+}
+
+export interface LocalHumanAuthSignedScreenshot {
+  url: string;
+  expiresAt: string;
+}
+
 function stripTrailingSlash(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
@@ -22,14 +32,16 @@ function stripTrailingSlash(value: string): string {
 export class LocalHumanAuthStack {
   private readonly config: OpenPocketConfig;
   private readonly log: (line: string) => void;
+  private readonly options: LocalHumanAuthStackOptions;
   private relay: HumanAuthRelayServer | null = null;
   private ngrok: NgrokTunnel | null = null;
   private registeredAgentId: string | null = null;
   private resolvedRelayBaseUrl = "";
   private resolvedPublicBaseUrl = "";
 
-  constructor(config: OpenPocketConfig, log?: (line: string) => void) {
+  constructor(config: OpenPocketConfig, log?: (line: string) => void, options: LocalHumanAuthStackOptions = {}) {
     this.config = config;
+    this.options = options;
     this.log =
       log ??
       ((line: string) => {
@@ -85,6 +97,17 @@ export class LocalHumanAuthStack {
     if (relay) {
       await relay.stop();
     }
+  }
+
+  async createSignedScreenshotUrl(options?: { ttlSec?: number }): Promise<LocalHumanAuthSignedScreenshot> {
+    await this.start();
+    if (!this.relay) {
+      throw new Error("Local human-auth relay is not running.");
+    }
+    return this.relay.createSignedScreenshotUrl({
+      publicBaseUrl: this.resolvedPublicBaseUrl || this.resolvedRelayBaseUrl || this.requireRelayAddress(),
+      ttlSec: options?.ttlSec,
+    });
   }
 
   private async startManagedRelay(agentId: string): Promise<LocalHumanAuthStackStartResult> {
@@ -156,7 +179,7 @@ export class LocalHumanAuthStack {
       apiKey: this.config.humanAuth.apiKey,
       apiKeyEnv: this.config.humanAuth.apiKeyEnv,
       stateFile: this.config.humanAuth.localRelayStateFile,
-      takeoverRuntime: new LocalHumanAuthTakeoverRuntime(this.config),
+      takeoverRuntime: this.options.takeoverRuntime ?? new LocalHumanAuthTakeoverRuntime(this.config),
       logger: this.log,
     });
     await this.relay.start();

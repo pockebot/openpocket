@@ -219,7 +219,9 @@ Examples:
 openpocket model show
 openpocket model list
 openpocket model set --name gpt-5.4
+openpocket model set --name aliyun-ui-agent/mobile
 openpocket --agent review-bot model set --provider google --model gemini-3.1-pro-preview
+openpocket --agent review-bot model set --provider aliyun-ui-agent --model pre-gui_owl_7b
 ```
 
 Notes:
@@ -227,6 +229,8 @@ Notes:
 - `model set --name <profile>` switches to an existing profile key
 - `model set --provider <provider> --model <model-id>` creates/updates a profile from provider presets and switches the selected agent's default model
 - model config is per agent after creation
+- `Aliyun UI Agent (Mobile)` is a dedicated backend, not a normal OpenAI-compatible chat profile even though it uses DashScope
+- when using `aliyun-ui-agent/mobile`, the selected agent must expose screenshots through the local relay stack; for public internet access, use the shared relay hub or per-agent ngrok
 
 ## Channel Commands
 

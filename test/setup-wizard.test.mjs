@@ -242,6 +242,115 @@ test("setup wizard supports custom provider+model profile in model selection", a
   });
 });
 
+test("setup wizard supports Aliyun UI Agent mobile profile selection", async () => {
+  await withTempHome("openpocket-setup-aliyun-ui-agent-", async () => {
+    const cfg = loadConfig();
+    cfg.humanAuth.tunnel.ngrok.executable = "echo";
+    const prevToken = process.env.NGROK_AUTHTOKEN;
+    process.env.NGROK_AUTHTOKEN = "ngrok-test-token";
+    const prompter = new FakePrompter({
+      confirms: [true, true, false, false],
+      selects: ["physical-phone", "usb", "aliyun-ui-agent/mobile", "skip", "skip", "pairing", "ngrok", "env"],
+      texts: [""],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    try {
+      await runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false });
+
+      const savedCfg = JSON.parse(fs.readFileSync(cfg.configPath, "utf-8"));
+      assert.equal(savedCfg.defaultModel, "aliyun-ui-agent/mobile");
+      assert.equal(savedCfg.models["aliyun-ui-agent/mobile"].apiKeyEnv, "DASHSCOPE_API_KEY");
+      assert.equal(savedCfg.models["aliyun-ui-agent/mobile"].backend, "aliyun_ui_agent_mobile");
+      assert.equal(savedCfg.humanAuth.enabled, true);
+      assert.equal(savedCfg.humanAuth.useLocalRelay, true);
+      assert.equal(savedCfg.humanAuth.tunnel.provider, "ngrok");
+      assert.equal(savedCfg.humanAuth.tunnel.ngrok.enabled, true);
+
+      const statePath = path.join(cfg.stateDir, "onboarding.json");
+      const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+      assert.equal(state.modelProfile, "aliyun-ui-agent/mobile");
+      assert.equal(state.modelProvider, "Aliyun UI Agent (Mobile)");
+      assert.equal(state.apiKeyEnv, "DASHSCOPE_API_KEY");
+      assert.equal(state.humanAuthMode, "ngrok");
+      assert.equal(typeof state.ngrokConfiguredAt, "string");
+    } finally {
+      if (prevToken === undefined) {
+        delete process.env.NGROK_AUTHTOKEN;
+      } else {
+        process.env.NGROK_AUTHTOKEN = prevToken;
+      }
+    }
+  });
+});
+
+test("setup wizard rejects disabling human-auth bridge for Aliyun UI Agent mobile", async () => {
+  await withTempHome("openpocket-setup-aliyun-ui-agent-disabled-", async () => {
+    const cfg = loadConfig();
+    const prompter = new FakePrompter({
+      confirms: [true, true, false, false],
+      selects: ["physical-phone", "usb", "aliyun-ui-agent/mobile", "skip", "skip", "pairing", "disabled"],
+      texts: [""],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await assert.rejects(
+      () => runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false }),
+      /Aliyun UI Agent \(Mobile\) requires ngrok/i,
+    );
+  });
+});
+
+test("setup wizard rejects missing ngrok CLI for Aliyun UI Agent mobile", async () => {
+  await withTempHome("openpocket-setup-aliyun-ui-agent-missing-ngrok-", async () => {
+    const cfg = loadConfig();
+    cfg.humanAuth.tunnel.ngrok.executable = "definitely-missing-ngrok-cli";
+    const prompter = new FakePrompter({
+      confirms: [true, true, false, false],
+      selects: ["physical-phone", "usb", "aliyun-ui-agent/mobile", "skip", "skip", "pairing", "ngrok", "skip"],
+      texts: [""],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    await assert.rejects(
+      () => runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false }),
+      /requires ngrok cli/i,
+    );
+  });
+});
+
+test("setup wizard rejects missing ngrok token for Aliyun UI Agent mobile", async () => {
+  await withTempHome("openpocket-setup-aliyun-ui-agent-missing-token-", async () => {
+    const cfg = loadConfig();
+    cfg.humanAuth.tunnel.ngrok.executable = "echo";
+    const prevToken = process.env.NGROK_AUTHTOKEN;
+    delete process.env.NGROK_AUTHTOKEN;
+    const prompter = new FakePrompter({
+      confirms: [true, true, false, false],
+      selects: ["physical-phone", "usb", "aliyun-ui-agent/mobile", "skip", "skip", "pairing", "ngrok", "skip"],
+      texts: [""],
+      pauseCount: 0,
+    });
+    const emulator = new FakeEmulator();
+
+    try {
+      await assert.rejects(
+        () => runSetupWizard(cfg, { prompter, emulator, skipTtyCheck: true, printHeader: false }),
+        /requires ngrok authtoken/i,
+      );
+    } finally {
+      if (prevToken === undefined) {
+        delete process.env.NGROK_AUTHTOKEN;
+      } else {
+        process.env.NGROK_AUTHTOKEN = prevToken;
+      }
+    }
+  });
+});
+
 test("setup wizard can configure physical phone target and skip emulator onboarding", async () => {
   await withTempHome("openpocket-setup-physical-target-", async () => {
     const cfg = loadConfig();

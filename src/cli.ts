@@ -602,6 +602,7 @@ function modelProviderLabel(baseUrl: string): string {
   if (lower.includes("api.kimi.com")) return "Kimi Code";
   if (lower.includes("moonshot.cn") || lower.includes("moonshot.ai")) return "Moonshot AI";
   if (lower.includes("api.deepseek.com")) return "DeepSeek";
+  if (lower.includes("/api/v2/apps/gui-owl/gui_agent_server")) return "Aliyun UI Agent (Mobile)";
   if (lower.includes("dashscope.aliyuncs.com")) return "Qwen (DashScope)";
   if (lower.includes("api.minimax.io") || lower.includes("api.minimaxi.com")) return "MiniMax";
   if (lower.includes("volces.com") || lower.includes("volcengine.com")) return "Volcano Engine";
