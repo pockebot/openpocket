@@ -113,9 +113,9 @@ function hasRetryableServerErrorSignature(detail: string): boolean {
 
 function isRetryableUpstreamModelError(
   detail: string,
-  modelInfo: Pick<RuntimeModelInfo, "provider" | "api" | "model">,
+  _modelInfo: Pick<RuntimeModelInfo, "provider" | "api" | "model">,
 ): boolean {
-  return isOpenAiLikeRuntimeModel(modelInfo) && hasRetryableServerErrorSignature(detail);
+  return hasRetryableServerErrorSignature(detail);
 }
 
 const PHONE_ONLY_TOOL_NAMES = new Set([
