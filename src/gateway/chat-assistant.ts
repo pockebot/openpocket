@@ -3362,7 +3362,7 @@ export class ChatAssistant {
         "Capture any meaningful result or confirmation before ending the run.",
         "Stop after this focused pass and leave remaining work for the next scheduled trigger.",
       ],
-      stepBudget: 30,
+      stepBudget: this.config.agent.maxSteps,
       completionCriteria: "Finish after one focused pass, once meaningful progress is made, or when the step budget is exhausted.",
     };
   }
@@ -3378,7 +3378,7 @@ export class ChatAssistant {
     return {
       summary: this.normalizeOneLine(String(value?.summary || "")) || fallback.summary,
       steps: steps.length > 0 ? steps : fallback.steps,
-      stepBudget: Math.max(20, Math.min(60, Number(value?.stepBudget) || fallback.stepBudget)),
+      stepBudget: Math.max(80, Math.min(this.config.agent.maxSteps, Number(value?.stepBudget) || fallback.stepBudget)),
       completionCriteria: this.normalizeOneLine(String(value?.completionCriteria || "")) || fallback.completionCriteria,
     };
   }
@@ -3466,14 +3466,14 @@ export class ChatAssistant {
       "Output strict JSON only:",
       '{',
       '  "steps": ["step 1 description", "step 2 description", ...],',
-      '  "stepBudget": <number 20-60>,',
+      `  "stepBudget": <number 80-${this.config.agent.maxSteps}>,`,
       '  "completionCriteria": "when to call finish",',
       '  "summary": "one-line plan summary for the user"',
       '}',
       "",
       "Rules:",
       "1) Break the task into 3-8 concrete, actionable steps. Each step should be specific (e.g. 'Open X app and scroll the home feed for 2-3 posts related to Open Pocket' not 'Browse feed').",
-      "2) Set stepBudget to a realistic number of agent steps needed (typically 20-60). Open-ended monitoring tasks should be capped, not infinite.",
+      `2) Set stepBudget to a realistic number of agent steps needed (typically 80-${this.config.agent.maxSteps}). Open-ended monitoring tasks should be capped, not infinite.`,
       "3) completionCriteria must be clear and achievable within a single session. The task will trigger again later, so do NOT try to be exhaustive.",
       "4) For social media tasks: plan specific interactions (e.g. 'comment on 2-3 relevant posts', 'check profile for new replies'), not open-ended browsing.",
       "5) For monitoring tasks: do one focused pass, not continuous monitoring. The cron schedule handles repetition.",
