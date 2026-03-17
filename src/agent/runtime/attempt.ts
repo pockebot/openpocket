@@ -191,7 +191,7 @@ function buildCronTaskPlanGuidance(plan: CronTaskPlan | null | undefined): strin
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 320) || "Finish after completing one focused pass or when the step budget is exhausted.";
-  const stepBudget = Number.isFinite(plan.stepBudget) ? Math.max(1, Math.round(plan.stepBudget)) : 30;
+  const stepBudget = plan.stepBudget;
   const steps = Array.isArray(plan.steps)
     ? plan.steps
       .map((step) => String(step || "").replace(/\s+/g, " ").trim())
