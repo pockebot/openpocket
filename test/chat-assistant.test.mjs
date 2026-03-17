@@ -658,8 +658,8 @@ test("ChatAssistant cron planner returns bounded fallback plan without model aut
   assert.ok(plan);
   assert.equal(Array.isArray(plan.steps), true);
   assert.ok(plan.steps.length >= 3);
-  assert.ok(plan.stepBudget >= 20);
-  assert.ok(plan.stepBudget <= 60);
+  assert.ok(plan.stepBudget >= 80);
+  assert.ok(plan.stepBudget <= 100);
   assert.match(plan.completionCriteria, /focused pass|step budget/i);
 });
 
