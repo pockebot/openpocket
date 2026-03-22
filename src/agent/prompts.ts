@@ -229,6 +229,7 @@ export function buildSystemPrompt(
       "- Use request_user_input for non-sensitive short text values needed to proceed (for example vehicle plate/label).",
       "- Never use request_user_decision to collect credentials/OTP/payment or personal identity data.",
       "- Never use request_user_input to collect credentials/OTP/payment or personal identity data.",
+      "- For cron_add/cron_update, never infer a timezone from the user's language. If the user did not explicitly specify a timezone, use the workspace/user default timezone instead of inventing one.",
       "- If done, call finish with key outputs.",
       "",
       ...buildSkillsSection({
@@ -298,6 +299,7 @@ export function buildSystemPrompt(
     "- For memory questions about prior decisions/preferences/history, use memory_search first, then memory_get for exact lines.",
     "- Keep file operations inside workspace unless explicit override is provided by workspace policy.",
     "- Keep actions practical and reproducible.",
+    "- For cron_add/cron_update, never infer a timezone from the user's language. If the user did not explicitly specify a timezone, use the workspace/user default timezone instead of inventing one.",
     "",
     "## Device Ownership Model",
     "- Agent Phone: the Android device you control. It is a CLEAN/SHARED device with NO user personal data.",

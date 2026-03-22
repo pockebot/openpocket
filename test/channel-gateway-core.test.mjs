@@ -703,6 +703,121 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
   });
 });
 
+test("GatewayCore runs scheduled jobs headlessly when no reply target is stored", async () => {
+  await withTempHome("gwcore-cron-headless-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    core.chat.planCronTask = async () => ({
+      summary: "headless run",
+      steps: ["run task"],
+      stepBudget: 4,
+      completionCriteria: "task completes",
+    });
+    core.chat.narrateScheduledTaskStart = async () => {
+      throw new Error("start narration should be skipped without a reply target");
+    };
+    core.chat.narrateTaskOutcome = async () => {
+      throw new Error("final narration should be skipped without a reply target");
+    };
+    core.agent.runTask = async () => ({
+      ok: true,
+      message: "headless ok",
+      sessionPath: "/tmp/gwcore-cron-headless.jsonl",
+      skillPath: null,
+      scriptPath: null,
+    });
+
+    const result = await core.runScheduledJob({
+      id: "headless-job",
+      name: "Headless Job",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 8 * * *",
+        at: null,
+        everyMs: null,
+        tz: "UTC",
+        summaryText: "Daily at 08:00 UTC",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Open settings app and check Wi-Fi",
+      },
+      delivery: null,
+      model: null,
+      promptMode: "minimal",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: null,
+      sourceChannel: null,
+      sourcePeerId: null,
+      runOnStartup: false,
+    });
+
+    assert.deepEqual(result, { accepted: true, ok: true, message: "headless ok" });
+    assert.equal(adapter.sent.length, 0);
+  });
+});
+
+test("GatewayCore falls back to the stored source chat for cron replies when delivery is absent", async () => {
+  await withTempHome("gwcore-cron-source-fallback-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    core.chat.planCronTask = async () => ({
+      summary: "notify source chat",
+      steps: ["run task"],
+      stepBudget: 4,
+      completionCriteria: "task completes",
+    });
+    core.chat.narrateScheduledTaskStart = async () => "Starting scheduled job";
+    core.chat.narrateTaskOutcome = async () => "Scheduled job finished";
+    core.agent.runTask = async () => ({
+      ok: true,
+      message: "source fallback ok",
+      sessionPath: "/tmp/gwcore-cron-source-fallback.jsonl",
+      skillPath: null,
+      scriptPath: null,
+    });
+
+    const result = await core.runScheduledJob({
+      id: "source-fallback-job",
+      name: "Source Fallback Job",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 8 * * *",
+        at: null,
+        everyMs: null,
+        tz: "UTC",
+        summaryText: "Daily at 08:00 UTC",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Open settings app and check Wi-Fi",
+      },
+      delivery: null,
+      model: null,
+      promptMode: "minimal",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: "test",
+      sourceChannel: "telegram",
+      sourcePeerId: "user-1",
+      runOnStartup: false,
+    });
+
+    assert.deepEqual(result, { accepted: true, ok: true, message: "source fallback ok" });
+    assert.equal(adapter.sent.length, 2);
+    assert.deepEqual(
+      adapter.sent.map((entry) => ({ peerId: entry.peerId, text: entry.text })),
+      [
+        { peerId: "user-1", text: "Starting scheduled job" },
+        { peerId: "user-1", text: "Scheduled job finished" },
+      ],
+    );
+  });
+});
+
 test("GatewayCore answers schedule-management list requests directly from the cron registry", async () => {
   await withTempHome("gwcore-schedule-manage-list-", async (home) => {
     const { adapter, core, config } = createGatewayCore(home);

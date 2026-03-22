@@ -401,6 +401,7 @@ export async function runRuntimeAttempt(
       launchablePackages,
       taskExecutionPlan: request.taskExecutionPlan ?? null,
       cronTaskPlan: request.cronTaskPlan ?? null,
+      channelContext: request.channelContext ?? null,
       runtimeModel: profile.backend === "aliyun_ui_agent_mobile" || profile.backend === "aliyun_gui_plus"
         ? {
           id: effectiveProfile.model,

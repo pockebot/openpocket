@@ -2388,6 +2388,13 @@ export class TelegramGateway {
       recentProgress: [],
       allProgress: [],
     };
+    const channelContext = chatId !== null
+      ? {
+        channelType: "telegram",
+        peerId: String(chatId),
+        senderId: String(chatId),
+      }
+      : null;
     let progressWork: Promise<void> = Promise.resolve();
     this.log(
       `task accepted source=${source} chat=${chatId ?? "(none)"} task=${JSON.stringify(task)} model=${modelName ?? this.config.defaultModel}`,
@@ -2597,6 +2604,7 @@ export class TelegramGateway {
             undefined,
             cronStepBudget ?? undefined,
             cronTaskPlan ?? undefined,
+            channelContext,
           );
           await progressWork;
 

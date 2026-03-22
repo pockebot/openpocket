@@ -28,6 +28,12 @@ import { type AutoArtifactBuilder, type StepTrace } from "../../skills/auto-arti
 import type { SkillLoader } from "../../skills/skill-loader.js";
 import type { SystemPromptMode } from "../prompts.js";
 
+export interface ChannelOriginContext {
+  channelType: string;
+  peerId: string;
+  senderId?: string | null;
+}
+
 export interface RunTaskRequest {
   task: string;
   modelName?: string;
@@ -42,6 +48,7 @@ export interface RunTaskRequest {
   taskExecutionPlan?: TaskExecutionPlan | null;
   maxStepsOverride?: number;
   cronTaskPlan?: CronTaskPlan | null;
+  channelContext?: ChannelOriginContext | null;
 }
 
 export interface RunTaskAttemptOutcome {
@@ -208,6 +215,7 @@ export interface PhoneAgentRunContext {
   launchablePackages: string[];
   taskExecutionPlan: TaskExecutionPlan | null;
   cronTaskPlan: CronTaskPlan | null;
+  channelContext: ChannelOriginContext | null;
   runtimeModel: RuntimeModelMetadata;
   effectivePromptMode: SystemPromptMode;
   systemPrompt: string;

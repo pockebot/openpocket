@@ -29,6 +29,7 @@ test("schedule intent normalization builds confirmation from model output", () =
   assert.equal(intent?.schedule.kind, "cron");
   assert.equal(intent?.schedule.expr, "0 8 * * *");
   assert.equal(intent?.schedule.summaryText, "Every day at 08:00");
+  assert.match(intent?.confirmationPrompt ?? "", /Asia\/Shanghai/);
   assert.match(intent?.confirmationPrompt ?? "", /confirm/i);
 });
 

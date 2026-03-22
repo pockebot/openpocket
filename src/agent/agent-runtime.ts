@@ -62,7 +62,7 @@ import {
 } from "./journal/task-journal-store.js";
 import { runRuntimeAttempt } from "./runtime/attempt.js";
 import { runRuntimeTask } from "./runtime/run.js";
-import type { RunTaskRequest } from "./runtime/types.js";
+import type { ChannelOriginContext, RunTaskRequest } from "./runtime/types.js";
 import { AliyunUiAgentClient } from "./aliyun-ui-agent-client.js";
 import { AliyunGuiPlusClient } from "./aliyun-gui-plus-client.js";
 import { createPiSessionBridge } from "./pi-session-bridge.js";
@@ -320,6 +320,7 @@ interface PhoneAgentRunContext {
   launchablePackages: string[];
   taskExecutionPlan: TaskExecutionPlan | null;
   cronTaskPlan: CronTaskPlan | null;
+  channelContext: ChannelOriginContext | null;
   runtimeModel: {
     id: string;
     provider: string;
@@ -2431,7 +2432,7 @@ export class AgentRuntime {
           action.type === "cron_remove" ||
           action.type === "cron_update"
         ) {
-          executionResult = this.executeCronAction(action);
+          executionResult = this.executeCronAction(action, ctx);
         } else if (action.type === "runtime_info") {
           executionResult = this.buildRuntimeInfoActionResult(ctx);
         } else {
@@ -2609,6 +2610,7 @@ export class AgentRuntime {
     action: Extract<AgentAction, {
       type: "cron_add" | "cron_list" | "cron_remove" | "cron_update";
     }>,
+    ctx?: Pick<PhoneAgentRunContext, "channelContext" | "task">,
   ): string {
     const registry = new CronRegistry(this.config);
 
@@ -2624,6 +2626,9 @@ export class AgentRuntime {
     }
 
     if (action.type === "cron_update") {
+      const normalizedSchedule = action.schedule
+        ? this.normalizeCronScheduleTimezone(action.schedule, ctx?.task)
+        : undefined;
       const updated = registry.update(action.id, {
         name: action.name,
         enabled: action.enabled,
@@ -2633,7 +2638,7 @@ export class AgentRuntime {
             task: action.task,
           }
           : undefined,
-        schedule: action.schedule,
+        schedule: normalizedSchedule,
         delivery:
           action.channel && action.to
             ? {
@@ -2651,31 +2656,92 @@ export class AgentRuntime {
         : `cron_update missing id=${action.id}`;
     }
 
+    const inheritedChannel = action.channel ?? ctx?.channelContext?.channelType ?? null;
+    const inheritedPeerId = action.to ?? ctx?.channelContext?.peerId ?? null;
+    const inheritedSourceChannel = action.sourceChannel ?? ctx?.channelContext?.channelType ?? null;
+    const inheritedSourcePeerId = action.sourcePeerId ?? ctx?.channelContext?.peerId ?? null;
+    const inheritedCreatedBy = action.createdBy
+      ?? (ctx?.channelContext
+        ? `${ctx.channelContext.channelType}:${ctx.channelContext.senderId ?? ctx.channelContext.peerId}`
+        : undefined);
+    const normalizedSchedule = this.normalizeCronScheduleTimezone(action.schedule, ctx?.task);
+
     const created = registry.add({
       id: action.id,
       name: action.name,
       enabled: true,
-      schedule: action.schedule,
+      schedule: normalizedSchedule,
       payload: {
         kind: "agent_turn",
         task: action.task,
       },
       delivery:
-        action.channel && action.to
+        inheritedChannel && inheritedPeerId
           ? {
             mode: "announce",
-            channel: action.channel,
-            to: action.to,
+            channel: inheritedChannel,
+            to: inheritedPeerId,
           }
           : null,
       model: action.model ?? null,
       promptMode: action.promptMode ?? "minimal",
       runOnStartup: action.runOnStartup,
-      createdBy: action.createdBy,
-      sourceChannel: action.sourceChannel,
-      sourcePeerId: action.sourcePeerId,
+      createdBy: inheritedCreatedBy,
+      sourceChannel: inheritedSourceChannel,
+      sourcePeerId: inheritedSourcePeerId,
     });
-    return `cron_add ok id=${created.id}`;
+    return `cron_add ok id=${created.id} tz=${created.schedule.tz}`;
+  }
+
+  private normalizeCronScheduleTimezone<
+    T extends {
+      kind: "cron" | "at" | "every";
+      tz: string;
+    },
+  >(schedule: T, sourceTask?: string): T {
+    if (this.sourceTaskMentionsExplicitTimezone(sourceTask ?? "")) {
+      return schedule;
+    }
+    const preferredTimezone = this.resolvePreferredScheduleTimezone();
+    if (!preferredTimezone || schedule.tz === preferredTimezone) {
+      return schedule;
+    }
+    return {
+      ...schedule,
+      tz: preferredTimezone,
+    };
+  }
+
+  private resolvePreferredScheduleTimezone(): string {
+    const userPath = path.join(this.config.workspaceDir, "USER.md");
+    try {
+      const user = fs.readFileSync(userPath, "utf-8");
+      const match = user.match(/^\s*-\s*Timezone:\s*([^\r\n]+?)\s*$/im);
+      const configured = match?.[1]?.trim() ?? "";
+      if (configured) {
+        return configured;
+      }
+    } catch {
+      // Fall back to the process timezone below.
+    }
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  }
+
+  private sourceTaskMentionsExplicitTimezone(task: string): boolean {
+    const normalized = String(task || "").trim();
+    if (!normalized) {
+      return false;
+    }
+    return [
+      /\b(?:timezone|time zone)\b/i,
+      /\b(?:utc|gmt)(?:\s*[+-]\s*\d{1,2}(?::?\d{2})?)?\b/i,
+      /\b(?:pst|pdt|est|edt|cst|cdt|mst|mdt)\b/i,
+      /\b(?:pacific|eastern|central|mountain)\s+time\b/i,
+      /\b(?:beijing|shanghai|china|tokyo|singapore|hong kong|taipei|los angeles|new york|london)\s+time\b/i,
+      /\b(?:asia|america|europe|australia|africa|etc)\/[A-Za-z_+-]+(?:\/[A-Za-z_+-]+)?\b/,
+      /(?:^|[^\d])[+-]\d{2}:\d{2}(?:$|[^\d])/,
+      /北京时间|上海时间|中国时间|太平洋时间|美东时间|美西时间|东京时间|新加坡时间|东八区/u,
+    ].some((pattern) => pattern.test(normalized));
   }
 
   private executeJournalAction(
@@ -3781,6 +3847,7 @@ export class AgentRuntime {
     availableToolNamesOverride?: string[],
     maxStepsOverride?: number,
     cronTaskPlan?: CronTaskPlan | null,
+    channelContext?: ChannelOriginContext | null,
   ): Promise<AgentRunResult> {
     const activeToolNames = Array.isArray(availableToolNamesOverride) && availableToolNamesOverride.length > 0
       ? availableToolNamesOverride
@@ -3799,6 +3866,7 @@ export class AgentRuntime {
       taskExecutionPlan,
       maxStepsOverride,
       cronTaskPlan,
+      channelContext,
     };
 
     return runRuntimeTask(

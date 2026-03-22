@@ -2441,6 +2441,7 @@ export class ChatAssistant {
     inputText: string,
   ): Promise<ScheduleIntentExtractionDecision | null> {
     const locale: OnboardingLocale = inferScheduleIntentLocale(inputText);
+    const defaultTimezone = this.scheduleTimezoneForInput();
     const recentContext = this.buildRoutingContextTranscript(chatId);
     const prompt = [
       "Determine whether the user message asks to create a scheduled job, manage an existing scheduled job, or neither.",
@@ -2464,7 +2465,9 @@ export class ChatAssistant {
       "13) Use kind=at only for one-shot future schedules when you can provide an RFC3339 datetime.",
       "14) summaryText must be short and in the user's language when route=create_schedule.",
       "15) If the schedule is ambiguous or any required field is missing for route=create_schedule, return route=none instead of guessing.",
+      "16) If the user does not explicitly specify a timezone, leave schedule.tz empty or use the default timezone below. Never infer timezone from the user's language or script.",
       `User locale hint: ${locale}`,
+      `Default timezone: ${defaultTimezone}`,
       this.buildExistingJobsCatalog(),
       recentContext ? `Recent conversation context:\n${recentContext}` : "",
       `User message: ${inputText}`,

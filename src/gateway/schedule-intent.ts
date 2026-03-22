@@ -82,7 +82,7 @@ export function normalizeScheduleIntentDecision(
       schedule,
       delivery: null,
       requiresConfirmation: true,
-      confirmationPrompt: buildScheduleIntentConfirmationPrompt(schedule.summaryText, normalizedTask),
+      confirmationPrompt: buildScheduleIntentConfirmationPrompt(schedule.summaryText, schedule.tz, normalizedTask),
     },
   };
 }
@@ -96,8 +96,8 @@ export function normalizeScheduleIntentCandidate(
   return decision?.route === "create_schedule" ? decision.intent : null;
 }
 
-function buildScheduleIntentConfirmationPrompt(summaryText: string, taskText: string): string {
-  return `I understand this as a scheduled job: ${summaryText}, task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`;
+function buildScheduleIntentConfirmationPrompt(summaryText: string, timezone: string, taskText: string): string {
+  return `I understand this as a scheduled job: ${summaryText} (${timezone}), task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`;
 }
 
 function normalizeSchedule(

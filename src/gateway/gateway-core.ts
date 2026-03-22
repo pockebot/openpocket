@@ -19,6 +19,7 @@ import type {
 import type {
   ChannelAdapter,
   ChannelRouter,
+  ChannelType,
   InboundEnvelope,
   SendOptions,
   SessionKeyResolver,
@@ -1230,14 +1231,26 @@ export class GatewayCore {
     this.log(`task accepted channel=${envelope.channelType} sender=${envelope.senderId} model=${this.config.defaultModel}${taskDetail}`, "info", "task");
 
     const adapter = this.router.getAdapter(envelope.channelType);
+    const canReply = adapter !== null && this.hasReplyTarget(envelope);
+    const channelContext = canReply
+      ? {
+        channelType: envelope.channelType,
+        peerId: envelope.peerId,
+        senderId: envelope.senderId,
+      }
+      : null;
 
     try {
-      if (adapter) await adapter.setTypingIndicator(envelope.peerId, true);
+      if (canReply && adapter) await adapter.setTypingIndicator(envelope.peerId, true);
 
       const enqueueProgress = (progress: AgentProgressUpdate): void => {
         progressWork = progressWork.then(async () => {
           const recentProgress = [...narrationState.recentProgress, progress].slice(-8);
           narrationState.allProgress = [...narrationState.allProgress, progress].slice(-16);
+          if (!canReply) {
+            narrationState.recentProgress = recentProgress;
+            return;
+          }
           const isFirstProgress =
             narrationState.lastNotifiedProgress === null && progress.step === 1;
 
@@ -1296,6 +1309,11 @@ export class GatewayCore {
         undefined,
         async (progress) => enqueueProgress(progress),
         async (request) => {
+          if (!canReply) {
+            throw new Error(
+              "Human authorization is unavailable because this scheduled job has no reachable reply target.",
+            );
+          }
           return this.humanAuth.requestAndWait(
             { chatId: this.peerIdNum(envelope), task, request: { ...request, timeoutSec: Math.max(30, request.timeoutSec) } },
             async (opened) => {
@@ -1318,45 +1336,50 @@ export class GatewayCore {
           );
         },
         runOptions?.promptMode,
-        adapter
+        canReply && adapter
           ? async (request) => adapter.requestUserDecision(envelope.peerId, request)
           : undefined,
         sessionKey,
-        adapter
+        canReply && adapter
           ? async (request) => adapter.requestUserInput(envelope.peerId, request)
           : undefined,
-        adapter
+        canReply && adapter
           ? async (request) => this.deliverChannelMedia(envelope, request, adapter)
           : undefined,
         taskExecutionPlan,
         runOptions?.availableToolNamesOverride,
         runOptions?.cronStepBudget,
         runOptions?.cronTaskPlan,
+        channelContext,
       );
       await progressWork;
 
       this.log(`task done channel=${envelope.channelType} model=${this.config.defaultModel} ok=${result.ok} session=${result.sessionPath}`, "info", "task");
 
-      const evidenceSnapshot = readLatestTaskJournalSnapshot(result.sessionPath);
-      const finalMessage = await this.chat.narrateTaskOutcome({
-        task, locale, ok: result.ok, rawResult: result.message,
-        recentProgress: narrationState.allProgress,
-        evidenceSnapshot,
-        skillPath: result.skillPath ?? null,
-        scriptPath: result.scriptPath ?? null,
-      });
-      await this.router.replyText(envelope, this.sanitizeForChat(finalMessage, 1800), { disableLinkPreview: true });
-      this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", finalMessage);
+      if (canReply) {
+        const evidenceSnapshot = readLatestTaskJournalSnapshot(result.sessionPath);
+        const finalMessage = await this.chat.narrateTaskOutcome({
+          task, locale, ok: result.ok, rawResult: result.message,
+          recentProgress: narrationState.allProgress,
+          evidenceSnapshot,
+          skillPath: result.skillPath ?? null,
+          scriptPath: result.scriptPath ?? null,
+        });
+        await this.router.replyText(envelope, this.sanitizeForChat(finalMessage, 1800), { disableLinkPreview: true });
+        this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", finalMessage);
+      }
 
       return { accepted: true, ok: result.ok, message: result.message };
     } catch (error) {
       await progressWork.catch(() => {});
       const message = `Execution interrupted: ${(error as Error).message || "Unknown error."}`;
       this.log(`task crash channel=${envelope.channelType} model=${this.config.defaultModel} error=${(error as Error).message}`, "error", "task");
-      await this.router.replyText(envelope, this.sanitizeForChat(message, 600));
+      if (canReply) {
+        await this.router.replyText(envelope, this.sanitizeForChat(message, 600));
+      }
       return { accepted: true, ok: false, message };
     } finally {
-      if (adapter) await adapter.setTypingIndicator(envelope.peerId, false).catch(() => {});
+      if (canReply && adapter) await adapter.setTypingIndicator(envelope.peerId, false).catch(() => {});
       void this.drainTaskQueue();
     }
   }
@@ -1385,8 +1408,9 @@ export class GatewayCore {
     }
 
     const adapters = this.router.getAllAdapters();
-    const preferredAdapter = job.delivery?.channel
-      ? this.router.getAdapter(job.delivery.channel as import("../channel/types.js").ChannelType)
+    const replyTarget = this.resolveScheduledJobReplyTarget(job);
+    const preferredAdapter = replyTarget
+      ? this.router.getAdapter(replyTarget.channelType)
       : null;
     const adapter = preferredAdapter ?? adapters[0];
     if (!adapter) {
@@ -1396,11 +1420,11 @@ export class GatewayCore {
     const cronPlan = await this.chat.planCronTask(job.payload.task);
 
     const envelope: InboundEnvelope = {
-      channelType: adapter.channelType,
+      channelType: replyTarget?.channelType ?? adapter.channelType,
       senderId: "cron",
       senderName: "Cron",
       senderLanguageCode: null,
-      peerId: job.delivery?.to ? String(job.delivery.to) : "cron",
+      peerId: replyTarget?.peerId ?? "cron",
       peerKind: "dm",
       text: job.payload.task,
       attachments: [],
@@ -1408,7 +1432,7 @@ export class GatewayCore {
       receivedAt: new Date().toISOString(),
     };
 
-    if (job.delivery?.to) {
+    if (preferredAdapter && replyTarget) {
       const startMsg = await this.chat.narrateScheduledTaskStart(job.name, job.payload.task);
       await this.router.replyText(envelope, startMsg);
       this.chat.appendExternalTurn(this.peerIdNum(envelope), "assistant", startMsg);
@@ -1741,6 +1765,22 @@ export class GatewayCore {
 
   private inferTaskLocale(task: string): OnboardingLocale {
     return /[一-鿿]/u.test(task) ? "zh" : "en";
+  }
+
+  private hasReplyTarget(envelope: InboundEnvelope): boolean {
+    return envelope.peerId.trim().length > 0 && envelope.peerId !== "cron";
+  }
+
+  private resolveScheduledJobReplyTarget(job: StoredCronJob): { channelType: ChannelType; peerId: string } | null {
+    const channelType = job.delivery?.channel ?? job.sourceChannel;
+    const peerId = job.delivery?.to ? String(job.delivery.to).trim() : (job.sourcePeerId?.trim() ?? "");
+    if (!channelType || !peerId) {
+      return null;
+    }
+    return {
+      channelType: channelType as ChannelType,
+      peerId,
+    };
   }
 
   /**
