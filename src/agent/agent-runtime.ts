@@ -10,6 +10,7 @@ import type {
   ChannelMediaDeliveryResult,
   ChannelMediaRequest,
   CronTaskPlan,
+  CronTimezoneSource,
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
@@ -2627,7 +2628,7 @@ export class AgentRuntime {
 
     if (action.type === "cron_update") {
       const normalizedSchedule = action.schedule
-        ? this.normalizeCronScheduleTimezone(action.schedule, ctx?.task)
+        ? this.normalizeCronScheduleTimezone(action.schedule, action.timezoneSource)
         : undefined;
       const updated = registry.update(action.id, {
         name: action.name,
@@ -2664,7 +2665,7 @@ export class AgentRuntime {
       ?? (ctx?.channelContext
         ? `${ctx.channelContext.channelType}:${ctx.channelContext.senderId ?? ctx.channelContext.peerId}`
         : undefined);
-    const normalizedSchedule = this.normalizeCronScheduleTimezone(action.schedule, ctx?.task);
+    const normalizedSchedule = this.normalizeCronScheduleTimezone(action.schedule, action.timezoneSource);
 
     const created = registry.add({
       id: action.id,
@@ -2698,8 +2699,8 @@ export class AgentRuntime {
       kind: "cron" | "at" | "every";
       tz: string;
     },
-  >(schedule: T, sourceTask?: string): T {
-    if (this.sourceTaskMentionsExplicitTimezone(sourceTask ?? "")) {
+  >(schedule: T, timezoneSource?: CronTimezoneSource): T {
+    if (timezoneSource === "explicit") {
       return schedule;
     }
     const preferredTimezone = this.resolvePreferredScheduleTimezone();
@@ -2716,32 +2717,23 @@ export class AgentRuntime {
     const userPath = path.join(this.config.workspaceDir, "USER.md");
     try {
       const user = fs.readFileSync(userPath, "utf-8");
-      const match = user.match(/^\s*-\s*Timezone:\s*([^\r\n]+?)\s*$/im);
-      const configured = match?.[1]?.trim() ?? "";
+      const timezoneLine = user
+        .split(/\r?\n/)
+        .find((line) => /^\s*-\s*Timezone\s*:/i.test(line));
+      const configured = timezoneLine
+        ? timezoneLine.replace(/^\s*-\s*Timezone\s*:\s*/i, "").trim()
+        : "";
       if (configured) {
-        return configured;
+        try {
+          return new Intl.DateTimeFormat("en-US", { timeZone: configured }).resolvedOptions().timeZone;
+        } catch {
+          // Fall through to the process timezone below.
+        }
       }
     } catch {
       // Fall back to the process timezone below.
     }
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  }
-
-  private sourceTaskMentionsExplicitTimezone(task: string): boolean {
-    const normalized = String(task || "").trim();
-    if (!normalized) {
-      return false;
-    }
-    return [
-      /\b(?:timezone|time zone)\b/i,
-      /\b(?:utc|gmt)(?:\s*[+-]\s*\d{1,2}(?::?\d{2})?)?\b/i,
-      /\b(?:pst|pdt|est|edt|cst|cdt|mst|mdt)\b/i,
-      /\b(?:pacific|eastern|central|mountain)\s+time\b/i,
-      /\b(?:beijing|shanghai|china|tokyo|singapore|hong kong|taipei|los angeles|new york|london)\s+time\b/i,
-      /\b(?:asia|america|europe|australia|africa|etc)\/[A-Za-z_+-]+(?:\/[A-Za-z_+-]+)?\b/,
-      /(?:^|[^\d])[+-]\d{2}:\d{2}(?:$|[^\d])/,
-      /北京时间|上海时间|中国时间|太平洋时间|美东时间|美西时间|东京时间|新加坡时间|东八区/u,
-    ].some((pattern) => pattern.test(normalized));
   }
 
   private executeJournalAction(

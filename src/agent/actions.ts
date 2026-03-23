@@ -296,6 +296,10 @@ export function normalizeAction(input: unknown): AgentAction {
           ? String(input.schedule.summaryText ?? "")
           : "",
       },
+      timezoneSource:
+        input.timezoneSource === "explicit" || input.timezoneSource === "default"
+          ? input.timezoneSource
+          : undefined,
       task: String(input.task ?? ""),
       channel: toOptionalTrimmedString(input.channel),
       to: toOptionalTrimmedString(input.to),
@@ -348,6 +352,10 @@ export function normalizeAction(input: unknown): AgentAction {
           summaryText: String(input.schedule.summaryText ?? ""),
         }
         : undefined,
+      timezoneSource:
+        input.timezoneSource === "explicit" || input.timezoneSource === "default"
+          ? input.timezoneSource
+          : undefined,
       channel: toOptionalTrimmedString(input.channel),
       to: toOptionalTrimmedString(input.to),
       model: toOptionalTrimmedString(input.model),

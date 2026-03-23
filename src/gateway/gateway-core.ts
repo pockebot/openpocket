@@ -34,6 +34,7 @@ import { HumanAuthBridge } from "../human-auth/bridge.js";
 import { LocalHumanAuthStack } from "../human-auth/local-stack.js";
 import { readLatestTaskJournalSnapshot } from "../agent/journal/task-journal-store.js";
 import { ChatAssistant } from "./chat-assistant.js";
+import { buildScheduleIntentConfirmationPrompt } from "./schedule-intent.js";
 import {
   emptyCronManagementPatch,
   emptyCronManagementSelector,
@@ -645,6 +646,18 @@ export class GatewayCore {
     return null;
   }
 
+  private parseScheduleConfirmationTimezone(text: string): string | null {
+    const normalized = text.trim().replace(/^["'`]+|["'`]+$/g, "");
+    if (!normalized) {
+      return null;
+    }
+    try {
+      return new Intl.DateTimeFormat("en-US", { timeZone: normalized }).resolvedOptions().timeZone;
+    } catch {
+      return null;
+    }
+  }
+
   private slugifyScheduleTask(task: string): string {
     const slug = task
       .toLowerCase()
@@ -699,6 +712,7 @@ export class GatewayCore {
         id: `schedule-${Date.now()}-${this.slugifyScheduleTask(intent.normalizedTask)}`,
         name: this.buildScheduledJobName(intent),
         schedule: intent.schedule,
+        timezoneSource: intent.timezoneSource,
         task: intent.normalizedTask,
         channel: envelope.channelType,
         to: envelope.peerId,
@@ -1103,9 +1117,33 @@ export class GatewayCore {
       return false;
     }
     const action = this.readScheduleConfirmationAction(text);
-    const locale = this.inferLocale(envelope);
+    const timezoneOverride = this.parseScheduleConfirmationTimezone(text);
+    if (!action && timezoneOverride) {
+      const updatedIntent: ScheduleIntent = {
+        ...pending.intent,
+        schedule: {
+          ...pending.intent.schedule,
+          tz: timezoneOverride,
+        },
+        timezoneSource: "explicit",
+        confirmationPrompt: buildScheduleIntentConfirmationPrompt(
+          pending.intent.schedule.summaryText,
+          timezoneOverride,
+          pending.intent.normalizedTask,
+          "explicit",
+        ),
+      };
+      this.pendingScheduleConfirmations.set(key, {
+        intent: updatedIntent,
+        createdAtMs: Date.now(),
+      });
+      await this.router.replyText(envelope, this.sanitizeForChat(updatedIntent.confirmationPrompt, 1800));
+      return true;
+    }
     if (!action) {
-      const reminder = 'You have a pending scheduled job. Reply with "confirm" or "cancel" first.';
+      const reminder = pending.intent.timezoneSource === "default"
+        ? 'You have a pending scheduled job. Reply with "confirm", "cancel", or send a timezone like "America/Los_Angeles".'
+        : 'You have a pending scheduled job. Reply with "confirm" or "cancel" first.';
       await this.router.replyText(envelope, reminder);
       return true;
     }

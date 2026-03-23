@@ -510,6 +510,7 @@ test("GatewayCore handlePlainMessage replies with confirmation for schedule inte
           tz: "Asia/Shanghai",
           summaryText: "Daily 08:00",
         },
+        timezoneSource: "explicit",
         delivery: null,
         requiresConfirmation: true,
         confirmationPrompt: "Please confirm creating this scheduled job.",
@@ -554,6 +555,7 @@ test("GatewayCore creates a structured cron job after confirmation", async () =>
           tz: "Asia/Shanghai",
           summaryText: "Daily 08:00",
         },
+        timezoneSource: "explicit",
         delivery: null,
         requiresConfirmation: true,
         confirmationPrompt: "Please confirm creating this scheduled job.",
@@ -638,6 +640,7 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
           tz: "Asia/Shanghai",
           summaryText: "Daily 08:00",
         },
+        timezoneSource: "explicit",
         delivery: null,
         requiresConfirmation: true,
         confirmationPrompt: "Please confirm creating this scheduled job.",
@@ -700,6 +703,64 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
     assert.match(capturedTask, /Create exactly one cron job/i);
     assert.deepEqual(capturedToolNames, ["cron_add", "finish"]);
     assert.match(adapter.sent[1].text, /created/i);
+  });
+});
+
+test("GatewayCore lets the user override a defaulted schedule timezone before confirmation", async () => {
+  await withTempHome("gwcore-schedule-timezone-override-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+    let capturedTask = "";
+
+    core.chat.decide = async () => ({
+      mode: "schedule_intent",
+      task: "Open Slack and complete check-in",
+      reply: [
+        'I understand this as a scheduled job: Daily 08:00 (America/Los_Angeles), task "Open Slack and complete check-in".',
+        "I used your default timezone because you did not specify one.",
+        'Reply "confirm" to create it, "cancel" to discard it, or send a different timezone such as "Asia/Shanghai".',
+      ].join(" "),
+      confidence: 0.99,
+      reason: "schedule_intent:cron",
+      scheduleIntent: {
+        sourceText: "Every morning at 8, open Slack and complete check-in",
+        normalizedTask: "Open Slack and complete check-in",
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "America/Los_Angeles",
+          summaryText: "Daily 08:00",
+        },
+        timezoneSource: "default",
+        delivery: null,
+        requiresConfirmation: true,
+        confirmationPrompt: [
+          'I understand this as a scheduled job: Daily 08:00 (America/Los_Angeles), task "Open Slack and complete check-in".',
+          "I used your default timezone because you did not specify one.",
+          'Reply "confirm" to create it, "cancel" to discard it, or send a different timezone such as "Asia/Shanghai".',
+        ].join(" "),
+      },
+    });
+    core.agent.runTask = async (task) => {
+      capturedTask = task;
+      return {
+        ok: true,
+        message: "created",
+        sessionPath: "/tmp/cron-setup.jsonl",
+        skillPath: null,
+        scriptPath: null,
+      };
+    };
+
+    await core.handleInbound(makeEnvelope({ text: "Every morning at 8, open Slack and complete check-in" }));
+    await core.handleInbound(makeEnvelope({ text: "Europe/London" }));
+    await core.handleInbound(makeEnvelope({ text: "confirm" }));
+
+    assert.match(adapter.sent[1].text, /Europe\/London/);
+    assert.match(adapter.sent[1].text, /confirm/i);
+    assert.match(capturedTask, /"tz": "Europe\/London"/);
+    assert.match(capturedTask, /"timezoneSource": "explicit"/);
   });
 });
 
@@ -1781,6 +1842,7 @@ test("GatewayCore cancels pending schedule confirmation without creating a job",
           tz: "Asia/Shanghai",
           summaryText: "Daily 08:00",
         },
+        timezoneSource: "explicit",
         delivery: null,
         requiresConfirmation: true,
         confirmationPrompt: "Please confirm creating this scheduled job.",
@@ -1825,6 +1887,7 @@ test("GatewayCore blocks unrelated messages while schedule confirmation is pendi
               tz: "Asia/Shanghai",
               summaryText: "Daily 08:00",
             },
+            timezoneSource: "explicit",
             delivery: null,
             requiresConfirmation: true,
             confirmationPrompt: "Please confirm creating this scheduled job.",
