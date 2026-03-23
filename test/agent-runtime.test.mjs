@@ -557,6 +557,7 @@ test("AgentRuntime cron_add tool creates a structured cron job", async () => {
             tz: "Asia/Shanghai",
             summaryText: "Daily 08:00",
           },
+          timezoneSource: "explicit",
           task: "Open Slack and complete check-in",
           channel: "telegram",
           to: "12345",
@@ -595,6 +596,216 @@ test("AgentRuntime cron_add tool creates a structured cron job", async () => {
   assert.equal(created.payload.task, "Open Slack and complete check-in");
   assert.equal(created.delivery.channel, "telegram");
   assert.equal(created.delivery.to, "12345");
+  assert.equal(created.schedule.tz, "Asia/Shanghai");
+});
+
+test("AgentRuntime cron_add inherits channel metadata from the active run context", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "create cron job",
+        action: {
+          type: "cron_add",
+          id: "daily-slack-checkin-inherited",
+          name: "Daily Slack Check-in Inherited",
+          schedule: {
+            kind: "cron",
+            expr: "0 8 * * *",
+            at: null,
+            everyMs: null,
+            tz: "Asia/Shanghai",
+            summaryText: "Daily 08:00",
+          },
+          timezoneSource: "default",
+          task: "Open Slack and complete check-in",
+          promptMode: "minimal",
+        },
+      },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+  fs.writeFileSync(
+    path.join(runtime.config.workspaceDir, "USER.md"),
+    [
+      "# USER",
+      "",
+      "## Profile",
+      "",
+      "- Timezone: America/Los_Angeles",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const result = await runtime.runTask(
+    "create cron job via inherited context",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    ["cron_add", "finish"],
+    undefined,
+    undefined,
+    { channelType: "telegram", peerId: "12345", senderId: "12345" },
+  );
+  assert.equal(result.ok, true);
+
+  const jobsFile = path.join(runtime.config.workspaceDir, "cron", "jobs.json");
+  const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  const created = saved.jobs.find((job) => job.id === "daily-slack-checkin-inherited");
+  assert.equal(Boolean(created), true);
+  assert.deepEqual(created.delivery, { mode: "announce", channel: "telegram", to: "12345" });
+  assert.equal(created.schedule.tz, "America/Los_Angeles");
+  assert.equal(created.createdBy, "telegram:12345");
+  assert.equal(created.sourceChannel, "telegram");
+  assert.equal(created.sourcePeerId, "12345");
+});
+
+test("AgentRuntime preserves an explicitly requested timezone for cron_add", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "create cron job",
+        action: {
+          type: "cron_add",
+          id: "daily-slack-checkin-shanghai",
+          name: "Daily Slack Check-In Shanghai",
+          schedule: {
+            kind: "cron",
+            expr: "0 8 * * *",
+            at: null,
+            everyMs: null,
+            tz: "Asia/Shanghai",
+            summaryText: "Daily 08:00",
+          },
+          timezoneSource: "explicit",
+          task: "Open Slack and complete check-in",
+          promptMode: "minimal",
+        },
+      },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+  fs.writeFileSync(
+    path.join(runtime.config.workspaceDir, "USER.md"),
+    [
+      "# USER",
+      "",
+      "## Profile",
+      "",
+      "- Timezone: America/Los_Angeles",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const result = await runtime.runTask(
+    "Create a cron job for 8 AM Shanghai time to open Slack and complete check-in",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    ["cron_add", "finish"],
+    undefined,
+    undefined,
+    { channelType: "telegram", peerId: "12345", senderId: "12345" },
+  );
+  assert.equal(result.ok, true);
+
+  const jobsFile = path.join(runtime.config.workspaceDir, "cron", "jobs.json");
+  const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  const created = saved.jobs.find((job) => job.id === "daily-slack-checkin-shanghai");
+  assert.equal(Boolean(created), true);
+  assert.equal(created.schedule.tz, "Asia/Shanghai");
+});
+
+test("AgentRuntime ignores blank USER.md timezone lines when defaulting cron timezone", async () => {
+  const runtime = setupRuntime({
+    returnHomeOnTaskEnd: false,
+    scriptedSteps: [
+      {
+        thought: "create cron job",
+        action: {
+          type: "cron_add",
+          id: "daily-slack-checkin-fallback",
+          name: "Daily Slack Check-in Fallback",
+          schedule: {
+            kind: "cron",
+            expr: "0 8 * * *",
+            at: null,
+            everyMs: null,
+            tz: "Asia/Shanghai",
+            summaryText: "Daily 08:00",
+          },
+          timezoneSource: "default",
+          task: "Open Slack and complete check-in",
+          promptMode: "minimal",
+        },
+      },
+      { thought: "done", action: { type: "finish", message: "task completed" } },
+    ],
+  });
+
+  runtime.adb = {
+    queryLaunchablePackages: () => [],
+    captureScreenSnapshot: () => makeSnapshot(),
+    executeAction: async () => "ok",
+  };
+  fs.writeFileSync(
+    path.join(runtime.config.workspaceDir, "USER.md"),
+    [
+      "# USER",
+      "",
+      "## Profile",
+      "",
+      "- Timezone:",
+      "- Language preference: English",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const result = await runtime.runTask(
+    "create cron job with fallback timezone",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    ["cron_add", "finish"],
+  );
+  assert.equal(result.ok, true);
+
+  const jobsFile = path.join(runtime.config.workspaceDir, "cron", "jobs.json");
+  const saved = JSON.parse(fs.readFileSync(jobsFile, "utf-8"));
+  const created = saved.jobs.find((job) => job.id === "daily-slack-checkin-fallback");
+  assert.equal(Boolean(created), true);
+  assert.equal(created.schedule.tz, Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
 });
 
 test("AgentRuntime system prompt includes task journal guidance", async () => {

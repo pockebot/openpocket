@@ -507,6 +507,7 @@ export type AgentAction =
       id: string;
       name: string;
       schedule: CronScheduleSpec;
+      timezoneSource?: CronTimezoneSource;
       task: string;
       channel?: string;
       to?: string;
@@ -527,6 +528,7 @@ export type AgentAction =
       enabled?: boolean;
       task?: string;
       schedule?: CronScheduleSpec;
+      timezoneSource?: CronTimezoneSource;
       channel?: string;
       to?: string;
       model?: string;
@@ -702,6 +704,8 @@ export interface CronScheduleSpec {
   summaryText: string;
 }
 
+export type CronTimezoneSource = "explicit" | "default";
+
 export interface CronDeliveryTarget {
   mode: "announce";
   channel: string;
@@ -712,6 +716,7 @@ export interface ScheduleIntent {
   sourceText: string;
   normalizedTask: string;
   schedule: CronScheduleSpec;
+  timezoneSource: CronTimezoneSource;
   delivery?: CronDeliveryTarget | null;
   requiresConfirmation: boolean;
   confirmationPrompt: string;

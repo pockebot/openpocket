@@ -10,6 +10,7 @@ import type {
   ChannelMediaDeliveryResult,
   ChannelMediaRequest,
   CronTaskPlan,
+  CronTimezoneSource,
   HumanAuthDecision,
   HumanAuthCapability,
   HumanAuthRequest,
@@ -62,7 +63,7 @@ import {
 } from "./journal/task-journal-store.js";
 import { runRuntimeAttempt } from "./runtime/attempt.js";
 import { runRuntimeTask } from "./runtime/run.js";
-import type { RunTaskRequest } from "./runtime/types.js";
+import type { ChannelOriginContext, RunTaskRequest } from "./runtime/types.js";
 import { AliyunUiAgentClient } from "./aliyun-ui-agent-client.js";
 import { AliyunGuiPlusClient } from "./aliyun-gui-plus-client.js";
 import { createPiSessionBridge } from "./pi-session-bridge.js";
@@ -320,6 +321,7 @@ interface PhoneAgentRunContext {
   launchablePackages: string[];
   taskExecutionPlan: TaskExecutionPlan | null;
   cronTaskPlan: CronTaskPlan | null;
+  channelContext: ChannelOriginContext | null;
   runtimeModel: {
     id: string;
     provider: string;
@@ -2431,7 +2433,7 @@ export class AgentRuntime {
           action.type === "cron_remove" ||
           action.type === "cron_update"
         ) {
-          executionResult = this.executeCronAction(action);
+          executionResult = this.executeCronAction(action, ctx);
         } else if (action.type === "runtime_info") {
           executionResult = this.buildRuntimeInfoActionResult(ctx);
         } else {
@@ -2609,6 +2611,7 @@ export class AgentRuntime {
     action: Extract<AgentAction, {
       type: "cron_add" | "cron_list" | "cron_remove" | "cron_update";
     }>,
+    ctx?: Pick<PhoneAgentRunContext, "channelContext" | "task">,
   ): string {
     const registry = new CronRegistry(this.config);
 
@@ -2624,6 +2627,9 @@ export class AgentRuntime {
     }
 
     if (action.type === "cron_update") {
+      const normalizedSchedule = action.schedule
+        ? this.normalizeCronScheduleTimezone(action.schedule, action.timezoneSource)
+        : undefined;
       const updated = registry.update(action.id, {
         name: action.name,
         enabled: action.enabled,
@@ -2633,7 +2639,7 @@ export class AgentRuntime {
             task: action.task,
           }
           : undefined,
-        schedule: action.schedule,
+        schedule: normalizedSchedule,
         delivery:
           action.channel && action.to
             ? {
@@ -2651,31 +2657,83 @@ export class AgentRuntime {
         : `cron_update missing id=${action.id}`;
     }
 
+    const inheritedChannel = action.channel ?? ctx?.channelContext?.channelType ?? null;
+    const inheritedPeerId = action.to ?? ctx?.channelContext?.peerId ?? null;
+    const inheritedSourceChannel = action.sourceChannel ?? ctx?.channelContext?.channelType ?? null;
+    const inheritedSourcePeerId = action.sourcePeerId ?? ctx?.channelContext?.peerId ?? null;
+    const inheritedCreatedBy = action.createdBy
+      ?? (ctx?.channelContext
+        ? `${ctx.channelContext.channelType}:${ctx.channelContext.senderId ?? ctx.channelContext.peerId}`
+        : undefined);
+    const normalizedSchedule = this.normalizeCronScheduleTimezone(action.schedule, action.timezoneSource);
+
     const created = registry.add({
       id: action.id,
       name: action.name,
       enabled: true,
-      schedule: action.schedule,
+      schedule: normalizedSchedule,
       payload: {
         kind: "agent_turn",
         task: action.task,
       },
       delivery:
-        action.channel && action.to
+        inheritedChannel && inheritedPeerId
           ? {
             mode: "announce",
-            channel: action.channel,
-            to: action.to,
+            channel: inheritedChannel,
+            to: inheritedPeerId,
           }
           : null,
       model: action.model ?? null,
       promptMode: action.promptMode ?? "minimal",
       runOnStartup: action.runOnStartup,
-      createdBy: action.createdBy,
-      sourceChannel: action.sourceChannel,
-      sourcePeerId: action.sourcePeerId,
+      createdBy: inheritedCreatedBy,
+      sourceChannel: inheritedSourceChannel,
+      sourcePeerId: inheritedSourcePeerId,
     });
-    return `cron_add ok id=${created.id}`;
+    return `cron_add ok id=${created.id} tz=${created.schedule.tz}`;
+  }
+
+  private normalizeCronScheduleTimezone<
+    T extends {
+      kind: "cron" | "at" | "every";
+      tz: string;
+    },
+  >(schedule: T, timezoneSource?: CronTimezoneSource): T {
+    if (timezoneSource === "explicit") {
+      return schedule;
+    }
+    const preferredTimezone = this.resolvePreferredScheduleTimezone();
+    if (!preferredTimezone || schedule.tz === preferredTimezone) {
+      return schedule;
+    }
+    return {
+      ...schedule,
+      tz: preferredTimezone,
+    };
+  }
+
+  private resolvePreferredScheduleTimezone(): string {
+    const userPath = path.join(this.config.workspaceDir, "USER.md");
+    try {
+      const user = fs.readFileSync(userPath, "utf-8");
+      const timezoneLine = user
+        .split(/\r?\n/)
+        .find((line) => /^\s*-\s*Timezone\s*:/i.test(line));
+      const configured = timezoneLine
+        ? timezoneLine.replace(/^\s*-\s*Timezone\s*:\s*/i, "").trim()
+        : "";
+      if (configured) {
+        try {
+          return new Intl.DateTimeFormat("en-US", { timeZone: configured }).resolvedOptions().timeZone;
+        } catch {
+          // Fall through to the process timezone below.
+        }
+      }
+    } catch {
+      // Fall back to the process timezone below.
+    }
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   }
 
   private executeJournalAction(
@@ -3781,6 +3839,7 @@ export class AgentRuntime {
     availableToolNamesOverride?: string[],
     maxStepsOverride?: number,
     cronTaskPlan?: CronTaskPlan | null,
+    channelContext?: ChannelOriginContext | null,
   ): Promise<AgentRunResult> {
     const activeToolNames = Array.isArray(availableToolNamesOverride) && availableToolNamesOverride.length > 0
       ? availableToolNamesOverride
@@ -3799,6 +3858,7 @@ export class AgentRuntime {
       taskExecutionPlan,
       maxStepsOverride,
       cronTaskPlan,
+      channelContext,
     };
 
     return runRuntimeTask(

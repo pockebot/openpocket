@@ -510,6 +510,7 @@ test("GatewayCore handlePlainMessage replies with confirmation for schedule inte
           tz: "Asia/Shanghai",
           summaryText: "Daily 08:00",
         },
+        timezoneSource: "explicit",
         delivery: null,
         requiresConfirmation: true,
         confirmationPrompt: "Please confirm creating this scheduled job.",
@@ -554,6 +555,7 @@ test("GatewayCore creates a structured cron job after confirmation", async () =>
           tz: "Asia/Shanghai",
           summaryText: "Daily 08:00",
         },
+        timezoneSource: "explicit",
         delivery: null,
         requiresConfirmation: true,
         confirmationPrompt: "Please confirm creating this scheduled job.",
@@ -638,6 +640,7 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
           tz: "Asia/Shanghai",
           summaryText: "Daily 08:00",
         },
+        timezoneSource: "explicit",
         delivery: null,
         requiresConfirmation: true,
         confirmationPrompt: "Please confirm creating this scheduled job.",
@@ -700,6 +703,179 @@ test("GatewayCore uses a restricted cron setup run after confirmation", async ()
     assert.match(capturedTask, /Create exactly one cron job/i);
     assert.deepEqual(capturedToolNames, ["cron_add", "finish"]);
     assert.match(adapter.sent[1].text, /created/i);
+  });
+});
+
+test("GatewayCore lets the user override a defaulted schedule timezone before confirmation", async () => {
+  await withTempHome("gwcore-schedule-timezone-override-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+    let capturedTask = "";
+
+    core.chat.decide = async () => ({
+      mode: "schedule_intent",
+      task: "Open Slack and complete check-in",
+      reply: [
+        'I understand this as a scheduled job: Daily 08:00 (America/Los_Angeles), task "Open Slack and complete check-in".',
+        "I used your default timezone because you did not specify one.",
+        'Reply "confirm" to create it, "cancel" to discard it, or send a different timezone such as "Asia/Shanghai".',
+      ].join(" "),
+      confidence: 0.99,
+      reason: "schedule_intent:cron",
+      scheduleIntent: {
+        sourceText: "Every morning at 8, open Slack and complete check-in",
+        normalizedTask: "Open Slack and complete check-in",
+        schedule: {
+          kind: "cron",
+          expr: "0 8 * * *",
+          at: null,
+          everyMs: null,
+          tz: "America/Los_Angeles",
+          summaryText: "Daily 08:00",
+        },
+        timezoneSource: "default",
+        delivery: null,
+        requiresConfirmation: true,
+        confirmationPrompt: [
+          'I understand this as a scheduled job: Daily 08:00 (America/Los_Angeles), task "Open Slack and complete check-in".',
+          "I used your default timezone because you did not specify one.",
+          'Reply "confirm" to create it, "cancel" to discard it, or send a different timezone such as "Asia/Shanghai".',
+        ].join(" "),
+      },
+    });
+    core.agent.runTask = async (task) => {
+      capturedTask = task;
+      return {
+        ok: true,
+        message: "created",
+        sessionPath: "/tmp/cron-setup.jsonl",
+        skillPath: null,
+        scriptPath: null,
+      };
+    };
+
+    await core.handleInbound(makeEnvelope({ text: "Every morning at 8, open Slack and complete check-in" }));
+    await core.handleInbound(makeEnvelope({ text: "Europe/London" }));
+    await core.handleInbound(makeEnvelope({ text: "confirm" }));
+
+    assert.match(adapter.sent[1].text, /Europe\/London/);
+    assert.match(adapter.sent[1].text, /confirm/i);
+    assert.match(capturedTask, /"tz": "Europe\/London"/);
+    assert.match(capturedTask, /"timezoneSource": "explicit"/);
+  });
+});
+
+test("GatewayCore runs scheduled jobs headlessly when no reply target is stored", async () => {
+  await withTempHome("gwcore-cron-headless-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    core.chat.planCronTask = async () => ({
+      summary: "headless run",
+      steps: ["run task"],
+      stepBudget: 4,
+      completionCriteria: "task completes",
+    });
+    core.chat.narrateScheduledTaskStart = async () => {
+      throw new Error("start narration should be skipped without a reply target");
+    };
+    core.chat.narrateTaskOutcome = async () => {
+      throw new Error("final narration should be skipped without a reply target");
+    };
+    core.agent.runTask = async () => ({
+      ok: true,
+      message: "headless ok",
+      sessionPath: "/tmp/gwcore-cron-headless.jsonl",
+      skillPath: null,
+      scriptPath: null,
+    });
+
+    const result = await core.runScheduledJob({
+      id: "headless-job",
+      name: "Headless Job",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 8 * * *",
+        at: null,
+        everyMs: null,
+        tz: "UTC",
+        summaryText: "Daily at 08:00 UTC",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Open settings app and check Wi-Fi",
+      },
+      delivery: null,
+      model: null,
+      promptMode: "minimal",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: null,
+      sourceChannel: null,
+      sourcePeerId: null,
+      runOnStartup: false,
+    });
+
+    assert.deepEqual(result, { accepted: true, ok: true, message: "headless ok" });
+    assert.equal(adapter.sent.length, 0);
+  });
+});
+
+test("GatewayCore falls back to the stored source chat for cron replies when delivery is absent", async () => {
+  await withTempHome("gwcore-cron-source-fallback-", async (home) => {
+    const { adapter, core } = createGatewayCore(home);
+
+    core.chat.planCronTask = async () => ({
+      summary: "notify source chat",
+      steps: ["run task"],
+      stepBudget: 4,
+      completionCriteria: "task completes",
+    });
+    core.chat.narrateScheduledTaskStart = async () => "Starting scheduled job";
+    core.chat.narrateTaskOutcome = async () => "Scheduled job finished";
+    core.agent.runTask = async () => ({
+      ok: true,
+      message: "source fallback ok",
+      sessionPath: "/tmp/gwcore-cron-source-fallback.jsonl",
+      skillPath: null,
+      scriptPath: null,
+    });
+
+    const result = await core.runScheduledJob({
+      id: "source-fallback-job",
+      name: "Source Fallback Job",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 8 * * *",
+        at: null,
+        everyMs: null,
+        tz: "UTC",
+        summaryText: "Daily at 08:00 UTC",
+      },
+      payload: {
+        kind: "agent_turn",
+        task: "Open settings app and check Wi-Fi",
+      },
+      delivery: null,
+      model: null,
+      promptMode: "minimal",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: "test",
+      sourceChannel: "telegram",
+      sourcePeerId: "user-1",
+      runOnStartup: false,
+    });
+
+    assert.deepEqual(result, { accepted: true, ok: true, message: "source fallback ok" });
+    assert.equal(adapter.sent.length, 2);
+    assert.deepEqual(
+      adapter.sent.map((entry) => ({ peerId: entry.peerId, text: entry.text })),
+      [
+        { peerId: "user-1", text: "Starting scheduled job" },
+        { peerId: "user-1", text: "Scheduled job finished" },
+      ],
+    );
   });
 });
 
@@ -1666,6 +1842,7 @@ test("GatewayCore cancels pending schedule confirmation without creating a job",
           tz: "Asia/Shanghai",
           summaryText: "Daily 08:00",
         },
+        timezoneSource: "explicit",
         delivery: null,
         requiresConfirmation: true,
         confirmationPrompt: "Please confirm creating this scheduled job.",
@@ -1710,6 +1887,7 @@ test("GatewayCore blocks unrelated messages while schedule confirmation is pendi
               tz: "Asia/Shanghai",
               summaryText: "Daily 08:00",
             },
+            timezoneSource: "explicit",
             delivery: null,
             requiresConfirmation: true,
             confirmationPrompt: "Please confirm creating this scheduled job.",

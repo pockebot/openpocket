@@ -2441,11 +2441,12 @@ export class ChatAssistant {
     inputText: string,
   ): Promise<ScheduleIntentExtractionDecision | null> {
     const locale: OnboardingLocale = inferScheduleIntentLocale(inputText);
+    const defaultTimezone = this.scheduleTimezoneForInput();
     const recentContext = this.buildRoutingContextTranscript(chatId);
     const prompt = [
       "Determine whether the user message asks to create a scheduled job, manage an existing scheduled job, or neither.",
       "Output strict JSON only:",
-      '{"route":"create_schedule|manage_schedule|none","task":"<task or empty>","manageIntent":{"action":"list|update|remove|enable|disable|unknown","selector":{"all":true|false,"ids":["<job id>"],"nameContains":["<name fragment>"],"taskContains":["<task fragment>"],"scheduleContains":["<schedule fragment>"],"enabled":"any|enabled|disabled"},"patch":{"name":"<new name or empty>","task":"<new task or empty>","enabled":true|false|null,"schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","summaryText":"<short schedule summary>"}}},"schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","summaryText":"<concise schedule summary in the user language>"},"confidence":0-1,"reason":"..."}',
+      '{"route":"create_schedule|manage_schedule|none","task":"<task or empty>","manageIntent":{"action":"list|update|remove|enable|disable|unknown","selector":{"all":true|false,"ids":["<job id>"],"nameContains":["<name fragment>"],"taskContains":["<task fragment>"],"scheduleContains":["<schedule fragment>"],"enabled":"any|enabled|disabled"},"patch":{"name":"<new name or empty>","task":"<new task or empty>","enabled":true|false|null,"schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","timezoneSource":"explicit|default","summaryText":"<short schedule summary>"}}},"schedule":{"kind":"cron|at|every","expr":"<cron expr or empty>","at":"<RFC3339 datetime or empty>","everyMs":number|null,"tz":"<IANA timezone or empty>","timezoneSource":"explicit|default","summaryText":"<concise schedule summary in the user language>"},"confidence":0-1,"reason":"..."}',
       "Rules:",
       "1) Return route=create_schedule for explicit or implicit requests to create a new recurring or one-shot scheduled task/reminder.",
       "2) Return route=manage_schedule for requests to inspect, list, modify, rename, enable, disable, delete, or otherwise manage an existing cron job or scheduled task.",
@@ -2464,7 +2465,10 @@ export class ChatAssistant {
       "13) Use kind=at only for one-shot future schedules when you can provide an RFC3339 datetime.",
       "14) summaryText must be short and in the user's language when route=create_schedule.",
       "15) If the schedule is ambiguous or any required field is missing for route=create_schedule, return route=none instead of guessing.",
+      '16) If the user explicitly specifies a timezone, set schedule.timezoneSource="explicit" and set schedule.tz to that timezone.',
+      '17) If the user does not explicitly specify a timezone, leave schedule.tz empty or use the default timezone below, and set schedule.timezoneSource="default". Never infer timezone from the user\'s language or script.',
       `User locale hint: ${locale}`,
+      `Default timezone: ${defaultTimezone}`,
       this.buildExistingJobsCatalog(),
       recentContext ? `Recent conversation context:\n${recentContext}` : "",
       `User message: ${inputText}`,

@@ -175,11 +175,20 @@ const cronScheduleSchema = Type.Object({
   summaryText: Type.String({ description: "Human-readable schedule summary." }),
 });
 
+const cronTimezoneSourceSchema = Type.Union([
+  Type.Literal("explicit"),
+  Type.Literal("default"),
+], {
+  description:
+    "Whether the timezone came explicitly from the user or was defaulted from workspace/user profile settings.",
+});
+
 export const cronAddSchema = Type.Object({
   thought: ThoughtParam,
   id: Type.String({ description: "Unique cron job id." }),
   name: Type.String({ description: "Display name for the cron job." }),
   schedule: cronScheduleSchema,
+  timezoneSource: Type.Optional(cronTimezoneSourceSchema),
   task: Type.String({ description: "Natural-language task to run when the job fires." }),
   channel: Type.Optional(Type.String({ description: "Optional delivery channel." })),
   to: Type.Optional(Type.String({ description: "Optional delivery target/peer id." })),
@@ -210,6 +219,7 @@ export const cronUpdateSchema = Type.Object({
   enabled: Type.Optional(Type.Boolean({ description: "Enable or disable the job." })),
   task: Type.Optional(Type.String({ description: "Updated task text." })),
   schedule: Type.Optional(cronScheduleSchema),
+  timezoneSource: Type.Optional(cronTimezoneSourceSchema),
   channel: Type.Optional(Type.String({ description: "Updated delivery channel." })),
   to: Type.Optional(Type.String({ description: "Updated delivery target." })),
   model: Type.Optional(Type.String({ description: "Updated model override." })),

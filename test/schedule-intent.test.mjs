@@ -29,7 +29,31 @@ test("schedule intent normalization builds confirmation from model output", () =
   assert.equal(intent?.schedule.kind, "cron");
   assert.equal(intent?.schedule.expr, "0 8 * * *");
   assert.equal(intent?.schedule.summaryText, "Every day at 08:00");
+  assert.equal(intent?.timezoneSource, "default");
+  assert.match(intent?.confirmationPrompt ?? "", /Asia\/Shanghai/);
+  assert.match(intent?.confirmationPrompt ?? "", /default timezone/i);
   assert.match(intent?.confirmationPrompt ?? "", /confirm/i);
+});
+
+test("schedule intent normalization preserves explicit timezone metadata from model output", () => {
+  const intent = normalizeScheduleIntentCandidate("Open Slack tomorrow at 8am Shanghai time", {
+    route: "create_schedule",
+    task: "Open Slack",
+    schedule: {
+      kind: "at",
+      at: "2026-03-08T08:00:00+08:00",
+      tz: "Asia/Shanghai",
+      timezoneSource: "explicit",
+      summaryText: "Tomorrow at 08:00",
+    },
+  }, {
+    timezone: "America/Los_Angeles",
+  });
+
+  assert.ok(intent);
+  assert.equal(intent?.schedule.tz, "Asia/Shanghai");
+  assert.equal(intent?.timezoneSource, "explicit");
+  assert.doesNotMatch(intent?.confirmationPrompt ?? "", /default timezone/i);
 });
 
 test("schedule intent normalization requires RFC3339 at value for one-shot schedules", () => {

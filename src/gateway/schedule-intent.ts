@@ -1,4 +1,4 @@
-import type { ScheduleIntent } from "../types.js";
+import type { CronTimezoneSource, ScheduleIntent } from "../types.js";
 import {
   normalizeCronManagementIntent,
   type CronManagementAction,
@@ -20,6 +20,11 @@ interface NormalizeScheduleIntentOptions {
   timezone?: string;
   resolveTimezone?: () => string;
 }
+
+type NormalizedScheduleValue = {
+  schedule: ScheduleIntent["schedule"];
+  timezoneSource: CronTimezoneSource;
+};
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -67,10 +72,11 @@ export function normalizeScheduleIntentDecision(
   }
 
   const normalizedTask = normalizeOneLine(String(candidate.task ?? ""));
-  const schedule = normalizeSchedule(candidate.schedule, options);
-  if (!normalizedTask || !schedule) {
+  const normalizedSchedule = normalizeSchedule(candidate.schedule, options);
+  if (!normalizedTask || !normalizedSchedule) {
     return null;
   }
+  const { schedule, timezoneSource } = normalizedSchedule;
 
   const normalizedSourceText = normalizeOneLine(sourceText);
 
@@ -80,9 +86,15 @@ export function normalizeScheduleIntentDecision(
       sourceText: normalizedSourceText,
       normalizedTask,
       schedule,
+      timezoneSource,
       delivery: null,
       requiresConfirmation: true,
-      confirmationPrompt: buildScheduleIntentConfirmationPrompt(schedule.summaryText, normalizedTask),
+      confirmationPrompt: buildScheduleIntentConfirmationPrompt(
+        schedule.summaryText,
+        schedule.tz,
+        normalizedTask,
+        timezoneSource,
+      ),
     },
   };
 }
@@ -96,14 +108,26 @@ export function normalizeScheduleIntentCandidate(
   return decision?.route === "create_schedule" ? decision.intent : null;
 }
 
-function buildScheduleIntentConfirmationPrompt(summaryText: string, taskText: string): string {
-  return `I understand this as a scheduled job: ${summaryText}, task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`;
+export function buildScheduleIntentConfirmationPrompt(
+  summaryText: string,
+  timezone: string,
+  taskText: string,
+  timezoneSource: CronTimezoneSource = "explicit",
+): string {
+  if (timezoneSource === "default") {
+    return [
+      `I understand this as a scheduled job: ${summaryText} (${timezone}), task "${taskText}".`,
+      "I used your default timezone because you did not specify one.",
+      'Reply "confirm" to create it, "cancel" to discard it, or send a different timezone such as "Asia/Shanghai".',
+    ].join(" ");
+  }
+  return `I understand this as a scheduled job: ${summaryText} (${timezone}), task "${taskText}". Reply "confirm" to create it or "cancel" to discard it.`;
 }
 
 function normalizeSchedule(
   value: unknown,
   options: NormalizeScheduleIntentOptions,
-): ScheduleIntent["schedule"] | null {
+): NormalizedScheduleValue | null {
   if (!isObject(value)) {
     return null;
   }
@@ -117,7 +141,13 @@ function normalizeSchedule(
   const at = normalizeOptionalString(value.at);
   const summaryText = normalizeOneLine(String(value.summaryText ?? ""));
   const everyMs = toFinitePositiveNumber(value.everyMs);
-  const tz = normalizeOptionalString(value.tz) ?? resolveScheduleTimezone(options);
+  const suppliedTimezone = normalizeOptionalString(value.tz);
+  const tz = suppliedTimezone ?? resolveScheduleTimezone(options);
+  const declaredTimezoneSource = normalizeTimezoneSource(value.timezoneSource);
+  const timezoneSource: CronTimezoneSource =
+    suppliedTimezone && declaredTimezoneSource === "explicit"
+      ? "explicit"
+      : "default";
 
   if (!summaryText) {
     return null;
@@ -133,12 +163,15 @@ function normalizeSchedule(
   }
 
   return {
-    kind,
-    expr: expr ?? null,
-    at: at ?? null,
-    everyMs: everyMs ?? null,
-    tz,
-    summaryText,
+    schedule: {
+      kind,
+      expr: expr ?? null,
+      at: at ?? null,
+      everyMs: everyMs ?? null,
+      tz,
+      summaryText,
+    },
+    timezoneSource,
   };
 }
 
@@ -152,6 +185,10 @@ function normalizeOptionalString(value: unknown): string | null {
   }
   const normalized = normalizeOneLine(String(value));
   return normalized || null;
+}
+
+function normalizeTimezoneSource(value: unknown): CronTimezoneSource | null {
+  return value === "explicit" || value === "default" ? value : null;
 }
 
 function toFinitePositiveNumber(value: unknown): number | null {
