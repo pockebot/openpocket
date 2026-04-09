@@ -1,4 +1,4 @@
-FROM node:20-bookworm
+FROM --platform=linux/amd64 node:20-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
@@ -55,6 +55,7 @@ RUN npm ci
 
 COPY src ./src
 COPY test ./test
+COPY docs ./docs
 COPY openpocket ./openpocket
 COPY openpocket.config.example.json ./openpocket.config.example.json
 COPY README.md ./README.md
