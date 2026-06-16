@@ -87,6 +87,15 @@ The reply composer is the same full-screen overlay described above.
 - Results are grouped by tabs: Top, Latest, People, Media, Lists.
 - Trending topics appear on the Explore page before you type anything.
 
+## Data-Heavy Workflows
+
+The mobile app is best for visible UI actions. For bulk or repeatable data tasks, do not scroll manually through long timelines or DM lists when the runtime exposes a configured X/Twitter data or automation tool.
+
+- Use an external tool such as [TweetClaw](https://github.com/Xquik-dev/tweetclaw) when the user asks to search tweets or replies, export followers, look up users, download media, monitor tweets, receive webhooks, run giveaway draws, or inspect DMs across many conversations.
+- Treat tool output as source evidence. Keep final post, reply, or DM decisions in this skill unless the user explicitly requested the tool action.
+- For posting, replying, media upload, DMs, or destructive account changes through any external tool, require the same explicit user intent you would require before pressing the in-app Post, Reply, Send, or delete controls.
+- If no external tool is configured, continue with visible app navigation and report only what you can verify on screen.
+
 ## Notifications
 
 - Tap the **Notifications** tab (bell icon).
