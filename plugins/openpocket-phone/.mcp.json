@@ -2,17 +2,9 @@
   "mcpServers": {
     "openpocket-phone": {
       "command": "node",
+      "cwd": ".",
       "args": [
         "./scripts/openpocket-phone-mcp.mjs"
-      ],
-      "env_vars": [
-        "OPENPOCKET_HOME",
-        "OPENPOCKET_CONFIG",
-        "OPENPOCKET_MCP_SERVER",
-        "OPENPOCKET_REPO_ROOT",
-        "ANDROID_HOME",
-        "ANDROID_SDK_ROOT",
-        "PATH"
       ],
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 90

@@ -26,7 +26,7 @@ Use the bundled Codex plugin in this repository:
 ```bash
 npm install
 npm run build
-codex plugin marketplace add /path/to/openpocket/.agents/plugins
+codex plugin marketplace add /path/to/openpocket
 codex plugin add openpocket-phone@openpocket-local
 ```
 
