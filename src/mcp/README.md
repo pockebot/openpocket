@@ -30,7 +30,7 @@ codex plugin marketplace add /path/to/openpocket
 codex plugin add openpocket-phone@openpocket-local
 ```
 
-Start a new Codex thread after installing the plugin so Codex can load the `phone-use` skill and the `openpocket-phone` MCP tools.
+Start a fresh Codex session after installing the plugin so Codex can load the `phone-use` skill and the `openpocket-phone` MCP tools. If the Codex desktop app was already running before installation, restart the app or use a fresh `codex exec` process to verify newly installed local MCP tools.
 
 ## Usage with Claude Code
 
