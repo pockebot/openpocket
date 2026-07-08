@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * OpenPocket Android Emulator MCP Server
+ * OpenPocket Android Phone MCP Server
  *
- * Exposes emulator control as MCP tools for Claude Code.
+ * Exposes Android target control as MCP tools for Codex, Claude Code, and
+ * other MCP clients.
  * Usage: node dist/mcp/server.js [--config path/to/config.json]
  */
 
@@ -31,7 +32,7 @@ const adb = new AdbRuntime(config, emulator);
 // --- MCP Server --------------------------------------------------------
 
 const server = new Server(
-  { name: "openpocket-emulator", version: "0.1.0" },
+  { name: "openpocket-phone", version: "0.1.0" },
   { capabilities: { tools: {} } },
 );
 
@@ -39,9 +40,40 @@ const server = new Server(
 
 const TOOLS = [
   {
+    name: "target_status",
+    description:
+      "Inspect the configured OpenPocket Android target, online ADB devices, booted emulator devices, and the currently resolved target device when available.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        deviceId: { type: "string", description: "Optional target device ID to validate." },
+      },
+    },
+  },
+  {
+    name: "start_emulator",
+    description:
+      "Start the configured Android emulator target and wait until it boots. Use only when target_status shows no online emulator for an emulator-backed target.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        headless: { type: "boolean", description: "Override emulator headless mode for this start." },
+      },
+    },
+  },
+  {
+    name: "stop_emulator",
+    description:
+      "Stop the configured Android emulator target. Do not use for physical phones.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
     name: "screenshot",
     description:
-      "Capture the current emulator screen. Returns base64 PNG image, current foreground app, screen dimensions, and interactive UI elements with their IDs, text, bounds, and clickability.",
+      "Capture the current Android target screen. Returns PNG image content, current foreground app, screen dimensions, and interactive UI elements with IDs, text, bounds, and clickability.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -51,7 +83,7 @@ const TOOLS = [
   },
   {
     name: "tap",
-    description: "Tap at pixel coordinates on the emulator screen",
+    description: "Tap at pixel coordinates on the Android target screen",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -76,7 +108,7 @@ const TOOLS = [
   },
   {
     name: "swipe",
-    description: "Perform a swipe gesture on the emulator screen",
+    description: "Perform a swipe gesture on the Android target screen",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -92,7 +124,7 @@ const TOOLS = [
   },
   {
     name: "type_text",
-    description: "Type text into the currently focused input field on the emulator. Handles Unicode.",
+    description: "Type text into the currently focused input field on the Android target. Handles Unicode.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -128,7 +160,7 @@ const TOOLS = [
   },
   {
     name: "adb_shell",
-    description: "Execute an arbitrary ADB shell command on the emulator",
+    description: "Execute an arbitrary ADB shell command on the Android target",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -140,7 +172,7 @@ const TOOLS = [
   },
   {
     name: "list_packages",
-    description: "List all launchable apps installed on the emulator",
+    description: "List all launchable apps installed on the Android target",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -172,6 +204,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case "target_status": {
+        const status = emulator.status();
+        let resolvedDeviceId: string | null = null;
+        let resolveError: string | null = null;
+        try {
+          resolvedDeviceId = adb.resolveDeviceId(deviceId);
+        } catch (e: any) {
+          resolveError = e?.message ? String(e.message) : String(e);
+        }
+        const metadata = {
+          targetType: config.target?.type ?? "emulator",
+          configuredDeviceId: config.agent.deviceId ?? null,
+          requestedDeviceId: deviceId,
+          resolvedDeviceId,
+          resolveError,
+          avdName: status.avdName,
+          devices: status.devices,
+          bootedDevices: status.bootedDevices,
+        };
+        return { content: [{ type: "text", text: JSON.stringify(metadata, null, 2) }] };
+      }
+
+      case "start_emulator": {
+        const result = await emulator.start(
+          typeof args.headless === "boolean" ? Boolean(args.headless) : undefined,
+        );
+        return { content: [{ type: "text", text: result }] };
+      }
+
+      case "stop_emulator": {
+        const result = emulator.stop();
+        return { content: [{ type: "text", text: result }] };
+      }
+
       case "screenshot": {
         const snap = await adb.captureScreenSnapshot(deviceId);
         const metadata = {
@@ -188,11 +254,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           installedApps: snap.installedApps,
           installedPackages: snap.installedPackages,
         };
+        const content = [];
+        if (snap.somScreenshotBase64) {
+          content.push({
+            type: "image" as const,
+            data: snap.somScreenshotBase64,
+            mimeType: "image/png",
+          });
+        }
+        content.push({ type: "image" as const, data: snap.screenshotBase64, mimeType: "image/png" });
+        content.push({ type: "text" as const, text: JSON.stringify(metadata, null, 2) });
         return {
-          content: [
-            { type: "image", data: snap.screenshotBase64, mimeType: "image/png" },
-            { type: "text", text: JSON.stringify(metadata, null, 2) },
-          ],
+          content,
         };
       }
 
@@ -205,11 +278,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "tap_element": {
+        const snap = await adb.captureScreenSnapshot(deviceId);
+        const elementId = String(args.elementId);
+        const element = snap.uiElements.find((item) => item.id === elementId);
+        if (!element) {
+          return {
+            content: [{
+              type: "text",
+              text: `Element not found: ${elementId}. Capture a fresh screenshot and use one of its uiElements IDs.`,
+            }],
+            isError: true,
+          };
+        }
         const result = await adb.executeAction(
-          { type: "tap_element", elementId: String(args.elementId) },
-          deviceId,
+          { type: "tap", x: element.center.x, y: element.center.y },
+          snap.deviceId,
         );
-        return { content: [{ type: "text", text: result }] };
+        return {
+          content: [{
+            type: "text",
+            text: `${result} via element ${element.id} (${element.text || element.contentDesc || element.resourceId || element.className})`,
+          }],
+        };
       }
 
       case "swipe": {
@@ -283,7 +373,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OpenPocket Emulator MCP Server running on stdio");
+  console.error("OpenPocket Phone MCP Server running on stdio");
 }
 
 main().catch((err) => {

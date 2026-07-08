@@ -1,0 +1,20 @@
+{
+  "name": "openpocket-local",
+  "interface": {
+    "displayName": "OpenPocket Local"
+  },
+  "plugins": [
+    {
+      "name": "openpocket-phone",
+      "source": {
+        "source": "local",
+        "path": "./plugins/openpocket-phone"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

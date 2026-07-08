@@ -413,6 +413,20 @@ function errorMessage(error: unknown): string {
   return String(error || "unknown error");
 }
 
+function parseLaunchActivityComponent(output: string): string | null {
+  const lines = String(output || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line.includes("/") && /^[A-Za-z0-9._$]+\/[A-Za-z0-9._$]+/.test(line)) {
+      return line;
+    }
+  }
+  return null;
+}
+
 function looksLikeAdbTimeout(error: unknown): boolean {
   const text = String(
     error instanceof Error
@@ -1096,6 +1110,81 @@ export class AdbRuntime {
     return this.queryLaunchablePackagesForDevice(deviceId);
   }
 
+  private resolveLaunchActivityComponent(deviceId: string, packageName: string): string | null {
+    try {
+      const raw = this.emulator.runAdb([
+        "-s",
+        deviceId,
+        "shell",
+        "cmd",
+        "package",
+        "resolve-activity",
+        "--brief",
+        packageName,
+      ], 8_000);
+      return parseLaunchActivityComponent(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  private launchPackage(deviceId: string, packageName: string): string {
+    try {
+      this.emulator.runAdb([
+        "-s",
+        deviceId,
+        "shell",
+        "monkey",
+        "-p",
+        packageName,
+        "-c",
+        "android.intent.category.LAUNCHER",
+        "1",
+      ]);
+      return `Launched package ${packageName}`;
+    } catch (monkeyError) {
+      const errors = [`monkey=${errorMessage(monkeyError)}`];
+      const component = this.resolveLaunchActivityComponent(deviceId, packageName);
+      if (component) {
+        try {
+          this.emulator.runAdb([
+            "-s",
+            deviceId,
+            "shell",
+            "am",
+            "start",
+            "-n",
+            component,
+          ]);
+          return `Launched package ${packageName} via activity ${component}`;
+        } catch (amComponentError) {
+          errors.push(`amComponent=${errorMessage(amComponentError)}`);
+        }
+      }
+
+      try {
+        this.emulator.runAdb([
+          "-s",
+          deviceId,
+          "shell",
+          "am",
+          "start",
+          "-a",
+          "android.intent.action.MAIN",
+          "-c",
+          "android.intent.category.LAUNCHER",
+          "-p",
+          packageName,
+        ]);
+        return `Launched package ${packageName} via package intent`;
+      } catch (amPackageError) {
+        errors.push(`amPackage=${errorMessage(amPackageError)}`);
+      }
+
+      throw new Error(`Failed to launch package ${packageName} (${errors.join("; ")})`);
+    }
+  }
+
   private resolveScreenSize(deviceId: string): { width: number; height: number } {
     const cached = this.screenSizeCache.get(deviceId);
     if (cached && Date.now() - cached.updatedAtMs < 30_000) {
@@ -1632,18 +1721,7 @@ export class AdbRuntime {
         return `Sent keyevent ${action.keycode}`;
       }
       case "launch_app": {
-        this.emulator.runAdb([
-          "-s",
-          deviceId,
-          "shell",
-          "monkey",
-          "-p",
-          action.packageName,
-          "-c",
-          "android.intent.category.LAUNCHER",
-          "1",
-        ]);
-        return `Launched package ${action.packageName}`;
+        return this.launchPackage(deviceId, action.packageName);
       }
       case "shell": {
         const command = String(action.command ?? "").trim();

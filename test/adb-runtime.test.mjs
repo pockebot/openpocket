@@ -64,6 +64,8 @@ class FakeEmulator {
     this.failClipboardSet = Boolean(options.failClipboardSet);
     this.failAdbKeyboardBroadcast = Boolean(options.failAdbKeyboardBroadcast);
     this.failHelperImeBroadcast = Boolean(options.failHelperImeBroadcast);
+    this.failMonkeyLaunch = Boolean(options.failMonkeyLaunch);
+    this.resolveActivityOutput = options.resolveActivityOutput ?? "";
     this.installedPackages = Array.isArray(options.installedPackages) ? [...options.installedPackages] : [];
     this.failInstall = Boolean(options.failInstall);
     this.availableImes = Array.isArray(options.availableImes)
@@ -273,6 +275,34 @@ class FakeEmulator {
         return "Broadcast failed: no receivers";
       }
       return "Broadcast completed: result=0";
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "monkey"
+    ) {
+      if (this.failMonkeyLaunch) {
+        throw new Error("monkey launch failed");
+      }
+      return "Events injected: 1";
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "cmd" &&
+      args[4] === "package" &&
+      args[5] === "resolve-activity" &&
+      args[6] === "--brief"
+    ) {
+      return this.resolveActivityOutput;
+    }
+    if (
+      args[0] === "-s" &&
+      args[2] === "shell" &&
+      args[3] === "am" &&
+      args[4] === "start"
+    ) {
+      return "Starting: Intent {}";
     }
     if (
       args[0] === "-s" &&
@@ -886,6 +916,34 @@ test("AdbRuntime shell preserves wrapped command and quoted arguments", async ()
   assert.deepEqual(
     emulator.calls[1],
     ["-s", "emulator-5554", "shell", "settings", "put", "global", "device_name", "Pixel 9 Pro"],
+  );
+});
+
+test("AdbRuntime launch_app falls back to resolved activity when monkey fails", async () => {
+  const emulator = new FakeEmulator({
+    failMonkeyLaunch: true,
+    resolveActivityOutput: [
+      "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true",
+      "com.android.settings/.Settings",
+    ].join("\n"),
+  });
+  const runtime = new AdbRuntime(makeConfig(), emulator);
+
+  const result = await runtime.executeAction({
+    type: "launch_app",
+    packageName: "com.android.settings",
+  });
+
+  assert.equal(result, "Launched package com.android.settings via activity com.android.settings/.Settings");
+  assert.equal(
+    emulator.calls.some(
+      (args) => args[0] === "-s" && args[2] === "shell" && args[3] === "monkey",
+    ),
+    true,
+  );
+  assert.deepEqual(
+    emulator.calls.find((args) => args[0] === "-s" && args[2] === "shell" && args[3] === "am"),
+    ["-s", "emulator-5554", "shell", "am", "start", "-n", "com.android.settings/.Settings"],
   );
 });
 
