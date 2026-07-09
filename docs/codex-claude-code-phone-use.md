@@ -12,6 +12,7 @@ This document describes the OpenPocket integration layer for Codex and Claude Co
 | `plugins/openpocket-phone/skills/phone-use/SKILL.md` | Codex skill instructions for phone-use safety, tool selection, and interaction loops. |
 | `plugins/openpocket-phone/scripts/openpocket-phone-mcp.mjs` | Codex plugin wrapper that locates `dist/mcp/server.js` from the source repo, plugin cache, or environment. |
 | `plugins/openpocket-phone/scripts/doctor.mjs` | Local preflight that verifies the plugin manifest, MCP server path, and required tool surface. |
+| `plugins/openpocket-phone/README.md` | User-facing install guide for Codex CLI, Codex Desktop App, Claude Code CLI, Claude Code Desktop App, and Claude Desktop MCP. |
 | `src/mcp/server.ts` | The actual OpenPocket Phone MCP server implementation. Codex and Claude Code both ultimately use this server. |
 | `.mcp.json` | Project-scoped MCP config for Claude Code when opened from the repository root. |
 
@@ -64,6 +65,8 @@ openpocket target pair \
 
 ## Codex Setup
 
+For the most user-friendly install matrix, including Codex CLI and Codex Desktop App, see [`plugins/openpocket-phone/README.md`](../plugins/openpocket-phone/README.md).
+
 Install the local marketplace and plugin from the OpenPocket repository root:
 
 ```bash
@@ -102,6 +105,8 @@ wait_for_text, tap_text, open_app, and list_apps are visible.
 A successful run proves that Codex has loaded the plugin-provided MCP tools natively for that session.
 
 ## Claude Code Setup
+
+For the most user-friendly install matrix, including Claude Code CLI, Claude Code Desktop App, and Claude Desktop MCP configuration, see [`plugins/openpocket-phone/README.md`](../plugins/openpocket-phone/README.md).
 
 ### Option 1: Project-Scoped MCP
 
