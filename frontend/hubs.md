@@ -31,7 +31,7 @@ OpenPocket is a local device-first phone-use agent aimed at real consumer scenar
 
 | Hub | Purpose | Entry |
 | --- | --- | --- |
-| Get Started | Install, initialize, configure, and add more agents | [Quickstart](./get-started/quickstart.md) |
+| Get Started | Install, initialize, configure, add IDE integrations, and add more agents | [Quickstart](./get-started/quickstart.md) |
 | Concepts | Understand blueprint, architecture, and core agent mechanics | [Project Blueprint](./concepts/project-blueprint.md) |
 | Tools | Skill and script authoring and runtime behavior | [Skills](./tools/skills.md) |
 | Reference | Precise schemas, defaults, formats, and commands | [Config Defaults](./reference/config-defaults.md) |
@@ -40,6 +40,7 @@ OpenPocket is a local device-first phone-use agent aimed at real consumer scenar
 ## Popular Specs
 
 - Product blueprint: [Project Blueprint](./concepts/project-blueprint.md)
+- Codex and Claude Code phone use: [Codex and Claude Code Phone Use](./get-started/codex-claude-code.md)
 - Multi-agent setup: [Multi-Agent Setup](./get-started/multi-agent.md)
 - Prompt templates: [Prompt Templates](./reference/prompt-templates.md)
 - Default values: [Config Defaults](./reference/config-defaults.md)

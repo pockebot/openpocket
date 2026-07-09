@@ -215,6 +215,31 @@ const hasMoreModels = computed(() => modelSupport.length > modelSupportCollapsed
   </div>
 </section>
 
+<!-- Agent IDE Integrations -->
+<section class="op-integrations">
+  <div class="op-integrations-head">
+    <p class="op-section-label">Agent IDE Integrations</p>
+    <div class="op-integrations-copy">
+      <h2>Use OpenPocket directly from Codex and Claude Code.</h2>
+      <p>The integration layer is separate from the OpenPocket runtime. Codex loads a local plugin with a phone-use skill, while Claude Code connects to the same Android MCP server directly.</p>
+    </div>
+  </div>
+  <div class="op-integrations-grid">
+    <a class="op-integration-card op-integration-card--codex" :href="withBase('/get-started/codex-claude-code')">
+      <p class="op-integration-eyebrow">Codex Plugin</p>
+      <h3>Native phone-use tools inside Codex</h3>
+      <p>Install <code>openpocket-phone</code> to expose emulator and physical Android control through the plugin, skill, and MCP tool surface.</p>
+      <code class="op-integration-code">codex plugin add openpocket-phone@openpocket-local</code>
+    </a>
+    <a class="op-integration-card op-integration-card--claude" :href="withBase('/get-started/codex-claude-code')">
+      <p class="op-integration-eyebrow">Claude Code MCP</p>
+      <h3>Connect directly to the Phone MCP server</h3>
+      <p>Use the project <code>.mcp.json</code> or a manual MCP registration to drive the same OpenPocket Android target from Claude Code.</p>
+      <code class="op-integration-code">claude mcp add openpocket-phone</code>
+    </a>
+  </div>
+</section>
+
 <!-- Support -->
 <section class="op-support">
   <p class="op-section-label">Support</p>

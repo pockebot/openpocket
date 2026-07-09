@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "openpocket-emulator": {
+    "openpocket-phone": {
       "command": "node",
       "args": ["dist/mcp/server.js"]
     }

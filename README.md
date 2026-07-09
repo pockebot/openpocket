@@ -13,6 +13,7 @@
   <a href="https://www.openpocket.ai">Website</a> &middot;
   <a href="https://www.openpocket.ai/hubs#doc-hubs">Documentation</a> &middot;
   <a href="https://www.openpocket.ai/get-started/quickstart">Quickstart</a> &middot;
+  <a href="./docs/codex-claude-code-phone-use.md">Codex/Claude Code</a> &middot;
   <a href="https://discord.gg/jS6HgkNpxK">Discord</a> &middot;
   <a href="https://www.reddit.com/r/openpocket/">Reddit</a> &middot;
   <a href="./CONTRIBUTING.md">Contributing</a>
@@ -74,6 +75,7 @@ Imagine having a second phone that works for you around the clock — replying t
 - **Human-auth relay** — sensitive actions (camera, payments, location) escalate to you for approval through a private local relay.
 - **Channel integrations** — receive tasks and results through Telegram, Discord, WhatsApp, or CLI.
 - **Skills framework** — extend agent capabilities by dropping a `SKILL.md` into the skills directory — no code changes needed.
+- **Codex + Claude Code phone use** — expose the same Android target control layer through a local Codex plugin or a Claude Code MCP server.
 
 ## Quick Start
 
@@ -107,6 +109,34 @@ openpocket agent --model gpt-5.2-codex "Open Chrome and search weather"
 ```
 
 For full setup details see the [Quickstart guide](https://www.openpocket.ai/get-started/quickstart), [Device targets](https://www.openpocket.ai/get-started/device-targets), and [Configuration](https://www.openpocket.ai/get-started/configuration).
+
+## Codex and Claude Code Phone Use
+
+OpenPocket includes an independent integration layer for coding agents:
+
+| Client | Integration | Runtime used |
+| --- | --- | --- |
+| Codex | local plugin at `plugins/openpocket-phone/`, including a `phone-use` skill and MCP registration | `src/mcp/server.ts` |
+| Claude Code | project `.mcp.json` or `claude mcp add` registration | `src/mcp/server.ts` |
+
+The plugin/MCP layer is separate from the main OpenPocket runtime. OpenPocket still owns the configured Android emulator or authorized physical phone; Codex and Claude Code receive a focused `openpocket-phone` MCP tool surface for inspection, tapping, typing, app launch, UI text search, screenshots, and target management.
+
+From the repository root:
+
+```bash
+npm install
+npm run build
+codex plugin marketplace add /path/to/openpocket
+codex plugin add openpocket-phone@openpocket-local
+```
+
+For Claude Code, build the repo and open Claude Code from the repository root so the root `.mcp.json` can register `openpocket-phone`, or register it manually:
+
+```bash
+claude mcp add --transport stdio openpocket-phone -- node /path/to/openpocket/dist/mcp/server.js
+```
+
+See the full [Codex plugin and Claude Code MCP integration guide](./docs/codex-claude-code-phone-use.md) or the website page at [Codex and Claude Code Phone Use](https://www.openpocket.ai/get-started/codex-claude-code).
 
 ## Usage
 

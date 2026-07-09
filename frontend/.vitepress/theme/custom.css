@@ -759,6 +759,125 @@ h1, h2, h3, h4, h5, h6,
 }
 
 /* ============================================
+   AGENT IDE INTEGRATIONS
+   ============================================ */
+.op-integrations {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  width: 100%;
+}
+
+.op-integrations-head {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  padding-top: 24px;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.op-integrations-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.op-integrations-copy h2 {
+  max-width: 760px;
+  margin: 0 !important;
+  font-size: 36px !important;
+  line-height: 44px !important;
+  font-weight: 500 !important;
+  color: #0f172a !important;
+}
+
+.op-integrations-copy p {
+  max-width: 860px;
+  margin: 0;
+  font-size: 16px;
+  line-height: 26px;
+  color: #475569;
+}
+
+.op-integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.op-integration-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 260px;
+  padding: 24px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  color: inherit;
+  text-decoration: none !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.op-integration-card:hover {
+  border-color: rgba(255, 138, 0, 0.55);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
+}
+
+.op-integration-eyebrow {
+  margin: 0 !important;
+  font-size: 13px !important;
+  line-height: 18px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.op-integration-card--codex .op-integration-eyebrow {
+  color: #2563eb !important;
+}
+
+.op-integration-card--claude .op-integration-eyebrow {
+  color: #0f766e !important;
+}
+
+.op-integration-card h3 {
+  margin: 0 !important;
+  font-size: 24px !important;
+  line-height: 32px !important;
+  font-weight: 600 !important;
+  color: #0f172a !important;
+}
+
+.op-integration-card p:not(.op-integration-eyebrow) {
+  margin: 0;
+  font-size: 15px;
+  line-height: 24px;
+  color: #475569;
+}
+
+.op-integration-card p code {
+  border-radius: 4px;
+  font-size: 0.92em;
+}
+
+.op-integration-code {
+  display: block;
+  margin-top: auto;
+  padding: 12px 14px !important;
+  border-radius: 8px !important;
+  background: rgba(15, 23, 42, 0.06) !important;
+  color: #0f172a !important;
+  font-family: var(--vp-font-family-mono) !important;
+  font-size: 13px !important;
+  line-height: 20px !important;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+/* ============================================
    SUPPORT
    ============================================ */
 .op-support {
@@ -1208,6 +1327,15 @@ h1, h2, h3, h4, h5, h6,
 .dark .op-workflow-step-title    { color: #ffb347 !important; }
 .dark .op-workflow-step p        { color: #c8cdd8 !important; }
 
+.dark .op-integrations-head      { border-color: rgba(255, 255, 255, 0.16); }
+.dark .op-integrations-copy h2   { color: #f1f5f9 !important; }
+.dark .op-integrations-copy p    { color: #c8cdd8 !important; }
+.dark .op-integration-card       { background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.16); }
+.dark .op-integration-card:hover { border-color: rgba(255, 179, 71, 0.55); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28); }
+.dark .op-integration-card h3    { color: #f1f5f9 !important; }
+.dark .op-integration-card p:not(.op-integration-eyebrow) { color: #c8cdd8; }
+.dark .op-integration-code       { background: rgba(15, 23, 42, 0.48) !important; border-color: rgba(255, 255, 255, 0.14); color: #e2e8f0 !important; }
+
 .dark .op-support-item           { border-color: rgba(255, 255, 255, 0.16); }
 .dark .op-support-item h3        { color: #ffb347 !important; }
 .dark .op-support-pill           { background: rgba(241, 245, 249, 0.08); border-color: rgba(241, 245, 249, 0.16); color: #f1f5f9; }
@@ -1270,6 +1398,8 @@ h1, h2, h3, h4, h5, h6,
 .op-usecases,
 .op-workflow,
 .op-workflow-step,
+.op-integrations,
+.op-integration-card,
 .op-support,
 .op-support-item,
 .op-footer-animation {
@@ -1292,6 +1422,10 @@ h1, h2, h3, h4, h5, h6,
 .op-workflow-step.visible:nth-child(1) { animation: op-fade-up 0.5s ease 0.1s both; }
 .op-workflow-step.visible:nth-child(2) { animation: op-fade-up 0.5s ease 0.25s both; }
 .op-workflow-step.visible:nth-child(3) { animation: op-fade-up 0.5s ease 0.4s both; }
+
+.op-integrations.visible { animation: op-fade-up 0.6s ease both; }
+.op-integration-card.visible:nth-child(1) { animation: op-fade-up 0.5s ease 0.1s both; }
+.op-integration-card.visible:nth-child(2) { animation: op-fade-up 0.5s ease 0.25s both; }
 
 .op-support.visible     { animation: op-fade-up 0.6s ease both; }
 .op-support-item.visible:nth-child(1) { animation: op-fade-up 0.5s ease 0.1s both; }
@@ -1332,6 +1466,9 @@ h1, h2, h3, h4, h5, h6,
   .op-why-item p          { font-size: 15px; line-height: 24px; }
   .op-support-item        { grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 20px; }
   .op-support-item h3     { font-size: 24px; line-height: 30px; }
+  .op-integrations-head   { grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 20px; }
+  .op-integrations-copy h2 { font-size: 30px !important; line-height: 38px !important; }
+  .op-integration-card h3 { font-size: 22px !important; line-height: 30px !important; }
   .op-model-grid          { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .op-model-card          { min-height: 88px; }
   .op-workflow-step-title { font-size: 44px !important; line-height: 52px !important; }
@@ -1357,6 +1494,11 @@ h1, h2, h3, h4, h5, h6,
   .op-why-item p          { font-size: 14px; line-height: 22px; }
   .op-support-item        { grid-template-columns: 1fr; gap: 10px; padding: 18px 0; }
   .op-support-item h3     { font-size: 22px; }
+  .op-integrations-head   { grid-template-columns: 1fr; gap: 10px; padding-top: 18px; }
+  .op-integrations-copy h2 { font-size: 24px !important; line-height: 32px !important; }
+  .op-integrations-copy p { font-size: 14px; line-height: 22px; }
+  .op-integrations-grid   { grid-template-columns: 1fr; }
+  .op-integration-card    { min-height: 0; padding: 20px; }
   .op-model-grid          { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .op-model-card          { min-height: 84px; padding: 10px 12px; }
   .op-model-logo-box      { width: 48px; height: 48px; }
@@ -1388,6 +1530,11 @@ h1, h2, h3, h4, h5, h6,
   .op-why-item h3         { font-size: 20px; }
   .op-why-item p          { font-size: 13px; line-height: 18px; }
   .op-support-item h3     { font-size: 20px; }
+  .op-integrations-copy h2 { font-size: 21px !important; line-height: 28px !important; }
+  .op-integration-card    { padding: 16px; }
+  .op-integration-card h3 { font-size: 19px !important; line-height: 26px !important; }
+  .op-integration-card p:not(.op-integration-eyebrow) { font-size: 13px; line-height: 20px; }
+  .op-integration-code    { font-size: 12px !important; line-height: 18px !important; padding: 10px 12px !important; }
   .op-support-pill        { height: 32px; padding: 0 12px; font-size: 12px; line-height: 16px; }
   .op-model-grid          { grid-template-columns: 1fr; }
   .op-model-card          { min-height: 80px; }

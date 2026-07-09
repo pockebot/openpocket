@@ -1,0 +1,14 @@
+interface:
+  display_name: "Phone Use"
+  short_description: "Control Android targets with OpenPocket text and UI tools"
+  default_prompt: "Use OpenPocket to inspect and control my Android target."
+
+policy:
+  allow_implicit_invocation: true
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "openpocket-phone"
+      description: "OpenPocket Android target control tools"
+      transport: "stdio"
