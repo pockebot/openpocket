@@ -28,7 +28,7 @@ The Desktop bundles remove the repository build step. They do not install the An
 | Component | Included in the plugin | Required for |
 | --- | --- | --- |
 | Host manifest, `phone-use` skill, 23-tool MCP runtime, and helper APK | Yes | Every install |
-| Node.js 20 or newer | No | Every install |
+| Node.js 20 or newer | No | Every install; use a current LTS release when possible |
 | Android SDK platform-tools (`adb`) | No | Emulator and physical-device targets |
 | Android Emulator, a system image, and an existing AVD | No | Emulator targets only |
 | Android Studio | No | Optional; it is the easiest way to install and manage the Android SDK and AVDs |
@@ -38,7 +38,41 @@ For an emulator, prepare Node.js 20+, `adb`, Android Emulator, a system image, a
 
 Set `ANDROID_SDK_ROOT` when the Android SDK is not in its default location. The first plugin launch creates an emulator-first config at `~/.openpocket/config.json` with `OpenPocket_AVD` as the default AVD name.
 
+### Prepare An Emulator
+
+1. [Install a current Node.js LTS release](https://nodejs.org/en/download), then confirm `node --version` reports 20 or newer.
+2. [Install Android Studio](https://developer.android.com/studio/install).
+3. Open **Tools > SDK Manager > SDK Tools** and install **Android SDK Platform-Tools** and **Android Emulator**. In **SDK Platforms**, install at least one Android system image.
+4. Open **Tools > Device Manager**, [create a virtual device](https://developer.android.com/studio/run/managing-avds), and name it `OpenPocket_AVD` for the zero-configuration path.
+5. Put the SDK's `platform-tools` and `emulator` directories on `PATH`, or set `ANDROID_SDK_ROOT` so OpenPocket can discover them.
+
+Verify the host before installing the plugin:
+
+```bash
+node --version
+adb version
+emulator -list-avds
+```
+
+The AVD list should contain `OpenPocket_AVD`. To use a differently named AVD, install the plugin without `--start-emulator`, then set `emulator.avdName` in `~/.openpocket/config.json` before starting the emulator.
+
+### Prepare A Physical Android Phone
+
+1. Install a current Node.js LTS release and Android SDK Platform-Tools. Android Studio is optional for this path.
+2. Follow Android's [hardware-device setup](https://developer.android.com/studio/run/device) to enable Developer options and USB debugging, or enable Wireless debugging.
+3. Connect the phone, keep it unlocked, and accept the ADB authorization prompt for this computer.
+4. Run `adb devices -l` and confirm the device state is `device`, not `unauthorized` or `offline`.
+
+A physical-phone target does not require Android Emulator, a system image, an AVD, or a JDK.
+
 ## Pick An Install Path
+
+Clone or download the [OpenPocket repository](https://github.com/pockebot/openpocket) first. CLI installers run from the repository root; Desktop installs use the self-contained bundles already committed in the checkout.
+
+```bash
+git clone https://github.com/pockebot/openpocket.git
+cd openpocket
+```
 
 | Client | Fastest path |
 | --- | --- |
