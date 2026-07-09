@@ -31,10 +31,19 @@ Codex and Claude Code require different manifest formats and each client install
 
 ## Requirements
 
-- Node.js 20 or newer
-- Android SDK platform-tools (`adb`)
-- Android Emulator tools for emulator targets
-- an existing AVD or an ADB-authorized Android phone
+The plugin and Desktop zip already include the host manifest, `phone-use` skill, 23-tool MCP runtime, and helper APK. You do not need to build OpenPocket before a Desktop install, but the plugin does not install the Android SDK or emulator environment.
+
+| Component | Included | When you need it |
+| --- | --- | --- |
+| Node.js 20 or newer | No | Every install |
+| Android SDK platform-tools (`adb`) | No | Emulator and physical-device targets |
+| Android Emulator, a system image, and an existing AVD | No | Emulator targets only |
+| Android Studio | No | Optional; recommended for installing and managing SDK packages and AVDs |
+| JDK | No | Not required by OpenPocket Phone itself |
+
+**Emulator minimum:** Node.js 20+, `adb`, Android Emulator, a system image, and an existing AVD.
+
+**Physical-phone minimum:** Node.js 20+, `adb`, and an Android phone that has authorized this computer for USB or wireless debugging. Emulator tools and a JDK are not required.
 
 Set `ANDROID_SDK_ROOT` when the Android SDK is not in its standard location. On first launch, the plugin creates `~/.openpocket/config.json` with an emulator target and `OpenPocket_AVD` as the default AVD name.
 

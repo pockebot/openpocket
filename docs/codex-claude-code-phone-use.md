@@ -50,6 +50,20 @@ The extra `openpocket-phone` directory beneath each host name is intentional. Co
 | `.claude-plugin/marketplace.json` | Claude Code repo marketplace |
 | `src/mcp/server.ts` | Authoritative MCP implementation source |
 
+## Host Environment Boundary
+
+The install bundles are self-contained at the OpenPocket layer: each includes its host manifest, generated skill, compiled MCP runtime, and helper APK. They do not package system-level Android tooling.
+
+| Host dependency | Bundled | Notes |
+| --- | --- | --- |
+| Node.js 20+ | No | Required to run the bundled JavaScript MCP server |
+| Android SDK platform-tools (`adb`) | No | Required for both emulator and physical-device targets |
+| Android Emulator, system image, and AVD | No | Required only for emulator targets |
+| Android Studio | No | Optional SDK and AVD manager |
+| JDK | No | Not used directly by the plugin |
+
+This boundary lets Desktop users install without a source checkout build while preserving the user's existing Android SDK, emulator images, AVDs, and ADB trust state.
+
 ## Installation
 
 ### CLI

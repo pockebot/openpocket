@@ -238,6 +238,10 @@ const hasMoreModels = computed(() => modelSupport.length > modelSupportCollapsed
       <code class="op-integration-code">npm run phone-use:install -- claude-code</code>
     </a>
   </div>
+  <p class="op-integration-requirements">
+    <strong>Host setup:</strong> Node.js 20+ and <code>adb</code> are required. Emulator users also need Android Emulator, a system image, and an existing AVD. Android Studio is optional; the plugin itself does not require a JDK.
+    <a :href="withBase('/get-started/codex-claude-code#requirements')">View setup requirements</a>
+  </p>
 </section>
 
 <!-- Support -->

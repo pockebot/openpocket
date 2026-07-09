@@ -23,10 +23,18 @@ The directories under `codex/` and `claude/` therefore contain thin host adapter
 
 ## Requirements
 
-- Node.js 20 or newer
-- Android SDK platform-tools (`adb`)
-- Android Emulator tools for an emulator target
-- an existing AVD, or an Android device that has authorized this computer for ADB
+The Desktop bundles remove the repository build step. They do not install the Android host environment.
+
+| Component | Included in the plugin | Required for |
+| --- | --- | --- |
+| Host manifest, `phone-use` skill, 23-tool MCP runtime, and helper APK | Yes | Every install |
+| Node.js 20 or newer | No | Every install |
+| Android SDK platform-tools (`adb`) | No | Emulator and physical-device targets |
+| Android Emulator, a system image, and an existing AVD | No | Emulator targets only |
+| Android Studio | No | Optional; it is the easiest way to install and manage the Android SDK and AVDs |
+| JDK | No | Not required by the plugin itself |
+
+For an emulator, prepare Node.js 20+, `adb`, Android Emulator, a system image, and an existing AVD. For a physical Android phone, prepare Node.js 20+, `adb`, and authorize the computer for USB or wireless debugging; Emulator tools and a JDK are not required.
 
 Set `ANDROID_SDK_ROOT` when the Android SDK is not in its default location. The first plugin launch creates an emulator-first config at `~/.openpocket/config.json` with `OpenPocket_AVD` as the default AVD name.
 
