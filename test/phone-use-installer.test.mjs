@@ -7,10 +7,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  installClaudeCodeConfig,
-  mergeClaudeConfig,
+  claudeBinaryCandidates,
   parseInstallArgs,
   parseMarketplaceList,
+  removeLegacyClaudeMcpConfig,
 } from "../plugins/openpocket-phone/scripts/install.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -61,62 +61,60 @@ test("phone-use installer rejects incompatible target options", () => {
   );
 });
 
-test("Claude config merge preserves unrelated settings", () => {
-  const input = {
-    theme: "dark",
+test("Claude MCP migration preserves unrelated settings and creates a backup", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-phone-installer-"));
+  const configPath = path.join(home, ".claude.json");
+  const original = {
+    keep: true,
     mcpServers: {
       existing: {
         type: "stdio",
         command: "existing-server",
         args: [],
       },
+      "openpocket-phone": {
+        type: "stdio",
+        command: "/usr/local/bin/node",
+        args: ["/repo/dist/mcp/server.js"],
+      },
     },
   };
-  const serverEntry = {
-    type: "stdio",
-    command: "/usr/local/bin/node",
-    args: ["/repo/dist/mcp/server.js"],
-  };
-  const merged = mergeClaudeConfig(input, serverEntry);
-
-  assert.equal(merged.theme, "dark");
-  assert.deepEqual(merged.mcpServers.existing, input.mcpServers.existing);
-  assert.deepEqual(merged.mcpServers["openpocket-phone"], serverEntry);
-  assert.equal(input.mcpServers["openpocket-phone"], undefined);
-});
-
-test("Claude config installation writes atomically and creates a backup", () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-phone-installer-"));
-  const configPath = path.join(home, ".claude.json");
-  fs.writeFileSync(configPath, `${JSON.stringify({ keep: true }, null, 2)}\n`, {
+  fs.writeFileSync(configPath, `${JSON.stringify(original, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
   });
 
-  const result = installClaudeCodeConfig({
+  const result = removeLegacyClaudeMcpConfig({
     configPath,
-    nodePath: "/usr/local/bin/node",
-    serverPath: "/repo/dist/mcp/server.js",
   });
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const backup = JSON.parse(fs.readFileSync(result.backupPath, "utf8"));
 
   assert.equal(result.changed, true);
   assert.equal(config.keep, true);
-  assert.equal(config.mcpServers["openpocket-phone"].type, "stdio");
-  assert.equal(config.mcpServers["openpocket-phone"].command, "/usr/local/bin/node");
-  assert.deepEqual(config.mcpServers["openpocket-phone"].args, [
-    "/repo/dist/mcp/server.js",
-  ]);
-  assert.deepEqual(backup, { keep: true });
+  assert.equal(config.mcpServers["openpocket-phone"], undefined);
+  assert.deepEqual(config.mcpServers.existing, original.mcpServers.existing);
+  assert.deepEqual(backup, original);
 
-  const second = installClaudeCodeConfig({
+  const second = removeLegacyClaudeMcpConfig({
     configPath,
-    nodePath: "/usr/local/bin/node",
-    serverPath: "/repo/dist/mcp/server.js",
   });
   assert.equal(second.changed, false);
   assert.equal(second.backupPath, null);
+});
+
+test("Claude binary discovery includes an explicit executable", () => {
+  const previous = process.env.OPENPOCKET_CLAUDE_BIN;
+  process.env.OPENPOCKET_CLAUDE_BIN = process.execPath;
+  try {
+    assert.equal(claudeBinaryCandidates()[0], process.execPath);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENPOCKET_CLAUDE_BIN;
+    } else {
+      process.env.OPENPOCKET_CLAUDE_BIN = previous;
+    }
+  }
 });
 
 test("marketplace list parser supports roots with spaces", () => {
@@ -141,7 +139,7 @@ test("installer dry run explains the one-command Codex flow", () => {
   assert.match(result.stdout, /Restart the client and start a new task/);
 });
 
-test("installer dry run explains the shared Claude Code MCP flow", () => {
+test("installer dry run explains the native Claude Code plugin flow", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-phone-claude-dry-"));
   const result = spawnSync(
     process.execPath,
@@ -157,7 +155,9 @@ test("installer dry run explains the shared Claude Code MCP flow", () => {
   );
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /Client: Claude Code CLI \+ Desktop/);
-  assert.match(result.stdout, /openpocket-phone registered/);
+  assert.match(result.stdout, /openpocket-phone@openpocket-local installed/);
+  assert.match(result.stdout, /plugin marketplace add/);
+  assert.match(result.stdout, /plugin install/);
   assert.match(result.stdout, /23 tools ready/);
   assert.equal(fs.existsSync(path.join(home, ".claude.json")), false);
 });

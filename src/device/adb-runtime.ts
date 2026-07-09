@@ -11,9 +11,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import sharp from "sharp";
 import { nowIso } from "../utils/paths.js";
-import { drawSetOfMarkOverlay, scaleScreenshot } from "../utils/image-scale.js";
+import {
+  drawSetOfMarkOverlay,
+  loadOptionalSharp,
+  scaleScreenshot,
+} from "../utils/image-scale.js";
 import { sleep } from "../utils/time.js";
 import { EmulatorManager } from "./emulator-manager.js";
 import { normalizeOptionalAdbEndpoint } from "./adb-endpoint.js";
@@ -27,6 +30,7 @@ export function resolveHelperImeApkPath(): string | null {
   // At runtime we are in dist/device/, so project root is ../../
   const thisDir = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
+    path.resolve(thisDir, "openpocket-ime.apk"),
     path.resolve(thisDir, "../../assets/android/openpocket-ime.apk"),
     path.resolve(thisDir, "../assets/android/openpocket-ime.apk"),
     path.resolve(thisDir, "../../android/openpocket-ime/build/openpocket-ime.apk"),
@@ -478,6 +482,10 @@ async function computeVisualHash(
   }
 
   try {
+    const sharp = await loadOptionalSharp();
+    if (!sharp) {
+      return createHash("sha1").update(pngBuffer).digest("hex").slice(0, 16);
+    }
     const raw = await sharp(pngBuffer)
       .extract({
         left: 0,

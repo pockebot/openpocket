@@ -155,6 +155,18 @@ export class EmulatorManager {
       }
     }
 
+    const fallback = process.platform === "darwin"
+      ? [path.join(os.homedir(), "Library", "Android", "sdk", "platform-tools", "adb")]
+      : process.platform === "win32"
+        ? [path.join(os.homedir(), "AppData", "Local", "Android", "Sdk", "platform-tools", "adb.exe")]
+        : [path.join(os.homedir(), "Android", "Sdk", "platform-tools", "adb")];
+
+    for (const candidate of fallback) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
     const fromPath = process.env.PATH?.split(path.delimiter)
       .map((p) => path.join(p, "adb"))
       .find((p) => fs.existsSync(p));

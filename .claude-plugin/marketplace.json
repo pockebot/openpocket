@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "openpocket-local",
+  "owner": {
+    "name": "OpenPocket"
+  },
+  "description": "Local OpenPocket plugins for Claude Code.",
+  "plugins": [
+    {
+      "name": "openpocket-phone",
+      "displayName": "OpenPocket Phone",
+      "source": "./plugins/openpocket-phone-claude",
+      "description": "Control Android phones and emulators with OpenPocket phone-use tools.",
+      "version": "0.1.0",
+      "category": "development"
+    }
+  ]
+}

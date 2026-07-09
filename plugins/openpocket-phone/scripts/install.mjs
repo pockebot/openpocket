@@ -12,6 +12,7 @@ const repoRoot = path.resolve(pluginRoot, "../..");
 const marketplaceName = "openpocket-local";
 const pluginName = "openpocket-phone";
 const pluginSelector = `${pluginName}@${marketplaceName}`;
+const claudePluginRoot = path.join(repoRoot, "plugins", "openpocket-phone-claude");
 const targetTypes = new Set(["emulator", "physical-phone", "android-tv", "cloud"]);
 
 const clientAliases = new Map([
@@ -33,7 +34,7 @@ Usage:
 
 Clients:
   codex        Installs the Codex plugin for Codex CLI and Codex Desktop.
-  claude-code  Registers a user-scoped MCP server for Claude Code CLI and Desktop.
+  claude-code  Installs the native plugin for Claude Code CLI and Desktop.
 
 Options:
   --target <type>       Configure emulator, physical-phone, android-tv, or cloud.
@@ -217,6 +218,37 @@ export function codexBinaryCandidates() {
   ]);
 }
 
+export function claudeBinaryCandidates() {
+  const desktopRoot = path.join(
+    os.homedir(),
+    "Library",
+    "Application Support",
+    "Claude",
+    "claude-code",
+  );
+  let desktopVersions = [];
+  if (process.platform === "darwin" && fs.existsSync(desktopRoot)) {
+    desktopVersions = fs.readdirSync(desktopRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
+      .map((version) => path.join(
+        desktopRoot,
+        version,
+        "claude.app",
+        "Contents",
+        "MacOS",
+        "claude",
+      ));
+  }
+
+  return uniqueExistingPaths([
+    process.env.OPENPOCKET_CLAUDE_BIN,
+    findOnPath("claude"),
+    ...desktopVersions,
+  ]);
+}
+
 export function parseMarketplaceList(output) {
   const rows = [];
   for (const line of String(output || "").split(/\r?\n/)) {
@@ -293,64 +325,49 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-export function mergeClaudeConfig(config, serverEntry) {
-  if (!isPlainObject(config)) {
-    throw new Error("Claude configuration must be a JSON object.");
-  }
-  if (config.mcpServers !== undefined && !isPlainObject(config.mcpServers)) {
-    throw new Error("Claude configuration mcpServers must be a JSON object.");
-  }
-  return {
-    ...config,
-    mcpServers: {
-      ...(config.mcpServers || {}),
-      [pluginName]: serverEntry,
-    },
-  };
-}
-
-export function installClaudeCodeConfig({
+export function removeLegacyClaudeMcpConfig({
   configPath = process.env.OPENPOCKET_CLAUDE_CONFIG
     || path.join(os.homedir(), ".claude.json"),
-  nodePath = process.execPath,
-  serverPath = path.join(repoRoot, "dist", "mcp", "server.js"),
   dryRun = false,
 } = {}) {
   const resolvedConfigPath = path.resolve(configPath);
-  const serverEntry = {
-    type: "stdio",
-    command: path.resolve(nodePath),
-    args: [path.resolve(serverPath)],
-  };
-
-  let existing = {};
-  let existingText = null;
-  if (fs.existsSync(resolvedConfigPath)) {
-    existingText = fs.readFileSync(resolvedConfigPath, "utf8");
-    try {
-      existing = JSON.parse(existingText);
-    } catch (error) {
-      throw new Error(
-        `Claude configuration is not valid JSON: ${resolvedConfigPath}\n${error.message}`,
-      );
-    }
+  if (!fs.existsSync(resolvedConfigPath)) {
+    return { configPath: resolvedConfigPath, backupPath: null, changed: false };
   }
 
-  const merged = mergeClaudeConfig(existing, serverEntry);
-  const nextText = `${JSON.stringify(merged, null, 2)}\n`;
-  const changed = existingText !== nextText;
-  const backupPath = existingText && changed
-    ? `${resolvedConfigPath}.openpocket-phone.bak`
-    : null;
+  const existingText = fs.readFileSync(resolvedConfigPath, "utf8");
+  let existing;
+  try {
+    existing = JSON.parse(existingText);
+  } catch (error) {
+    throw new Error(
+      `Claude configuration is not valid JSON: ${resolvedConfigPath}\n${error.message}`,
+    );
+  }
+  if (!isPlainObject(existing)) {
+    throw new Error("Claude configuration must be a JSON object.");
+  }
+  if (existing.mcpServers !== undefined && !isPlainObject(existing.mcpServers)) {
+    throw new Error("Claude configuration mcpServers must be a JSON object.");
+  }
+  if (!existing.mcpServers || !Object.hasOwn(existing.mcpServers, pluginName)) {
+    return { configPath: resolvedConfigPath, backupPath: null, changed: false };
+  }
 
-  if (!dryRun && changed) {
+  const nextConfig = { ...existing, mcpServers: { ...existing.mcpServers } };
+  delete nextConfig.mcpServers[pluginName];
+  if (Object.keys(nextConfig.mcpServers).length === 0) {
+    delete nextConfig.mcpServers;
+  }
+
+  const nextText = `${JSON.stringify(nextConfig, null, 2)}\n`;
+  const backupPath = `${resolvedConfigPath}.openpocket-phone-mcp.bak`;
+
+  if (!dryRun) {
     fs.mkdirSync(path.dirname(resolvedConfigPath), { recursive: true });
-    let mode = 0o600;
-    if (fs.existsSync(resolvedConfigPath)) {
-      mode = fs.statSync(resolvedConfigPath).mode & 0o777;
-      fs.copyFileSync(resolvedConfigPath, backupPath);
-      fs.chmodSync(backupPath, mode);
-    }
+    const mode = fs.statSync(resolvedConfigPath).mode & 0o777;
+    fs.copyFileSync(resolvedConfigPath, backupPath);
+    fs.chmodSync(backupPath, mode);
     const tempPath = `${resolvedConfigPath}.tmp-${process.pid}`;
     fs.writeFileSync(tempPath, nextText, { encoding: "utf8", mode });
     fs.renameSync(tempPath, resolvedConfigPath);
@@ -360,8 +377,52 @@ export function installClaudeCodeConfig({
   return {
     configPath: resolvedConfigPath,
     backupPath,
-    changed,
-    serverEntry,
+    changed: true,
+  };
+}
+
+function resolveClaudeBinary(dryRun) {
+  const candidates = claudeBinaryCandidates();
+  if (dryRun) {
+    return candidates[0] || "claude";
+  }
+
+  const failures = [];
+  for (const binary of candidates) {
+    const result = execute(binary, ["plugin", "marketplace", "list"]);
+    if (result.status === 0 && !result.error) {
+      return binary;
+    }
+    failures.push(`${binary}: ${outputTail(result.stderr || result.stdout, 500)}`);
+  }
+  if (candidates.length === 0) {
+    throw new Error(
+      "Claude Code was not found. Install Claude Code CLI or Claude Desktop, then retry.",
+    );
+  }
+  throw new Error(`No usable Claude Code CLI was found.\n${failures.join("\n")}`);
+}
+
+function installClaudePlugin(dryRun) {
+  const binary = resolveClaudeBinary(dryRun);
+  const packageScript = path.join(claudePluginRoot, "scripts", "package.mjs");
+  const commands = [
+    [process.execPath, [packageScript]],
+    [binary, ["plugin", "marketplace", "add", repoRoot, "--scope", "user"]],
+    [binary, ["plugin", "install", pluginSelector, "--scope", "user"]],
+  ];
+
+  if (!dryRun) {
+    for (const [command, args] of commands) {
+      assertSuccess(execute(command, args), "Claude plugin installation");
+    }
+  }
+
+  const migration = removeLegacyClaudeMcpConfig({ dryRun });
+  return {
+    binary,
+    migration,
+    commands: commands.map(([command, args]) => commandLine(command, args)),
   };
 }
 
@@ -488,13 +549,15 @@ export async function main(argv = process.argv.slice(2)) {
       }
     }
   } else {
-    const claude = installClaudeCodeConfig({
-      serverPath: build.serverPath,
-      dryRun: options.dryRun,
-    });
-    printStep(4, total, "MCP", `${pluginName} registered in ${claude.configPath}`);
-    if (claude.backupPath) {
-      console.log(`             Backup: ${claude.backupPath}`);
+    const claude = installClaudePlugin(options.dryRun);
+    printStep(4, total, "Plugin", `${pluginSelector} installed`);
+    if (options.dryRun) {
+      for (const command of claude.commands) {
+        console.log(`             ${command}`);
+      }
+    }
+    if (claude.migration.backupPath) {
+      console.log(`             Legacy MCP backup: ${claude.migration.backupPath}`);
     }
   }
 
