@@ -2,6 +2,12 @@
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes Android phone interaction as tools for Codex, Claude Code, and other MCP clients. It controls OpenPocket Android targets through ADB, including emulator targets and physical-phone targets selected in OpenPocket config.
 
+For the full standalone integration guide, see [Codex Plugin and Claude Code MCP Integration](../../docs/codex-claude-code-phone-use.md) or the website page at [Codex and Claude Code Phone Use](https://www.openpocket.ai/get-started/codex-claude-code).
+
+## Integration Boundary
+
+The MCP server is the shared phone-control layer. Codex loads it through the local `plugins/openpocket-phone/` plugin, which also provides the `phone-use` skill. Claude Code connects to the same server directly through project-scoped `.mcp.json` or `claude mcp add`. The main OpenPocket runtime still owns target configuration, emulator startup, physical-phone selection, and ADB execution.
+
 ## Prerequisites
 
 - Node.js >= 20

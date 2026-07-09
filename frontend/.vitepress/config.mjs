@@ -18,6 +18,8 @@ const siteKeywords = [
   "phone-use agent",
   "Android automation",
   "Android emulator automation",
+  "Codex phone use plugin",
+  "Claude Code MCP phone use",
   "local AI agent",
   "human in the loop automation",
   "Telegram phone bot",
@@ -258,6 +260,7 @@ const baseSidebar = [
     items: [
       { text: "Index", link: "/get-started/" },
       { text: "Quickstart", link: "/get-started/quickstart" },
+      { text: "Codex and Claude Code Phone Use", link: "/get-started/codex-claude-code" },
       { text: "Device Targets", link: "/get-started/device-targets" },
       { text: "Multi-Agent Setup", link: "/get-started/multi-agent" },
       { text: "Configuration", link: "/get-started/configuration" },
