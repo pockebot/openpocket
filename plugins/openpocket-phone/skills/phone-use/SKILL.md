@@ -21,25 +21,42 @@ Before controlling a target:
 2. Use `target_status` to inspect configured target type and online ADB devices.
 3. If the target is an emulator and no booted emulator is online, use `start_emulator` or ask the user before starting it when the task might disturb local resources.
 4. If the target is a physical phone, require USB debugging or Wi-Fi ADB to be authorized. Do not try to bypass device trust prompts, lock screens, account prompts, or OS security settings.
-5. If multiple devices are online, ask the user which serial to use unless the task names a device.
+5. If multiple target devices are online, pass an explicit `deviceId` for every inspection/action. If the user has not chosen one, ask which serial to use.
 
 ## Interaction Loop
 
-1. Capture state with `screenshot`.
-2. Read the metadata returned with the screenshot:
+1. Capture cheap state first with `ui_snapshot`, `visible_text`, or `current_app`.
+2. Use `open_app` when the app label is known but the package is not. Use `launch_app` only when the exact package name is known.
+3. Use `find_text` to locate screen controls and data. Use `tap_text` when the next action is clearly tied to visible text.
+4. Use `wait_for_text` after app launch, navigation, search, or scrolling instead of repeatedly polling screenshots by hand.
+5. Use `screenshot` when visual layout, images, game/canvas surfaces, or low-confidence text extraction matter.
+6. Read the metadata returned by `screenshot` or `ui_snapshot`:
    - `currentApp`
    - `deviceId`
    - `uiElements`
+   - `visibleTextLines`
    - `secureSurfaceDetected`
+   - `captureMetrics`
    - screen dimensions and scale values
-3. Prefer `tap_element` when a matching UI element ID exists. Use raw `tap` only when no reliable element is exposed.
-4. Use `type_text` only after the intended input field is focused.
-5. Use `key_event` for BACK, HOME, ENTER, SEARCH, and similar Android key actions.
-6. Use `swipe` for scrolling or gesture movement.
-7. Use `launch_app` when the target package is known.
-8. Use `adb_shell` only for Android inspection or deterministic device setup. Avoid broad or destructive shell commands.
-9. After each action, use `wait` briefly when the UI needs time to settle, then capture a fresh `screenshot`.
-10. Stop when the user goal is met, when the device state is ambiguous, or when a sensitive checkpoint appears.
+7. Prefer `tap_text`, then `tap_element`, then raw `tap` in that order. Raw coordinates are last resort.
+8. Use `type_text` only after the intended input field is focused.
+9. Use `key_event` for BACK, HOME, ENTER, SEARCH, and similar Android key actions.
+10. Use `swipe`, `drag`, and `long_press_drag` for scrolling or gesture movement.
+11. Use `adb_shell` only for Android inspection or deterministic device setup. Avoid broad or destructive shell commands.
+12. Stop when the user goal is met, when the device state is ambiguous, or when a sensitive checkpoint appears.
+
+## Tool Selection
+
+- `target_status`: confirm target type, online devices, booted devices, and ambiguity.
+- `ui_snapshot`: default read-only state capture; returns UI elements and visible text without images.
+- `visible_text`: quick text extraction for scanning current screen contents.
+- `find_text`: locate elements by `text`, `contentDesc`, `resourceId`, or `className`.
+- `tap_text`: tap by text/resource match; prefer for buttons, tabs, menus, and labeled controls.
+- `wait_for_text`: wait for a screen state to appear after navigation or search.
+- `screenshot`: use when visual evidence or element overlays are needed.
+- `open_app`: open by launcher label or package; use when the package name is uncertain.
+- `list_apps`: discover installed launchable app labels and package names.
+- `adb_shell`: use sparingly for Android-level inspection.
 
 ## Sensitive Boundaries
 
@@ -81,9 +98,9 @@ openpocket target pair --host <device-ip> --pair-port <pair-port> --code <pairin
 If the MCP server is missing or disconnected:
 
 1. Build OpenPocket: `npm install && npm run build`.
-2. Verify the MCP server manually: `node dist/mcp/server.js`.
+2. Verify the plugin wrapper and MCP tool surface: `node plugins/openpocket-phone/scripts/doctor.mjs`.
 3. In Codex, check the MCP status for `openpocket-phone`.
-4. If the plugin was just installed or updated, start a new Codex thread.
+4. If the plugin was just installed or updated, start a new Codex thread. Existing desktop threads may not pick up newly installed local MCP tools.
 
 If `tap_element` fails because the element disappeared, capture a fresh `screenshot` and pick a new element ID.
 

@@ -1,7 +1,7 @@
 {
   "name": "openpocket-phone",
-  "version": "0.1.0+codex.20260708220141",
-  "description": "Control OpenPocket Android emulator and physical-phone targets from Codex through local MCP tools.",
+  "version": "0.1.0+codex.20260709000946",
+  "description": "Control OpenPocket Android emulator and physical-phone targets from Codex through ergonomic local MCP tools.",
   "author": {
     "name": "OpenPocket"
   },
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "OpenPocket Phone",
     "shortDescription": "Control Android phones and emulators through OpenPocket",
-    "longDescription": "OpenPocket Phone gives Codex a local phone-use surface for Android emulator and physical-phone targets. It uses OpenPocket's ADB runtime for screenshots, UI metadata, taps, swipes, text input, app launch, and target status without relying on desktop Computer Use.",
+    "longDescription": "OpenPocket Phone gives Codex a local phone-use surface for Android emulator and physical-phone targets. It uses OpenPocket's ADB runtime for target status, app discovery and launch, text-only UI snapshots, visible-text search, tap-by-text actions, screenshots, gestures, Unicode text input, and narrow Android shell inspection without relying on desktop Computer Use.",
     "developerName": "OpenPocket",
     "category": "Developer Tools",
     "capabilities": [
@@ -31,8 +31,8 @@
     ],
     "websiteURL": "https://www.openpocket.ai",
     "defaultPrompt": [
-      "Use OpenPocket to inspect my Android target",
-      "Drive this Android app through OpenPocket",
+      "Inspect my Android target with OpenPocket",
+      "Open an Android app and tap by text",
       "Check whether my phone target is ready"
     ],
     "brandColor": "#0F766E"

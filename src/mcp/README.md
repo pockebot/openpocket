@@ -32,6 +32,12 @@ codex plugin add openpocket-phone@openpocket-local
 
 Start a fresh Codex session after installing the plugin so Codex can load the `phone-use` skill and the `openpocket-phone` MCP tools. If the Codex desktop app was already running before installation, restart the app or use a fresh `codex exec` process to verify newly installed local MCP tools.
 
+To verify the local plugin bundle without touching a phone target:
+
+```bash
+node plugins/openpocket-phone/scripts/doctor.mjs
+```
+
 ## Usage with Claude Code
 
 ### Option 1: Project-scoped
@@ -57,16 +63,28 @@ claude mcp add --transport stdio openpocket-phone -- node /path/to/openpocket/di
 | `target_status` | Inspect configured target and online ADB devices |
 | `start_emulator` | Start the configured emulator target |
 | `stop_emulator` | Stop the configured emulator target |
-| `screenshot` | Capture screen PNG content with UI element metadata |
+| `current_app` | Inspect the foreground app and screenshot hash without image payloads |
+| `screenshot` | Capture screen PNG content, UI metadata, visible text, secure-surface status, and capture metrics |
+| `ui_snapshot` | Capture text-only UI metadata without image payloads |
+| `visible_text` | Return visible/accessibility text with source element IDs |
+| `find_text` | Find UI elements by text, content description, resource ID, or class name |
+| `wait_for_text` | Poll until matching UI text appears |
+| `tap_text` | Tap the best matching UI element by visible text or resource ID |
 | `tap` | Tap at pixel coordinates |
-| `tap_element` | Tap a UI element by ID (from screenshot metadata) |
+| `tap_element` | Tap a UI element by ID from screenshot, ui_snapshot, visible_text, or find_text |
 | `swipe` | Swipe gesture between two points |
+| `drag` | Drag between two points |
+| `long_press_drag` | Long-press then drag between two points |
 | `type_text` | Type text into focused input (Unicode-safe) |
 | `key_event` | Send Android key events (BACK, HOME, ENTER, etc.) |
-| `launch_app` | Launch an app by package name |
+| `open_app` | Open an app by launcher label or package name |
+| `launch_app` | Launch an app by exact package name |
 | `adb_shell` | Run arbitrary ADB shell commands |
-| `list_packages` | List all launchable apps on the device |
+| `list_apps` | List launchable app labels and package names |
+| `list_packages` | List launchable app package names |
 | `wait` | Pause between actions |
+
+For normal phone use, prefer `ui_snapshot`, `visible_text`, `find_text`, `tap_text`, `wait_for_text`, and `open_app` before falling back to raw coordinate taps.
 
 ## Verify
 
@@ -76,4 +94,4 @@ After registering, check that the server is running inside Claude Code:
 /mcp
 ```
 
-You should see `openpocket-phone` listed with 13 tools.
+You should see `openpocket-phone` listed with 23 tools.

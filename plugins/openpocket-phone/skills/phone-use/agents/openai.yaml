@@ -1,7 +1,7 @@
 interface:
   display_name: "Phone Use"
-  short_description: "Control Android targets through OpenPocket"
-  default_prompt: "Use OpenPocket to inspect my Android target."
+  short_description: "Control Android targets with OpenPocket text and UI tools"
+  default_prompt: "Use OpenPocket to inspect and control my Android target."
 
 policy:
   allow_implicit_invocation: true
