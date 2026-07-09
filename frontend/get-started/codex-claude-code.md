@@ -1,6 +1,6 @@
 # Codex And Claude Code Phone Use
 
-OpenPocket gives Codex and Claude Code native phone-use plugins for Android. Each plugin includes a host-specific manifest, a `phone-use` skill, and the same local MCP runtime with 23 tools. The runtime controls the Android target through ADB instead of clicking the emulator window through desktop Computer Use.
+OpenPocket gives Codex and Claude Code one native phone-use integration for Android. Each host adapter includes its required manifest, a generated copy of the shared `phone-use` skill, and the same local MCP runtime with 23 tools. The runtime controls the Android target through ADB instead of clicking the emulator window through desktop Computer Use.
 
 ## Choose Your Client
 
@@ -11,9 +11,23 @@ OpenPocket gives Codex and Claude Code native phone-use plugins for Android. Eac
 | Codex Desktop | Install `OpenPocket Phone` from the repository's `OpenPocket Local` marketplace |
 | Claude Desktop | Upload the ready-made `openpocket-phone-claude.zip` from Settings > Plugins |
 
-Both Desktop packages contain the compiled MCP runtime. You do not need to run `npm install` or `npm run build` before a Desktop install.
+The Codex and Claude directories are thin host-specific install roots, not separate phone-control implementations. Both Desktop packages contain the same compiled MCP runtime, so you do not need to run `npm install` or `npm run build` before a Desktop install.
 
 > OpenPocket Phone currently supports Android emulators and ADB-authorized Android devices. It does not support iOS Simulator or iPhone targets yet.
+
+## One Core, Two Adapters
+
+The repository keeps all host integration files under one root:
+
+```text
+plugins/openpocket-phone/
+  shared/                         canonical phone-use skill
+  codex/openpocket-phone/         Codex install root
+  claude/openpocket-phone/        Claude Code install root and Desktop zip
+  scripts/                        shared package, install, and Doctor commands
+```
+
+Codex and Claude Code require different manifest formats and each client installs one self-contained directory. `npm run phone-use:package` builds the runtime once and synchronizes both adapters; tests reject drift between their generated skill and runtime files.
 
 ## Requirements
 
@@ -50,11 +64,11 @@ From the OpenPocket repository root:
 npm run phone-use:install -- claude-code --target emulator
 ```
 
-This installs a native Claude plugin at user scope. It does not rely on a raw project `.mcp.json` or a manual `claude mcp add` entry. Start a new Claude Code session, then use `/plugin` and `/mcp` to inspect the loaded skill and server.
+This installs or updates a native Claude plugin at user scope. It does not rely on a raw project `.mcp.json` or a manual `claude mcp add` entry. Start a new Claude Code session, then use `/plugin` and `/mcp` to inspect the loaded skill and server.
 
 ## Codex Desktop
 
-The repository includes a Codex marketplace at `.agents/plugins/marketplace.json` and a self-contained plugin at `plugins/openpocket-phone/`.
+The repository includes a Codex marketplace at `.agents/plugins/marketplace.json` and a self-contained adapter at `plugins/openpocket-phone/codex/openpocket-phone/`.
 
 1. Download or clone OpenPocket.
 2. Open the repository folder as a Codex project.
@@ -78,7 +92,7 @@ npm run phone-use:install -- codex
 The upload-ready archive is committed at:
 
 ```text
-plugins/openpocket-phone-claude/releases/openpocket-phone-claude.zip
+plugins/openpocket-phone/claude/openpocket-phone/releases/openpocket-phone-claude.zip
 ```
 
 1. Open Claude Desktop **Settings > Plugins**.
@@ -103,8 +117,8 @@ A successful install appears as a native plugin with one bundled skill:
 For one-process development tests, Claude Code can load the source folder or zip directly:
 
 ```bash
-claude --plugin-dir ./plugins/openpocket-phone-claude
-claude --plugin-dir ./plugins/openpocket-phone-claude/releases/openpocket-phone-claude.zip
+claude --plugin-dir ./plugins/openpocket-phone/claude/openpocket-phone
+claude --plugin-dir ./plugins/openpocket-phone/claude/openpocket-phone/releases/openpocket-phone-claude.zip
 ```
 
 ## Physical Android Phone
@@ -186,7 +200,7 @@ Set `emulator.avdName` in `~/.openpocket/config.json` to an installed AVD. If mo
 ```bash
 npm run phone-use:package
 node plugins/openpocket-phone/scripts/doctor.mjs
-claude plugin validate plugins/openpocket-phone-claude --strict
+claude plugin validate plugins/openpocket-phone/claude/openpocket-phone --strict
 ```
 
 For package internals and maintainer validation, see the [repository integration guide](https://github.com/pockebot/openpocket/blob/main/docs/codex-claude-code-phone-use.md).

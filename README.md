@@ -112,14 +112,14 @@ For full setup details see the [Quickstart guide](https://www.openpocket.ai/get-
 
 ## Codex and Claude Code Phone Use
 
-OpenPocket includes independent native plugins for Codex and Claude Code. Each package bundles a `phone-use` skill and the same 23-tool Android MCP runtime, so the host controls an emulator or authorized physical phone through ADB instead of desktop Computer Use.
+OpenPocket includes one Phone Use integration with native adapters for Codex and Claude Code. Both adapters are generated from the same `phone-use` skill and 23-tool Android MCP source, so the host controls an emulator or authorized physical phone through ADB instead of desktop Computer Use.
 
 | Client | Native package | Fastest install |
 | --- | --- | --- |
-| Codex CLI | `plugins/openpocket-phone/` | `npm run phone-use:install -- codex` |
-| Claude Code CLI | `plugins/openpocket-phone-claude/` | `npm run phone-use:install -- claude-code` |
-| Codex Desktop | `plugins/openpocket-phone/` | Install from the `OpenPocket Local` repo marketplace |
-| Claude Desktop | `plugins/openpocket-phone-claude/` | Upload `releases/openpocket-phone-claude.zip` in Settings > Plugins |
+| Codex CLI | `plugins/openpocket-phone/codex/openpocket-phone/` | `npm run phone-use:install -- codex` |
+| Claude Code CLI | `plugins/openpocket-phone/claude/openpocket-phone/` | `npm run phone-use:install -- claude-code` |
+| Codex Desktop | `plugins/openpocket-phone/codex/openpocket-phone/` | Install from the `OpenPocket Local` repo marketplace |
+| Claude Desktop | `plugins/openpocket-phone/claude/openpocket-phone/` | Upload `releases/openpocket-phone-claude.zip` in Settings > Plugins |
 
 For CLI users, one command handles dependencies, target setup, native plugin installation, and the 23-tool Doctor check:
 
@@ -128,7 +128,7 @@ npm run phone-use:install -- codex --target emulator
 npm run phone-use:install -- claude-code --target emulator
 ```
 
-Desktop packages are self-contained. Codex reads `.agents/plugins/marketplace.json` from the opened repository, while Claude Desktop accepts the ready-made zip. Neither Desktop path requires `npm install` or `npm run build` before plugin installation.
+The two directories are thin host-specific install roots, not separate implementations. Their generated skills and runtimes are kept identical by one packaging command and automated tests. Desktop packages are self-contained: Codex reads `.agents/plugins/marketplace.json` from the opened repository, while Claude Desktop accepts the ready-made zip. Neither Desktop path requires `npm install` or `npm run build` before plugin installation.
 
 After installation, start a new task and ask:
 

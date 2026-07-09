@@ -12,10 +12,10 @@ End users should install a native plugin instead of registering this source serv
 
 | Host | Native package |
 | --- | --- |
-| Codex CLI and Desktop | `plugins/openpocket-phone/` |
-| Claude Code CLI and Desktop | `plugins/openpocket-phone-claude/` |
+| Codex CLI and Desktop | `plugins/openpocket-phone/codex/openpocket-phone/` |
+| Claude Code CLI and Desktop | `plugins/openpocket-phone/claude/openpocket-phone/` |
 
-Each package includes a host-specific manifest, a `phone-use` skill, an MCP registration, and a self-contained runtime generated from `src/mcp/server.ts`. Installed plugins do not depend on the repository's `dist/` directory.
+Both install roots belong to the single `plugins/openpocket-phone/` integration. Each includes a host-specific manifest, a generated copy of the shared `phone-use` skill, an MCP registration, and a self-contained runtime generated from `src/mcp/server.ts`. Installed plugins do not depend on the repository's `dist/` directory.
 
 ## Requirements
 
@@ -93,7 +93,7 @@ Prefer `ui_snapshot`, `visible_text`, `find_text`, `tap_text`, `wait_for_text`, 
 ```bash
 npm run phone-use:package
 node plugins/openpocket-phone/scripts/doctor.mjs
-node --test test/codex-phone-plugin.test.mjs test/claude-phone-plugin.test.mjs
+node --test test/codex-phone-plugin.test.mjs test/claude-phone-plugin.test.mjs test/phone-plugin-layout.test.mjs
 ```
 
 A full native acceptance test must use a fresh Codex or Claude Code session and call `target_status` through the plugin-provided tool. Starting `dist/mcp/server.js` manually proves only the server, not native plugin loading.

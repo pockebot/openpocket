@@ -7,16 +7,18 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const pluginRoot = path.resolve(scriptDir, "..");
-const repoRoot = path.resolve(pluginRoot, "../..");
-const runtimeDir = path.join(pluginRoot, "runtime");
-const codexRuntimeDir = path.join(
-  repoRoot,
-  "plugins",
-  "openpocket-phone",
-  "runtime",
+const integrationRoot = path.resolve(scriptDir, "..");
+const repoRoot = path.resolve(integrationRoot, "../..");
+const codexPluginRoot = path.join(integrationRoot, "codex", "openpocket-phone");
+const claudePluginRoot = path.join(integrationRoot, "claude", "openpocket-phone");
+const sharedSkillPath = path.join(
+  integrationRoot,
+  "shared",
+  "skills",
+  "phone-use",
+  "SKILL.md",
 );
-const releasesDir = path.join(pluginRoot, "releases");
+const releasesDir = path.join(claudePluginRoot, "releases");
 const archivePath = path.join(releasesDir, "openpocket-phone-claude.zip");
 const esbuildPath = path.join(repoRoot, "node_modules", ".bin", "esbuild");
 
@@ -34,18 +36,17 @@ function run(command, args, options = {}) {
 }
 
 function copyIntoStage(stageDir, relativePath) {
-  const source = path.join(pluginRoot, relativePath);
+  const source = path.join(claudePluginRoot, relativePath);
   const destination = path.join(stageDir, relativePath);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.cpSync(source, destination, { recursive: true });
 }
 
-function buildRuntime() {
+function buildRuntime(runtimeDir) {
   if (!fs.existsSync(esbuildPath)) {
-    throw new Error("esbuild is missing. Run npm install before packaging the Claude plugin.");
+    throw new Error("esbuild is missing. Run npm install before packaging the phone plugins.");
   }
 
-  fs.rmSync(runtimeDir, { recursive: true, force: true });
   fs.mkdirSync(runtimeDir, { recursive: true });
 
   run(esbuildPath, [
@@ -74,6 +75,20 @@ function buildRuntime() {
   fs.chmodSync(path.join(runtimeDir, "screen-awake-worker.js"), 0o755);
 }
 
+function replaceDirectory(source, destination) {
+  fs.rmSync(destination, { recursive: true, force: true });
+  fs.cpSync(source, destination, { recursive: true });
+}
+
+function syncHostBundles(runtimeDir) {
+  for (const pluginRoot of [codexPluginRoot, claudePluginRoot]) {
+    replaceDirectory(runtimeDir, path.join(pluginRoot, "runtime"));
+    const skillPath = path.join(pluginRoot, "skills", "phone-use", "SKILL.md");
+    fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+    fs.copyFileSync(sharedSkillPath, skillPath);
+  }
+}
+
 function buildArchive() {
   fs.mkdirSync(releasesDir, { recursive: true });
   fs.rmSync(archivePath, { force: true });
@@ -94,16 +109,18 @@ function buildArchive() {
   }
 }
 
-function syncCodexRuntime() {
-  fs.rmSync(codexRuntimeDir, { recursive: true, force: true });
-  fs.cpSync(runtimeDir, codexRuntimeDir, { recursive: true });
+const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpocket-phone-build-"));
+try {
+  const runtimeDir = path.join(buildDir, "runtime");
+  buildRuntime(runtimeDir);
+  syncHostBundles(runtimeDir);
+  buildArchive();
+} finally {
+  fs.rmSync(buildDir, { recursive: true, force: true });
 }
 
-buildRuntime();
-syncCodexRuntime();
-buildArchive();
-
 const sizeKb = Math.ceil(fs.statSync(archivePath).size / 1024);
-console.log(`Codex runtime: ${codexRuntimeDir}`);
-console.log(`Claude plugin: ${archivePath}`);
+console.log(`Codex plugin: ${codexPluginRoot}`);
+console.log(`Claude plugin: ${claudePluginRoot}`);
+console.log(`Claude archive: ${archivePath}`);
 console.log(`Archive size: ${sizeKb} KB`);

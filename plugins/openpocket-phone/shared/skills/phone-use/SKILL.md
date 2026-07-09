@@ -1,6 +1,6 @@
 ---
 name: phone-use
-description: Use OpenPocket MCP tools to inspect or control an Android emulator, physical Android phone, Android TV, or ADB-backed app from Claude Code. Trigger for phone use, Android automation, mobile UI testing, emulator control, physical-device control, app navigation, screenshots, tapping, typing, and requests that should not use desktop computer-use automation.
+description: Use OpenPocket MCP tools to inspect or control an Android emulator, physical Android phone, Android TV, or ADB-backed app. Trigger for phone use, Android automation, mobile UI testing, emulator control, physical-device control, app navigation, screenshots, tapping, typing, and requests that should not use desktop computer-use automation.
 ---
 
 # Phone Use With OpenPocket
@@ -24,11 +24,12 @@ OpenPocket is Android-first. This plugin does not control iOS Simulator or iPhon
 3. Locate controls with `find_text` and prefer `tap_text` or `tap_element` over raw coordinates.
 4. After navigation, launch, search, or scrolling, use `wait_for_text` instead of repeatedly polling screenshots.
 5. Use `screenshot` when visual layout, imagery, canvas content, or uncertain text extraction matters.
-6. Use `type_text` only after the intended input field is focused.
-7. Use `key_event` for BACK, HOME, ENTER, SEARCH, and similar Android keys.
-8. Use `swipe`, `drag`, and `long_press_drag` for gestures.
-9. Use `adb_shell` only for narrow Android inspection or deterministic setup. Avoid broad or destructive commands.
-10. Re-read the screen after every state-changing action and stop when the user goal is complete or the state becomes ambiguous.
+6. Read the metadata returned by `screenshot` or `ui_snapshot`, including `currentApp`, `deviceId`, `uiElements`, `visibleTextLines`, `secureSurfaceDetected`, capture metrics, and screen dimensions.
+7. Use `type_text` only after the intended input field is focused.
+8. Use `key_event` for BACK, HOME, ENTER, SEARCH, and similar Android keys.
+9. Use `swipe`, `drag`, and `long_press_drag` for gestures.
+10. Use `adb_shell` only for narrow Android inspection or deterministic setup. Avoid broad or destructive commands.
+11. Re-read the screen after every state-changing action and stop when the user goal is complete or the state becomes ambiguous.
 
 ## Tool Guide
 
@@ -53,10 +54,12 @@ Pause for explicit user confirmation before:
 - entering a password, OTP, 2FA code, recovery code, card detail, government ID, or private health or finance data
 - using camera, microphone, photos, contacts, files, location, biometric, NFC, or SMS capabilities
 
+If OpenPocket Human Auth is configured and the user asks for an approval-driven flow, prefer the OpenPocket human-auth path. Otherwise ask the user to provide the required data or approve the action in chat.
+
 If a secure surface produces a black or incomplete screenshot, use returned UI metadata only. Do not infer hidden sensitive content.
 
 ## Recovery
 
-If tools are missing after installation, start a new Claude Code task or run `/reload-plugins`. Plugin-provided MCP tools are scoped under `mcp__plugin_openpocket-phone_openpocket-phone__*` internally.
+If tools are missing immediately after installation or update, restart the client and open a new task. Plugin-provided MCP tools are loaded per client task and an existing task may retain the previous tool surface.
 
-If a UI element disappears, capture a fresh snapshot before trying again. If a physical device is unavailable, ask the user to authorize USB debugging or Wi-Fi ADB first.
+Run `node plugins/openpocket-phone/scripts/doctor.mjs` from an OpenPocket checkout to validate both host bundles. If a UI element disappears, capture a fresh snapshot before trying again. If a physical device is unavailable, ask the user to authorize USB debugging or Wi-Fi ADB first.

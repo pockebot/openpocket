@@ -7,7 +7,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const pluginRoot = path.join(repoRoot, "plugins", "openpocket-phone");
+const integrationRoot = path.join(repoRoot, "plugins", "openpocket-phone");
+const pluginRoot = path.join(integrationRoot, "codex", "openpocket-phone");
 const serverPath = path.join(pluginRoot, "runtime", "openpocket-phone-server.mjs");
 
 test("Codex plugin declares one phone-use skill and bundled MCP runtime", () => {
@@ -30,6 +31,14 @@ test("Codex plugin declares one phone-use skill and bundled MCP runtime", () => 
   ]);
   assert.match(skill, /^---\nname: phone-use\n/m);
   assert.match(skill, /target_status/);
+  assert.equal(path.basename(pluginRoot), manifest.name);
+  assert.equal(
+    skill,
+    fs.readFileSync(
+      path.join(integrationRoot, "shared", "skills", "phone-use", "SKILL.md"),
+      "utf8",
+    ),
+  );
 
   for (const relativePath of [
     "runtime/openpocket-phone-server.mjs",

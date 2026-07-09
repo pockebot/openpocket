@@ -8,7 +8,7 @@
       "name": "openpocket-phone",
       "source": {
         "source": "local",
-        "path": "./plugins/openpocket-phone"
+        "path": "./plugins/openpocket-phone/codex/openpocket-phone"
       },
       "policy": {
         "installation": "AVAILABLE",

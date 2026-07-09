@@ -1,6 +1,6 @@
 {
   "name": "openpocket-phone",
-  "version": "0.1.0+codex.20260709130340",
+  "version": "0.1.1+codex.20260709210902",
   "description": "Control OpenPocket Android emulator and physical-phone targets from Codex through ergonomic local MCP tools.",
   "author": {
     "name": "OpenPocket"

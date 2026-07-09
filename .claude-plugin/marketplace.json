@@ -9,9 +9,9 @@
     {
       "name": "openpocket-phone",
       "displayName": "OpenPocket Phone",
-      "source": "./plugins/openpocket-phone-claude",
+      "source": "./plugins/openpocket-phone/claude/openpocket-phone",
       "description": "Control Android phones and emulators with OpenPocket phone-use tools.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "development"
     }
   ]

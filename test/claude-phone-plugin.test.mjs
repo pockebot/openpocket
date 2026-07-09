@@ -7,7 +7,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const pluginRoot = path.join(repoRoot, "plugins", "openpocket-phone-claude");
+const integrationRoot = path.join(repoRoot, "plugins", "openpocket-phone");
+const pluginRoot = path.join(integrationRoot, "claude", "openpocket-phone");
 const serverPath = path.join(pluginRoot, "runtime", "openpocket-phone-server.mjs");
 const archivePath = path.join(
   pluginRoot,
@@ -35,6 +36,14 @@ test("Claude plugin declares one phone-use skill and one MCP server", () => {
   ]);
   assert.match(skill, /^---\nname: phone-use\n/m);
   assert.match(skill, /target_status/);
+  assert.equal(path.basename(pluginRoot), manifest.name);
+  assert.equal(
+    skill,
+    fs.readFileSync(
+      path.join(integrationRoot, "shared", "skills", "phone-use", "SKILL.md"),
+      "utf8",
+    ),
+  );
 });
 
 test("Claude Desktop archive contains a self-contained plugin root", () => {

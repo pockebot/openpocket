@@ -155,9 +155,10 @@ test("installer dry run explains the native Claude Code plugin flow", () => {
   );
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /Client: Claude Code CLI \+ Desktop/);
-  assert.match(result.stdout, /openpocket-phone@openpocket-local installed/);
+  assert.match(result.stdout, /openpocket-phone@openpocket-local installed or updated/);
   assert.match(result.stdout, /plugin marketplace add/);
   assert.match(result.stdout, /plugin install/);
+  assert.match(result.stdout, /plugin update/);
   assert.match(result.stdout, /23 tools ready/);
   assert.equal(fs.existsSync(path.join(home, ".claude.json")), false);
 });

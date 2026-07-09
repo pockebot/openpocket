@@ -7,12 +7,13 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const pluginRoot = path.resolve(scriptDir, "..");
-const repoRoot = path.resolve(pluginRoot, "../..");
+const integrationRoot = path.resolve(scriptDir, "..");
+const repoRoot = path.resolve(integrationRoot, "../..");
 const marketplaceName = "openpocket-local";
 const pluginName = "openpocket-phone";
 const pluginSelector = `${pluginName}@${marketplaceName}`;
-const claudePluginRoot = path.join(repoRoot, "plugins", "openpocket-phone-claude");
+const codexPluginRoot = path.join(integrationRoot, "codex", "openpocket-phone");
+const claudePluginRoot = path.join(integrationRoot, "claude", "openpocket-phone");
 const targetTypes = new Set(["emulator", "physical-phone", "android-tv", "cloud"]);
 
 const clientAliases = new Map([
@@ -41,7 +42,7 @@ Options:
   --device <serial>     Pin a physical target to one ADB device serial.
   --start-emulator      Start the configured emulator after installation.
   --skip-deps           Do not install missing npm dependencies.
-  --skip-build          Reuse the existing dist/ build.
+  --skip-build          Reuse the existing dist/ build and packaged plugin runtimes.
   --dry-run             Print the plan without changing files or client config.
   -h, --help            Show this help.
 `;
@@ -405,11 +406,10 @@ function resolveClaudeBinary(dryRun) {
 
 function installClaudePlugin(dryRun) {
   const binary = resolveClaudeBinary(dryRun);
-  const packageScript = path.join(claudePluginRoot, "scripts", "package.mjs");
   const commands = [
-    [process.execPath, [packageScript]],
     [binary, ["plugin", "marketplace", "add", repoRoot, "--scope", "user"]],
     [binary, ["plugin", "install", pluginSelector, "--scope", "user"]],
+    [binary, ["plugin", "update", pluginSelector, "--scope", "user"]],
   ];
 
   if (!dryRun) {
@@ -451,16 +451,30 @@ function runBuild(options) {
   }
 
   const serverPath = path.join(repoRoot, "dist", "mcp", "server.js");
+  const packageScript = path.join(integrationRoot, "scripts", "package.mjs");
   if (!options.skipBuild && !options.dryRun) {
     assertSuccess(execute("npm", ["run", "build", "--silent"]), "OpenPocket build");
+    assertSuccess(
+      execute(process.execPath, [packageScript]),
+      "Phone plugin packaging",
+    );
   }
   if (!options.dryRun && !fs.existsSync(serverPath)) {
     throw new Error(`MCP server build is missing: ${serverPath}`);
+  }
+  if (!options.dryRun) {
+    for (const pluginRoot of [codexPluginRoot, claudePluginRoot]) {
+      const bundledServer = path.join(pluginRoot, "runtime", "openpocket-phone-server.mjs");
+      if (!fs.existsSync(bundledServer)) {
+        throw new Error(`Packaged MCP runtime is missing: ${bundledServer}`);
+      }
+    }
   }
 
   return {
     dependenciesReady,
     serverPath,
+    packaged: !options.skipBuild,
   };
 }
 
@@ -496,7 +510,7 @@ function runDoctor(dryRun) {
   if (dryRun) {
     return { toolCount: 23 };
   }
-  const doctorPath = path.join(pluginRoot, "scripts", "doctor.mjs");
+  const doctorPath = path.join(integrationRoot, "scripts", "doctor.mjs");
   const result = assertSuccess(
     execute(process.execPath, [doctorPath]),
     "OpenPocket Phone doctor",
@@ -535,7 +549,12 @@ export async function main(argv = process.argv.slice(2)) {
     "Dependencies",
     build.dependenciesReady ? "ready" : options.dryRun ? "install if missing" : "installed",
   );
-  printStep(2, total, "Runtime", options.skipBuild ? "reused existing build" : "built");
+  printStep(
+    2,
+    total,
+    "Runtime",
+    build.packaged ? "built and synced to both host bundles" : "reused packaged bundles",
+  );
 
   const target = configureTarget(options);
   printStep(3, total, "Target", target);
@@ -550,7 +569,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
   } else {
     const claude = installClaudePlugin(options.dryRun);
-    printStep(4, total, "Plugin", `${pluginSelector} installed`);
+    printStep(4, total, "Plugin", `${pluginSelector} installed or updated`);
     if (options.dryRun) {
       for (const command of claude.commands) {
         console.log(`             ${command}`);

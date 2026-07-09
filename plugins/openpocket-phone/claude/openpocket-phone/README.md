@@ -1,8 +1,8 @@
 # OpenPocket Phone For Claude Code
 
-This directory is the native Claude Code plugin for OpenPocket Phone. It packages a `phone-use` skill and a self-contained MCP runtime with 23 Android tools for emulator and ADB-authorized physical-phone control.
+This directory is the self-contained Claude Code adapter for the OpenPocket Phone integration. It packages a `phone-use` skill and a bundled MCP runtime with 23 Android tools for emulator and ADB-authorized physical-phone control.
 
-It is independent from the Codex package at `plugins/openpocket-phone/`. Both plugins are generated from the same OpenPocket MCP source and expose the same tool surface.
+It is not a separate implementation from the Codex adapter. Both host bundles are generated from the shared skill under `plugins/openpocket-phone/shared/` and the same OpenPocket MCP source.
 
 ## Requirements
 
@@ -28,11 +28,11 @@ No repository build is required for this path.
 5. Confirm that **OpenPocket Phone** appears in the plugin list.
 6. Start a new Claude Code task.
 
-![Claude Desktop Add menu with Upload plugin](../openpocket-phone/assets/onboarding/claude-plugin-add-menu.png)
+![Claude Desktop Add menu with Upload plugin](https://www.openpocket.ai/images/openpocket-phone/claude-plugin-add-menu.png)
 
-![Claude Desktop local plugin upload dialog](../openpocket-phone/assets/onboarding/claude-plugin-upload.png)
+![Claude Desktop local plugin upload dialog](https://www.openpocket.ai/images/openpocket-phone/claude-plugin-upload.png)
 
-![OpenPocket Phone installed in Claude Desktop](../openpocket-phone/assets/onboarding/claude-plugin-installed.png)
+![OpenPocket Phone installed in Claude Desktop](https://www.openpocket.ai/images/openpocket-phone/claude-plugin-installed.png)
 
 Use this first prompt:
 
@@ -51,7 +51,7 @@ From the OpenPocket repository root:
 npm run phone-use:install -- claude-code --target emulator
 ```
 
-The installer prepares the runtime, adds the `openpocket-local` marketplace, installs `openpocket-phone@openpocket-local` at user scope, migrates an older raw `openpocket-phone` MCP entry when present, and runs the 23-tool Doctor check.
+The installer prepares the runtime, adds the `openpocket-local` marketplace, installs or updates `openpocket-phone@openpocket-local` at user scope, migrates an older raw `openpocket-phone` MCP entry when present, and runs the 23-tool Doctor check.
 
 Verify the native plugin:
 
@@ -66,8 +66,8 @@ Then open a fresh Claude Code session and use `/plugin` or `/mcp` to inspect the
 Plugin developers can load the directory or zip for one Claude Code process:
 
 ```bash
-claude --plugin-dir ./plugins/openpocket-phone-claude
-claude --plugin-dir ./plugins/openpocket-phone-claude/releases/openpocket-phone-claude.zip
+claude --plugin-dir ./plugins/openpocket-phone/claude/openpocket-phone
+claude --plugin-dir ./plugins/openpocket-phone/claude/openpocket-phone/releases/openpocket-phone-claude.zip
 ```
 
 ## Physical Android Phone
@@ -102,9 +102,9 @@ From the repository root:
 ```bash
 npm install
 npm run phone-use:package
-claude plugin validate plugins/openpocket-phone-claude --strict
+claude plugin validate plugins/openpocket-phone/claude/openpocket-phone --strict
 ```
 
-The package command rebuilds the shared runtime, synchronizes the Codex plugin runtime, and refreshes this zip.
+The package command builds the runtime once, synchronizes the canonical skill and generated runtime into both host adapters, and refreshes this zip.
 
-For the complete Codex and Claude install matrix, target setup, tool list, and troubleshooting, see the [OpenPocket Phone plugin guide](../openpocket-phone/README.md).
+For the complete Codex and Claude install matrix, target setup, tool list, and troubleshooting, see the [OpenPocket Phone integration guide](https://github.com/pockebot/openpocket/blob/main/plugins/openpocket-phone/README.md).

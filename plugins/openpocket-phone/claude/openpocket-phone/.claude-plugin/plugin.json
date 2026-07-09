@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "openpocket-phone",
   "displayName": "OpenPocket Phone",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Control Android phones and emulators from Claude Code with OpenPocket phone-use tools.",
   "author": {
     "name": "OpenPocket",

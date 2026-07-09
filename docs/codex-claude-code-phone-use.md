@@ -1,6 +1,6 @@
 # Codex And Claude Code Phone Use
 
-OpenPocket provides native phone-use plugins for Codex and Claude Code. Each plugin bundles host-specific metadata, a `phone-use` skill, and the same local 23-tool MCP runtime. The MCP runtime controls Android through ADB, so an agent interacts with the Android target directly instead of clicking the emulator window through desktop Computer Use.
+OpenPocket provides one phone-use integration with native adapters for Codex and Claude Code. Each adapter bundles host-specific metadata, a generated copy of the shared `phone-use` skill, and the same local 23-tool MCP runtime. The MCP runtime controls Android through ADB, so an agent interacts with the Android target directly instead of clicking the emulator window through desktop Computer Use.
 
 The user-facing onboarding guide is [`plugins/openpocket-phone/README.md`](../plugins/openpocket-phone/README.md). This document describes the integration boundary, package layout, runtime behavior, and validation model.
 
@@ -8,10 +8,10 @@ The user-facing onboarding guide is [`plugins/openpocket-phone/README.md`](../pl
 
 | Client | Native package | Installation surface |
 | --- | --- | --- |
-| Codex CLI | `plugins/openpocket-phone/` | `npm run phone-use:install -- codex` or `/plugins` |
-| Codex Desktop | `plugins/openpocket-phone/` | `OpenPocket Local` repo marketplace in Plugins |
-| Claude Code CLI | `plugins/openpocket-phone-claude/` | `npm run phone-use:install -- claude-code` |
-| Claude Desktop | `plugins/openpocket-phone-claude/` | Settings > Plugins > Add > Upload plugin |
+| Codex CLI | `plugins/openpocket-phone/codex/openpocket-phone/` | `npm run phone-use:install -- codex` or `/plugins` |
+| Codex Desktop | `plugins/openpocket-phone/codex/openpocket-phone/` | `OpenPocket Local` repo marketplace in Plugins |
+| Claude Code CLI | `plugins/openpocket-phone/claude/openpocket-phone/` | `npm run phone-use:install -- claude-code` |
+| Claude Desktop | `plugins/openpocket-phone/claude/openpocket-phone/` | Settings > Plugins > Add > Upload plugin |
 
 There is no root project-scoped `.mcp.json` and no required raw `claude mcp add` registration. Both hosts load a native plugin that owns its skill and MCP registration.
 
@@ -28,23 +28,24 @@ flowchart LR
     ADB --> Phone["Authorized Android phone"]
 ```
 
-The two bundles are independent at installation time. Their generated runtime files are byte-identical and come from `src/mcp/server.ts`, but neither installed plugin needs to find `dist/mcp/server.js` in a source checkout.
+The two bundles are independent only at installation time because each host caches or uploads one plugin root. Their generated runtime files are byte-identical and come from `src/mcp/server.ts`; their skills are byte-identical copies of `plugins/openpocket-phone/shared/skills/phone-use/SKILL.md`. Neither installed adapter needs to find `dist/mcp/server.js` in a source checkout.
+
+The extra `openpocket-phone` directory beneath each host name is intentional. Codex and Claude validators both expect the install-root directory name to match the plugin manifest name.
 
 ## Package Boundaries
 
 | Path | Responsibility |
 | --- | --- |
-| `plugins/openpocket-phone/` | Installable Codex plugin |
-| `plugins/openpocket-phone/.codex-plugin/plugin.json` | Codex manifest and UI metadata |
-| `plugins/openpocket-phone/.mcp.json` | Codex stdio MCP registration |
-| `plugins/openpocket-phone/skills/phone-use/SKILL.md` | Codex phone-use workflow and safety guidance |
-| `plugins/openpocket-phone/runtime/` | Self-contained Codex MCP runtime and Android helpers |
-| `plugins/openpocket-phone-claude/` | Installable Claude Code plugin |
-| `plugins/openpocket-phone-claude/.claude-plugin/plugin.json` | Claude plugin manifest |
-| `plugins/openpocket-phone-claude/.mcp.json` | Claude plugin-scoped MCP registration |
-| `plugins/openpocket-phone-claude/skills/phone-use/SKILL.md` | Claude phone-use workflow and safety guidance |
-| `plugins/openpocket-phone-claude/runtime/` | Self-contained Claude MCP runtime and Android helpers |
-| `plugins/openpocket-phone-claude/releases/openpocket-phone-claude.zip` | Ready-to-upload Claude Desktop archive |
+| `plugins/openpocket-phone/` | Single integration root, onboarding, and build/install scripts |
+| `plugins/openpocket-phone/shared/skills/phone-use/SKILL.md` | Canonical phone-use workflow and safety guidance |
+| `plugins/openpocket-phone/codex/openpocket-phone/` | Self-contained Codex install root |
+| `plugins/openpocket-phone/codex/openpocket-phone/.codex-plugin/plugin.json` | Codex manifest and UI metadata |
+| `plugins/openpocket-phone/codex/openpocket-phone/.mcp.json` | Codex stdio MCP registration |
+| `plugins/openpocket-phone/claude/openpocket-phone/` | Self-contained Claude Code install root |
+| `plugins/openpocket-phone/claude/openpocket-phone/.claude-plugin/plugin.json` | Claude plugin manifest |
+| `plugins/openpocket-phone/claude/openpocket-phone/.mcp.json` | Claude plugin-scoped MCP registration |
+| `plugins/openpocket-phone/claude/openpocket-phone/releases/openpocket-phone-claude.zip` | Ready-to-upload Claude Desktop archive |
+| `plugins/openpocket-phone/scripts/package.mjs` | Builds once and synchronizes both generated host bundles |
 | `.agents/plugins/marketplace.json` | Codex repo marketplace |
 | `.claude-plugin/marketplace.json` | Claude Code repo marketplace |
 | `src/mcp/server.ts` | Authoritative MCP implementation source |
@@ -82,7 +83,7 @@ Open the repository as a Codex project, restart the app, open Plugins, select `O
 
 ### Claude Desktop
 
-Open Settings > Plugins, select Add > Upload plugin, and choose [`openpocket-phone-claude.zip`](../plugins/openpocket-phone-claude/releases/openpocket-phone-claude.zip). Start a new Claude Code task after the upload.
+Open Settings > Plugins, select Add > Upload plugin, and choose [`openpocket-phone-claude.zip`](../plugins/openpocket-phone/claude/openpocket-phone/releases/openpocket-phone-claude.zip). Start a new Claude Code task after the upload.
 
 ![OpenPocket Phone installed in Claude Desktop](../plugins/openpocket-phone/assets/onboarding/claude-plugin-installed.png)
 
@@ -156,8 +157,8 @@ Run package-level checks from the repository root:
 ```bash
 npm run phone-use:package
 node plugins/openpocket-phone/scripts/doctor.mjs
-claude plugin validate plugins/openpocket-phone-claude --strict
-node --test test/codex-phone-plugin.test.mjs test/claude-phone-plugin.test.mjs
+claude plugin validate plugins/openpocket-phone/claude/openpocket-phone --strict
+node --test test/codex-phone-plugin.test.mjs test/claude-phone-plugin.test.mjs test/phone-plugin-layout.test.mjs
 ```
 
 ## Safety Boundaries
@@ -181,7 +182,7 @@ npm install
 npm run phone-use:package
 ```
 
-The package script writes the Claude runtime, copies the same files into the Codex plugin, and rebuilds the upload zip. A Codex plugin content change must also bump the build metadata in `plugins/openpocket-phone/.codex-plugin/plugin.json` so existing hosts do not retain a stale cache entry.
+The package script builds one temporary runtime, copies it and the canonical skill into both host adapters, and rebuilds the upload zip. Tests and the Doctor compare both generated bundles byte-for-byte. A Codex plugin content change must also bump the build metadata in `plugins/openpocket-phone/codex/openpocket-phone/.codex-plugin/plugin.json` so existing hosts do not retain a stale cache entry.
 
 ## Troubleshooting
 
