@@ -1,243 +1,207 @@
-# Codex Plugin and Claude Code MCP Integration
+# Codex And Claude Code Phone Use
 
-This document describes the OpenPocket integration layer for Codex and Claude Code. It is separate from the main OpenPocket runtime: the runtime owns Android target control, while the Codex plugin and Claude Code MCP registration expose that control surface to coding agents.
+OpenPocket provides native phone-use plugins for Codex and Claude Code. Each plugin bundles host-specific metadata, a `phone-use` skill, and the same local 23-tool MCP runtime. The MCP runtime controls Android through ADB, so an agent interacts with the Android target directly instead of clicking the emulator window through desktop Computer Use.
 
-## What Lives Where
+The user-facing onboarding guide is [`plugins/openpocket-phone/README.md`](../plugins/openpocket-phone/README.md). This document describes the integration boundary, package layout, runtime behavior, and validation model.
 
-| Path | Purpose |
+## Integration Matrix
+
+| Client | Native package | Installation surface |
+| --- | --- | --- |
+| Codex CLI | `plugins/openpocket-phone/` | `npm run phone-use:install -- codex` or `/plugins` |
+| Codex Desktop | `plugins/openpocket-phone/` | `OpenPocket Local` repo marketplace in Plugins |
+| Claude Code CLI | `plugins/openpocket-phone-claude/` | `npm run phone-use:install -- claude-code` |
+| Claude Desktop | `plugins/openpocket-phone-claude/` | Settings > Plugins > Add > Upload plugin |
+
+There is no root project-scoped `.mcp.json` and no required raw `claude mcp add` registration. Both hosts load a native plugin that owns its skill and MCP registration.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Codex["Codex CLI or Desktop"] --> CodexPlugin["Codex plugin\nmanifest + skill + MCP config"]
+    Claude["Claude Code CLI or Desktop"] --> ClaudePlugin["Claude plugin\nmanifest + skill + MCP config"]
+    CodexPlugin --> Runtime["Bundled OpenPocket Phone MCP runtime\n23 tools"]
+    ClaudePlugin --> Runtime
+    Runtime --> ADB["ADB runtime"]
+    ADB --> Emulator["Android emulator"]
+    ADB --> Phone["Authorized Android phone"]
+```
+
+The two bundles are independent at installation time. Their generated runtime files are byte-identical and come from `src/mcp/server.ts`, but neither installed plugin needs to find `dist/mcp/server.js` in a source checkout.
+
+## Package Boundaries
+
+| Path | Responsibility |
 | --- | --- |
-| `plugins/openpocket-phone/` | Codex plugin bundle. This is the installable local plugin package. |
-| `plugins/openpocket-phone/.codex-plugin/plugin.json` | Codex plugin manifest, UI metadata, skill path, and MCP config path. |
-| `plugins/openpocket-phone/.mcp.json` | MCP registration used by the Codex plugin. It launches the wrapper script from the plugin cache. |
-| `plugins/openpocket-phone/skills/phone-use/SKILL.md` | Codex skill instructions for phone-use safety, tool selection, and interaction loops. |
-| `plugins/openpocket-phone/scripts/openpocket-phone-mcp.mjs` | Codex plugin wrapper that locates `dist/mcp/server.js` from the source repo, plugin cache, or environment. |
-| `plugins/openpocket-phone/scripts/doctor.mjs` | Local preflight that verifies the plugin manifest, MCP server path, and required tool surface. |
-| `plugins/openpocket-phone/README.md` | User-facing install guide for Codex CLI, Codex Desktop App, Claude Code CLI, Claude Code Desktop App, and Claude Desktop MCP. |
-| `src/mcp/server.ts` | The actual OpenPocket Phone MCP server implementation. Codex and Claude Code both ultimately use this server. |
-| `.mcp.json` | Project-scoped MCP config for Claude Code when opened from the repository root. |
+| `plugins/openpocket-phone/` | Installable Codex plugin |
+| `plugins/openpocket-phone/.codex-plugin/plugin.json` | Codex manifest and UI metadata |
+| `plugins/openpocket-phone/.mcp.json` | Codex stdio MCP registration |
+| `plugins/openpocket-phone/skills/phone-use/SKILL.md` | Codex phone-use workflow and safety guidance |
+| `plugins/openpocket-phone/runtime/` | Self-contained Codex MCP runtime and Android helpers |
+| `plugins/openpocket-phone-claude/` | Installable Claude Code plugin |
+| `plugins/openpocket-phone-claude/.claude-plugin/plugin.json` | Claude plugin manifest |
+| `plugins/openpocket-phone-claude/.mcp.json` | Claude plugin-scoped MCP registration |
+| `plugins/openpocket-phone-claude/skills/phone-use/SKILL.md` | Claude phone-use workflow and safety guidance |
+| `plugins/openpocket-phone-claude/runtime/` | Self-contained Claude MCP runtime and Android helpers |
+| `plugins/openpocket-phone-claude/releases/openpocket-phone-claude.zip` | Ready-to-upload Claude Desktop archive |
+| `.agents/plugins/marketplace.json` | Codex repo marketplace |
+| `.claude-plugin/marketplace.json` | Claude Code repo marketplace |
+| `src/mcp/server.ts` | Authoritative MCP implementation source |
 
-The Codex plugin is therefore a bundle of:
+## Installation
 
-- a Codex plugin manifest
-- one Codex skill
-- a stdio MCP server registration
-- helper scripts for server discovery and diagnostics
+### CLI
 
-Claude Code does not use the Codex plugin manifest or skill. It uses the MCP server directly through `.mcp.json` or `claude mcp add`.
-
-## Prerequisites
-
-```bash
-npm install
-npm run build
-```
-
-You also need:
-
-- Node.js 20 or newer
-- Android SDK platform-tools and emulator tools
-- an OpenPocket target configured in `openpocket.config.json`
-- an emulator AVD or an authorized Android device
-
-For an emulator target:
+Run one command from the repository root for the selected host:
 
 ```bash
-openpocket target set --type emulator
-openpocket emulator start
+npm run phone-use:install -- codex --target emulator
+npm run phone-use:install -- claude-code --target emulator
 ```
 
-For a physical phone:
+The installer can also start the emulator:
+
+```bash
+npm run phone-use:install -- codex --target emulator --start-emulator
+```
+
+For an authorized physical Android device:
 
 ```bash
 adb devices -l
-openpocket target set --type physical-phone --device <serial>
+npm run phone-use:install -- codex --device <serial>
+npm run phone-use:install -- claude-code --device <serial>
 ```
 
-For Wi-Fi ADB pairing:
+### Codex Desktop
 
-```bash
-openpocket target pair \
-  --host <device-ip> \
-  --pair-port <pair-port> \
-  --code <pairing-code> \
-  --type physical-phone
-```
+Open the repository as a Codex project, restart the app, open Plugins, select `OpenPocket Local`, and install `OpenPocket Phone`. The repo marketplace and bundled runtime make a source build unnecessary for this path.
 
-## Codex Setup
+![OpenPocket Phone installed in Codex Desktop](../plugins/openpocket-phone/assets/onboarding/codex-plugin-installed.png)
 
-For the most user-friendly install matrix, including Codex CLI and Codex Desktop App, see [`plugins/openpocket-phone/README.md`](../plugins/openpocket-phone/README.md).
+### Claude Desktop
 
-Install the local marketplace and plugin from the OpenPocket repository root:
+Open Settings > Plugins, select Add > Upload plugin, and choose [`openpocket-phone-claude.zip`](../plugins/openpocket-phone-claude/releases/openpocket-phone-claude.zip). Start a new Claude Code task after the upload.
 
-```bash
-npm install
-npm run build
-codex plugin marketplace add /path/to/openpocket
-codex plugin add openpocket-phone@openpocket-local
-```
+![OpenPocket Phone installed in Claude Desktop](../plugins/openpocket-phone/assets/onboarding/claude-plugin-installed.png)
 
-Then start a fresh Codex thread or fresh `codex exec` session. Existing desktop threads may not pick up newly installed local MCP tools until a new session is created.
+See the [full screenshot walkthrough](../plugins/openpocket-phone/README.md#claude-desktop) for every Desktop step.
 
-Run the plugin preflight without touching a phone target:
+## Runtime Configuration
 
-```bash
-node plugins/openpocket-phone/scripts/doctor.mjs
-```
+The plugin runtime reads `~/.openpocket/config.json`, or `$OPENPOCKET_HOME/config.json` when `OPENPOCKET_HOME` is set. If the file is missing, the runtime creates a minimal emulator-first config:
 
-The output should report:
+- target type: `emulator`
+- AVD name: `OpenPocket_AVD`
+- Android SDK root: `ANDROID_SDK_ROOT`, then `ANDROID_HOME`, then standard SDK discovery
+- device ID: unset until a physical target is pinned
 
-- `pluginName: "openpocket-phone"`
-- `mcpServerName: "openpocket-phone"`
-- `toolCount: 23`
-- required tools including `ui_snapshot`, `visible_text`, `find_text`, `wait_for_text`, `tap_text`, `open_app`, and `list_apps`
-
-### Codex Validation Prompt
-
-Use a fresh Codex session and ask it to use only native OpenPocket tools:
-
-```text
-Use the openpocket-phone plugin only. Call target_status and report targetType,
-avdName, devices, bootedDevices, resolvedDeviceId, resolveError, and
-ambiguousTarget. Then confirm whether ui_snapshot, visible_text, find_text,
-wait_for_text, tap_text, open_app, and list_apps are visible.
-```
-
-A successful run proves that Codex has loaded the plugin-provided MCP tools natively for that session.
-
-## Claude Code Setup
-
-For the most user-friendly install matrix, including Claude Code CLI, Claude Code Desktop App, and Claude Desktop MCP configuration, see [`plugins/openpocket-phone/README.md`](../plugins/openpocket-phone/README.md).
-
-### Option 1: Project-Scoped MCP
-
-Build OpenPocket, then open Claude Code from the repository root:
-
-```bash
-npm install
-npm run build
-claude
-```
-
-The root `.mcp.json` registers:
-
-```json
-{
-  "mcpServers": {
-    "openpocket-phone": {
-      "command": "node",
-      "args": ["dist/mcp/server.js"]
-    }
-  }
-}
-```
-
-Inside Claude Code, run:
-
-```text
-/mcp
-```
-
-You should see `openpocket-phone` with 23 tools.
-
-### Option 2: Manual MCP Registration
-
-Register the server explicitly:
-
-```bash
-claude mcp add --transport stdio openpocket-phone -- \
-  node /path/to/openpocket/dist/mcp/server.js
-```
-
-With a custom config path:
-
-```bash
-claude mcp add --transport stdio openpocket-phone -- \
-  node /path/to/openpocket/dist/mcp/server.js \
-  --config /path/to/openpocket.config.json
-```
+The native plugin does not require a model provider key in OpenPocket config. Codex or Claude supplies the agent model; OpenPocket supplies Android tools.
 
 ## Tool Surface
 
 | Tool | Use |
 | --- | --- |
-| `target_status` | Inspect target type, online devices, booted devices, and ambiguity. |
-| `start_emulator` | Start the configured emulator target. |
-| `stop_emulator` | Stop the configured emulator target. |
-| `current_app` | Inspect foreground app and screenshot hash without image payloads. |
-| `screenshot` | Capture image content with UI metadata, visible text, secure-surface status, and metrics. |
-| `ui_snapshot` | Capture text-only UI metadata without image payloads. |
-| `visible_text` | Return visible/accessibility text and source element IDs. |
-| `find_text` | Find elements by text, content description, resource ID, or class name. |
-| `wait_for_text` | Poll until matching UI text appears. |
-| `tap_text` | Tap the best matching element by visible text or resource ID. |
-| `tap` | Tap raw device coordinates. |
-| `tap_element` | Tap a UI element by ID returned from a snapshot or text search. |
-| `swipe` | Perform a swipe gesture. |
-| `drag` | Drag between two points. |
-| `long_press_drag` | Long-press then drag between two points. |
-| `type_text` | Type text into the focused field, including Unicode. |
-| `key_event` | Send Android key events such as BACK, HOME, ENTER, and SEARCH. |
-| `open_app` | Open an app by launcher label or package name. |
-| `launch_app` | Launch an app by exact package name. |
-| `adb_shell` | Run narrow Android inspection commands. |
-| `list_apps` | List launchable app labels and package names. |
-| `list_packages` | List launchable package names. |
-| `wait` | Pause between actions. |
+| `target_status` | Inspect target type, online devices, booted devices, target resolution, and ambiguity |
+| `start_emulator` | Start the configured emulator and wait for boot completion |
+| `stop_emulator` | Stop the configured emulator target |
+| `current_app` | Read the foreground package and lightweight visual hash |
+| `screenshot` | Capture screen image content, UI metadata, visible text, secure-surface status, and metrics |
+| `ui_snapshot` | Capture text-only UI metadata without image payloads |
+| `visible_text` | Return visible and accessibility text with source element IDs |
+| `find_text` | Match UI elements by text, content description, resource ID, or class |
+| `wait_for_text` | Poll for a matching UI state |
+| `tap_text` | Tap the best text or resource-ID match |
+| `tap` | Tap raw device coordinates |
+| `tap_element` | Tap an element ID returned by an inspection tool |
+| `swipe` | Perform a swipe gesture |
+| `drag` | Drag between two points |
+| `long_press_drag` | Long-press and drag between two points |
+| `type_text` | Enter Unicode text through the OpenPocket IME helper |
+| `key_event` | Send Android key events such as BACK, HOME, ENTER, or SEARCH |
+| `open_app` | Open an app by launcher label or package name |
+| `launch_app` | Launch an app by exact package name |
+| `adb_shell` | Run narrow Android shell inspection commands |
+| `list_apps` | List launchable app labels and package names |
+| `list_packages` | List launchable package names |
+| `wait` | Pause between actions |
 
-For normal UI work, prefer this order:
+The expected interaction order is:
 
 1. `target_status`
 2. `ui_snapshot`, `visible_text`, or `current_app`
 3. `find_text` or `wait_for_text`
 4. `tap_text` or `tap_element`
-5. raw `tap` only when element metadata is unavailable
+5. raw `tap` only when UI metadata is unavailable
+
+## Native Validation
+
+Do not treat a visible skill as proof that the plugin MCP server loaded. Validate three distinct layers:
+
+1. **Package**: the host accepts the plugin manifest and sees one `phone-use` skill.
+2. **Protocol**: the bundled server completes MCP initialization and returns all 23 tools from `tools/list`.
+3. **Fresh host session**: a newly started Codex or Claude Code task can call `target_status` without manually starting `dist/mcp/server.js`.
+
+Use this acceptance prompt:
+
+```text
+Use OpenPocket Phone only. Call target_status and report targetType, avdName,
+devices, bootedDevices, resolvedDeviceId, resolveError, and ambiguousTarget.
+Then call current_app and ui_snapshot without tapping or typing.
+```
+
+Run package-level checks from the repository root:
+
+```bash
+npm run phone-use:package
+node plugins/openpocket-phone/scripts/doctor.mjs
+claude plugin validate plugins/openpocket-phone-claude --strict
+node --test test/codex-phone-plugin.test.mjs test/claude-phone-plugin.test.mjs
+```
 
 ## Safety Boundaries
 
-OpenPocket can drive apps on an authorized Android target, but the agent should pause for explicit user confirmation before:
+The plugin can drive the authorized Android target. Agents should pause for explicit user confirmation before:
 
-- submitting purchases or payments
-- sending messages, posts, likes, follows, or irreversible social actions
-- changing account, security, privacy, or payment settings
-- entering passwords, OTPs, recovery codes, card details, government IDs, or private health/finance data
-- using camera, microphone, photos, contacts, files, location, biometric, NFC, or SMS capabilities
+- purchases, payments, bids, or financial submissions
+- messages, posts, likes, follows, or other external communication
+- account, security, privacy, or payment-setting changes
+- password, OTP, recovery-code, card, government-ID, or private health and finance entry
+- camera, microphone, photos, contacts, files, location, biometric, NFC, or SMS access
+
+OpenPocket does not bypass ADB authorization, Android trust prompts, lock screens, secure surfaces, or application security controls.
+
+## Development Workflow
+
+Rebuild both generated runtimes and the Claude archive:
+
+```bash
+npm install
+npm run phone-use:package
+```
+
+The package script writes the Claude runtime, copies the same files into the Codex plugin, and rebuilds the upload zip. A Codex plugin content change must also bump the build metadata in `plugins/openpocket-phone/.codex-plugin/plugin.json` so existing hosts do not retain a stale cache entry.
 
 ## Troubleshooting
 
-### Codex Can See the Skill But Not the Tools
+### Skill Present, Tools Missing
 
-Start a fresh Codex session after installing or updating the plugin. Existing desktop threads may keep the old tool registry.
+Start a new host session. Tool registries are session-scoped, so an already running task does not gain newly installed plugin MCP tools.
 
-### The Plugin Cannot Find the MCP Server
+### Plugin Runtime Does Not Start
 
-Run:
+Confirm Node.js 20 or newer is visible to the desktop process, then run:
 
 ```bash
-npm run build
+node --version
 node plugins/openpocket-phone/scripts/doctor.mjs
 ```
 
-If the server is still not found, set one of:
+### ADB Target Does Not Resolve
 
-```bash
-export OPENPOCKET_REPO_ROOT=/path/to/openpocket
-export OPENPOCKET_MCP_SERVER=/path/to/openpocket/dist/mcp/server.js
-```
+Run `adb devices -l`, call `target_status`, and set an explicit physical `deviceId` when multiple targets are online.
 
-### Multiple Devices Are Online
+### Emulator Does Not Start
 
-Use `target_status`. If more than one target device is online, pass `deviceId` explicitly to every inspection and action tool.
-
-### The Screen Is Blank or Sensitive
-
-Use `secureSurfaceDetected`, `secureSurfaceEvidence`, `visibleTextLines`, and `uiElements` from `screenshot` or `ui_snapshot`. Do not infer sensitive content from a black secure surface.
-
-### Physical Phone Is Not Controllable
-
-Confirm that ADB authorization is granted:
-
-```bash
-adb devices -l
-```
-
-OpenPocket does not bypass device trust prompts, lock screens, account prompts, or OS security settings.
+Confirm `emulator.avdName` in `~/.openpocket/config.json` matches an installed AVD and that `ANDROID_SDK_ROOT` points to the intended Android SDK.

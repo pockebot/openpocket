@@ -1,103 +1,99 @@
 # OpenPocket Phone MCP Server
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes Android phone interaction as tools for Codex, Claude Code, and other MCP clients. It controls OpenPocket Android targets through ADB, including emulator targets and physical-phone targets selected in OpenPocket config.
+This module implements the shared Android phone-control server used by the native Codex and Claude Code plugins. It exposes 23 MCP tools backed by OpenPocket's ADB runtime for emulator and authorized physical-phone targets.
 
-For the user-friendly install matrix covering Codex CLI, Codex Desktop App, Claude Code CLI, Claude Code Desktop App, and Claude Desktop MCP, see [OpenPocket Phone Plugin](../../plugins/openpocket-phone/README.md). For the broader standalone integration guide, see [Codex Plugin and Claude Code MCP Integration](../../docs/codex-claude-code-phone-use.md) or the website page at [Codex and Claude Code Phone Use](https://www.openpocket.ai/get-started/codex-claude-code).
+End users should install a native plugin instead of registering this source server manually:
+
+- [OpenPocket Phone plugin onboarding](../../plugins/openpocket-phone/README.md)
+- [Integration architecture and validation](../../docs/codex-claude-code-phone-use.md)
+- [Website setup guide](https://www.openpocket.ai/get-started/codex-claude-code)
 
 ## Integration Boundary
 
-The MCP server is the shared phone-control layer. Codex loads it through the local `plugins/openpocket-phone/` plugin, which also provides the `phone-use` skill. Claude Code connects to the same server directly through project-scoped `.mcp.json` or `claude mcp add`. The main OpenPocket runtime still owns target configuration, emulator startup, physical-phone selection, and ADB execution.
+| Host | Native package |
+| --- | --- |
+| Codex CLI and Desktop | `plugins/openpocket-phone/` |
+| Claude Code CLI and Desktop | `plugins/openpocket-phone-claude/` |
 
-## Prerequisites
+Each package includes a host-specific manifest, a `phone-use` skill, an MCP registration, and a self-contained runtime generated from `src/mcp/server.ts`. Installed plugins do not depend on the repository's `dist/` directory.
 
-- Node.js >= 20
-- Android SDK with emulator and ADB installed
-- An OpenPocket target configured via `openpocket.config.json`
-- For emulator targets: an AVD configured in OpenPocket
-- For physical-phone targets: USB debugging or Wi-Fi ADB authorized for this host
+## Requirements
 
-## Install
+- Node.js 20 or newer
+- Android SDK platform-tools and emulator tools
+- an existing AVD or an ADB-authorized Android device
 
-From the project root:
+The runtime reads `~/.openpocket/config.json` and creates an emulator-first default when the file is missing.
+
+## Install Native Plugins
+
+From the repository root:
+
+```bash
+npm run phone-use:install -- codex --target emulator
+npm run phone-use:install -- claude-code --target emulator
+```
+
+For Desktop screenshots and no-build install paths, see the [plugin onboarding guide](../../plugins/openpocket-phone/README.md).
+
+## Run The Source Server For Development
+
+Build and start the source MCP server only when developing or debugging this module:
 
 ```bash
 npm install
 npm run build
+node dist/mcp/server.js
 ```
 
-## Usage with Codex
-
-Use the bundled Codex plugin in this repository:
+Use a custom config path when needed:
 
 ```bash
-npm install
-npm run build
-codex plugin marketplace add /path/to/openpocket
-codex plugin add openpocket-phone@openpocket-local
+node dist/mcp/server.js --config /absolute/path/to/config.json
 ```
 
-Start a fresh Codex session after installing the plugin so Codex can load the `phone-use` skill and the `openpocket-phone` MCP tools. If the Codex desktop app was already running before installation, restart the app or use a fresh `codex exec` process to verify newly installed local MCP tools.
-
-To verify the local plugin bundle without touching a phone target:
+Rebuild both plugin runtimes and the Claude Desktop archive:
 
 ```bash
-node plugins/openpocket-phone/scripts/doctor.mjs
-```
-
-## Usage with Claude Code
-
-### Option 1: Project-scoped
-
-The `.mcp.json` at the project root auto-registers the server when you open Claude Code in this directory. Restart Claude Code after building.
-
-### Option 2: Manual registration
-
-```bash
-claude mcp add --transport stdio openpocket-phone -- node /path/to/openpocket/dist/mcp/server.js
-```
-
-### Option 3: With custom config path
-
-```bash
-claude mcp add --transport stdio openpocket-phone -- node /path/to/openpocket/dist/mcp/server.js --config /path/to/openpocket.config.json
+npm run phone-use:package
 ```
 
 ## Available Tools
 
 | Tool | Description |
-|------|-------------|
-| `target_status` | Inspect configured target and online ADB devices |
+| --- | --- |
+| `target_status` | Inspect configured target, online devices, booted emulators, and target resolution |
 | `start_emulator` | Start the configured emulator target |
 | `stop_emulator` | Stop the configured emulator target |
-| `current_app` | Inspect the foreground app and screenshot hash without image payloads |
-| `screenshot` | Capture screen PNG content, UI metadata, visible text, secure-surface status, and capture metrics |
+| `current_app` | Inspect foreground app and screenshot hash without image payloads |
+| `screenshot` | Capture PNG content, UI metadata, visible text, secure-surface status, and metrics |
 | `ui_snapshot` | Capture text-only UI metadata without image payloads |
-| `visible_text` | Return visible/accessibility text with source element IDs |
-| `find_text` | Find UI elements by text, content description, resource ID, or class name |
+| `visible_text` | Return visible and accessibility text with source element IDs |
+| `find_text` | Find UI elements by text, content description, resource ID, or class |
 | `wait_for_text` | Poll until matching UI text appears |
-| `tap_text` | Tap the best matching UI element by visible text or resource ID |
-| `tap` | Tap at pixel coordinates |
-| `tap_element` | Tap a UI element by ID from screenshot, ui_snapshot, visible_text, or find_text |
-| `swipe` | Swipe gesture between two points |
+| `tap_text` | Tap the best matching text or resource-ID element |
+| `tap` | Tap pixel coordinates |
+| `tap_element` | Tap an element ID returned by an inspection tool |
+| `swipe` | Swipe between two points |
 | `drag` | Drag between two points |
-| `long_press_drag` | Long-press then drag between two points |
-| `type_text` | Type text into focused input (Unicode-safe) |
-| `key_event` | Send Android key events (BACK, HOME, ENTER, etc.) |
+| `long_press_drag` | Long-press and drag between two points |
+| `type_text` | Enter Unicode text through the OpenPocket IME helper |
+| `key_event` | Send Android key events such as BACK, HOME, or ENTER |
 | `open_app` | Open an app by launcher label or package name |
 | `launch_app` | Launch an app by exact package name |
-| `adb_shell` | Run arbitrary ADB shell commands |
+| `adb_shell` | Run narrow Android shell commands |
 | `list_apps` | List launchable app labels and package names |
-| `list_packages` | List launchable app package names |
+| `list_packages` | List launchable package names |
 | `wait` | Pause between actions |
 
-For normal phone use, prefer `ui_snapshot`, `visible_text`, `find_text`, `tap_text`, `wait_for_text`, and `open_app` before falling back to raw coordinate taps.
+Prefer `ui_snapshot`, `visible_text`, `find_text`, `tap_text`, `wait_for_text`, and `open_app` before raw coordinate taps.
 
-## Verify
+## Validate
 
-After registering, check that the server is running inside Claude Code:
-
+```bash
+npm run phone-use:package
+node plugins/openpocket-phone/scripts/doctor.mjs
+node --test test/codex-phone-plugin.test.mjs test/claude-phone-plugin.test.mjs
 ```
-/mcp
-```
 
-You should see `openpocket-phone` listed with 23 tools.
+A full native acceptance test must use a fresh Codex or Claude Code session and call `target_status` through the plugin-provided tool. Starting `dist/mcp/server.js` manually proves only the server, not native plugin loading.
