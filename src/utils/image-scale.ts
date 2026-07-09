@@ -1,4 +1,32 @@
-import sharp from "sharp";
+type SharpFactory = typeof import("sharp");
+
+let sharpFactoryPromise: Promise<SharpFactory | null> | null = null;
+
+export async function loadOptionalSharp(): Promise<SharpFactory | null> {
+  if (!sharpFactoryPromise) {
+    sharpFactoryPromise = import("sharp")
+      .then((module) => (
+        ((module as unknown as { default?: SharpFactory }).default ?? module) as SharpFactory
+      ))
+      .catch(() => null);
+  }
+  return sharpFactoryPromise;
+}
+
+function readPngDimensions(pngBuffer: Buffer): { width: number; height: number } {
+  const pngSignature = "89504e470d0a1a0a";
+  if (
+    pngBuffer.length >= 24
+    && pngBuffer.subarray(0, 8).toString("hex") === pngSignature
+    && pngBuffer.subarray(12, 16).toString("ascii") === "IHDR"
+  ) {
+    return {
+      width: pngBuffer.readUInt32BE(16),
+      height: pngBuffer.readUInt32BE(20),
+    };
+  }
+  return { width: 1080, height: 1920 };
+}
 
 export interface ScaledImage {
   data: Buffer;
@@ -41,9 +69,23 @@ export async function scaleScreenshot(
   pngBuffer: Buffer,
   modelName?: string,
 ): Promise<ScaledImage> {
-  const metadata = await sharp(pngBuffer).metadata();
-  const origWidth = metadata.width!;
-  const origHeight = metadata.height!;
+  const sharp = await loadOptionalSharp();
+  const fallbackDimensions = readPngDimensions(pngBuffer);
+  const metadata = sharp ? await sharp(pngBuffer).metadata() : fallbackDimensions;
+  const origWidth = metadata.width ?? fallbackDimensions.width;
+  const origHeight = metadata.height ?? fallbackDimensions.height;
+
+  if (!sharp) {
+    return {
+      data: pngBuffer,
+      scaleX: 1,
+      scaleY: 1,
+      originalWidth: origWidth,
+      originalHeight: origHeight,
+      width: origWidth,
+      height: origHeight,
+    };
+  }
 
   const target = getScaleTarget(modelName ?? "");
   const referenceSide =
@@ -97,6 +139,10 @@ export async function drawDebugMarker(
   pngBuffer: Buffer,
   action: { type: string; x?: number; y?: number; x1?: number; y1?: number; x2?: number; y2?: number },
 ): Promise<Buffer> {
+  const sharp = await loadOptionalSharp();
+  if (!sharp) {
+    return pngBuffer;
+  }
   const meta = await sharp(pngBuffer).metadata();
   const w = meta.width!;
   const h = meta.height!;
@@ -153,6 +199,10 @@ export async function drawSetOfMarkOverlay(
   marks: SoMOverlayMark[],
 ): Promise<Buffer> {
   if (!marks.length) {
+    return pngBuffer;
+  }
+  const sharp = await loadOptionalSharp();
+  if (!sharp) {
     return pngBuffer;
   }
   const meta = await sharp(pngBuffer).metadata();

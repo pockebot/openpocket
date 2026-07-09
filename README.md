@@ -75,7 +75,7 @@ Imagine having a second phone that works for you around the clock — replying t
 - **Human-auth relay** — sensitive actions (camera, payments, location) escalate to you for approval through a private local relay.
 - **Channel integrations** — receive tasks and results through Telegram, Discord, WhatsApp, or CLI.
 - **Skills framework** — extend agent capabilities by dropping a `SKILL.md` into the skills directory — no code changes needed.
-- **Codex + Claude Code phone use** — expose the same Android target control layer through a local Codex plugin or a Claude Code MCP server.
+- **Codex + Claude Code phone use** — install native plugins that bundle the same Android skill and 23-tool MCP runtime for both hosts.
 
 ## Quick Start
 
@@ -112,31 +112,35 @@ For full setup details see the [Quickstart guide](https://www.openpocket.ai/get-
 
 ## Codex and Claude Code Phone Use
 
-OpenPocket includes an independent integration layer for coding agents:
+OpenPocket includes one Phone Use integration with native adapters for Codex and Claude Code. Both adapters are generated from the same `phone-use` skill and 23-tool Android MCP source, so the host controls an emulator or authorized physical phone through ADB instead of desktop Computer Use.
 
-| Client | Integration | Runtime used |
+| Client | Native package | Fastest install |
 | --- | --- | --- |
-| Codex | local plugin at `plugins/openpocket-phone/`, including a `phone-use` skill and MCP registration | `src/mcp/server.ts` |
-| Claude Code | project `.mcp.json` or `claude mcp add` registration | `src/mcp/server.ts` |
+| Codex CLI | `plugins/openpocket-phone/codex/openpocket-phone/` | `npm run phone-use:install -- codex` |
+| Claude Code CLI | `plugins/openpocket-phone/claude/openpocket-phone/` | `npm run phone-use:install -- claude-code` |
+| Codex Desktop | `plugins/openpocket-phone/codex/openpocket-phone/` | Install from the `OpenPocket Local` repo marketplace |
+| Claude Desktop | `plugins/openpocket-phone/claude/openpocket-phone/` | Upload `releases/openpocket-phone-claude.zip` in Settings > Plugins |
 
-The plugin/MCP layer is separate from the main OpenPocket runtime. OpenPocket still owns the configured Android emulator or authorized physical phone; Codex and Claude Code receive a focused `openpocket-phone` MCP tool surface for inspection, tapping, typing, app launch, UI text search, screenshots, and target management.
-
-From the repository root:
-
-```bash
-npm install
-npm run build
-codex plugin marketplace add /path/to/openpocket
-codex plugin add openpocket-phone@openpocket-local
-```
-
-For Claude Code, build the repo and open Claude Code from the repository root so the root `.mcp.json` can register `openpocket-phone`, or register it manually:
+For CLI users, one command handles dependencies, target setup, native plugin installation, and the 23-tool Doctor check:
 
 ```bash
-claude mcp add --transport stdio openpocket-phone -- node /path/to/openpocket/dist/mcp/server.js
+npm run phone-use:install -- codex --target emulator
+npm run phone-use:install -- claude-code --target emulator
 ```
 
-See the full [Codex plugin and Claude Code MCP integration guide](./docs/codex-claude-code-phone-use.md) or the website page at [Codex and Claude Code Phone Use](https://www.openpocket.ai/get-started/codex-claude-code).
+The two directories are thin host-specific install roots, not separate implementations. Their generated skills and runtimes are kept identical by one packaging command and automated tests. Desktop packages are self-contained: Codex reads `.agents/plugins/marketplace.json` from the opened repository, while Claude Desktop accepts the ready-made zip. Neither Desktop path requires `npm install` or `npm run build` before plugin installation.
+
+After installation, start a new task and ask:
+
+```text
+Use OpenPocket Phone. Call target_status and report the Android target.
+```
+
+![OpenPocket Phone installed in Codex Desktop](./plugins/openpocket-phone/assets/onboarding/codex-plugin-installed.png)
+
+![OpenPocket Phone installed in Claude Desktop](./plugins/openpocket-phone/assets/onboarding/claude-plugin-installed.png)
+
+See the screenshot-led [plugin onboarding guide](./plugins/openpocket-phone/README.md), the [integration architecture](./docs/codex-claude-code-phone-use.md), or the website page at [Codex and Claude Code Phone Use](https://www.openpocket.ai/get-started/codex-claude-code).
 
 ## Usage
 

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "openpocket-phone": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/runtime/openpocket-phone-server.mjs"
+      ]
+    }
+  }
+}

@@ -9,6 +9,7 @@
  */
 
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -17,9 +18,9 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { loadConfig } from "../config/index.js";
 import { EmulatorManager } from "../device/emulator-manager.js";
 import { AdbRuntime } from "../device/adb-runtime.js";
+import { loadPhoneRuntimeConfig } from "./runtime-config.js";
 import type {
   InstalledAppInfo,
   OpenPocketConfig,
@@ -1107,7 +1108,7 @@ function configPathFromArgv(argv: string[]): string | undefined {
 }
 
 export function createDefaultRuntime(argv = process.argv): OpenPocketPhoneRuntime {
-  const config = loadConfig(configPathFromArgv(argv));
+  const config = loadPhoneRuntimeConfig(configPathFromArgv(argv));
   const emulator = new EmulatorManager(config);
   const adb = new AdbRuntime(config, emulator);
   return { config, emulator, adb };
@@ -1142,7 +1143,11 @@ function isDirectRun(): boolean {
   if (!entrypoint) {
     return false;
   }
-  return path.resolve(entrypoint) === fileURLToPath(import.meta.url);
+  try {
+    return fs.realpathSync(entrypoint) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return path.resolve(entrypoint) === fileURLToPath(import.meta.url);
+  }
 }
 
 if (isDirectRun()) {

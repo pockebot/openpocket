@@ -221,23 +221,27 @@ const hasMoreModels = computed(() => modelSupport.length > modelSupportCollapsed
     <p class="op-section-label">Agent IDE Integrations</p>
     <div class="op-integrations-copy">
       <h2>Use OpenPocket directly from Codex and Claude Code.</h2>
-      <p>The integration layer is separate from the OpenPocket runtime. Codex loads a local plugin with a phone-use skill, while Claude Code connects to the same Android MCP server directly.</p>
+      <p>Both hosts load a native plugin with a phone-use skill and the same bundled 23-tool Android MCP runtime.</p>
     </div>
   </div>
   <div class="op-integrations-grid">
     <a class="op-integration-card op-integration-card--codex" :href="withBase('/get-started/codex-claude-code')">
       <p class="op-integration-eyebrow">Codex Plugin</p>
       <h3>Native phone-use tools inside Codex</h3>
-      <p>Install <code>openpocket-phone</code> to expose emulator and physical Android control through the plugin, skill, and MCP tool surface.</p>
-      <code class="op-integration-code">codex plugin add openpocket-phone@openpocket-local</code>
+      <p>Install from the local marketplace in Codex Desktop or use one command for Codex CLI.</p>
+      <code class="op-integration-code">npm run phone-use:install -- codex</code>
     </a>
     <a class="op-integration-card op-integration-card--claude" :href="withBase('/get-started/codex-claude-code')">
-      <p class="op-integration-eyebrow">Claude Code MCP</p>
-      <h3>Connect directly to the Phone MCP server</h3>
-      <p>Use the project <code>.mcp.json</code> or a manual MCP registration to drive the same OpenPocket Android target from Claude Code.</p>
-      <code class="op-integration-code">claude mcp add openpocket-phone</code>
+      <p class="op-integration-eyebrow">Claude Code Plugin</p>
+      <h3>Upload once, then use phone tools natively</h3>
+      <p>Upload the ready-made plugin zip in Claude Desktop or use one command for Claude Code CLI.</p>
+      <code class="op-integration-code">npm run phone-use:install -- claude-code</code>
     </a>
   </div>
+  <p class="op-integration-requirements">
+    <strong>Host setup:</strong> Node.js 20+ and <code>adb</code> are required. Emulator users also need Android Emulator, a system image, and an existing AVD. Android Studio is optional; the plugin itself does not require a JDK.
+    <a :href="withBase('/get-started/codex-claude-code#requirements')">View setup requirements</a>
+  </p>
 </section>
 
 <!-- Support -->

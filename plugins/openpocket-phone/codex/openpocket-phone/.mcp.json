@@ -4,7 +4,7 @@
       "command": "node",
       "cwd": ".",
       "args": [
-        "./scripts/openpocket-phone-mcp.mjs"
+        "./runtime/openpocket-phone-server.mjs"
       ],
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 90
