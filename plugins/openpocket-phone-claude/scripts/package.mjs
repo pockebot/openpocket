@@ -10,6 +10,12 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(pluginRoot, "../..");
 const runtimeDir = path.join(pluginRoot, "runtime");
+const codexRuntimeDir = path.join(
+  repoRoot,
+  "plugins",
+  "openpocket-phone",
+  "runtime",
+);
 const releasesDir = path.join(pluginRoot, "releases");
 const archivePath = path.join(releasesDir, "openpocket-phone-claude.zip");
 const esbuildPath = path.join(repoRoot, "node_modules", ".bin", "esbuild");
@@ -88,9 +94,16 @@ function buildArchive() {
   }
 }
 
+function syncCodexRuntime() {
+  fs.rmSync(codexRuntimeDir, { recursive: true, force: true });
+  fs.cpSync(runtimeDir, codexRuntimeDir, { recursive: true });
+}
+
 buildRuntime();
+syncCodexRuntime();
 buildArchive();
 
 const sizeKb = Math.ceil(fs.statSync(archivePath).size / 1024);
+console.log(`Codex runtime: ${codexRuntimeDir}`);
 console.log(`Claude plugin: ${archivePath}`);
 console.log(`Archive size: ${sizeKb} KB`);

@@ -102,6 +102,7 @@ function findMarketplaceRootFromCodexConfig() {
 function serverCandidates() {
   const marketplaceRoot = findMarketplaceRootFromCodexConfig();
   return [
+    existingFile(path.join(pluginRoot, "runtime", "openpocket-phone-server.mjs")),
     existingFile(process.env.OPENPOCKET_MCP_SERVER),
     process.env.OPENPOCKET_REPO_ROOT
       ? existingFile(path.join(process.env.OPENPOCKET_REPO_ROOT, "dist/mcp/server.js"))
@@ -123,7 +124,9 @@ async function main() {
   const mcpJson = readJson(mcpJsonPath);
   const [serverPath] = serverCandidates();
   if (!serverPath) {
-    throw new Error("MCP server not found. Run npm run build or set OPENPOCKET_REPO_ROOT.");
+    throw new Error(
+      "MCP server not found. Reinstall the plugin, run npm run phone-use:package, or set OPENPOCKET_REPO_ROOT.",
+    );
   }
   const serverModule = await import(pathToFileURL(serverPath).href);
   const toolNames = Array.isArray(serverModule.TOOLS)
